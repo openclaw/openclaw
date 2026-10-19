@@ -55,22 +55,27 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  if (
-    normalized.startsWith("\0@oxc-project+runtime@") &&
-    normalized.endsWith("/helpers/esm/decorate.js")
-  ) {
-    // Chat and New Session still use decorators; neither route owns their shared helper.
-    return "decorator-runtime";
-  }
-
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/lib/device-pair-setup.ts":
+      // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
+      return "device-pair-setup-runtime";
+    case "ui/src/app/app-root-focus.ts":
+    case "ui/src/app/app-root-focus-view.tsx":
+      return "focus-dashboard-runtime";
+    case "ui/src/components/solid/gateway-url-confirmation.tsx":
+      // A pending target owns this dialog; ordinary boot never requests it.
+      return "gateway-confirmation-runtime";
+    case "ui/src/pages/chat/route-entry.ts":
+      // Pending New Session previews must render while the Chat route entry waits.
+      return "chat-route-entry";
+    case "ui/src/pages/devices/devices-page.tsx":
+      return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
     case "ui/src/pages/cron/cron-page.tsx":
       return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
-    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
@@ -110,21 +115,21 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "dompurify") ||
-    moduleIdIncludesPackage(id, "entities") ||
-    moduleIdIncludesPackage(id, "linkify-it") ||
-    moduleIdIncludesPackage(id, "mdurl") ||
-    moduleIdIncludesPackage(id, "punycode.js") ||
-    moduleIdIncludesPackage(id, "uc.micro")
-  ) {
+  // Code highlighting is requested by the first completed code block; it must
+  // not share the parser/sanitizer chunk used by ordinary transcript prose.
+  if (moduleIdIncludesPackage(id, "highlight.js")) {
+    return "markdown-highlight-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "json5")) {
+    // Config parsing loads only when a config consumer warms it.
+    return "json5-runtime";
   }
 
   if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
@@ -178,10 +183,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                // Fold small post-port partitions back into their boot parents;
-                // route membership and the maximum chunk size stay unchanged.
+                // Keep disclosure JSX in its chat partition instead of splitting
+                // compression dictionaries. Shipped byte/request budgets still apply.
                 minSize: 128 * 1024,
-                maxSize: (route === "shared" ? 1280 : 1408) * 1024,
+                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1440 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

@@ -6,6 +6,7 @@ import {
 import { reconcileHarnessCompletionDelivery } from "../agents/agent-harness-completion-delivery.js";
 import {
   assertAgentHarnessCompletionScope,
+  assertHarnessCompletionSourceAdmission,
   withAgentHarnessCompletionAdmission,
   type AgentHarnessCompletionScope,
 } from "../agents/agent-harness-completion-scope.js";
@@ -32,6 +33,11 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
 export {
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
@@ -218,26 +224,63 @@ async function deliverAgentHarnessCompletionBound(
           requesterLifecycleRevision,
           isSourceCurrent: isSourceSessionEffectsAllowed,
         },
-        () =>
-          deliverSubagentAnnouncement({
+        async () => {
+          const sourceRunId = buildAnnounceIdempotencyKey(params.announceId);
+          const assertCurrent = assertHarnessCompletionSourceAdmission({
             requesterSessionKey,
             requesterAgentId: scope.requesterAgentId,
-            isSourceSessionEffectsAllowed,
-            triggerMessage: prompt,
-            internalEvents,
-            requesterSessionOrigin: scope.requesterOrigin,
-            completionDirectOrigin: completionDirectOrigin ?? directOrigin,
-            directOrigin,
+            requesterSessionId,
+            requesterLifecycleRevision,
             sourceSessionKey: childSessionKey,
-            sourceTool: "agent_harness_completion",
-            isSourceSessionAdmissionAllowed: isSourceSessionEffectsAllowed,
-            targetRequesterSessionKey: requesterSessionKey,
-            requesterIsSubagent,
-            expectsCompletionMessage: true,
-            bestEffortDeliver: true,
-            directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
-            signal,
-          }),
+            sourceRunId,
+          });
+          const controllerInput =
+            requester.storePath && requester.agentId
+              ? reserveSessionControllerSource(requester.canonicalKey, {
+                  reservationId: `agent-harness-completion:${sourceRunId}`,
+                  protocolRunId: sourceRunId,
+                  sourceSessionId: requesterSessionId,
+                  policy: { mode: "followup" },
+                  target: captureSessionTarget({
+                    storeScope: requester.storePath,
+                    sessionKey: requester.canonicalKey,
+                    aliases: [requesterSessionKey],
+                    agentId: requester.agentId,
+                    incarnation: requesterSessionId,
+                  }),
+                  adapter: {
+                    ...(signal ? { signal } : {}),
+                    authority: { ...(signal ? { signal } : {}), assertCurrent },
+                  },
+                })
+              : undefined;
+          try {
+            return await deliverSubagentAnnouncement({
+              requesterSessionKey,
+              requesterAgentId: scope.requesterAgentId,
+              isSourceSessionEffectsAllowed,
+              triggerMessage: prompt,
+              internalEvents,
+              requesterSessionOrigin: scope.requesterOrigin,
+              completionDirectOrigin: completionDirectOrigin ?? directOrigin,
+              directOrigin,
+              sourceSessionKey: childSessionKey,
+              sourceTool: "agent_harness_completion",
+              isSourceSessionAdmissionAllowed: isSourceSessionEffectsAllowed,
+              targetRequesterSessionKey: requesterSessionKey,
+              requesterIsSubagent,
+              expectsCompletionMessage: true,
+              bestEffortDeliver: true,
+              directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
+              signal,
+              controllerInput,
+            });
+          } finally {
+            if (controllerInput && !controllerInput.custody.rpcAdopted) {
+              retireSessionControllerInput(controllerInput);
+            }
+          }
+        },
       );
     };
     const resolveGatewayContext = getGatewayContextResolver(scope);

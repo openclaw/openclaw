@@ -145,14 +145,24 @@ describe("doctor config analysis helpers", () => {
     expect(stripUnknownConfigKeys(input as never)).toEqual({ config, removed: [removed] });
   });
 
-  it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=true", () => {
-    withEnv({ OPENCLAW_UPDATE_IN_PROGRESS: "true" }, () => {
-      const input = { hooks: {}, unexpected: true } as never;
-      const result = stripUnknownConfigKeys(input);
-      expect(result.config).toBe(input);
-      expect(result.removed).toEqual([]);
-    });
-  });
+  it.each([undefined, "1"])(
+    "cleans unowned keys during updates (post-core=%s), preserving deferred inputs",
+    (postCore) => {
+      withEnv(
+        {
+          OPENCLAW_UPDATE_IN_PROGRESS: "true",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: postCore,
+        },
+        () => {
+          const input = { hooks: {}, deferred: { setting: true }, unexpected: true };
+          const result = stripUnknownConfigKeys(input, [["deferred", "setting"]]);
+          expect(result.config).toEqual({ hooks: {}, deferred: { setting: true } });
+          expect(result.removed).toEqual(["unexpected"]);
+          expect(input.unexpected).toBe(true);
+        },
+      );
+    },
+  );
 });
 
 describe("collectImplicitFallbackClobberWarnings", () => {

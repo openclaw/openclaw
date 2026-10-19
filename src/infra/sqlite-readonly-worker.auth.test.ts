@@ -5,11 +5,12 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import {
   bindAuthProfileFileObservationReaders,
   readAuthProfileDatabaseIdentity,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "../agents/auth-profiles/file-state.js";
 import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -68,7 +69,10 @@ it.skipIf(skipBroker)(
     let pendingRefresh: Promise<void> | undefined;
     const observed: unknown[] = [];
     let refresh = () => read(source, "canonical");
-    const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
+    const publishFileChange = authProfileFileChanges.onChange;
+    authProfileFileChanges.onChange = async (change) => {
+      await publishFileChange?.(change);
+      const { directory } = change;
       if (directory !== path.dirname(source)) {
         return;
       }
@@ -76,7 +80,7 @@ it.skipIf(skipBroker)(
       observed.push(rows.store);
       // Credential publication can replace the observation's refresh callback.
       refresh = () => read(source, "canonical");
-    });
+    };
     try {
       await broker.ready();
       const brokerSpawn = vi.spyOn(broker, "spawn");
@@ -119,7 +123,7 @@ it.skipIf(skipBroker)(
     } finally {
       publication?.dispose();
       await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
-      unsubscribe();
+      authProfileFileChanges.onChange = publishFileChange;
       await closeOpenClawStateDatabaseAsync();
       await scope.close();
       await restartedScope.close();
@@ -246,9 +250,6 @@ it("observes agent initialization after a cold auth read in the same worker", as
     using database = openNodeSqliteDatabase(source);
     ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path: source, env });
     database
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("plugin-model-catalog-v1", "fixture", "synthetic catalog", 1);
-    database
       .prepare(
         "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
       )
@@ -256,10 +257,17 @@ it("observes agent initialization after a cold auth read in the same worker", as
     await expect(
       runSqliteReadOnlyOperation(
         source,
-        { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["fixture"] } },
+        {
+          type: "agentRetirement.sessionStoreBlocker",
+          input: prepareAgentSessionStoreDeletionSafety(
+            { agents: { entries: { survivor: {} } }, session: { store: source } },
+            "main",
+            env,
+          ),
+        },
         { source: "canonical", expectedIdentity, env },
       ),
-    ).resolves.toEqual([{ pluginId: "fixture", contents: "synthetic catalog" }]);
+    ).resolves.toEqual({ blocker: "survivor" });
     expect((await read(source, "canonical", undefined, env)).store).toEqual({
       status: "readable",
       raw: store,

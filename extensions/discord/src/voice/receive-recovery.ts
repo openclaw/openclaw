@@ -29,7 +29,7 @@ type DavePassthroughTarget = {
           dave?: {
             lastTransitionId?: number;
             reinitializing?: boolean;
-            recoverFromInvalidTransition?: (transitionId: number) => void;
+            recoverFromInvalidTransition: (transitionId: number) => void;
             session?: {
               setPassthroughMode: (passthrough: boolean, expirySeconds: number) => void;
             };
@@ -144,8 +144,7 @@ export function recoverDaveZeroTransition(params: {
     target.connection.state.status !== sdk.VoiceConnectionStatus.Ready ||
     networkingState?.code !== sdk.NetworkingStatusCode.Ready ||
     daveSession?.lastTransitionId !== 0 ||
-    daveSession.reinitializing !== false ||
-    typeof daveSession.recoverFromInvalidTransition !== "function"
+    daveSession.reinitializing !== false
   ) {
     return "not-attempted";
   }

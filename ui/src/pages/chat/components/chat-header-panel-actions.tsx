@@ -1,6 +1,11 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
@@ -18,7 +23,7 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
-import { chatQuickActionEntry, type ChatQuickAction } from "./chat-quick-action.tsx";
+import { useChatQuickActionEntries, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
@@ -151,8 +156,6 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions,
     panelActions,
     allActions,
-    mainHeaderAction: mainDefinition?.headerAction,
-    sideHeaderAction: sideDefinition?.headerAction,
     mainHeaderActionView: mainDefinition?.headerActionView,
     sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,
@@ -163,52 +166,65 @@ let nextLayoutId = 0;
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
-  const [opened, setOpened] = createSignal(false);
+  const controls = createMenuControls();
   let menu: MenuHandle | undefined;
   const model = createMemo(() => layoutModel(props));
-  const headerActions = (
-    <Show when={opened() || model().allActions.length === 0}>
-      {model().mainHeaderAction}
-      <Show when={model().mainHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
-      <Show when={model().mainHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
-      {model().sideHeaderAction}
-      <Show when={model().sideHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
-      <Show when={model().sideHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
-    </Show>
+  const headerActions = createMemo(
+    () => (
+      <>
+        <Show when={model().mainHeaderActionView}>
+          {(view) => <ClearCompanion {...view()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().mainHeaderLink}>
+          {(link) => <ExternalPanelLink {...link()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().sideHeaderActionView}>
+          {(view) => <ClearCompanion {...view()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().sideHeaderLink}>
+          {(link) => <ExternalPanelLink {...link()} actionRef={controls.ref()} />}
+        </Show>
+      </>
+    ),
+    { lazy: true },
   );
-  const items = createMemo((): MenuEntry[] => {
-    const { actions, panelActions } = model();
-    const primary = props.mobile ? panelActions : actions;
-    const secondary = props.mobile ? actions : panelActions;
-    return [
-      ...primary.map((action) => chatQuickActionEntry(action, action.id, true)),
-      ...(primary.length && secondary.length
-        ? [
-            {
-              kind: "content" as const,
-              id: "panel-actions",
-              content: <div class="session-menu__separator" role="separator" />,
-            },
-          ]
-        : []),
-      ...secondary.map((action) => chatQuickActionEntry(action, action.id, true)),
-      {
-        kind: "content",
-        id: "header-actions",
-        content: headerActions,
-      },
-    ];
-  });
+  const primary = useChatQuickActionEntries(
+    () => (props.mobile ? model().panelActions : model().actions),
+    true,
+  );
+  const secondary = useChatQuickActionEntries(
+    () => (props.mobile ? model().actions : model().panelActions),
+    true,
+  );
+  const items = createMemo(
+    (): MenuEntry[] => {
+      return [
+        ...primary(),
+        ...(primary().length && secondary().length
+          ? [
+              {
+                kind: "content" as const,
+                id: "panel-actions",
+                content: <div class="session-menu__separator" role="separator" />,
+              },
+            ]
+          : []),
+        ...secondary(),
+        {
+          kind: "content",
+          id: "header-actions",
+          content: headerActions(),
+        },
+      ];
+    },
+    { lazy: true },
+  );
   return (
     <Show
-      when={
-        model().allActions.length > 0 ||
-        model().mainHeaderAction ||
-        model().mainHeaderActionView ||
-        model().mainHeaderLink
-      }
+      when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
     >
       <Menu
+        controls={controls}
         lazy
         id={id}
         class={[
@@ -227,11 +243,6 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
           </>
         }
         items={items()}
-        onOpenChange={(open) => {
-          if (open) {
-            setOpened(true);
-          }
-        }}
         ref={(handle) => {
           menu = handle;
         }}

@@ -108,7 +108,7 @@ Prereqs:
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
-- Ruby 3.4.11 and Bundler 4.0.22 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
+- Ruby 4.0.7 and Bundler 4.0.22 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the official OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the official OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)

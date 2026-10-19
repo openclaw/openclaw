@@ -41,7 +41,6 @@ async function mountedPicker(container: HTMLElement) {
 async function mountPicker(composerProps: ReturnType<typeof props>) {
   const container = document.body.appendChild(createComposerContainer());
   const draw = () => renderComposerInto(container, composerProps);
-  composerProps.onRequestUpdate = draw;
   draw();
   const dropdown = await mountedPicker(container);
   return { container, dropdown, draw };
@@ -77,7 +76,6 @@ describe("composer microphone picker", () => {
       renderComposerInto(container, composerProps);
     };
     onTestFinished(theme.subscribe(draw));
-    composerProps.onRequestUpdate = draw;
     draw();
 
     const dropdown = await mountedPicker(container);

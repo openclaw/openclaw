@@ -35,7 +35,7 @@ export function watchRowFacts(
   return watchHistoryOwners((owner) => ({ ...owner, readRowFacts: wrap(owner) }), once);
 }
 
-export function watchHistoryOwners(
+function watchHistoryOwners(
   wrap: (owner: history.SessionHistoryWorkerDatabase) => history.SessionHistoryWorkerDatabase,
   once = false,
 ) {

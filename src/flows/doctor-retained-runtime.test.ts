@@ -175,6 +175,22 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
   expect(output).not.toContain(directory);
 });
 
+it("Doctor scopes holders to each runtime and reports unknown custody once", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const warning = "Could not verify runtime custody for PID 4242: working directory is unavailable";
+  mocks.census.mockReturnValue({ pids: [4242], warnings: [warning] });
+  expect((await runDoctor(true)).split(warning)).toHaveLength(2);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(true);
+  mocks.note.mockClear();
+  mocks.census.mockImplementation((directory) => ({ pids: directory === held ? [4243] : [] }));
+  const output = await runDoctor(true);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+});
+
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
   const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
   fs.mkdirSync(path.dirname(installed), { recursive: true });

@@ -94,7 +94,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
   let ready = false;
   const panel = await mountAttachment({
     src: undefined,
-    resolveSource: (requestUpdate) =>
+    resolveSource: (onSourceChange) =>
       ready
         ? { status: "ready", src: "/recovered.txt" }
         : {
@@ -102,7 +102,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
             reason: "Temporarily unavailable",
             onRetry: () => {
               ready = true;
-              requestUpdate();
+              onSourceChange();
             },
           },
   });

@@ -188,6 +188,54 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
   expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
 });
 
+it("excludes overlapping JSON only in native PostgreSQL branches", () => {
+  const { root, write } = fixture();
+  write(
+    "src/runtime.ts",
+    [
+      'import { isPostgresSqlConnection as postgres } from "./infra/sql-connection.js";',
+      "const read = postgres(db)",
+      "  ? sql`SELECT value FROM json_each(body::json)`",
+      "  : sql`SELECT value FROM json_each(body)`;",
+      "if (postgres(db)) {",
+      "  sql`SELECT jsonb_set(body::jsonb, path, value::jsonb), json_tree(body), json_extract(body, '$'), json_set(body, path, value), json_valid(body), rowid FROM facts`;",
+      "  const later = () => sql`SELECT json_extract(body, '$') FROM facts`;",
+      "} else {",
+      "  sql`SELECT json_set(body, path, value) FROM facts`;",
+      "}",
+      "sql`SELECT jsonb_set(body, path, value) FROM json_each(body)`;",
+    ].join("\n"),
+  );
+  write(
+    "src/unrelated.ts",
+    [
+      'import { isPostgresSqlConnection } from "./unrelated-owner.js";',
+      "if (isPostgresSqlConnection(db)) sql`SELECT jsonb_set(body, path, value) FROM json_each(body)`;",
+    ].join("\n"),
+  );
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "src/runtime.ts",
+      matches: [
+        { construct: "json-string-set", line: 4 },
+        { construct: "json-string-set", line: 6 },
+        { construct: "json-projection", line: 6 },
+        { construct: "json-projection", line: 6 },
+        { construct: "json-projection", line: 6 },
+        { construct: "rowid", line: 6 },
+        { construct: "json-projection", line: 7 },
+        { construct: "json-projection", line: 9 },
+        { construct: "json-projection", line: 11 },
+        { construct: "json-string-set", line: 11 },
+      ],
+    },
+    {
+      file: "src/unrelated.ts",
+      matches: [{ construct: "json-projection" }, { construct: "json-string-set" }],
+    },
+  ]);
+});
+
 it("distinguishes PostgreSQL staging from SQLite temporary schemas", () => {
   const { root, write } = fixture();
   write(
@@ -314,6 +362,20 @@ it("compares base to working tree or index using only changed files, and permits
 it.each([
   { file: "src/infra/sqlite-strict.ts", sql: "PRAGMA foreign_keys = OFF", result: 0, owner: true },
   { file: "src/consumer.ts", sql: "PRAGMA foreign_keys = OFF", result: 1, owner: false },
+  { file: "src/infra/sqlite-snapshot.ts", sql: "PRAGMA auto_vacuum", result: 0, owner: true },
+  { file: "src/consumer.ts", sql: "PRAGMA auto_vacuum", result: 1, owner: false },
+  {
+    file: "src/infra/sqlite-snapshot.ts",
+    sql: "INSERT OR IGNORE INTO t VALUES (1)",
+    result: 1,
+    owner: true,
+  },
+  {
+    file: "src/infra/sqlite-snapshot.ts",
+    sql: "SELECT json_extract(value, '$') FROM t",
+    result: 1,
+    owner: true,
+  },
   {
     file: "src/infra/sqlite-strict.ts",
     sql: "INSERT OR IGNORE INTO t VALUES (1)",

@@ -4,16 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  readSqliteTranscriptPayload,
-  sqliteTranscriptPayloadColumns,
-} from "../../scripts/lib/sqlite-transcript-payload.mjs";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
-import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   claimOpenClawAgentDatabaseLease,
@@ -36,105 +30,16 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
+import {
+  type FixtureEvent,
+  insertSession,
+  messageEvent,
+  readEventJson,
+  readGeneration,
+  readMigrationCursor,
+} from "./state-migrations.transcript-directives.test-support.js";
 
 const tempDirs: string[] = [];
-
-type FixtureEvent = Record<string, unknown>;
-
-function messageEvent(params: {
-  content: unknown;
-  id: string;
-  parentId?: string | null;
-  role: "assistant" | "toolResult" | "user";
-  timestamp: number;
-}): FixtureEvent {
-  return {
-    type: "message",
-    id: params.id,
-    parentId: params.parentId ?? null,
-    timestamp: params.timestamp,
-    message: {
-      role: params.role,
-      content: params.content,
-      timestamp: params.timestamp,
-      ...(params.role === "assistant"
-        ? {
-            api: "messages",
-            provider: "anthropic",
-            model: "sonnet-4.6",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-          }
-        : {}),
-    },
-  };
-}
-
-function insertSession(
-  database: import("node:sqlite").DatabaseSync,
-  params: {
-    events: FixtureEvent[];
-    generation: string;
-    sessionId: string;
-    reconcile?: boolean;
-    legacy?: boolean;
-  },
-): void {
-  const sessionKey = `agent:main:${params.sessionId}`;
-  database
-    .prepare(
-      `INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at)
-       VALUES(?,?,?,?)`,
-    )
-    .run(sessionKey, params.sessionId, "{}", 1);
-  database
-    .prepare(
-      `INSERT INTO session_windows(session_id,session_key,created_at,updated_at,transcript_updated_at)
-       VALUES(?,?,?,?,?)`,
-    )
-    .run(params.sessionId, sessionKey, 1, 1, 1);
-  database
-    .prepare(
-      `INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at)
-       VALUES(?,?,?)`,
-    )
-    .run(params.sessionId, params.generation, 1);
-  for (const [seq, event] of params.events.entries()) {
-    const eventJson = JSON.stringify(event);
-    if (params.legacy) {
-      database
-        .prepare(
-          `INSERT INTO transcript_events(session_id,seq,event_json,created_at)
-         VALUES(?,?,?,?)`,
-        )
-        .run(params.sessionId, seq, eventJson, Number(event.timestamp ?? 1));
-    } else {
-      database
-        .prepare(`INSERT INTO transcript_events
-        (session_id,seq,event_json,created_at,navigation_type,navigation_custom_type,
-         navigation_display,message_role,navigation_last_type,navigation_last_custom_type,navigation_valid)
-        VALUES ($sessionId,$seq,$eventJson,$createdAt,$navigation_type,$navigation_custom_type,
-          $navigation_display,$message_role,$navigation_last_type,$navigation_last_custom_type,$navigation_valid)`)
-        .run({
-          sessionId: params.sessionId,
-          seq,
-          eventJson,
-          createdAt: Number(event.timestamp ?? 1),
-          ...deriveTranscriptPredicateFields(eventJson),
-        });
-    }
-  }
-  if (params.reconcile !== false) {
-    reconcileSessionTranscriptIndexInTransaction(database, params.sessionId);
-  }
-}
 
 function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
   // These active stores have known-empty deletion history before their legacy bytes exist.
@@ -151,52 +56,6 @@ function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
     UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
   `);
   return { db: database, path: databasePath };
-}
-
-function readEventJson(databasePath: string, sessionId: string, seq: number): string {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare(
-        `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? AND seq = ?`,
-      )
-      .get(sessionId, seq);
-    if (!row) {
-      throw new Error(`Missing transcript fixture ${sessionId}:${seq}`);
-    }
-    return readSqliteTranscriptPayload(row);
-  } finally {
-    database.close();
-  }
-}
-
-function readGeneration(databasePath: string, sessionId: string): string {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
-      .get(sessionId) as { generation: string };
-    return row.generation;
-  } finally {
-    database.close();
-  }
-}
-
-function readMigrationCursor(databasePath: string): unknown {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare(
-        "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
-      )
-      .get() as { app_version: string } | undefined;
-    return row ? JSON.parse(row.app_version) : undefined;
-  } finally {
-    database.close();
-  }
 }
 
 function hasTranscriptArchivesTable(databasePath: string): boolean {
@@ -496,7 +355,13 @@ describe("historical transcript directive migration", () => {
         "agent",
         1,
         "main",
-        JSON.stringify({ generation: "", phase: "archives", sessionId: "" }),
+        JSON.stringify({
+          generation: "",
+          phase: "archives",
+          scope: "all",
+          sessionId: "",
+          version: 2,
+        }),
         1,
         1,
       );
@@ -506,7 +371,7 @@ describe("historical transcript directive migration", () => {
       changes: [],
       warnings: [],
     });
-    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
+    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
     expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
   });
 
@@ -698,7 +563,7 @@ describe("historical transcript directive migration", () => {
       changes: [],
       warnings: [],
     });
-    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
+    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
   });
 
   it("rolls back a transcript transaction when maintenance expires before commit", async () => {
@@ -812,7 +677,13 @@ describe("historical transcript directive migration", () => {
       .run(
         "historical-transcript-directives-v1",
         1,
-        JSON.stringify({ generation: "", phase: "archives", sessionId: "" }),
+        JSON.stringify({
+          generation: "",
+          phase: "archives",
+          scope: "all",
+          sessionId: "",
+          version: 2,
+        }),
         1,
         1,
         "agent",
@@ -868,7 +739,9 @@ describe("historical transcript directive migration", () => {
     expect(readMigrationCursor(opened.path)).toEqual({
       generation: "",
       phase: "archives",
+      scope: "all",
       sessionId: "",
+      version: 2,
     });
     releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
   });
@@ -927,7 +800,12 @@ describe("historical transcript directive migration", () => {
     let competingLeaseId: string | undefined;
     let cursorAtCompetition: unknown;
     let competedAt = 0;
-    const batchCursor = { phase: "transcripts", sessionId: sessionIdAt(batchSize - 1) };
+    const batchCursor = {
+      phase: "transcripts",
+      scope: "all",
+      sessionId: sessionIdAt(batchSize - 1),
+      version: 2,
+    };
     const scheduleImmediate = globalThis.setImmediate;
     vi.spyOn(globalThis, "setImmediate").mockImplementation((callback, ...args) =>
       scheduleImmediate(() => {
@@ -959,7 +837,7 @@ describe("historical transcript directive migration", () => {
       expect.objectContaining({ message: expect.stringContaining("maintenance is in progress") }),
     );
     expect(competingLeaseId).toBeUndefined();
-    expect(readMigrationCursor(opened.path)).toEqual({ phase: "complete" });
+    expect(readMigrationCursor(opened.path)).toEqual({ phase: "complete", version: 2 });
     expect(JSON.parse(readEventJson(opened.path, sessionIdAt(batchSize), 0))).toMatchObject({
       message: { content: [{ type: "text", text: "Migrating" }] },
     });

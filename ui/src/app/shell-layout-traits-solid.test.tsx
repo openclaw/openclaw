@@ -7,7 +7,7 @@ import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { renderModelProvidersPageShell } from "../pages/model-providers/view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { ShellLayoutOwner } from "./shell-layout-owner.ts";
-import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
+import { createFooterControlRef, ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
 afterEach(() => {
   cleanup();
@@ -23,6 +23,78 @@ it("renders standalone settings without a shell layout owner", () => {
     </SettingsWorkspace>
   ));
   expect(view.getByRole("heading", { name: "Standalone settings" })).toBeTruthy();
+});
+
+it("checks only visible footer surfaces inside the current shell content", () => {
+  const content = document.createElement("main");
+  const surface = document.createElement("div");
+  document.body.append(content);
+  content.append(surface);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(content);
+  let visible = true;
+  let rect = new DOMRect(60, 760, 600, 80);
+  surface.checkVisibility = () => visible;
+  surface.getBoundingClientRect = () => rect;
+  const release = owner.registerFooterControlSurface(surface);
+  const bounds = { left: 44, right: 284, top: 756, bottom: 800 };
+  expect(owner.footerControlsOverlap(bounds)).toBe(true);
+  visible = false;
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  visible = true;
+  rect = new DOMRect(284, 760, 600, 80);
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  rect = new DOMRect(60, 760, 0, 80);
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  rect = new DOMRect(60, 760, 600, 80);
+  document.body.append(surface);
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  content.append(surface);
+  content.remove();
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  document.body.append(content);
+  release();
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  owner.registerFooterControlSurface(surface);
+  owner.dispose();
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+});
+
+it("releases replaced footer refs and the retained surface when their renderer retires", () => {
+  const content = document.createElement("main");
+  const host = document.createElement("div");
+  const replacement = document.createElement("div");
+  content.append(host, replacement);
+  document.body.append(content);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(content);
+  let attach!: (element: HTMLElement) => void;
+  function Surface() {
+    attach = createFooterControlRef();
+    return <div ref={attach}>Original footer</div>;
+  }
+  const view = render(
+    () => (
+      <ShellLayoutProvider value={{ owner, host }}>
+        <Surface />
+      </ShellLayoutProvider>
+    ),
+    { container: host },
+  );
+  const original = view.getByText("Original footer");
+  original.checkVisibility = () => true;
+  replacement.checkVisibility = () => true;
+  original.getBoundingClientRect = () => new DOMRect(60, 760, 600, 80);
+  replacement.getBoundingClientRect = () => new DOMRect(500, 760, 600, 80);
+  const bounds = { left: 44, right: 284, top: 756, bottom: 800 };
+  expect(owner.footerControlsOverlap(bounds)).toBe(true);
+  attach(replacement);
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
+  replacement.getBoundingClientRect = () => new DOMRect(60, 760, 600, 80);
+  expect(owner.footerControlsOverlap(bounds)).toBe(true);
+  view.unmount();
+  expect(replacement.isConnected).toBe(true);
+  expect(owner.footerControlsOverlap(bounds)).toBe(false);
 });
 
 it("reserves the Models page column before its body finishes loading", () => {
@@ -57,7 +129,7 @@ it("reserves the Models page column before its body finishes loading", () => {
   expect(content.textContent).toContain("Models ready");
 });
 
-it("publishes settings layout before descendants render and measure updates", () => {
+it("publishes settings layout before mounted descendants measure updates", () => {
   const content = document.createElement("main");
   content.className = "content";
   const host = document.createElement("div");
@@ -68,7 +140,9 @@ it("publishes settings layout before descendants render and measure updates", ()
   const [wide, setWide] = createSignal(true);
   const observations: string[] = [];
   function Measure() {
-    observations.push(content.className);
+    onSettled(() => {
+      observations.push(content.className);
+    });
     createEffect(wide, () => {
       observations.push(content.className);
     });
@@ -106,7 +180,9 @@ it("keeps layout traits through shell class updates and retires them with their 
   let content!: HTMLElement;
   const measurements: string[] = [];
   function Measure() {
-    measurements.push(content.className);
+    onSettled(() => {
+      measurements.push(content.className);
+    });
     createEffect(chat, () => {
       measurements.push(content.className);
     });
@@ -189,12 +265,13 @@ const BridgedSettingsPage = defineSolidBridge(
 );
 
 it.each([
-  { bridged: false, detached: false },
-  { bridged: true, detached: false },
-  { bridged: true, detached: true },
+  { bridged: false, detached: false, stacked: false },
+  { bridged: false, detached: false, stacked: true },
+  { bridged: true, detached: false, stacked: false },
+  { bridged: true, detached: true, stacked: false },
 ])(
-  "publishes initial page layout ($bridged bridge, $detached detached)",
-  async ({ bridged, detached }) => {
+  "publishes initial page layout ($bridged bridge, $detached detached, $stacked stacked)",
+  async ({ bridged, detached, stacked }) => {
     const owner = new ShellLayoutOwner();
     let content!: HTMLElement;
     const container = detached ? document.createElement("div") : undefined;
@@ -219,7 +296,7 @@ it.each([
               <BridgedSettingsPage />
             ) : (
               <SettingsPage wide>
-                <SettingsPageHeader title="Native settings" />
+                <SettingsPageHeader title="Native settings" stacked={stacked} />
               </SettingsPage>
             )}
           </ShellLayoutProvider>
@@ -236,6 +313,6 @@ it.each([
     });
     expect(content.classList.contains("content--settings-page")).toBe(true);
     expect(content.classList.contains("content--settings-wide")).toBe(true);
-    expect(content.classList.contains("content--toolbar-header")).toBe(true);
+    expect(content.classList.contains("content--toolbar-header")).toBe(!stacked);
   },
 );

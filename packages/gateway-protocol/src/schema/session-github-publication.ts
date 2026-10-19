@@ -46,6 +46,7 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
+  draft: Type.Optional(Type.Boolean()),
   selection: Type.Optional(GitHubPublicationSelectionSchema),
 });
 
@@ -69,7 +70,48 @@ export const GitHubBaseRefreshSchema = closedObject({
   // Equality check against the pending integration, never a ref selector.
   baseCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" })),
 });
+export const GitHubPublicationEditSchema = closedObject({
+  action: Type.Literal("edit"),
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
+  title: Type.Optional(GitHubPublicationTitleSchema),
+  body: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
+  expectedTitle: Type.Optional(GitHubPublicationTitleSchema),
+  expectedBody: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
+});
+export const GitHubPublicationReviewRequestSchema = closedObject({
+  action: Type.Literal("request_review"),
+  requestId: PersonalGitHubGenerationSchema,
+  expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+});
+export const GITHUB_PUBLICATION_EVIDENCE_MAX_BYTES = 10_000_000;
+export const GitHubPublicationEvidenceSchema = closedObject({
+  path: Type.String({ minLength: 1, maxLength: 1024 }),
+  sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  sizeBytes: Type.Integer({ minimum: 1, maximum: GITHUB_PUBLICATION_EVIDENCE_MAX_BYTES }),
+});
+export const GitHubPublicationEvidenceUploadSchema = closedObject({
+  action: Type.Literal("upload_evidence"),
+  requestId: PersonalGitHubGenerationSchema,
+  expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+  evidence: GitHubPublicationEvidenceSchema,
+});
 export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPublicationReviewRequestSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...GitHubPublicationEvidenceUploadSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...GitHubPublicationEditSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
   closedObject({
     ...GitHubPublicationActionSchema.properties,
     sessionKey: NonEmptyString,
@@ -136,6 +178,31 @@ export const SessionGitHubActionResultSchema = closedObject({
   mergeCommit: Type.Union([Type.String(), Type.Null()]),
   mergeable: Type.Union([Type.Boolean(), Type.Null()]),
   mergeState: Type.String(),
+  reviewRequest: Type.Optional(
+    closedObject({
+      status: Type.Literal("posted"),
+      url: NonEmptyString,
+      message: NonEmptyString,
+    }),
+  ),
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
+  evidence: Type.Optional(
+    Type.Union([
+      closedObject({
+        status: Type.Literal("uploaded"),
+        url: NonEmptyString,
+        sha256: NonEmptyString,
+        sizeBytes: Type.Integer({ minimum: 1 }),
+        mimeType: NonEmptyString,
+        publicAccess: Type.Literal("unverified"),
+      }),
+      closedObject({
+        status: Type.Literal("unconfirmed"),
+        message: NonEmptyString,
+      }),
+    ]),
+  ),
 });
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
@@ -227,6 +294,8 @@ export const SessionGitHubOptionsResultSchema = closedObject({
 export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
+export type GitHubPublicationEdit = Static<typeof GitHubPublicationEditSchema>;
+export type GitHubPublicationEvidence = Static<typeof GitHubPublicationEvidenceSchema>;
 export type SessionGitHubActionParams = Static<typeof SessionGitHubActionParamsSchema>;
 export type SessionGitHubActionResult = Static<typeof SessionGitHubActionResultSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;

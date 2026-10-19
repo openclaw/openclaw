@@ -1,4 +1,3 @@
-// Managed gateway service lifecycle before and after an update.
 import { confirm, isCancel } from "@clack/prompts";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";

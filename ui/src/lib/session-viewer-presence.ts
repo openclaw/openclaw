@@ -1,4 +1,4 @@
-import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/session-limits.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
@@ -88,7 +88,7 @@ export function sessionViewerPresenceForGateway(
       signature,
       {
         onSuccess: () => {
-          if (!isActive()) {
+          if (!isActive() && sessionKeys.length === 0) {
             lifecycle.detach();
           }
         },
@@ -115,10 +115,8 @@ export function sessionViewerPresenceForGateway(
     retry.reset();
     if (isActive()) {
       lifecycle.attach();
-      lifecycle.schedule();
-    } else if (lifecycle.attached) {
-      lifecycle.sync();
     }
+    lifecycle.schedule();
   };
 
   const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };

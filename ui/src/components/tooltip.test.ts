@@ -5,7 +5,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { Kbd } from "./solid/kbd.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
@@ -256,21 +256,41 @@ describe("openclaw-tooltip", () => {
     await expectOpenCount(1);
   });
 
-  it("keeps a repeated-label tooltip when a nested label clips", async () => {
-    const provider = createProvider();
-    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
-    const label = document.createElement("span");
-    label.textContent = "Claude Opus 4.7 Anthropic";
-    Object.defineProperty(label, "scrollWidth", { value: 160, configurable: true });
-    Object.defineProperty(label, "clientWidth", { value: 80, configurable: true });
-    trigger.append(label);
-    provider.append(tooltip);
-    document.body.append(provider);
-    await commitTooltip(tooltip);
+  it.each(["width", "height", "marker", "hidden descendant", "faded descendant"] as const)(
+    "keeps a repeated-label tooltip for nested overflow: %s",
+    async (overflow) => {
+      const provider = createProvider();
+      const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
+      const label = document.createElement("span");
+      label.textContent = "Claude Opus 4.7 Anthropic";
+      let target = label;
+      if (overflow === "hidden descendant" || overflow === "faded descendant") {
+        const wrapper = document.createElement("span");
+        wrapper.hidden = overflow === "hidden descendant";
+        wrapper.style.opacity = overflow === "faded descendant" ? "0" : "1";
+        target = document.createElement("span");
+        target.textContent = "Decorative text";
+        wrapper.append(target);
+        label.append(wrapper);
+      }
+      if (overflow === "width") {
+        Object.defineProperty(target, "scrollWidth", { value: 160, configurable: true });
+        Object.defineProperty(target, "clientWidth", { value: 80, configurable: true });
+      } else if (overflow === "height") {
+        Object.defineProperty(target, "scrollHeight", { value: 80, configurable: true });
+        Object.defineProperty(target, "clientHeight", { value: 40, configurable: true });
+      } else {
+        target.setAttribute("data-tooltip-overflow", "");
+      }
+      trigger.append(label);
+      provider.append(tooltip);
+      document.body.append(provider);
+      await commitTooltip(tooltip);
 
-    focusTrigger(trigger);
-    await expectOpenCount(1);
-  });
+      focusTrigger(trigger);
+      await expectOpenCount(1);
+    },
+  );
 
   it("does not reopen from pointer-origin focus after activation settles", async () => {
     const provider = createProvider();
@@ -479,6 +499,7 @@ describe("openclaw-tooltip", () => {
         wrapper.append(trigger);
         directTrigger.replaceWith(wrapper);
       }
+      tooltip.descriptionTarget = () => trigger;
       const action = document.createElement("button");
       action.textContent = "Card action";
       card.append(action);
@@ -662,7 +683,7 @@ describe("title tooltips", () => {
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
 
-    const hovercard = new PortaledHovercardController(() => hovercard.reset());
+    const hovercard = createPortaledHovercardOwner(() => hovercard.reset());
     hovercard.markTrigger(trigger);
     await Promise.resolve();
     await commitTooltip(tooltip);
@@ -848,6 +869,79 @@ describe("title tooltips", () => {
     await expectOpenCount(1);
   });
 
+  it("keeps an inherited hint on its focused control until focus moves to a sibling", async () => {
+    const wrapper = document.createElement("div");
+    wrapper.title = "Shared action details";
+    const first = document.createElement("button");
+    const second = document.createElement("button");
+    first.textContent = "First action";
+    second.textContent = "Second action";
+    first.setAttribute("aria-describedby", "first-description");
+    second.setAttribute("aria-describedby", "second-description");
+    wrapper.append(first, second);
+    document.body.append(wrapper);
+
+    second.focus();
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const ids = (second.getAttribute("aria-describedby") ?? "").split(/\s+/u);
+    expect(ids).toHaveLength(2);
+    const descriptionId = ids.find((id) => id !== "second-description")!;
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Shared action details");
+    expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    expect(wrapper.hasAttribute("aria-describedby")).toBe(false);
+    const surface = currentTooltipSurface(tooltip);
+    expect(tooltipIsOpen(tooltip)).toBe(true);
+
+    for (const target of [first, wrapper]) {
+      dispatchMousePointer(target, "pointerover");
+      await settleTooltip(tooltip);
+      expect(second.getAttribute("aria-describedby")).toBe(`second-description ${descriptionId}`);
+      expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    }
+
+    first.focus();
+    await settleTooltip(tooltip);
+    expect(document.activeElement).toBe(first);
+    expect(first.getAttribute("aria-describedby")).toBe(`first-description ${descriptionId}`);
+    expect(second.getAttribute("aria-describedby")).toBe("second-description");
+    expect(document.querySelector("openclaw-tooltip")).toBe(tooltip);
+    expect(currentTooltipSurface(tooltip)).toBe(surface);
+    expect(tooltipIsOpen(tooltip)).toBe(true);
+  });
+
+  it("describes a titled label's associated control and follows its next pointer discovery", async () => {
+    const label = document.createElement("label");
+    label.title = "Account details";
+    label.textContent = "Account";
+    const first = document.createElement("input");
+    const second = document.createElement("input");
+    first.id = "first-account";
+    second.id = "second-account";
+    first.setAttribute("aria-describedby", "first-description");
+    second.setAttribute("aria-describedby", "second-description");
+    label.htmlFor = first.id;
+    document.body.append(label, first, second);
+
+    dispatchMousePointer(label, "pointerover");
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const ids = (first.getAttribute("aria-describedby") ?? "").split(/\s+/u);
+    expect(ids).toHaveLength(2);
+    const descriptionId = ids.find((id) => id !== "first-description")!;
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Account details");
+    expect(label.hasAttribute("aria-describedby")).toBe(false);
+    expect(second.getAttribute("aria-describedby")).toBe("second-description");
+
+    label.htmlFor = second.id;
+    dispatchMousePointer(label, "pointerover");
+    await settleTooltip(tooltip);
+    expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    expect(second.getAttribute("aria-describedby")).toBe(`second-description ${descriptionId}`);
+    expect(label.hasAttribute("aria-describedby")).toBe(false);
+    expect(document.querySelector("openclaw-tooltip")).toBe(tooltip);
+  });
+
   it("uses the nearest inherited title through shadow DOM and preserves iframe names", async () => {
     const parent = document.createElement("div");
     parent.title = "Inherited hint";
@@ -861,6 +955,9 @@ describe("title tooltips", () => {
     await commitTooltip(tooltip);
     expect(tooltip.content).toBe("Inherited hint");
     await settleTooltip(tooltip);
+    const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
+    expect(shadow.getElementById(descriptionId)?.textContent).toBe("Inherited hint");
+    expect(parent.hasAttribute("aria-describedby")).toBe(false);
     expect(tooltipIsOpen(tooltip)).toBe(true);
 
     const iframe = document.createElement("iframe");

@@ -10,6 +10,8 @@ const target = {
 const controls = ["tool_search", "tool_describe", "dispatch_action"];
 const probeText = "probe ok; PLUGIN_ROOT=/fixture; PLUGIN_DATA=/fixture-data; PROBE_MODE=live";
 type Round = { name: string; args: Record<string, unknown>; value: unknown };
+const parameters = { type: "object", properties: {}, additionalProperties: false };
+const described = (patch = {}) => ({ ...target, parameters: { ...parameters, ...patch } });
 
 function targetResult(
   text = probeText,
@@ -27,14 +29,7 @@ function targetResult(
 function rounds(text = probeText): Round[] {
   return [
     { name: "tool_search", args: { query: target.name, limit: 1 }, value: [{ ...target }] },
-    {
-      name: "tool_describe",
-      args: { id: target.id },
-      value: {
-        ...target,
-        parameters: { additionalProperties: false, properties: {}, type: "object" },
-      },
-    },
+    { name: "tool_describe", args: { id: target.id }, value: described() },
     { name: "dispatch_action", args: { id: target.id, args: {} }, value: targetResult(text) },
   ];
 }
@@ -59,6 +54,12 @@ function request(completed = rounds()) {
   return { tools: controls.map((name) => ({ type: "function", name })), input };
 }
 
+function expectFailure(body: ReturnType<typeof request>, reason = "unexpected-tool-output") {
+  expect(resolveAgentPluginBundleResponse(body)).toEqual({
+    text: `AGENT_BUNDLE_MCP_FAIL ${reason}`,
+  });
+}
+
 describe("Agent Plugins bundle mock response", () => {
   it.each([
     [String.raw`C:\Fixture User\plugin=one; two`, String.raw`C:\Fixture User\data=one; two`],
@@ -69,18 +70,16 @@ describe("Agent Plugins bundle mock response", () => {
       const completed = rounds(
         `probe ok; PLUGIN_ROOT=${pluginRoot}; PLUGIN_DATA=${pluginData}; PROBE_MODE=live`,
       );
-      expect(resolveAgentPluginBundleResponse(request([]))).toEqual({
-        tool: { name: "tool_search", args: { query: target.name, limit: 1 } },
-      });
-      expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 1)))).toEqual({
-        tool: { name: "tool_describe", args: { id: target.id } },
-      });
-      expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 2)))).toEqual({
-        tool: { name: "dispatch_action", args: { id: target.id, args: {} } },
-      });
-      expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-        text: "AGENT_BUNDLE_MCP_OK",
-      });
+      expect(
+        [0, 1, 2, 3].map((count) =>
+          resolveAgentPluginBundleResponse(request(completed.slice(0, count))),
+        ),
+      ).toEqual([
+        { tool: { name: "tool_search", args: { query: target.name, limit: 1 } } },
+        { tool: { name: "tool_describe", args: { id: target.id } } },
+        { tool: { name: "dispatch_action", args: { id: target.id, args: {} } } },
+        { text: "AGENT_BUNDLE_MCP_OK" },
+      ]);
     },
   );
 
@@ -88,9 +87,7 @@ describe("Agent Plugins bundle mock response", () => {
     const body = request([]);
     body.tools = body.tools.filter((tool) => tool.name !== missing);
     body.input.push({ role: "assistant", content: JSON.stringify({ name: missing }) });
-    expect(resolveAgentPluginBundleResponse(body)).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
-    });
+    expectFailure(body, "tool-not-declared");
   });
 
   it.each([
@@ -108,135 +105,75 @@ describe("Agent Plugins bundle mock response", () => {
     expect(resolveAgentPluginBundleResponse(body)).toEqual(expected);
   });
 
-  it.each<[string, (value: Round[]) => void]>([
-    ...(
-      [
-        ["wrong search call", 0, { name: "read" }],
-        ["wrong search query", 0, { args: { query: "other", limit: 1 } }],
-        ["missing candidate", 0, { value: [] }],
-        ["ambiguous candidates", 0, { value: [target, { ...target, id: "other" }] }],
-        ["wrong candidate source", 0, { value: [{ ...target, source: "openclaw" }] }],
-        ["wrong describe selector", 1, { args: { id: "other" } }],
-        [
-          "wrong described target",
-          1,
-          {
-            value: {
-              ...target,
-              id: "other",
-              parameters: { type: "object", properties: {}, additionalProperties: false },
-            },
-          },
-        ],
-        ["missing described schema", 1, { value: target }],
-        ["wrong call selector", 2, { args: { id: "other", args: {} } }],
-        ["unexpected target arguments", 2, { args: { id: target.id, args: { unexpected: true } } }],
-        [
-          "wrong receipt target",
-          2,
-          { value: { ...targetResult(), tool: { ...target, id: "other" } } },
-        ],
-        [
-          "missing target details",
-          2,
-          { value: { tool: target, result: { content: [{ type: "text", text: probeText }] } } },
-        ],
-        ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
-        ["wrong MCP operation", 2, { value: targetResult(probeText, { mcpTool: "other" }) }],
-        ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
-        ["missing environment evidence", 2, { value: targetResult("probe ok") }],
-        [
-          "corrupted probe success field",
-          2,
-          { value: targetResult(probeText.replace("probe ok", "probe ok=false")) },
-        ],
-        [
-          "corrupted probe mode field",
-          2,
-          { value: targetResult(probeText.replace("PROBE_MODE=live", "PROBE_MODE=live-corrupt")) },
-        ],
-        ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
-      ] satisfies [string, number, Partial<Round>][]
-    ).map(([label, index, patch]): [string, (value: Round[]) => void] => [
-      label,
-      (value) => {
-        value[index] = { ...value[index]!, ...patch };
-      },
-    ]),
-    ...(
-      [
-        [
-          "unexpected required arguments",
-          { type: "object", properties: {}, additionalProperties: false, required: ["city"] },
-        ],
-        [
-          "unexpected properties",
-          { type: "object", properties: { city: { type: "string" } }, additionalProperties: false },
-        ],
-        [
-          "permissive additional properties",
-          { type: "object", properties: {}, additionalProperties: true },
-        ],
-        ["missing additional-property restriction", { type: "object", properties: {} }],
-      ] satisfies [string, Record<string, unknown>][]
-    ).map(([label, parameters]): [string, (value: Round[]) => void] => [
-      label,
-      (value) => {
-        value.splice(2);
-        value[1]!.value = { ...target, parameters };
-      },
-    ]),
+  it.each<[string, number, Partial<Round>]>([
+    ["wrong search call", 0, { name: "read" }],
+    ["wrong search query", 0, { args: { query: "other", limit: 1 } }],
+    ["missing candidate", 0, { value: [] }],
+    ["ambiguous candidates", 0, { value: [target, { ...target, id: "other" }] }],
+    ["wrong candidate source", 0, { value: [{ ...target, source: "openclaw" }] }],
+    ["wrong describe selector", 1, { args: { id: "other" } }],
+    ["wrong described target", 1, { value: { ...described(), id: "other" } }],
+    ["missing described schema", 1, { value: target }],
+    ["wrong call selector", 2, { args: { id: "other", args: {} } }],
+    ["unexpected target arguments", 2, { args: { id: target.id, args: { unexpected: true } } }],
+    ["wrong receipt target", 2, { value: { ...targetResult(), tool: { ...target, id: "other" } } }],
     [
-      "extra invocation",
-      (value) => {
-        value.push({ ...value[2]! });
-      },
+      "missing target details",
+      2,
+      { value: { tool: target, result: { content: [{ type: "text", text: probeText }] } } },
     ],
-  ])("rejects %s even when success markers are present", (_label, corrupt) => {
+    ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
+    ["wrong MCP operation", 2, { value: targetResult(probeText, { mcpTool: "other" }) }],
+    ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
+    ["missing environment evidence", 2, { value: targetResult("probe ok") }],
+    [
+      "corrupted probe success field",
+      2,
+      { value: targetResult(probeText.replace("probe ok", "probe ok=false")) },
+    ],
+    [
+      "corrupted probe mode field",
+      2,
+      { value: targetResult(probeText.replace("PROBE_MODE=live", "PROBE_MODE=live-corrupt")) },
+    ],
+    ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
+    ["unexpected required arguments", 1, { value: described({ required: ["city"] }) }],
+    [
+      "unexpected properties",
+      1,
+      { value: described({ properties: { city: { type: "string" } } }) },
+    ],
+    ["permissive additional properties", 1, { value: described({ additionalProperties: true }) }],
+    [
+      "missing additional-property restriction",
+      1,
+      { value: { ...target, parameters: { type: "object", properties: {} } } },
+    ],
+    ["extra invocation", 3, {}],
+  ])("rejects %s even when success markers are present", (_label, index, patch) => {
     const completed = rounds();
-    corrupt(completed);
-    expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-    });
+    if (index === 3) {
+      completed.push({ ...completed[2]! });
+    } else {
+      completed[index] = { ...completed[index]!, ...patch };
+    }
+    expectFailure(request(completed));
   });
 
   it.each<[string, (body: ReturnType<typeof request>) => void]>([
     ...[0, 1, 2].map((index): [string, (body: ReturnType<typeof request>) => void] => [
       `unframed ${controls[index]} output`,
-      (body) => {
-        body.input[2 + index * 2]!.output = JSON.stringify(rounds()[index]!.value);
-      },
+      ({ input }) =>
+        Object.assign(input[2 + index * 2]!, { output: JSON.stringify(rounds()[index]!.value) }),
     ]),
     [
       "description issued before search completion",
-      (body) => {
-        body.input.splice(1, 3, body.input[3]!, body.input[1]!, body.input[2]!);
-      },
+      ({ input }) => input.splice(1, 3, input[3]!, input[1]!, input[2]!),
     ],
-    [
-      "unpaired output",
-      (body) => {
-        body.input[6]!.call_id = "unrelated";
-      },
-    ],
-    [
-      "result before its call",
-      (body) => {
-        [body.input[5], body.input[6]] = [body.input[6]!, body.input[5]!];
-      },
-    ],
-    [
-      "duplicate call identity",
-      (body) => {
-        body.input.splice(5, 0, { ...body.input[5]! });
-      },
-    ],
-    [
-      "outer error",
-      (body) => {
-        body.input[6]!.isError = true;
-      },
-    ],
+    ["unpaired output", ({ input }) => Object.assign(input[6]!, { call_id: "unrelated" })],
+    ["result before its call", ({ input }) => input.splice(5, 2, input[6]!, input[5]!)],
+    ["duplicate call identity", ({ input }) => input.splice(5, 0, { ...input[5]! })],
+    ["outer error", ({ input }) => Object.assign(input[6]!, { isError: true })],
     [
       "mismatched external boundary",
       (body) => {
@@ -250,8 +187,6 @@ describe("Agent Plugins bundle mock response", () => {
   ])("rejects %s", (_label, corrupt) => {
     const body = request();
     corrupt(body);
-    expect(resolveAgentPluginBundleResponse(body)).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-    });
+    expectFailure(body);
   });
 });

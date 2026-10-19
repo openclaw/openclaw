@@ -5,13 +5,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { doctorDatabasePort, type DatabasePortOptions } from "./doctor-database-port.js";
 
 describe("database port engine-selection admission", () => {
-  it.each([
-    { to: "postgres" },
-    { to: "sqlite", dryRun: true },
-    { resume: "unread-recovery.json" },
-    { rollback: "unread-recovery.json" },
-  ] satisfies DatabasePortOptions[])(
-    "refuses mixed installs before touching stores (%j)",
+  it.each([{ to: "postgres" }, { to: "sqlite", dryRun: true }] satisfies DatabasePortOptions[])(
+    "requires a family for mixed installs before touching stores (%j)",
     async (options) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         await state.writeConfig({
@@ -24,7 +19,7 @@ describe("database port engine-selection admission", () => {
         const database = await state.writeText("state/openclaw.sqlite", "retained state bytes");
         const before = await fs.readFile(state.configPath);
         await expect(doctorDatabasePort(options)).rejects.toThrow(
-          /port for mixed-engine installs is not supported yet; use a single engine/,
+          /Mixed-engine database port requires --family/,
         );
         expect(await fs.readFile(database, "utf8")).toBe("retained state bytes");
         expect(await fs.readFile(state.configPath)).toEqual(before);
@@ -85,7 +80,7 @@ describe("database port engine-selection admission", () => {
         });
         const before = await fs.readFile(state.configPath);
         await expect(doctorDatabasePort({ to, dryRun: true })).rejects.toThrow(
-          /port .*not supported yet; use a single engine/,
+          /requires --family|require --family/,
         );
         expect(await fs.readFile(state.configPath)).toEqual(before);
       });

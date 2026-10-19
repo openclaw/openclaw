@@ -25,6 +25,7 @@ export type StateSchemaVersionFacts = { userVersion: number; contentVersion: num
 
 const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
   name: "state.schema-version",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -50,9 +51,11 @@ type StateSchemaAdmission<Value> = {
 export function createStateSchemaAdmission<Value>(
   name: string,
   read: SqliteDatabaseAdmissionKey<Value>["read"],
+  lifetime?: "process",
 ) {
   const key: SqliteDatabaseAdmissionKey<StateSchemaAdmission<Value>> = {
     name,
+    lifetime,
     schemaDependent: true,
     read(input) {
       if (
@@ -102,13 +105,16 @@ export function createStateSchemaAdmission<Value>(
   };
 }
 
-const runtimeAdmission = createStateSchemaAdmission("state.runtime-schema", (value) =>
-  typeof value === "object" &&
-  value !== null &&
-  "startupReady" in value &&
-  typeof value.startupReady === "boolean"
-    ? { startupReady: value.startupReady }
-    : undefined,
+const runtimeAdmission = createStateSchemaAdmission(
+  "state.runtime-schema",
+  (value) =>
+    typeof value === "object" &&
+    value !== null &&
+    "startupReady" in value &&
+    typeof value.startupReady === "boolean"
+      ? { startupReady: value.startupReady }
+      : undefined,
+  "process",
 );
 
 type ConnectionVersion = { schema: { admissionId: string }; facts: StateSchemaVersionFacts };

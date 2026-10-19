@@ -1,17 +1,17 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
-import { readDraftCloudProfiles } from "./discovery.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import { renderPicker } from "./where-chip.test-support.ts";
 
 describe("Cloud backend picker presentation", () => {
   it("orders actual backend groups while retaining disabled and missing selections", () => {
-    const cloudProfiles = readDraftCloudProfiles([
+    const cloudProfiles: DraftCloudProfile[] = [
       { id: "AWS", providerId: "crabbox", providerDisplayId: "local-container" },
       { id: "Azure", providerId: "crabbox", providerDisplayId: "incus" },
       { id: "custom", providerId: "custom-worker" },
       { id: "local", providerId: "crabbox", providerDisplayId: "machine0" },
       { id: "production", providerId: "crabbox", providerDisplayId: "aws" },
-    ]);
+    ];
     const onSelect = vi.fn();
     const container = renderPicker(
       true,
@@ -47,7 +47,7 @@ describe("Cloud backend picker presentation", () => {
 
   it("uses the backend rather than the profile name in both trigger and filtered menu", () => {
     const onSelect = vi.fn();
-    const cloudProfiles = readDraftCloudProfiles([
+    const cloudProfiles: DraftCloudProfile[] = [
       {
         id: "aws",
         providerId: "crabbox",
@@ -55,7 +55,7 @@ describe("Cloud backend picker presentation", () => {
         operatingSystems: [{ id: "linux", label: "Linux", default: true }],
         machines: [{ id: "standard", label: "Standard", default: true }],
       },
-    ]);
+    ];
     const container = renderPicker(
       true,
       undefined,

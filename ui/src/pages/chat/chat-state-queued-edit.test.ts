@@ -38,13 +38,11 @@ afterEach(() => {
 
 function createControllerFixture(withClient = false) {
   const controller = createChatState<ChatPageHost>({
-    invalidate: () => undefined,
-    updateComplete: Promise.resolve(true),
+    awaitDomCommit: async () => true,
   });
   const dispose = controller.dispose;
   const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
     dispatchEvent: () => true,
-    querySelector: () => null,
   });
   if (withClient) {
     state.client = createTestGatewayClient(async () => ({}));

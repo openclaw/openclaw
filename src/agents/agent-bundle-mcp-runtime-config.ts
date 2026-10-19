@@ -25,19 +25,6 @@ function digestSafeServerNameAssignments(
   );
 }
 
-function createCatalogFingerprint(params: {
-  servers: Record<string, unknown>;
-  mcpAppsEnabled: boolean;
-  /** Full-set server→safeName map; assignment changes must invalidate all partitions. */
-  safeServerNames?: Record<string, string>;
-  mcpToolsDeny?: Record<string, string[]>;
-}): string {
-  // Session MCP fingerprints only invalidate in-memory runtime catalogs.
-  // Algorithm changes can cause one cache miss, but no persisted state migration.
-  // Per-user url/headers never enter this hash (see redactMcpServersForFingerprint).
-  return crypto.createHash("sha256").update(JSON.stringify(params)).digest("hex");
-}
-
 function filterMcpServers<T>(
   mcpServers: Record<string, T>,
   options: {
@@ -127,12 +114,18 @@ export function loadSessionMcpConfig(params: {
       // participates in the server fingerprint and this sidecar only authorizes mkdir.
       prepareDataDirsByServer,
     },
-    fingerprint: createCatalogFingerprint({
-      servers: fingerprintServers,
-      mcpAppsEnabled,
-      ...(safeServerNames ? { safeServerNames } : {}),
-      mcpToolsDeny,
-    }),
+    // This hash only invalidates in-memory catalogs; requester URLs/headers are already redacted.
+    fingerprint: crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          servers: fingerprintServers,
+          mcpAppsEnabled,
+          ...(safeServerNames ? { safeServerNames } : {}),
+          mcpToolsDeny,
+        }),
+      )
+      .digest("hex"),
   };
 }
 

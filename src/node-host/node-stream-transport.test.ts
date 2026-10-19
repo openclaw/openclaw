@@ -42,10 +42,6 @@ async function connectTarget(port: number) {
   await once(socket, "connect");
   return socket;
 }
-function scheduleTimer(callback: () => void, delayMs: number) {
-  const timer = setTimeout(callback, delayMs);
-  return () => clearTimeout(timer);
-}
 function targetStream() {
   return new Duplex({
     read() {},
@@ -432,22 +428,23 @@ describe("node stream close acknowledgement", () => {
     const targetPort = await listenServer(targetServer);
     let ack: (() => void) | undefined;
     const ackArmed = createDeferred();
+    const realSetTimeout = globalThis.setTimeout;
+    const timerSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delayMs, ...args) => {
+        const timer = realSetTimeout(callback, delayMs, ...args);
+        if (delayMs === 5_000) {
+          ack = () => {
+            clearTimeout(timer);
+            callback(...args);
+          };
+          ackArmed.resolve();
+        }
+        return timer;
+      });
     const running = harness.run({
       attachPath: `/node-desktop/attach?ticket=${ticket}`,
       target: { port: targetPort },
-      closeAckMs: 40,
-      scheduleCloseAck: (callback, delayMs) => {
-        if (delayMs === 40) {
-          ack = callback;
-          ackArmed.resolve();
-          return () => {
-            if (ack === callback) {
-              ack = undefined;
-            }
-          };
-        }
-        return scheduleTimer(callback, delayMs);
-      },
     });
     const settled = running.catch(() => undefined);
     try {
@@ -472,6 +469,7 @@ describe("node stream close acknowledgement", () => {
       targetPeer?.destroy();
       await close(targetServer);
       await harness.cleanup();
+      timerSpy.mockRestore();
     }
   });
 
@@ -497,18 +495,8 @@ describe("node stream close acknowledgement", () => {
         connected.resolve(peer);
       });
       const targetPort = await listenServer(targetServer);
-      const delays: number[] = [];
-      const running = harness.run({
-        target: { port: targetPort },
-        closeAckMs: 40,
-        scheduleCloseAck: (callback, delayMs) => {
-          delays.push(delayMs);
-          if (delayMs >= 30_000) {
-            return () => undefined;
-          }
-          return scheduleTimer(callback, delayMs);
-        },
-      });
+      const timerSpy = vi.spyOn(globalThis, "setTimeout");
+      const running = harness.run({ target: { port: targetPort } });
       let targetPeer: net.Socket | undefined;
       try {
         targetPeer = await connected.promise;
@@ -519,8 +507,7 @@ describe("node stream close acknowledgement", () => {
           client.close();
         }
         await running;
-        expect(delays).not.toContain(40);
-        expect(delays).not.toContain(5_000);
+        expect(timerSpy.mock.calls.map(([, delayMs]) => delayMs)).not.toContain(5_000);
         expect(receivedSevens).toBe(payload.length);
       } finally {
         harness.controller.abort();
@@ -528,17 +515,18 @@ describe("node stream close acknowledgement", () => {
         targetPeer?.destroy();
         await close(targetServer);
         await harness.cleanup();
+        timerSpy.mockRestore();
       }
     },
   );
 
-  it("bounds websocket cleanup when the gateway sends a text frame", async () => {
+  it("rejects non-binary gateway data and closes the stream", async () => {
+    const gatewayClosed = createDeferred();
     let gatewaySocket: { send: (data: string) => void } | undefined;
     const harness = await websocketHarness((ws) => {
       gatewaySocket = ws;
+      ws.once("close", () => gatewayClosed.resolve());
     });
-    const delays: number[] = [];
-    const cleanups: Array<() => void> = [];
     try {
       await expect(
         harness.run({
@@ -547,27 +535,30 @@ describe("node stream close acknowledgement", () => {
               gatewaySocket?.send("not-binary");
             }
           },
-          scheduleCloseAck: (callback, delayMs) => {
-            delays.push(delayMs);
-            cleanups.push(callback);
-            return () => undefined;
-          },
         }),
       ).rejects.toThrow(/non-binary/);
-      expect(delays).not.toContain(30_000);
+      await gatewayClosed.promise;
+      expect(harness.target.destroyed).toBe(true);
+      expect(harness.wss.clients.size).toBe(0);
     } finally {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
       await harness.cleanup();
     }
   });
 
   it("completes a drained forward when the gateway acknowledges close", async () => {
-    const harness = await websocketHarness();
+    const gatewayClosed = createDeferred();
+    const messages: Buffer[] = [];
+    const harness = await websocketHarness((ws) => {
+      ws.on("message", (data) => {
+        if (Buffer.isBuffer(data)) {
+          messages.push(data);
+        }
+      });
+      ws.once("close", () => gatewayClosed.resolve());
+    });
     const { target } = harness;
     target.on("end", () => target.destroy());
-    const delays: number[] = [];
+    const timerSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       await harness.run({
         emitStatus: async (status) => {
@@ -576,15 +567,15 @@ describe("node stream close acknowledgement", () => {
             target.push(null);
           }
         },
-        scheduleCloseAck: (callback, delayMs) => {
-          delays.push(delayMs);
-          return scheduleTimer(callback, delayMs);
-        },
       });
-      expect(delays).not.toContain(5_000);
-      expect(delays).not.toContain(30_000);
+      await gatewayClosed.promise;
+      expect(Buffer.concat(messages.slice(1))).toEqual(Buffer.alloc(64, 7));
+      expect(target.destroyed).toBe(true);
+      expect(harness.wss.clients.size).toBe(0);
+      expect(timerSpy.mock.calls.map(([, delayMs]) => delayMs)).not.toContain(5_000);
     } finally {
       await harness.cleanup();
+      timerSpy.mockRestore();
     }
   });
 

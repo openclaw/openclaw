@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import {
   loadExactSessionEntryReadOnly,
@@ -5,10 +6,46 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
+import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
+import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import * as announceRuntime from "../announce/subagent-announce.runtime.js";
 import type { SessionStoreEntry } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
+
+export function holdRequesterWakeResponses(
+  gates: ReadonlyMap<string, Promise<void>>,
+  emptyReply: () => boolean,
+) {
+  const dispatch = vi
+    .mocked(announceRuntime.dispatchGatewayMethodInProcess)
+    .getMockImplementation();
+  if (!dispatch) {
+    throw new Error("Requester fixture requires its controller-admitting Gateway adapter");
+  }
+  vi.mocked(announceRuntime.dispatchGatewayMethodInProcess).mockImplementation(
+    async (method, params, options) => {
+      const result = await dispatch(method, params, options);
+      const sourceSessionKey = isRecord(params.inputProvenance)
+        ? params.inputProvenance.sourceSessionKey
+        : undefined;
+      const gate =
+        method === "agent" && typeof sourceSessionKey === "string"
+          ? gates.get(sourceSessionKey)
+          : undefined;
+      if (gate) {
+        // Delay the transport response only after the actual controller turn has completed.
+        await gate;
+        if (emptyReply()) {
+          return { result: { payloads: [] } };
+        }
+      }
+      return result;
+    },
+  );
+}
 
 export function createGatewayContext() {
   const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
@@ -27,12 +64,17 @@ export function createGatewayContext() {
     sendRecoveryNotice: async () => {
       throw new Error("Unexpected recovery notice");
     },
+    resumeChatInput: async () => {
+      throw new Error("Unexpected chat input recovery");
+    },
   };
-  const context = {
-    recoveryRuntime,
-    chatAbortControllers: new Map(),
-    localEmbedded: true,
-  } as GatewayRequestContext;
+  const methodRegistry = createRequestGatewayMethodRegistry();
+  const context = Object.assign(
+    createGatewayRequestContext(
+      makeContextParams({ getAttachedGatewayMethodRegistry: () => methodRegistry }),
+    ),
+    { recoveryRuntime, localEmbedded: true },
+  );
   context.resolveGatewayContext = () => context;
   return context;
 }

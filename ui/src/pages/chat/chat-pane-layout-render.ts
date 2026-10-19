@@ -22,7 +22,8 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import type { ChatDetailsElements } from "./components/chat-details.tsx";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
@@ -51,18 +52,42 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly detailsElements: ChatDetailsElements = {};
+
+  private registerDetailsElement(name: keyof ChatDetailsElements, element: HTMLElement) {
+    this.detailsElements[name] = element;
+    return () => {
+      if (this.detailsElements[name] === element) {
+        delete this.detailsElements[name];
+      }
+    };
+  }
+
+  get composerReady(): boolean {
+    return getChatComposerState(this.presentationId).composerTextarea?.isConnected === true;
+  }
+
+  focusComposerInput(): boolean {
+    const composer = getChatComposerState(this.presentationId).composerTextarea;
+    if (!this.active || !composer?.isConnected || composer.disabled) {
+      return false;
+    }
+    composer.focus({ preventScroll: true });
+    return true;
+  }
+
   private toolIcons?: PluginToolIcons;
 
-  mountToolIcons(revision: () => unknown): void {
+  mountToolIcons(readGateway: () => unknown): void {
     this.toolIcons = createChatToolIcons(() => {
-      revision();
+      readGateway();
       return {
         context: this.context,
-        session: this.state && !this.catalogHost ? this.resolveChatReadTarget() : undefined,
+        session: this.state && !this.history.catalogHost ? this.resolveChatReadTarget() : undefined,
       };
     });
   }
-  private desktopFocus: {
+  desktopFocus: {
     key: string;
     client: ChatPageHost["client"];
     href: string;
@@ -92,7 +117,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       session: selectedSession,
       agentWorkspace,
       worktreePath: selectedSession?.worktree
-        ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+        ? this.headerPresentation.worktreePaths.get(selectedSession.worktree.id)?.path
         : undefined,
     });
     if (this.inputRegion === "page") {
@@ -134,7 +159,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             ]),
             onRestored: () => {
               this.chatState.composerPersistence.restore();
-              state.requestUpdate?.();
+              this.chatState.composerPersistence.persistChangedState();
             },
           };
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
@@ -151,6 +176,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const ownsSubagentsPanel = !catalog && !this.compact;
     const paneChatProps: ChatProps = {
       ...chatProps,
+      onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
+      onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
       error: conversationVisible ? chatProps.error : null,
       detailsEnabled: !catalog && !this.compact,
       detailsWorkspace: {
@@ -163,6 +190,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onOpenWorkspace: () => openPanelSlot("workspace"),
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
+      onOpenProcesses: ownsSubagentsPanel
+        ? () => this.requestBackgroundPanel("processes", "open")
+        : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -177,6 +207,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const headerDetails: PaneDetailsProps | undefined = ownsSubagentsPanel
       ? {
           chat: paneChatProps,
+          elements: this.detailsElements,
           mobile: this.mergedChrome && !this.onBackToSubagents,
           presentation: panePresentation,
           conversationVisible,
@@ -203,7 +234,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         }
       : null;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
@@ -255,7 +286,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       subagentsPresented: slotPresentation("subagents"),
       processesPresented: slotPresentation("processes"),
       subagentsAvailable: !catalog,
-      subagentsShowRequest: this.subagentsShowRequest,
+      subagentsShowRequest: this.companionIntents.subagentsShowRequest,
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
@@ -270,11 +301,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onCloseLinkReader: () => closePanelSlot("link-reader"),
       terminalTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "terminal",
       onCloseTerminal: () => closePanelSlot("terminal"),
-      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
+      browserRefreshOnPresentation: !this.pendingPanelToggles.requests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
       desktopPresented,
-      desktopRefreshOnPresentation: !this.pendingPanelToggleRequests.has("desktop"),
+      desktopRefreshOnPresentation: !this.pendingPanelToggles.requests.has("desktop"),
       desktopAvailable,
       desktopSource,
       portalPresented: slotPresentation("portal"),
@@ -282,19 +313,22 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onDesktopFocusTargetChange: (target) => {
         // A retained callback cannot publish a previous presentation's source or control state.
         const href = buildControlUiFocusPath(target, state.basePath);
-        if (this.desktopFocus === desktopFocus && desktopFocus.href !== href) {
-          desktopFocus.href = href;
-          this.invalidate();
+        if (
+          this.desktopFocus?.key === desktopFocus.key &&
+          this.desktopFocus.client === desktopFocus.client &&
+          this.desktopFocus.href !== href
+        ) {
+          this.desktopFocus = { ...this.desktopFocus, href };
         }
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
       workspace: sessionWorkspace,
-      detail: { chat: chatProps, host: state, requestUpdate: state.requestUpdate! },
+      detail: { chat: chatProps, host: state },
       digest: observerDigest,
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      companionFocusRequest: this.sessionCompanionFocusRequest,
+      companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
@@ -319,7 +353,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       layout: savedLayout,
       closePanelSlot,
       openPanelSlot,
-      forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
+      forgetDiscussionUrl: () => this.sessionDiscussion.forgetOpenUrl(state.sessionKey.trim()),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
       setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
     });
@@ -357,6 +391,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           };
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      onRegionElementRef: (element) => {
+        this.sidebarRegionElement = element;
+        const release = this.registerDetailsElement("pane", element);
+        return () => {
+          release();
+          if (this.sidebarRegionElement === element) {
+            this.sidebarRegionElement = null;
+          }
+        };
+      },
+      onHeaderElementRef: (element) => this.registerDetailsElement("header", element),
+      onRegionViewRef: (element) => {
+        this.sidebarRegionView = element;
+        return () => {
+          if (this.sidebarRegionView === element) {
+            this.sidebarRegionView = null;
+          }
+        };
+      },
       presentationId: this.presentationId,
       conversationTab: { label: chatProps.assistantName, avatar },
       availableWidth: this.paneWidth,
@@ -365,11 +418,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       layout: sidebarLayout,
       sideFocusLocked: sidebarLayout !== savedLayout,
       sideFocusManaged:
-        companionPresented.isPresented() && Boolean(this.sessionCompanionFocusRequest),
-      sideFocusOrigin: this.sideFocusOrigin,
+        companionPresented.isPresented() && Boolean(this.companionIntents.focusRequest),
+      sideFocusOrigin: this.companionIntents.sideFocusOrigin,
       panelDefinitions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      requestUpdate: state.requestUpdate!,
     });
     return {
       region,

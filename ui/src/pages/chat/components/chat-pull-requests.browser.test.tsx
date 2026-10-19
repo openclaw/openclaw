@@ -1,10 +1,11 @@
-import { createSignal } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests } from "./chat-pull-requests.tsx";
 import baseStyles from "../../../styles/base.css?inline";
@@ -203,56 +204,144 @@ it.each([
   },
 );
 
-it.each(["openclaw", "a-very-long-repository-name-that-must-remain-readable"])(
-  "keeps the full %s PR reference and title clear of CI controls",
-  async (repo) => {
-    await page.viewport(1440, 700);
+it.each([
+  { width: 360, repo: "openclaw", checks: "passing", state: "merged" },
+  {
+    width: 300,
+    repo: "a-very-long-repository-name-that-needs-truncation",
+    checks: "pending",
+    state: "draft",
+  },
+  {
+    width: 220,
+    repo: "a-very-long-repository-name-that-needs-truncation",
+    checks: "failing",
+    state: "closed",
+  },
+] as const)(
+  "keeps title-first Details cards usable at $width px with $checks checks",
+  async ({ width, repo, checks, state }) => {
+    await page.viewport(800, 700);
     document.body.append(container);
+    const onDismiss = vi.fn();
+    const onOpenSessionDiff = vi.fn();
+    const pullRequest = {
+      number: 173824,
+      owner: "openclaw",
+      repo,
+      branch: "fix/sidebar-cards",
+      title: "fix: keep long pull request titles readable in the session Details sidebar",
+      url: "https://github.com/openclaw/" + repo + "/pull/173824",
+      state: "open" as const,
+      additions: 383,
+      deletions: 441,
+      checks: {
+        state: checks,
+        passed: 12,
+        failed: checks === "failing" ? 1 : 0,
+        skipped: 0,
+        running: checks === "pending" ? 2 : 0,
+      },
+    };
     mounted = mountSolid(
       () => (
         <>
-          <style>{`${baseStyles}${layoutStyles}${detailsStyles}`}</style>
-          <section class="chat-details" style="position:relative;width:360px">
-            <ChatPullRequests
-              pullRequests={[
-                {
-                  number: 42,
-                  owner: "example",
-                  repo,
-                  branch: "fix/layout",
-                  title:
-                    "Keep long pull request titles readable in the narrow session Details panel",
-                  url: `https://github.com/example/${repo}/pull/42`,
-                  state: "open",
-                  checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
-                },
-              ]}
-              status="ready"
-              compact
-              onDismiss={() => {}}
-            />
+          <style>{baseStyles + layoutStyles + detailsStyles}</style>
+          <section class="chat-details" style={"position:relative;width:" + width + "px"}>
+            {createComponent(ChatDetailsSession, {
+              presented: true,
+              props: {
+                sessionKey: "agent:main:cards",
+                selectedSession: undefined,
+                currentAgentId: "main",
+                messages: [],
+                pullRequests: [pullRequest, { ...pullRequest, number: 173825, state }],
+                onDismissPullRequest: onDismiss,
+                onOpenSessionDiff,
+              },
+            })}
           </section>
         </>
       ),
       { container },
     );
-    flush();
-    const reference = container.querySelector<HTMLElement>(".chat-pr__number")!;
-    expect(reference.textContent).toBe(`example/${repo}#42`);
+    const host = container.querySelector("openclaw-chat-details-session")!;
+    await host.updateComplete;
+    const group = container.querySelector<HTMLDetailsElement>(
+      '[data-details-group="pull-requests"]',
+    )!;
+    const row = group.querySelector<HTMLElement>(".chat-pr")!;
+    const title = row.querySelector<HTMLElement>(".chat-pr__link")!;
+    const reference = row.querySelector<HTMLElement>(".chat-pr__number")!;
+    const repository = row.querySelector<HTMLElement>(".chat-pr__repo")!;
+    const header = row.querySelector<HTMLElement>(".chat-pr__header")!;
+    const footer = row.querySelector<HTMLElement>(".chat-pr__meta")!;
+    await expect.element(page.elementLocator(title)).toBeVisible();
+    expect(reference.textContent).toBe("#173824");
     expect(reference.scrollWidth).toBeLessThanOrEqual(reference.clientWidth + 1);
-    const title = container.querySelector<HTMLElement>(".chat-pr__repo")!;
-    const link = container.querySelector<HTMLElement>(".chat-pr__link")!;
-    const controls = container.querySelector<HTMLElement>(".chat-pr__meta")!;
-    await expect.element(page.elementLocator(link)).toBeVisible();
-    expect(title.getBoundingClientRect().height).toBeGreaterThan(
-      Number.parseFloat(getComputedStyle(title).lineHeight) * 2,
+    expect(reference.getBoundingClientRect().height).toBeLessThanOrEqual(
+      Number.parseFloat(getComputedStyle(reference).lineHeight) + 1,
     );
-    expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth + 1);
-    expect(link.getBoundingClientRect().right).toBeLessThanOrEqual(
-      controls.getBoundingClientRect().left,
+    expect(repository.textContent).toBe("openclaw/" + repo);
+    expect(getComputedStyle(repository).textOverflow).toBe("ellipsis");
+    expect(title.getBoundingClientRect().width).toBeCloseTo(
+      header.getBoundingClientRect().width,
+      0,
     );
-    expect(reference.getBoundingClientRect().right).toBeLessThanOrEqual(
-      controls.getBoundingClientRect().left,
+    expect(title.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      header.getBoundingClientRect().bottom,
     );
+    expect(footer.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      title.getBoundingClientRect().bottom,
+    );
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+    expect(container.querySelector<HTMLElement>(".chat-details")!.scrollWidth).toBeLessThanOrEqual(
+      width,
+    );
+    expect(row.querySelector(".chat-pr__checks")?.getAttribute("data-checks")).toBe(checks);
+    expect(group.querySelectorAll(".chat-pr")).toHaveLength(2);
+    expect(group.querySelectorAll(".chat-pr")[1]?.getAttribute("data-state")).toBe(state);
+    // PR totals stay descriptive; only All changes opens the session diff.
+    expect(row.querySelector("button.chat-pr__diff")).toBeNull();
+    expect(footer.textContent).toContain("+383");
+    expect(footer.textContent).toContain("−441");
+    const allChanges = container.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+    expect(allChanges.closest("summary")).toBeNull();
+    expect(allChanges.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      header.getBoundingClientRect().top,
+    );
+    await page.elementLocator(allChanges).click();
+    expect(onOpenSessionDiff).toHaveBeenCalledOnce();
+    expect(group.open).toBe(true);
+    const summary = group.querySelector<HTMLElement>(":scope > summary")!;
+    summary.focus();
+    await userEvent.keyboard(" ");
+    await expect.element(page.elementLocator(title)).not.toBeVisible();
+    summary.focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.elementLocator(title)).toBeVisible();
+    const trigger = row.querySelector<HTMLButtonElement>(".chat-pr__actions button")!;
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const dismiss = page.getByRole("menuitem", {
+      name: "Dismiss pull request openclaw/" + repo + "#173824",
+      exact: true,
+    });
+    await expect.element(dismiss).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    const menu = row.querySelector<HTMLElement>('[role="menu"]')!;
+    await expect.poll(() => menu.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+    await userEvent.keyboard("{Enter}");
+    await expect.element(dismiss).toBeVisible();
+    host.presented = false;
+    await host.updateComplete;
+    await expect.poll(() => menu.matches(":popover-open")).toBe(false);
+    host.presented = true;
+    await host.updateComplete;
+    expect(menu.matches(":popover-open")).toBe(false);
+    await page.elementLocator(trigger).click();
+    await dismiss.click();
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith(pullRequest);
   },
 );

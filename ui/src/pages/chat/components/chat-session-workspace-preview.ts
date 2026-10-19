@@ -5,6 +5,7 @@ import {
   setSessionWorkspaceError,
   isCurrentSessionWorkspace,
   openSessionWorkspacePreview,
+  sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
 import type {
   SessionWorkspaceHost,
@@ -61,6 +62,7 @@ export function openWorkspaceItem<T>(
     workspace.previews = [...workspace.previews];
   }
   state.handleOpenSidebar(request);
+  sessionWorkspaceForHost(state).publish();
   const previous = preview.content;
   if (
     previous !== request &&
@@ -167,7 +169,9 @@ export function openWorkspaceItem<T>(
     } catch (error) {
       fail(options.resolveError?.(error) ?? formatUiError(error));
     } finally {
-      state.requestUpdate?.();
+      if (isCurrentSessionWorkspace(state, workspace)) {
+        sessionWorkspaceForHost(state).publish();
+      }
     }
   })();
 }

@@ -23,6 +23,28 @@ function promptPricing(): ModelCostConfig {
 }
 
 describe("usage cost estimation", () => {
+  it("never reprices an incomplete mixed-model total after another aggregation", () => {
+    const attempt = createUsageAccumulator();
+    mergeUsageIntoAccumulator(attempt, {
+      input: 100,
+      costStatus: "unavailable",
+    });
+    mergeUsageIntoAccumulator(attempt, {
+      input: 200,
+      cost: { total: 0.7 },
+      costStatus: "complete",
+    });
+    const run = createUsageAccumulator();
+    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    expect(toNormalizedUsage(run)?.input).toBe(300);
+    expect(
+      estimateAggregateUsageCost({
+        usage: toNormalizedUsage(run),
+        cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ).toBeUndefined();
+  });
+
   it.each([
     {
       name: "recorded zero",

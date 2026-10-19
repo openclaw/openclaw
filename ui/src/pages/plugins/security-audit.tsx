@@ -35,7 +35,7 @@ export function renderPluginSecurityAudit(status: string, auditUrl: string | nul
       <div class="plugin-catalog-detail__security-score">
         <strong>{tone === "pass" ? "Clean" : tone === "warning" ? "Review" : status}</strong>
         <For each={[0, 1, 2]}>
-          {(index) => <span class={index < bars ? "is-filled" : ""} aria-hidden="true" />}
+          {(index) => <span class={{ "is-filled": index < bars }} aria-hidden="true" />}
         </For>
       </div>
     </a>

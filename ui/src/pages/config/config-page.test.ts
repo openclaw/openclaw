@@ -26,12 +26,12 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
-import { extractQuickSettingsSecurity } from "./config-page-state.ts";
 import {
   mountConfigPage,
   mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
+import { extractQuickSettingsSecurity } from "./security.tsx";
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
@@ -121,6 +121,35 @@ it("distinguishes explicit values that equal the defaults", () => {
     toolProfile: "full",
     toolProfileOverridden: true,
   });
+});
+
+it("refreshes notification presentation from in-place owner publications", () => {
+  let publishNotifications = () => {};
+  const snapshot: NonNullable<ApplicationContext["nativeNotifications"]>["snapshot"] = {
+    permission: "granted",
+    test: { state: "sent" },
+  };
+  const nativeNotifications = {
+    snapshot,
+    subscribe: (notify: () => void) => {
+      publishNotifications = notify;
+      return () => {
+        publishNotifications = () => {};
+      };
+    },
+  };
+  const context = configContext({ nativeNotifications });
+  const { state } = mountConfigPageState(context, { pageId: "notifications" });
+  expect(state.configProps().nativeNotifications?.test?.state).toBe("sent");
+
+  snapshot.test = { state: "pending" };
+  publishNotifications();
+  flush();
+  expect(state.configProps().nativeNotifications?.test?.state).toBe("pending");
+
+  Object.assign(context.webPush.snapshot, { loading: true });
+  publishConfigSource(context.webPush);
+  expect(state.configProps().webPush?.loading).toBe(true);
 });
 
 it.each([

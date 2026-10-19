@@ -19,11 +19,12 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  createSubagentRunRecord,
-  markPendingFinalDelivery,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+} from "../../subagents/registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
 import {
   createLifecycleControllerFixture,
@@ -167,6 +168,18 @@ async function assembleWithCapturedHookCtx(
 }
 
 describe("prompt-build hook context input provenance", () => {
+  it("bounds plugin system context using the resolved attempt budget before assembly", async () => {
+    const { setSystemPrompt } = await assembleWithCapturedHookCtx(
+      "bounded-plugin-system-context",
+      { contextTokenBudget: 32_000 },
+      { hookResult: { prependSystemContext: "x".repeat(824_170) } },
+    );
+    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
+    expect(finalPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
+    expect(finalPrompt).toContain("Base system prompt");
+    expect(finalPrompt.length).toBeLessThan(33_000);
+  });
+
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
     const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
@@ -329,7 +342,10 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
           throw new Error("expected completed child");
         }
         const draft = structuredClone(current);
-        markPendingFinalDelivery({ entry: draft });
+        Object.assign(ensureDeliveryState(draft), {
+          status: "pending",
+          payload: loadPendingFinalDeliveryPayload(draft),
+        });
         return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
       },
       { runs },

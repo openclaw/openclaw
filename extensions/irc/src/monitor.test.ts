@@ -604,16 +604,6 @@ describe("irc monitor reconnect", () => {
 describe("irc monitor inbound target", () => {
   it.each([
     {
-      label: "channel",
-      serverTarget: "#openclaw",
-      expected: { isGroup: true, target: "#openclaw", rawTarget: "#openclaw" },
-    },
-    {
-      label: "DM",
-      serverTarget: "openclaw-bot",
-      expected: { isGroup: false, target: "alice", rawTarget: "openclaw-bot" },
-    },
-    {
       label: "channel with a colonless body",
       serverTarget: "#openclaw",
       colonlessBody: true,

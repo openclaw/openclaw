@@ -7,6 +7,7 @@ import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-app
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { FsSafeError, root, type ReadResult } from "../../infra/fs-safe.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
+import * as lifecycleState from "../session-lifecycle-state.js";
 import { registerAgentDeletionAuthorityTests } from "./agents-delete-authority.test-support.js";
 import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
 import {
@@ -334,7 +335,6 @@ vi.mock("../../state/openclaw-agent-db.js", () => ({
 
 // mock-isolation: Handler scenarios consume staged journal outcomes without shared-state storage.
 vi.mock("../../state/agent-deletion-journal.js", () => ({
-  readAgentDeletionJournal: mocks.readAgentDeletionJournal,
   readAgentDeletionJournalAsync: async () => mocks.readAgentDeletionJournal(),
   listPendingAgentDeletionJournalsAsync: async () => ({
     entries: mocks.listPendingAgentDeletionJournals(),
@@ -462,12 +462,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const { agentsHandlers } = await import("./agents.js");
+let restoreLifecyclePersistence: (() => void) | undefined;
 
 afterEach(() => {
+  restoreLifecyclePersistence?.();
   memorySessionActorOwners.reset();
 });
 
 beforeEach(() => {
+  // The roster fixture owns synthetic storage; cancellation authority stays real.
+  const lifecyclePersistence = vi
+    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+    .mockImplementation(async (params) => params.assertCommitAllowed?.());
+  restoreLifecyclePersistence = () => lifecyclePersistence.mockRestore();
   vi.mocked(root).mockReset();
   mocks.writeConfigFile.mockReset().mockResolvedValue(undefined);
   mocks.omitConfigMutationResult = false;
@@ -552,8 +559,6 @@ beforeEach(() => {
 function createContext() {
   return {
     getRuntimeConfig: () => mocks.loadConfigReturn,
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     cron: { removeAgentJobsTransactional: mocks.cronRemoveAgentJobsTransactional },
     logGateway: { warn: mocks.logGatewayWarn },

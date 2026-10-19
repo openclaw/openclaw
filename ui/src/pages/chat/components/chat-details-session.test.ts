@@ -1,13 +1,21 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 
@@ -62,7 +70,10 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   const changes = element.querySelector('[data-details-group="pull-requests"]')!;
   expect(changes.querySelector("summary")?.textContent).toContain("Changes");
-  const allChanges = changes.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
+  const allChanges = changes.parentElement!.querySelector<HTMLButtonElement>(
+    ".chat-details__all-changes",
+  )!;
+  expect(allChanges.closest("summary")).toBeNull();
   expect(allChanges.textContent).toContain("All changes");
   allChanges.click();
   expect(openChanges).toHaveBeenCalledOnce();
@@ -124,7 +135,6 @@ it("shows participant controls only while the session has participants", async (
   expect(element.querySelector(".chat-details__meta-actions")).toBeNull();
 });
 it("uses the current PR renderer and preserves CI session identity and branch dismissal", async () => {
-  const dismiss = vi.fn();
   const element = await mount({
     pullRequestsSessionId: "incarnation-7",
     pullRequests: [
@@ -140,9 +150,8 @@ it("uses the current PR renderer and preserves CI session identity and branch di
         deletions: 41,
       },
     ],
-    onDismissPullRequest: dismiss,
   });
-  expect(element.querySelector(".chat-pr__repo")?.textContent).toBe("A compact PR title");
+  expect(element.querySelector(".chat-pr__title")?.textContent).toBe("A compact PR title");
   const link = element.querySelector(".chat-pr__link")!;
   for (const fact of ["example/project", "feature", "Open", "+84", "−41"]) {
     expect(link.getAttribute("title")).toContain(fact);
@@ -151,8 +160,6 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
   expect(automation).toHaveProperty("presented", true);
-  element.querySelector<HTMLButtonElement>(".chat-pr__dismiss")!.click();
-  expect(dismiss).toHaveBeenCalledWith(element.props!.pullRequests![0]);
   const branch = {
     owner: "example",
     repo: "project",
@@ -183,6 +190,9 @@ it("projects direct active children through the live observer with stable rounde
     subagentSessions: [child],
     subagentSessionsHydrated: true,
   });
+  await waitForSolid(() =>
+    expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(child);
@@ -194,6 +204,265 @@ it("projects direct active children through the live observer with stable rounde
   element.presented = false;
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
+});
+
+it("renders unknown without invented zero counts and keeps the All changes action usable", async () => {
+  const open = vi.fn();
+  const element = await mount({ onOpenSessionDiff: open });
+  const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+  expect(button.textContent).toContain("—");
+  expect(button.textContent).not.toContain("0 files");
+  button.click();
+  expect(open).toHaveBeenCalledOnce();
+});
+
+it("admits only the latest visible native summary inputs and retires detached work", async () => {
+  vi.useFakeTimers();
+  const result = { files: [{ path: "accepted.ts" }], additions: 3, deletions: 1 };
+  const first = createDeferred<typeof result>();
+  const retired = createDeferred<typeof result>();
+  let requestedAt = 0;
+  const diff = vi.fn<(params: unknown) => Promise<typeof result>>().mockImplementation(() => {
+    requestedAt = Date.now();
+    return Promise.resolve(result);
+  });
+  diff.mockReturnValueOnce(first.promise);
+  const request = createGatewayRequestMock((method, params) =>
+    method === "sessions.diff"
+      ? diff(params)
+      : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+  );
+  const { gateway, publish } = createApplicationGateway();
+  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const element = document.createElement("openclaw-chat-details-session");
+  onTestFinished(async () => {
+    element.remove();
+    await Promise.resolve();
+    vi.useRealTimers();
+  });
+  const select = (id: string) => {
+    element.props = {
+      sessionKey: `agent:main:${id}`,
+      currentAgentId: "main",
+      selectedSession: { key: `agent:main:${id}`, kind: "direct", sessionId: id },
+      messages: [],
+      pullRequestsGateway: gateway,
+      onOpenSessionDiff: () => {},
+    };
+  };
+  select("hidden");
+  document.body.append(element);
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).not.toHaveBeenCalled();
+
+  element.presented = true;
+  select("intermediate");
+  select("first");
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:first",
+    agentId: "main",
+    scope: "all",
+    summaryOnly: true,
+  });
+  select("accepted");
+  first.resolve({ ...result, additions: 999 });
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+3"),
+  );
+  expect(diff).toHaveBeenCalledTimes(2);
+  expect(diff).toHaveBeenLastCalledWith({
+    sessionKey: "agent:main:accepted",
+    agentId: "main",
+    scope: "all",
+    summaryOnly: true,
+  });
+
+  const button = element.querySelector(".chat-details__all-changes");
+  element.remove();
+  document.body.append(element);
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(element.querySelector(".chat-details__all-changes")).toBe(button);
+  expect(diff).toHaveBeenCalledTimes(2);
+
+  element.props = { ...element.props!, runActive: true };
+  await vi.advanceTimersByTimeAsync(requestedAt + 4_999 - Date.now());
+  expect(diff).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(diff).toHaveBeenCalledTimes(3);
+  element.presented = false;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(diff).toHaveBeenCalledTimes(3);
+
+  diff.mockReturnValueOnce(retired.promise);
+  element.presented = true;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).toHaveBeenCalledTimes(4);
+  element.remove();
+  await Promise.resolve();
+  retired.resolve({ ...result, additions: 999 });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(diff).toHaveBeenCalledTimes(4);
+});
+
+it("shows abbreviated colored deltas with exact accessible totals, partial and stale states", async () => {
+  vi.useFakeTimers();
+  const request = vi
+    .fn<(method: string) => Promise<unknown>>()
+    .mockImplementation(async (method: string) =>
+      method === "sessions.diff"
+        ? { files: [{ path: "app.ts" }], additions: 12_480, deletions: 61, truncated: true }
+        : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+    );
+  // SAFETY: These components only read the supplied connection and subscription surface.
+  const gateway = {
+    snapshot: { client: { request }, phase: "connected", hello: null },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  } as unknown as ApplicationGateway;
+  try {
+    const element = await mount({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() =>
+      expect(element.querySelector(".chat-details__change-files")?.textContent).toContain("1 file"),
+    );
+    const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+12.5K");
+    expect(element.querySelector(".chat-details__change-lines--del")?.textContent).toBe("−61");
+    expect(button.getAttribute("aria-description")).toContain("+12480 lines, −61 lines");
+    expect(button.textContent).toContain("partial");
+    request.mockRejectedValue(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("stale"));
+    expect(button.textContent).toContain("+12.5K");
+    expect(button.getAttribute("aria-description")).toContain("Last-known changes");
+    request.mockResolvedValue({ files: [], additions: 0, deletions: 0 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("0 files"));
+    expect(button.textContent).toContain("+0");
+    expect(button.textContent).toContain("−0");
+    expect(
+      element.querySelector(".chat-details__change-lines--add, .chat-details__change-lines--del"),
+    ).toBeNull();
+    element.remove();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {
+  const parent = "agent:main:details";
+  const child = (slug: string, state: Partial<GatewaySessionRow>): GatewaySessionRow => ({
+    key: `agent:main:subagent:${slug}`,
+    kind: "direct",
+    label: slug,
+    spawnedBy: parent,
+    ...state,
+  });
+  const openSubagents = vi.fn();
+  const element = await mount({
+    selectedSession: { key: parent, kind: "direct", hasActiveSubagentRun: true },
+    subagentSessions: [
+      child("review", {
+        hasActiveRun: true,
+        activeRunIds: ["run-1"],
+        startedAt: Date.now() - 65_000,
+        observerDigest: {
+          runId: "run-1",
+          revision: 1,
+          updatedAt: 1,
+          headline: "Comparing themes",
+          health: "on-track",
+        },
+      }),
+      child("queued", { status: "queued" }),
+      child("docs", { status: "done" }),
+      child("bench", { status: "timeout" }),
+      child("lint", { status: "killed" }),
+      child("archived", { status: "done", archived: true }),
+      child("other-parent", { status: "done", spawnedBy: "agent:main:elsewhere" }),
+    ],
+    subagentSessionsHydrated: true,
+    onOpenSubagents: openSubagents,
+  });
+  expect(element.querySelector('[data-details-group="processes"]')).toBeNull();
+  const lane = element.querySelector<HTMLDetailsElement>('[data-details-group="subagents"]')!;
+  expect(lane.open).toBe(true);
+  const summary = lane.querySelector("summary")!;
+  expect(summary.querySelector(".chat-details__tally-summary")?.textContent).toBe(
+    "1 running · 1 queued · 1 done · 1 failed · 1 stopped",
+  );
+  // The bar sits in the heading so a collapsed group still shows it.
+  expect(
+    [...summary.querySelectorAll<HTMLElement>(".chat-details__tally-segment")].map(
+      (segment) => segment.dataset.state,
+    ),
+  ).toEqual(["done", "failed", "stopped", "running", "queued"]);
+  await waitForSolid(() =>
+    expect(lane.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
+  const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
+  await live.updateComplete;
+  const shownKeys = () =>
+    [...live.querySelectorAll<HTMLElement>("[data-subagent-session-key]")].map((row) =>
+      row.dataset.subagentSessionKey?.replace("agent:main:subagent:", ""),
+    );
+  expect(shownKeys()).toEqual(["review", "queued", "bench"]);
+  const more = lane.querySelector<HTMLButtonElement>(".chat-details__more")!;
+  expect(more.textContent).toBe("Show 2 more");
+  more.click();
+  await live.updateComplete;
+  expect(shownKeys()).toEqual(["review", "queued", "bench", "lint", "docs"]);
+  expect(more.textContent).toBe("Show less");
+  expect(
+    live
+      .querySelector('[data-subagent-session-key="agent:main:subagent:bench"]')
+      ?.querySelector(".chat-subagent-activity__status")?.textContent,
+  ).toBe("Failed");
+  const review = live.querySelector('[data-subagent-session-key="agent:main:subagent:review"]')!;
+  expect(review.querySelector(".chat-subagent-activity__status")?.textContent).toBe(
+    "Comparing themes",
+  );
+  expect(review.querySelector(".chat-subagent-activity__elapsed-compact")?.textContent).not.toBe(
+    "",
+  );
+  lane.querySelector<HTMLButtonElement>(".chat-details__navigation")!.click();
+  expect(openSubagents).toHaveBeenCalledOnce();
+  element.presented = false;
+  await element.updateComplete;
+  lane.querySelector<HTMLButtonElement>(".chat-details__navigation")?.click();
+  expect(openSubagents).toHaveBeenCalledOnce();
+});
+
+it("shows finished subagents after the parent stops waiting and omits the group without any", async () => {
+  const element = await mount({
+    subagentSessions: [
+      {
+        key: "agent:main:subagent:done",
+        kind: "direct",
+        status: "done",
+        spawnedBy: "agent:main:details",
+      },
+    ],
+    subagentSessionsHydrated: true,
+  });
+  const group = element.querySelector('[data-details-group="subagents"]')!;
+  expect(group.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done");
+  expect(group.querySelector(".chat-details__more")).toBeNull();
+  await waitForSolid(() =>
+    expect(group.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
+  const live = group.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
+  await live.updateComplete;
+  expect(live.querySelector(".chat-subagent-activity__status")?.textContent).toBe("Completed");
+  element.props = { ...element.props!, subagentSessionsHydrated: false };
+  await element.updateComplete;
+  expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
 });
 
 it("shows live environment and context facts while preserving disclosure intent", async () => {

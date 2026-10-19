@@ -12,6 +12,7 @@ import { reduceSessionActorEntry } from "../../config/sessions/session-actor-red
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -20,11 +21,10 @@ import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
@@ -63,7 +63,7 @@ export async function accountAgentTurnCompaction(params: {
   if (!operation) {
     return undefined;
   }
-  const authorize = () => replyRunRegistry.get(operation.key) === operation;
+  const authorize = () => isCurrentSessionControllerOperation(operation);
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
     const persistedCount = await incrementCompactionCount({
@@ -135,7 +135,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
   const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
-  const { autoCompactionCount, didLogHeartbeatStrip } = execution;
+  const { autoCompactionCount } = execution;
 
   if (
     shouldInjectGroupIntro &&
@@ -429,7 +429,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     expectedSession,
     configuredFallbackModel,
     contextTokensUsed,
-    didLogHeartbeatStrip,
     hasDirectlySentBlockReply,
     directBlockDeliveries,
     fallbackAttempts,
@@ -472,6 +471,10 @@ export async function accountFollowupTurn(params: {
       replyOperation: turn.operation,
     });
     return undefined;
+  }
+  if (turn.queued.goalContinuation) {
+    // Queue settlement, not enqueue or native provider subruns, counts one automatic turn.
+    completion?.patch({ kind: "goal-continuation", goalId: turn.queued.goalContinuation.goalId });
   }
   const resolvedVerboseLevel =
     normalizeVerboseLevel(

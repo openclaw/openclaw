@@ -21,6 +21,9 @@ import { normalizeOpenRouterBaseUrl } from "./provider-catalog.js";
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
+// Chat responses for Gemini image models carry an encrypted reasoning blob next to each image,
+// measured at 0.47-0.70x the image's base64 size.
+const CHAT_ENCODED_PAYLOADS_PER_IMAGE = 2;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
   "google/gemini-3-pro-image-preview",
@@ -313,7 +316,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             responseLabel: "openrouter.image-generation",
             readOptions: {
               maxBytes: resolveInlineImageJsonResponseMaxBytes(
-                canonicalBaseUrl ? 1 : count,
+                canonicalBaseUrl ? 1 : count * CHAT_ENCODED_PAYLOADS_PER_IMAGE,
                 resolveGeneratedImageDownloadMaxBytes(req.cfg),
               ),
             },

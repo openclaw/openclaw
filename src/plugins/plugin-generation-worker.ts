@@ -1,3 +1,4 @@
+import path from "node:path";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -8,9 +9,10 @@ import {
 import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
 import type {
   GenerationWorkerInput,
@@ -21,6 +23,7 @@ import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js
 import {
   adoptPluginNativeAdmissions,
   nativeAdmissionStateFor,
+  settlePluginNativeAdmissionState,
   type PluginNativeAdmissionTransfer,
 } from "./plugin-native-admission-state.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
@@ -66,10 +69,6 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
 export async function preparePluginGenerationArtifact(
   params: PreparationParameters,
 ): Promise<PreparedPluginGenerationArtifact> {
-  return createPreparationClient().prepare(params);
-}
-/** One artifact lifetime owns its worker, including recovery and native-root leases. */
-function createPreparationClient() {
   const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const owner = preparationOwnerFor(nativeSource);
   const storage = resolvePluginSourceCaptureStorage();
@@ -79,16 +78,19 @@ function createPreparationClient() {
   });
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
+  const nativeRoots = createPluginGenerationNativeRoots(storage);
+  const admissionRoot = path.resolve(params.rootDir);
+  const admissionOwner = admission.owners.get(admissionRoot);
   const root = createPluginSourceCaptureRoot(
     storage.stateDir,
     "plugin-preparation-",
     storage.placement,
   );
   let releasedRoot: Promise<void> | undefined;
-  const releaseRoot = () => (releasedRoot ??= root.release());
+  const releaseRoot = () =>
+    (releasedRoot ??= Promise.all([nativeRoots.close(), root.release()]).then(() => {}));
   const { port1, port2 } = new MessageChannel();
-  const moduleSources = new Map<number, (filename: string) => string>();
-  let nextCapture = 0;
+  let moduleSource: ((filename: string) => string) | undefined;
   let resources = 0;
   let pending = 0;
   let drained: ReturnType<typeof createDeferredCore<void>> | undefined;
@@ -111,41 +113,23 @@ function createPreparationClient() {
     }
   });
   function callback(message: GenerationWorkerCallback): void {
-    if (message.kind === "publish") {
-      void Promise.resolve()
-        .then(() => publishAdmission?.(message.publication) ?? false)
-        .then(
-          (accepted) =>
-            port1.postMessage({
-              kind: "published",
-              id: message.id,
-              accepted,
-            } satisfies GenerationWorkerCallback),
-          (error: unknown) =>
-            port1.postMessage({
-              kind: "published",
-              id: message.id,
-              error: String(error),
-            } satisfies GenerationWorkerCallback),
-        );
+    if (message.kind !== "mapping" && message.kind !== "native-root") {
       return;
     }
-    if (message.kind !== "mapping") {
-      return;
-    }
-    let filename: string | undefined;
-    let error: string | undefined;
-    try {
-      filename = moduleSources.get(message.captureId)?.(message.filename) ?? message.filename;
-    } catch (failure) {
-      error = failure instanceof Error ? failure.message : String(failure);
-    }
-    port1.postMessage({
-      kind: "mapped",
+    const reply: Extract<GenerationWorkerCallback, { kind: "callback-result" }> = {
+      kind: "callback-result",
       id: message.id,
-      filename,
-      error,
-    } satisfies GenerationWorkerCallback);
+    };
+    try {
+      if (message.kind === "native-root") {
+        reply.root = nativeRoots.allocate();
+      } else {
+        reply.filename = moduleSource?.(message.filename) ?? message.filename;
+      }
+    } catch (failure) {
+      reply.error = failure instanceof Error ? failure.message : String(failure);
+    }
+    port1.postMessage(reply);
     Atomics.store(message.signal, 0, 1);
     Atomics.notify(message.signal, 0);
   }
@@ -162,6 +146,7 @@ function createPreparationClient() {
         // them before the pool joins its physical execution lifetime.
         await pool.closeResources();
         await pool.close();
+        // Also release when construction failed before the pool registered custody.
         await releaseRoot();
         owner.clients.delete(close);
       } finally {
@@ -183,12 +168,16 @@ function createPreparationClient() {
       };
       return asynchronous ? request(command) : requestSync(command, sourceCapture);
     },
-    () => {
-      throw new Error("Host-owned native leases must return to their original owner");
+    {
+      exportRoot: () => {
+        throw new Error("Host-owned native leases cannot enter plugin preparation");
+      },
+      importRoot: (id) => nativeRoots.retain(id),
     },
   );
   function accept(reply: GenerationWorkerReply): unknown {
     resources = reply.resources;
+    codec.releaseReceivedHandles(reply.released ?? []);
     if ("error" in reply) {
       // Reload recovery distinguishes unavailable old source from fatal preparation errors.
       const error =
@@ -202,6 +191,7 @@ function createPreparationClient() {
         admission,
         // SAFETY: The matching worker encodes only PluginNativeAdmissionTransfer in this field.
         codec.decode(reply.admission) as PluginNativeAdmissionTransfer,
+        publishAdmission,
       );
     }
     return codec.decode(reply.value);
@@ -224,7 +214,11 @@ function createPreparationClient() {
         },
       );
       pendingNativeLoads.clear();
-      return accept(await task.result);
+      const value = accept(await task.result);
+      // Async preparation/disposal joins the captured admission owner. Sync lazy
+      // imports only queue facts, so they cannot block the host's async writes.
+      await settlePluginNativeAdmissionState(admission);
+      return value;
     } finally {
       try {
         if (task) {
@@ -300,48 +294,40 @@ function createPreparationClient() {
       }
     }
   }
-  let initialized = false;
-  return {
-    get closed() {
-      return Boolean(closing);
-    },
-    async prepare(params: PreparationParameters): Promise<PreparedPluginGenerationArtifact> {
-      const captureId = ++nextCapture;
-      const callbackPort = initialized ? undefined : port2;
-      initialized = true;
-      try {
-        const artifact = await request({
-          operation: "capture",
-          captureId,
-          rootDir: params.rootDir,
-          entryFile: params.standalone ? params.source : undefined,
-          storage,
-          installRoots,
-          readOnly,
-          scratch: root.directory,
-          managedRoot: root.managedRoot,
-          callbackPort,
-          admission: {
-            owners: admission.owners,
-            managedRoots: admission.managedRoots,
-            receipts: admission.receipts,
-            files: admission.files,
-            namespaces: admission.namespaces,
-          },
-        });
-        return {
-          // SAFETY: A successful capture reply encodes the worker's PluginGenerationArtifact.
-          artifact: artifact as PluginGenerationArtifact,
-          attachModuleSource: (mapper) => {
-            moduleSources.set(captureId, mapper);
-          },
-        };
-      } catch (error) {
-        if (!resources) {
-          await close();
-        }
-        throw error;
-      }
-    },
-  };
+  try {
+    const artifact = await request({
+      operation: "capture",
+      captureId: 1,
+      rootDir: params.rootDir,
+      entryFile: params.standalone ? params.source : undefined,
+      storage,
+      installRoots,
+      readOnly,
+      scratch: root.directory,
+      managedRoot: root.managedRoot,
+      callbackPort: port2,
+      admission: {
+        // One artifact uses one owner; shared native indexes still serve dependencies outside it.
+        owners: new Map(admissionOwner ? [[admissionRoot, admissionOwner]] : []),
+        managedRoots: admission.managedRoots,
+        receipts: new Map(
+          [...admission.receipts].filter(([key]) => key.startsWith(`${admissionRoot}\0`)),
+        ),
+        files: admission.files,
+        namespaces: admission.namespaces,
+      },
+    });
+    return {
+      // SAFETY: A successful capture reply encodes the worker's PluginGenerationArtifact.
+      artifact: artifact as PluginGenerationArtifact,
+      attachModuleSource: (mapper) => {
+        moduleSource = mapper;
+      },
+    };
+  } catch (error) {
+    if (!resources) {
+      await close();
+    }
+    throw error;
+  }
 }

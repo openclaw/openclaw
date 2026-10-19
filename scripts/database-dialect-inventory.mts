@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 import {
@@ -67,8 +67,34 @@ export function changedProductionFiles(root: string, base: string, staged: boole
 
 function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const sites: DialectSite[] = [];
+  const postgresGuards = new Set<string>();
+  for (const statement of source.statements) {
+    if (
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      path.posix.normalize(
+        path.posix.join(path.posix.dirname(file), statement.moduleSpecifier.text),
+      ) === "src/infra/sql-connection.js" &&
+      statement.importClause?.namedBindings &&
+      ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      for (const binding of statement.importClause.namedBindings.elements) {
+        if ((binding.propertyName?.text ?? binding.name.text) === "isPostgresSqlConnection") {
+          postgresGuards.add(binding.name.text);
+        }
+      }
+    }
+  }
+  const isPostgresGuard = (node: ts.Expression) =>
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    postgresGuards.has(node.expression.text);
   const physicalLayoutOwner = SQLITE_PHYSICAL_LAYOUT_OWNERS.includes(file);
-  const add = (match: DialectMatch, position: number) => {
+  const add = (match: DialectMatch, position: number, postgres = false, text = "") => {
+    // Only these shared names have proven PostgreSQL callers; SQLite-only JSON stays debt.
+    if (postgres && /^(?:json_each|jsonb_set)\s*\(/iu.test(text.slice(match.index))) {
+      return;
+    }
     // These engine owners define/call PostgreSQL functions, not SQLite connection UDFs.
     if (
       match.construct === "custom-function" &&
@@ -92,13 +118,22 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
       column: character + 1,
     });
   };
-  const literal = (node: ts.StringLiteral | ts.TemplateLiteralToken, owner: boolean) => {
+  const literal = (
+    node: ts.StringLiteral | ts.TemplateLiteralToken,
+    owner: boolean,
+    postgres: boolean,
+  ) => {
     for (const match of matchDialect(node.text, owner, false, physicalLayoutOwner)) {
       // Locations identify the containing literal, independent of cooked escape widths.
-      add(match, node.getStart(source));
+      add(match, node.getStart(source), postgres, node.text);
     }
   };
-  const template = (node: ts.TemplateLiteral, owner: boolean, tagged = false) => {
+  const template = (
+    node: ts.TemplateLiteral,
+    owner: boolean,
+    postgres: boolean,
+    tagged = false,
+  ) => {
     const head = ts.isTemplateExpression(node) ? node.head : node;
     if (!tagged && !SQL_STATEMENT.test(head.text)) {
       return;
@@ -118,18 +153,34 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     for (const { part, start } of spans) {
       for (const match of matches) {
         if (match.index >= start && match.index < start + part.text.length) {
-          add({ ...match, index: match.index - start }, part.getStart(source));
+          add({ ...match, index: match.index - start }, part.getStart(source), postgres, part.text);
         }
       }
     }
   };
-  const visit = (node: ts.Node, inheritedOwner = false) => {
+  const visit = (node: ts.Node, inheritedOwner = false, inheritedPostgres = false) => {
     let owner = inheritedOwner;
+    let postgres = inheritedPostgres;
     if (ts.isFunctionLikeDeclaration(node)) {
+      postgres = false;
       owner =
         file === "src/infra/kysely-sync.ts" &&
         ts.isFunctionDeclaration(node) &&
         /^(?:sqliteStringSet|sqliteStringSetEntries)$/u.test(node.name?.text ?? "");
+    }
+    if (ts.isConditionalExpression(node) && isPostgresGuard(node.condition)) {
+      visit(node.condition, owner, postgres);
+      visit(node.whenTrue, owner, true);
+      visit(node.whenFalse, owner, postgres);
+      return;
+    }
+    if (ts.isIfStatement(node) && isPostgresGuard(node.expression)) {
+      visit(node.expression, owner, postgres);
+      visit(node.thenStatement, owner, true);
+      if (node.elseStatement) {
+        visit(node.elseStatement, owner, postgres);
+      }
+      return;
     }
     if (ts.isTaggedTemplateExpression(node)) {
       const tag = node.tag;
@@ -139,15 +190,15 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
           ? tag.name.text
           : "";
       if (/sql$/iu.test(name)) {
-        template(node.template, owner, true);
+        template(node.template, owner, postgres, true);
       }
-      visit(tag, owner);
+      visit(tag, owner, postgres);
       return;
     }
     if (ts.isStringLiteral(node) && SQL_STATEMENT.test(node.text)) {
-      literal(node, owner);
+      literal(node, owner, postgres);
     } else if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
-      template(node, owner);
+      template(node, owner, postgres);
       return; // Substitutions are outside the lexical contract, regardless of tag.
     }
     if (
@@ -160,7 +211,7 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
         node.expression.name.getStart(source),
       );
     }
-    node.forEachChild((child) => visit(child, owner));
+    node.forEachChild((child) => visit(child, owner, postgres));
   };
   visit(source);
   return sites;

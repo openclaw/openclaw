@@ -8,7 +8,8 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import { listManagedPluginNpmRootsSync, listManagedPluginNpmRoots } from "./npm-project-roots.js";
+import { listManagedPluginNpmRootsForInstallRecords } from "./installed-plugin-npm-roots.js";
+import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -24,7 +25,67 @@ afterEach(() => {
 });
 
 describe("managed npm project roots", () => {
-  it("returns sorted canonical project directories and skips files", async () => {
+  it("selects and deduplicates managed record paths, including legacy and scoped packages", () => {
+    const npmRoot = makeNpmRoot();
+    const stateDir = path.dirname(npmRoot);
+    const legacy = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "legacy",
+      pluginId: "legacy",
+      version: "1.0.0",
+      layout: "legacy",
+    });
+    const scoped = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@fixture/scoped",
+      pluginId: "scoped",
+      version: "1.0.0",
+    });
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@fixture/scoped",
+    });
+    expect(
+      listManagedPluginNpmRootsForInstallRecords({
+        npmRoot,
+        installRecords: {
+          legacy: { source: "npm", installPath: legacy },
+          scoped: { source: "npm", installPath: scoped },
+          duplicate: { source: "npm", installPath: scoped },
+          developer: { source: "path", installPath: scoped },
+          external: {
+            source: "npm",
+            installPath: path.join(stateDir, "external", "node_modules", "other"),
+          },
+          absent: { source: "npm" },
+        },
+      }),
+    ).toEqual([npmRoot, projectRoot].toSorted((left, right) => left.localeCompare(right)));
+  });
+
+  it("does not discover stale roots for empty records and warns before unreadable-record fallback", () => {
+    const npmRoot = makeNpmRoot();
+    writeManagedNpmPlugin({
+      stateDir: path.dirname(npmRoot),
+      packageName: "stale",
+      pluginId: "stale",
+      version: "1.0.0",
+    });
+    const reads = vi.spyOn(fs, "readdirSync");
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    expect(listManagedPluginNpmRootsForInstallRecords({ npmRoot, installRecords: {} })).toEqual([]);
+    expect(reads).not.toHaveBeenCalled();
+    expect(warning).not.toHaveBeenCalled();
+    expect(listManagedPluginNpmRootsForInstallRecords({ npmRoot, installRecords: null })).toEqual([
+      npmRoot,
+      resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName: "stale" }),
+    ]);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("could not be read"), {
+      code: "OPENCLAW_PLUGIN_NPM_ROOTS_FALLBACK",
+    });
+  });
+
+  it("returns sorted canonical project directories and skips files", () => {
     const npmRoot = makeNpmRoot();
     const projects = ["zulu", "alpha"]
       .map((packageName) => {
@@ -40,12 +101,11 @@ describe("managed npm project roots", () => {
     fs.writeFileSync(path.join(resolvePluginNpmProjectsDir(npmRoot), "metadata.json"), "{}");
 
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot, ...projects]);
-    await expect(listManagedPluginNpmRoots(npmRoot)).resolves.toEqual([npmRoot, ...projects]);
   });
 
   it.each(["flat", "generation"] as const)(
     "recovers identical package bytes only after publication into a %s project",
-    async (layout) => {
+    (layout) => {
       const npmRoot = makeNpmRoot();
       const stateDir = path.dirname(npmRoot);
       const packageName = "@fixture/published";
@@ -68,7 +128,6 @@ describe("managed npm project roots", () => {
           loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
         );
       expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
-      await expect(listManagedPluginNpmRoots(npmRoot)).resolves.toEqual([npmRoot]);
       expect(readRecords()).toEqual({});
       expect(fs.readFileSync(path.join(stageRoot, packageRelative, "package.json"))).toEqual(
         packageBytes,
@@ -84,7 +143,6 @@ describe("managed npm project roots", () => {
             });
       fs.renameSync(stageRoot, publishedRoot);
       expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot, publishedRoot]);
-      await expect(listManagedPluginNpmRoots(npmRoot)).resolves.toEqual([npmRoot, publishedRoot]);
       expect(readRecords()).toEqual({
         published: {
           source: "npm",
@@ -102,7 +160,7 @@ describe("managed npm project roots", () => {
     },
   );
 
-  it("retains legacy recovery and excludes complete custody directories and substituted projects", async () => {
+  it("retains legacy recovery and excludes complete custody directories and substituted projects", () => {
     const npmRoot = makeNpmRoot();
     const stateDir = path.dirname(npmRoot);
     const packageName = "@fixture/custody";
@@ -132,7 +190,6 @@ describe("managed npm project roots", () => {
       layout: "legacy",
     });
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
-    await expect(listManagedPluginNpmRoots(npmRoot)).resolves.toEqual([npmRoot]);
     const records = withPluginCache(createPluginCache(), () =>
       loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
     );
@@ -141,30 +198,25 @@ describe("managed npm project roots", () => {
     expect(fs.existsSync(path.join(outside, path.relative(projectRoot, packageDir)))).toBe(true);
   });
 
-  it("treats a missing projects directory as empty", async () => {
+  it("treats a missing projects directory as empty", () => {
     const npmRoot = makeNpmRoot();
 
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
-    await expect(listManagedPluginNpmRoots(npmRoot)).resolves.toEqual([npmRoot]);
   });
 
-  it("treats a projects path that is a file as unavailable", async () => {
+  it("treats a projects path that is a file as unavailable", () => {
     const npmRoot = makeNpmRoot();
     fs.mkdirSync(npmRoot, { recursive: true });
     fs.writeFileSync(resolvePluginNpmProjectsDir(npmRoot), "not a directory", "utf8");
 
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
-    await expect(listManagedPluginNpmRoots(npmRoot)).resolves.toEqual([npmRoot]);
   });
 
-  it("propagates unrelated filesystem errors", async () => {
+  it("propagates unrelated filesystem errors", () => {
     const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
     vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
       throw error;
     });
     expect(() => listManagedPluginNpmRootsSync("/fake/npm")).toThrow(error);
-
-    vi.spyOn(fs.promises, "readdir").mockRejectedValueOnce(error);
-    await expect(listManagedPluginNpmRoots("/fake/npm")).rejects.toThrow(error);
   });
 });

@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
-import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -29,20 +29,16 @@ describe("chat transcript controller", () => {
 
   it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
     const update = createDeferred<boolean>();
-    const transcript = createTranscriptTestOwner(
-      {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: update.promise,
-      },
-      () => "projected-reply",
+    const transcript = createChatTranscript(() => "projected-reply");
+    const messageElements = transcript.renderSession(
+      "agent:main:projected-reply",
+      (session) => session.messageElements,
     );
     const tail: TestContentRow = {
       kind: "content",
       key: "tail",
       content: (
-        <div class="chat-bubble" data-entry-id="tail">
+        <div ref={messageElements.forKey("tail")} class="chat-bubble" data-entry-id="tail">
           Tail
         </div>
       ),
@@ -51,7 +47,11 @@ describe("chat transcript controller", () => {
       kind: "content",
       key: "original",
       content: (
-        <div class="chat-bubble" data-entry-id="original">
+        <div
+          ref={messageElements.forKey("optimistic-original")}
+          class="chat-bubble"
+          data-entry-id="original"
+        >
           Original
         </div>
       ),
@@ -85,7 +85,7 @@ describe("chat transcript controller", () => {
           ?.classList.contains("chat-bubble--reply-target"),
       ).toBe(true);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -93,20 +93,16 @@ describe("chat transcript controller", () => {
     "keeps only the current deferred message reveal after %s",
     async (interruption) => {
       const update = createDeferred<boolean>();
-      const transcript = createTranscriptTestOwner(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: update.promise,
-        },
-        () => `message-reveal-${interruption}`,
+      const transcript = createChatTranscript(() => `message-reveal-${interruption}`);
+      const messageElements = transcript.renderSession(
+        `agent:main:reveal-${interruption}`,
+        (session) => session.messageElements,
       );
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,
         content: (
-          <div class="chat-bubble" data-entry-id={id}>
+          <div ref={messageElements.forKey(id)} class="chat-bubble" data-entry-id={id}>
             {id}
           </div>
         ),
@@ -154,7 +150,7 @@ describe("chat transcript controller", () => {
         } else if (interruption === "touch") {
           container.dispatchEvent(new TouchEvent("touchstart"));
         } else if (interruption === "disconnect") {
-          transcript.hostDisconnected();
+          transcript.dispose();
         }
         update.resolve(true);
         await update.promise;
@@ -166,7 +162,7 @@ describe("chat transcript controller", () => {
           interruption === "new reveal",
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },

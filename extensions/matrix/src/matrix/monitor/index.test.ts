@@ -125,14 +125,11 @@ describe("monitorMatrixProvider", () => {
     hoisted.registeredHealthySyncGetter = undefined;
     hoisted.stopThreadBindingManager.mockReset().mockResolvedValue(undefined);
     hoisted.client.removeAllListeners();
-    hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
+    hoisted.client.bindSyncIngress.mockClear();
+    hoisted.ingress.start.mockClear();
+    hoisted.ingress.stop.mockClear();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claim
-      .mockReset()
-      .mockResolvedValue({ kind: "claimed" as const, handle: hoisted.inboundReplayClaim });
-    hoisted.inboundReplayClaim.commit.mockReset().mockResolvedValue(true);
-    hoisted.inboundReplayClaim.release.mockReset();
-    hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
+    hoisted.createMatrixIngressMonitor.mockClear();
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.registerChannelRuntimeContext.mockReset();
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
@@ -227,7 +224,7 @@ describe("monitorMatrixProvider", () => {
     }
   });
 
-  it("contains room-message handler rejections inside monitor task tracking", async () => {
+  it("propagates room-message handler failures to the ingress owner", async () => {
     const abortController = new AbortController();
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
@@ -247,14 +244,12 @@ describe("monitorMatrixProvider", () => {
 
       const onRoomMessage = registeredRoomMessageHandler();
 
-      await onRoomMessage("!room:example.org", { event_id: "$event" });
+      await expect(onRoomMessage("!room:example.org", { event_id: "$event" })).rejects.toThrow(
+        "room handler exploded",
+      );
       await Promise.resolve();
 
       expect(unhandled).toHaveLength(0);
-      expect(mockCallArg(hoisted.logger.warn, 0, 0)).toBe("matrix background task failed");
-      const warningMetadata = mockCallArg(hoisted.logger.warn, 0, 1) as Record<string, unknown>;
-      expect(warningMetadata.task).toBe("test room message");
-      expect(warningMetadata.error).toBe("Error: room handler exploded");
 
       abortController.abort();
       await monitorPromise;
@@ -285,22 +280,20 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("releases the prepared client when startup fails before later resources exist", async () => {
-    hoisted.createMatrixInboundEventDeduper.mockImplementation(() => {
-      throw new Error("deduper failed");
-    });
+    hoisted.client.bindSyncIngress.mockRejectedValueOnce(new Error("ingress failed"));
 
     await expect(
       monitorMatrixProvider({
         setStatus: hoisted.setStatus,
       }),
-    ).rejects.toThrow("deduper failed");
+    ).rejects.toThrow("ingress failed");
 
     expectPersistRelease();
     expectLastStatusFields({
       accountId: "default",
       connected: false,
       healthState: "error",
-      lastError: "deduper failed",
+      lastError: "ingress failed",
     });
   });
 
@@ -367,7 +360,9 @@ describe("monitorMatrixProvider", () => {
       expect.objectContaining({ mode: "stop" }),
     );
     expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
-    await hoisted.registeredOnRoomMessage?.("!room:example.org", { event_id: "$late" });
+    await expect(
+      registeredRoomMessageHandler()("!room:example.org", { event_id: "$late" }),
+    ).rejects.toThrow("Matrix monitor is stopped");
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -552,7 +547,9 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder).not.toContain("stop-manager");
     expect(hoisted.callOrder).not.toContain("release-client");
 
-    await onRoomMessage("!room:example.org", { event_id: "$late" });
+    await expect(onRoomMessage("!room:example.org", { event_id: "$late" })).rejects.toThrow(
+      "Matrix monitor is stopped",
+    );
     expect(hoisted.callOrder).not.toContain("handler-start:$late");
 
     pendingHandlers.get("$event")?.();

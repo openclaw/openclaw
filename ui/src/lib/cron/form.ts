@@ -9,6 +9,7 @@ import {
   parseStaggerSchedule,
 } from "./form-schedule.ts";
 import { getCronJobPayload } from "./payload.ts";
+import { DEFAULT_CRON_FORM } from "./state.ts";
 import type { CronFormState } from "./types.ts";
 
 const CRON_CHANNEL_LAST = "last";
@@ -21,56 +22,6 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
     (value.startsWith("session:") && value.length > "session:".length)
   );
 }
-
-export const DEFAULT_CRON_FORM: CronFormState = {
-  name: "",
-  description: "",
-  agentId: "",
-  sessionKey: "",
-  clearAgent: false,
-  enabled: true,
-  deleteAfterRun: false,
-  scheduleKind: "every",
-  eventSource: "mcp-events",
-  eventServer: "",
-  eventName: "",
-  eventArguments: "{}",
-  scheduleAt: "",
-  everyAmount: "30",
-  everyUnit: "minutes",
-  cronExpr: "0 7 * * *",
-  cronTz: "",
-  scheduleExact: false,
-  staggerAmount: "",
-  staggerUnit: "seconds",
-  triggerEnabled: false,
-  triggerScript: "",
-  triggerOnce: false,
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payloadKind: "agentTurn",
-  payloadLocked: false,
-  payloadText: "",
-  payloadModel: "",
-  payloadThinking: "",
-  payloadLightContext: false,
-  deliveryMode: "none",
-  deliveryChannel: "last",
-  deliveryTo: "",
-  deliveryAccountId: "",
-  deliveryBestEffort: false,
-  deliveryThreadId: undefined,
-  deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  timeoutSeconds: "",
-};
 
 function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind" | "payloadLocked">,

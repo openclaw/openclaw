@@ -104,7 +104,7 @@ describe("registered gateway install runtime default", () => {
         "--port",
         "29453",
       ]);
-      expect(probe).toHaveBeenCalledWith(bunPath, undefined, expect.any(Object));
+      expect(probe).toHaveBeenCalledWith(bunPath, expect.any(Object));
       expect(JSON.parse(runtimeLogs.at(-1)!).warnings).toEqual([
         "No supported Node runtime was found; using the running Bun for the service.",
       ]);

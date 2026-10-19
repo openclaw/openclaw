@@ -26,6 +26,18 @@ export function recordMemorySample(
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
   byteBuckets: number[],
 ): void {
+  store.clearGauges("openclaw_process_anonymous_memory_bytes");
+  for (const [kind, field] of [
+    ["rss", "anonymousRssBytes"],
+    ["swap", "anonymousSwapBytes"],
+  ] as const) {
+    store.gauge(
+      "openclaw_process_anonymous_memory_bytes",
+      "Latest Linux process anonymous RSS and swap; includes managed heaps and buffers, not allocator totals.",
+      { kind },
+      numericValue(memory[field]),
+    );
+  }
   for (const message of memory.workerMessages ?? []) {
     const labels = { kind: message.kind, direction: message.direction };
     store.counterValue(

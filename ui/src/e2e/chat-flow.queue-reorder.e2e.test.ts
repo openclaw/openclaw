@@ -13,60 +13,57 @@ import {
   installMockGateway,
   requireRecord,
 } from "./chat-flow.test-support.ts";
-import { outboxPayloadFile, stageOutboxAttachment } from "./chat-outbox-payloads.test-support.ts";
+import {
+  outboxPayloadFile,
+  readOutboxQueue,
+  stageOutboxAttachment,
+} from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
-function storedQueueOrder(page: Page) {
-  return page.evaluate(() =>
-    Object.entries(sessionStorage)
-      .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
-      .flatMap(([, value]) => {
-        try {
-          const parsed = JSON.parse(value) as {
-            sessions?: Record<
-              string,
-              { queue?: { text?: unknown; orderKey?: unknown; createdAt?: unknown }[] }
-            >;
-          };
-          return Object.values(parsed.sessions ?? {}).flatMap((session) => session.queue ?? []);
-        } catch {
-          return [];
-        }
-      })
-      .toSorted(
-        (left, right) =>
-          (typeof left.orderKey === "number" ? left.orderKey : Number(left.createdAt)) -
-          (typeof right.orderKey === "number" ? right.orderKey : Number(right.createdAt)),
-      )
-      .map((item) => item.text),
-  );
+async function openChat(options?: Parameters<typeof installMockGateway>[1], existingPage?: Page) {
+  const page = existingPage ?? (await newChatPage(suite));
+  const gateway = await installMockGateway(page, options);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  const composer = page.locator(".agent-chat__composer-combobox textarea");
+  if (!existingPage) {
+    await composer.waitFor({ state: "visible", timeout: 15_000 });
+  }
+  return { page, gateway, composer };
+}
+
+async function storedQueueOrder(page: Page) {
+  return (await readOutboxQueue(page))
+    .toSorted(
+      (left, right) => (left.orderKey ?? left.createdAt) - (right.orderKey ?? right.createdAt),
+    )
+    .map((item) => item.text);
 }
 
 suite.define(() => {
   it("delivers the reordered head after a reconnect attachment read settles", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages: [{ role: "assistant", content: "Synthetic queue ordering proof." }],
-        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const { gateway, composer } = await openChat(
+        {
+          historyMessages: [{ role: "assistant", content: "Synthetic queue ordering proof." }],
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        },
+        page,
+      );
       await waitForControlUiGatewayReady(page);
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      const rows = page.locator(".chat-queue__item");
+      await composer.waitFor();
       await page.getByText("Synthetic queue ordering proof.", { exact: true }).waitFor();
       await gateway.setOnline(false);
       await gateway.closeLatest();
       await waitForControlUiGatewayReconnecting(page);
       await stageOutboxAttachment(page, "A: review the attached itinerary");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.press("Enter");
-      await page.locator(".chat-queue__item", { hasText: "A: review" }).waitFor();
-      await composer.fill("B: read this instruction first");
-      await composer.press("Enter");
-      await page.locator(".chat-queue__item", { hasText: "B: read" }).waitFor();
+      await rows.filter({ hasText: "A: review" }).waitFor();
+      await queueMessages(page, ["B: read this instruction first"]);
       // Hold the browser's real Blob decoder after offline admission has stored every byte.
-      await page.evaluate(() => {
+      const attachmentRead = await page.evaluateHandle(() => {
         const NativeFileReader = FileReader;
         const pending: Array<() => void> = [];
         globalThis.FileReader = class extends NativeFileReader {
@@ -74,42 +71,26 @@ suite.define(() => {
             pending.push(() => super.readAsDataURL(blob));
           }
         };
-        Object.assign(window, {
-          queuedAttachmentRead: {
-            count: () => pending.length,
-            release: () => {
-              globalThis.FileReader = NativeFileReader;
-              pending.splice(0).forEach((resume) => resume());
-            },
+        return {
+          count: () => pending.length,
+          release: () => {
+            globalThis.FileReader = NativeFileReader;
+            pending.splice(0).forEach((resume) => resume());
           },
-        });
+        };
       });
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            (
-              window as unknown as { queuedAttachmentRead: { count(): number } }
-            ).queuedAttachmentRead.count(),
-          ),
-        )
-        .toBeGreaterThan(0);
-      await page
-        .locator(".chat-queue__item", { hasText: "B: read" })
-        .locator(".chat-queue__grip")
-        .focus();
+      await expect.poll(() => attachmentRead.evaluate((read) => read.count())).toBeGreaterThan(0);
+      await rows.filter({ hasText: "B: read" }).locator(".chat-queue__grip").focus();
       await page.keyboard.press("ArrowUp");
       const expected = ["B: read this instruction first", "A: review the attached itinerary"];
       await expect.poll(() => storedQueueOrder(page)).toEqual(expected);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await page.evaluate(() =>
-        (
-          window as unknown as { queuedAttachmentRead: { release(): void } }
-        ).queuedAttachmentRead.release(),
-      );
+      await attachmentRead.evaluate((read) => read.release());
+      await attachmentRead.dispose();
       const first = requireRecord((await gateway.waitForRequest("chat.send")).params);
       await page.locator(".chat-group.user", { hasText: String(first.message) }).waitFor();
 
@@ -141,12 +122,8 @@ suite.define(() => {
   it.each(["keyboard", "drag"] as const)(
     "keeps a reconnecting send ahead of queued messages reordered by %s",
     async (interaction) => {
-      const page = await newChatPage(suite);
-      const gateway = await installMockGateway(page);
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible", timeout: 15_000 });
+      const { page, gateway, composer } = await openChat();
+      const rows = page.locator(".chat-queue__item");
       await gateway.deferNext("chat.send");
       await composer.fill(QUEUED[0]);
       await composer.press("Enter");
@@ -157,26 +134,21 @@ suite.define(() => {
         .getByText("Waiting for reconnect", { exact: true })
         .waitFor();
 
-      for (const message of QUEUED.slice(1)) {
-        await composer.fill(message);
-        await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor();
-      }
+      await queueMessages(page, QUEUED.slice(1));
 
-      const queueText = () => page.locator(".chat-queue__item .chat-queue__text").allTextContents();
+      const queueText = () => rows.locator(".chat-queue__text").allTextContents();
       expect(await queueText()).toEqual([QUEUED[1], QUEUED[2]]);
       expect(await storedQueueOrder(page)).toEqual([...QUEUED]);
       expect(
         await page.locator(".chat-group.user").getByText(QUEUED[0], { exact: true }).count(),
       ).toBe(1);
 
-      const movingRow = page.locator(".chat-queue__item", { hasText: QUEUED[2] });
-      const handle = movingRow.locator(".chat-queue__grip");
+      const handle = rows.filter({ hasText: QUEUED[2] }).locator(".chat-queue__grip");
       if (interaction === "keyboard") {
         await handle.focus();
         await page.keyboard.press("ArrowUp");
       } else {
-        const target = page.locator(".chat-queue__item", { hasText: QUEUED[1] });
+        const target = rows.filter({ hasText: QUEUED[1] });
         const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
         try {
           // Let the handle write its own drag payload before the row accepts the drop.
@@ -203,8 +175,7 @@ suite.define(() => {
   );
 
   it("keeps the queue order consistent through a reload after a mid-reorder storage failure", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openChat({
       // A real active turn holds the restored queue while we inspect its order.
       sessions: [
         {
@@ -217,10 +188,6 @@ suite.define(() => {
       ],
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.waitFor({ state: "visible", timeout: 15_000 });
-
     await gateway.setOnline(false);
     await gateway.closeLatest();
     await queueMessages(page);
@@ -228,11 +195,7 @@ suite.define(() => {
     const queueText = () => page.locator(".chat-queue__item .chat-queue__text").allTextContents();
     expect(await queueText()).toEqual([...QUEUED]);
 
-    // Break durable storage for the rest of this page's lifetime, then attempt
-    // a reorder. A real `sessionStorage.setItem` failure (quota, private mode,
-    // disabled storage) landing mid-batch must reject the whole permutation
-    // instead of applying it partway, so the order has to stay exactly what
-    // it was — never a mix of the attempted and original arrangements.
+    // A failed durable batch must reject the whole permutation.
     await page.evaluate(() => {
       window.sessionStorage.setItem = () => {
         throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -248,17 +211,10 @@ suite.define(() => {
       .waitFor();
     expect(await queueText()).toEqual([...QUEUED]);
 
-    // A fresh load reads back only what actually made it to storage. Seeing the
-    // same order here (not a mix of the attempted and original permutations)
-    // is the proof: the failed batch never left a half-applied reorder behind.
-    // The app only mounts its session UI once the Gateway connects, so the
-    // storage-level readback below runs first, while this reload is still
-    // offline, exactly as the cold-reload offline-queue proof elsewhere does.
+    // Check durable order before reconnect mounts the session UI.
     await page.reload();
     expect(await storedQueueOrder(page)).toEqual([...QUEUED]);
 
-    // Bringing the Gateway back lets the app mount its session UI so the same
-    // order can be confirmed rendered, not just stored.
     await gateway.setOnline(true);
     await page.locator("openclaw-chat-pane").waitFor({ state: "attached", timeout: 15_000 });
     await page.locator(".chat-queue__item", { hasText: QUEUED[0] }).waitFor({ timeout: 10_000 });

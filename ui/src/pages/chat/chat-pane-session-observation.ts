@@ -84,12 +84,12 @@ function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
   observedSessionId: string | null = null,
-) {
+): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
-      return false;
+      return;
     }
     const sessions = result.sessions.filter(
       (candidate) =>
@@ -97,13 +97,13 @@ function applyObservedChatSessionRow(
         (observedSessionId !== null && candidate.sessionId !== observedSessionId),
     );
     if (sessions.length === result.sessions.length) {
-      return false;
+      return;
     }
     state.sessionsResult = { ...result, sessions, count: sessions.length };
-    return true;
+    return;
   }
   if (!visibleSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
-    return false;
+    return;
   }
   const current = state.sessionsResultAgentId === selectedAgentId ? state.sessionsResult : null;
   const existing = row.sessionId
@@ -139,22 +139,27 @@ function applyObservedChatSessionRow(
   if (row.providerReview) {
     holdProviderReviewQueuedInputs(state, row.key, row.agentId ?? selectedAgentId);
     if (
-      state.realtimeTalkSession ||
-      state.realtimeTalkActive ||
-      state.realtimeTalkUseSystemDefault
+      state.realtimeTalk.snapshot.realtimeTalkSession ||
+      state.realtimeTalk.snapshot.realtimeTalkActive ||
+      state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault
     ) {
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
   }
-  if (result === state.sessionsResult && state.sessionsResultAgentId === selectedAgentId) {
-    return false;
-  }
   state.sessionsResult = result;
   state.sessionsResultAgentId = selectedAgentId;
-  return true;
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  private readonly parentRowListeners = new Set<() => void>();
+  readonly parentSession = {
+    read: () => this.observedParentSessionRow(),
+    subscribe: (listener: () => void) => {
+      this.parentRowListeners.add(listener);
+      return () => this.parentRowListeners.delete(listener);
+    },
+  };
+
   private sessionObservation: {
     retryFailedRead: () => void;
     matchesPane: () => boolean;
@@ -178,6 +183,9 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     const previous = this.parentSessionObservation;
     this.parentSessionObservation = null;
     previous?.observation?.dispose();
+    if (previous) {
+      this.parentRowListeners.forEach((listener) => listener());
+    }
   }
 
   private synchronizeParentSessionObservation() {
@@ -231,7 +239,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
-        this.invalidate();
+        this.parentRowListeners.forEach((listener) => listener());
         if (
           !notification?.eventPending &&
           binding.observation &&
@@ -252,6 +260,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
+      this.parentRowListeners.forEach((listener) => listener());
       refresh.refresh();
     }
   }
@@ -332,12 +341,10 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           ) {
             state.pendingAbort = null;
           }
-          if (applyObservedChatSessionRow(state, row, binding.observation?.sessionId)) {
-            this.invalidate();
-          }
+          applyObservedChatSessionRow(state, row, binding.observation?.sessionId);
           this.synchronizeParentSessionObservation();
           if (state.pendingAbort) {
-            void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+            void replayPendingChatAbort(state);
           }
         }
         // Apply the retired row first so deletion cannot survive the replacement binding.
@@ -358,10 +365,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
               refreshRunner.refresh();
               return;
             }
-            this.activeSessionResources.reconcileObservation({
-              requestUpdate: () => this.invalidate(),
-              updated: () => this.updateComplete,
-            });
+            this.activeSessionResources.reconcileObservation();
           }
         },
         onEvent: (event, result) => {

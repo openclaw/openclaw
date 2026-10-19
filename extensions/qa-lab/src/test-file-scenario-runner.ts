@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveQaArtifactPath, toRepoArtifactPath } from "./cli-paths.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
@@ -22,7 +23,6 @@ import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource, QaTestFileScenario } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { shellQuote } from "./shell-quote.js";
 import {
   formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,

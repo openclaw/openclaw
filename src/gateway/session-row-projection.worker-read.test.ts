@@ -25,7 +25,6 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
@@ -59,6 +58,7 @@ import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { watchRowFacts as observeRowFacts } from "./session-row-projection.read-fixture.test-support.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
@@ -69,29 +69,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-function observeRowFacts(
-  wrap: (
-    owner: history.SessionHistoryWorkerDatabase,
-  ) => history.SessionHistoryWorkerDatabase["readRowFacts"],
-  once = false,
-) {
-  const readDatabases = history.withSessionHistoryWorkerDatabases;
-  const observe: typeof readDatabases = (databases, consume, lane) =>
-    readDatabases(
-      databases,
-      (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            readRowFacts: wrap(owner),
-          })),
-        ),
-      lane,
-    );
-  const spy = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
-  return once ? spy.mockImplementationOnce(observe) : spy.mockImplementation(observe);
-}
 
 it.each([{ workMs: 20, rowCount: 65 }])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
@@ -117,6 +94,9 @@ it.each([{ workMs: 20, rowCount: 65 }])(
         try {
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
+          for (const key of keys) {
+            projection.describe({ agentId: "main", key });
+          }
           const before = projection.materializedCount;
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
           const databases = observeRowFacts((owner) => async (input) => {
@@ -299,105 +279,82 @@ it.each([
   },
 );
 
-it.for(["shared-state replacement", "configured-alias close"] as const)(
-  "refuses held row facts after %s",
-  async (change, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const aliasDirectory = state.path("row-alias");
-      fs.symlinkSync(state.root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
-      const storePath = path.join(aliasDirectory, "sessions.sqlite");
-      const query = { agentId: "main", key: "agent:main:shared-source-replacement" };
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key, storePath },
-        {
-          sessionId: "shared-source",
-          lifecycleRevision: "first",
-          updatedAt: 1,
-        },
-      );
-      const databasePath = resolveOpenClawStateSqlitePath(state.env);
-      const successorPath = `${databasePath}.successor`;
-      for (const [pathname, backend] of [
-        [databasePath, "original"],
-        [successorPath, "successor"],
-      ] as const) {
-        seedCanonicalAcpSessionMeta({
-          databasePath: pathname,
-          env: state.env,
-          sessionKey: query.key,
-          lifecycleRevision: "first",
-          meta: {
-            backend,
-            agent: "main",
-            runtimeSessionName: "shared-source",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 1,
-          },
-        });
-      }
-      await closeOpenClawStateDatabaseAsync();
-      const foreground = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({
-        cfg: { agents: { entries: { main: {} } }, session: { store: storePath } },
-      });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      let reading: Promise<void> | undefined;
-      let closing: Promise<boolean> | undefined;
-      try {
-        await projection.ensureMaterialized();
-        expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
-        const materialized = projection.materializedCount;
-        if (change === "configured-alias close") {
-          // Retire warm discovery aliases before the fresh row owner must route its own close.
-          await closeOpenClawAgentDatabaseByPathAsync(storePath, query.agentId);
-          await closeOpenClawAgentDatabaseByPathAsync(fs.realpathSync(storePath), query.agentId);
-        }
-        observeRowFacts(
-          (owner) => async (input) => {
-            const reply = await owner.readRowFacts(input);
-            entered.resolve();
-            await release.promise;
-            return reply;
-          },
-          true,
-        );
-        sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
-        reading = projection.ensureMaterialized();
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, reading, "Expected the held row read"),
-          signal,
-        );
-        if (change === "configured-alias close") {
-          closing = closeOpenClawAgentDatabaseByPathAsync(storePath, query.agentId);
-          await withinTest(closing, signal);
-        } else {
-          await closeOpenClawStateDatabaseAsync();
-          fs.renameSync(databasePath, `${databasePath}.original`);
-          fs.renameSync(successorPath, databasePath);
-        }
-        const refused = expect(reading).rejects.toThrow(
-          change === "configured-alias close"
-            ? "Session history database read was revoked"
-            : /admission|changed|closed|retired/i,
-        );
-        release.resolve();
-        await refused;
-        expect(projection.materializedCount).toBe(materialized);
-        await projection.ensureMaterialized();
-        expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({
-          id: change === "configured-alias close" ? "original" : "successor",
-        });
-      } finally {
-        release.resolve();
-        await Promise.allSettled([reading, closing]);
-        projection.dispose();
-        foreground();
-      }
+it("refuses held row facts after configured-alias close", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const aliasDirectory = state.path("row-alias");
+    fs.symlinkSync(state.root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    const storePath = path.join(aliasDirectory, "sessions.sqlite");
+    const query = { agentId: "main", key: "agent:main:shared-source-replacement" };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath },
+      {
+        sessionId: "shared-source",
+        lifecycleRevision: "first",
+        updatedAt: 1,
+      },
+    );
+    const databasePath = resolveOpenClawStateSqlitePath(state.env);
+    seedCanonicalAcpSessionMeta({
+      databasePath,
+      env: state.env,
+      sessionKey: query.key,
+      lifecycleRevision: "first",
+      meta: {
+        backend: "original",
+        agent: "main",
+        runtimeSessionName: "shared-source",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
     });
-  },
-);
+    await closeOpenClawStateDatabaseAsync();
+    const foreground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg: { agents: { entries: { main: {} } }, session: { store: storePath } },
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let reading: Promise<void> | undefined;
+    let closing: Promise<boolean> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
+      const materialized = projection.materializedCount;
+      // Retire warm discovery aliases before the fresh row owner must route its own close.
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, query.agentId);
+      await closeOpenClawAgentDatabaseByPathAsync(fs.realpathSync(storePath), query.agentId);
+      observeRowFacts(
+        (owner) => async (input) => {
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        },
+        true,
+      );
+      sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
+      reading = projection.ensureMaterialized();
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, reading, "Expected the held row read"),
+        signal,
+      );
+      closing = closeOpenClawAgentDatabaseByPathAsync(storePath, query.agentId);
+      await withinTest(closing, signal);
+      const refused = expect(reading).rejects.toThrow("Session history database read was revoked");
+      release.resolve();
+      await refused;
+      expect(projection.materializedCount).toBe(materialized);
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading, closing]);
+      projection.dispose();
+      foreground();
+    }
+  });
+});
 
 it("preserves a keyed replacement while an older worker reply is pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

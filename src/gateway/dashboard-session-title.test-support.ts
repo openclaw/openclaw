@@ -1,20 +1,9 @@
-import assert from "node:assert/strict";
 import { text as readText } from "node:stream/consumers";
-import { fileURLToPath } from "node:url";
-import { afterEach } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { tryNativeRequireModule } from "../plugins/native-module-require.js";
-import { preparePluginLoaderAliases } from "../plugins/sdk-alias.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-
-let clearNativeRuntimeConfigSnapshot: (() => void) | undefined;
-afterEach(() => {
-  clearNativeRuntimeConfigSnapshot?.();
-  clearNativeRuntimeConfigSnapshot = undefined;
-});
 
 export const provider = "title-proof";
 export const model = "title-model";
@@ -34,6 +23,7 @@ export async function withTitleProvider(
     storePath: string;
     workspaceDir: string;
     requests: TitleRequest[];
+    env: NodeJS.ProcessEnv;
   }) => Promise<void>,
   params?: Record<string, unknown>,
   defaultParams?: Record<string, unknown>,
@@ -116,32 +106,13 @@ export async function withTitleProvider(
           },
         };
         setRuntimeConfigSnapshot(cfg);
-        if (api === "ollama") {
-          // Native plugin runtimes read a separate snapshot from the transformed fixture graph.
-          const nativeConfig = tryNativeRequireModule(
-            fileURLToPath(new URL("../config/runtime-snapshot.ts", import.meta.url)),
-            {
-              aliasMap: preparePluginLoaderAliases({
-                modulePath: fileURLToPath(
-                  new URL("../../extensions/ollama/index.ts", import.meta.url),
-                ),
-                devSourceRoot: fileURLToPath(new URL("../..", import.meta.url)),
-                pluginSdkResolution: "src",
-              }).resolveAlias,
-            },
-          );
-          assert(nativeConfig.ok, "Expected the native config runtime fixture");
-          const runtime =
-            nativeConfig.moduleExport as typeof import("../config/runtime-snapshot.js");
-          runtime.setRuntimeConfigSnapshot(cfg);
-          clearNativeRuntimeConfigSnapshot = runtime.clearRuntimeConfigSnapshot;
-        }
         await run({
           cfg,
           agentDir: state.agentDir(),
           storePath: state.statePath("sessions.json"),
           workspaceDir: state.workspaceDir,
           requests,
+          env: state.envVars,
         });
       },
     );

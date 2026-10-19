@@ -12,6 +12,18 @@ command, its automation flags, and the read-only lint mode.
 You can run Doctor after an update without first starting the Gateway. Plugin
 health checks use the runtime config prepared by Doctor.
 
+Database migrations use the [efficient integrity-check default](/install/updating#migration-integrity-checks):
+whole-database `quick_check`, full checks of tables the migration rewrites or
+re-indexes, and foreign-key checks. Use `openclaw doctor --fix --full-integrity-check`
+to check all tables and indexes during migration. Explicit verification,
+recovery, and compaction keep their existing checks.
+
+If Doctor cannot verify database readiness because a read-only snapshot did not
+stabilize, let write activity settle and retry the inspection. Doctor still
+refuses to complete repair, but snapshot contention alone does not call for a
+database restore. Integrity failures retain backup-restore guidance for the
+affected database.
+
 When the System agent runs Doctor, it uses a separate process from the same
 OpenClaw installation. Bulk diagnostic checks can then run without blocking the
 Gateway's event loop. This uses the existing `--non-interactive` behavior,

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, lazy, Loading, onCleanup } from "solid-js";
+import { createMemo, lazy, Loading, onSettled, Show } from "solid-js";
 import {
   isOptionalElementDefined,
   createLazyCustomElementRequests,
@@ -29,45 +29,42 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
   "openclaw-chat-question-card",
   (props, host) => {
     host.style.display = "contents";
-    const loader = createLazyCustomElementRequests();
-    const loadState = projectOwner(loader, (owner) => owner.visibleState);
-    createEffect(
-      () => Boolean(props.props),
-      (active) => loader.requestWhileActive(questionPanelElement, active),
-    );
-    onCleanup(() => {
-      loader.requestWhileActive(questionPanelElement, false);
-    });
-    const view = createMemo(() => {
-      const value = loadState.read();
-      return {
-        loaded: isOptionalElementDefined(questionPanelElement),
-        failure: value?.status === "error" ? value : undefined,
-      };
-    });
-    return (
-      <>
-        {props.props && (
-          <Loading fallback={<LoadingState />}>
-            {view().loaded ? (
-              <QuestionPanel props={props.props} />
-            ) : view().failure ? (
-              <LazyViewError
-                error={view().failure?.error}
-                stale={view().failure?.stale}
-                subtitle={questionPanelElement.label}
-                onRetry={() => loader.retry()}
-              />
-            ) : (
-              <LoadingState />
-            )}
-          </Loading>
-        )}
-      </>
-    );
+    return <Show when={props.props}>{(panel) => <QuestionCardContents panel={panel()} />}</Show>;
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );
+
+function QuestionCardContents(props: { panel: QuestionPanelProps }) {
+  const loader = createLazyCustomElementRequests();
+  const loadState = projectOwner(loader, (owner) => owner.visibleState);
+  onSettled(() => {
+    loader.requestWhileActive(questionPanelElement, true);
+    return () => loader.requestWhileActive(questionPanelElement, false);
+  });
+  const view = createMemo(() => {
+    const value = loadState.read();
+    return {
+      loaded: isOptionalElementDefined(questionPanelElement),
+      failure: value?.status === "error" ? value : undefined,
+    };
+  });
+  return (
+    <Loading fallback={<LoadingState />}>
+      {view().loaded ? (
+        <QuestionPanel props={props.panel} />
+      ) : view().failure ? (
+        <LazyViewError
+          error={view().failure?.error}
+          stale={view().failure?.stale}
+          subtitle={questionPanelElement.label}
+          onRetry={() => loader.retry()}
+        />
+      ) : (
+        <LoadingState />
+      )}
+    </Loading>
+  );
+}
 
 declare module "@solidjs/web" {
   namespace JSX {

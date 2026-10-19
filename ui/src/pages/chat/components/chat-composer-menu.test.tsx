@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 
@@ -47,8 +48,10 @@ it("retains the slash viewport during selection changes and resets it when switc
 it("retains the focused capability row and management link through catalog refreshes", async () => {
   type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
   const onNavigate = vi.fn();
+  const inputHandle = createChatAttachmentInputHandle();
   const [menu, setMenu] = createSignal<Menu>({
     attachments: {},
+    inputHandle,
     disabled: false,
     open: true,
     view: "skills",
@@ -79,6 +82,11 @@ it("retains the focused capability row and management link through catalog refre
     },
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
+  await waitForSolid(() =>
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true }),
+    ).toBeTruthy(),
+  );
   for (const name of ["Broken deps missing", "Private not available for this agent"]) {
     expect(
       view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
@@ -221,6 +229,7 @@ it("retains the focused capability row and management link through catalog refre
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {
+  const inputHandle = createChatAttachmentInputHandle();
   const [open, setOpen] = createSignal(false);
   const toggle = {
     value: "test-toggle",
@@ -233,6 +242,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
     <ChatComposerPlusMenu
       menu={{
         attachments: {},
+        inputHandle,
         disabled: false,
         open: open(),
         view: "root",
@@ -247,7 +257,10 @@ it("retains attachment choices while the native menu closes and reopens", async 
     ".agent-chat__input-btn--attach",
   )!;
   trigger.click();
-  await waitForSolid(() => expect(open()).toBe(true));
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy(),
+  );
   const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
   expect(choice.querySelector("svg")).not.toBeNull();
   setOpen(false);
@@ -256,3 +269,108 @@ it("retains attachment choices while the native menu closes and reopens", async 
   flush();
   expect(view.container.querySelector('[data-value="test-toggle"]')).toBe(choice);
 });
+
+it.each(["item", "external", "closed"] as const)(
+  "preserves newer %s focus after changing capability views",
+  async (target) => {
+    const inputHandle = createChatAttachmentInputHandle();
+    type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
+    const [currentView, setView] = createSignal<Menu["view"]>(
+      target === "closed" ? "connectors" : "tools:docs",
+    );
+    const [open, setOpen] = createSignal(true);
+    const view = mountSolid(() => (
+      <>
+        <input aria-label="Newer focus" />
+        <ChatComposerPlusMenu
+          menu={{
+            attachments: {},
+            inputHandle,
+            disabled: false,
+            open: open(),
+            view: currentView(),
+            toolOverrides: null,
+            onOpenChange: setOpen,
+            onViewChange: setView,
+            capabilityMenu: {
+              basePath: "/control",
+              skills: [],
+              skillsLoading: false,
+              skillsError: false,
+              mcpServers: [
+                {
+                  name: "docs",
+                  enabled: true,
+                  transport: "stdio",
+                  target: "docs-server",
+                  auth: null,
+                  signIn: null,
+                  toolFilter: false,
+                  parallel: false,
+                  tls: null,
+                },
+              ],
+              toolsEffectiveResult: null,
+              toolsEffectiveLoading: false,
+              toolsEffectiveError: false,
+              toolAccessMutationBlockedReason: null,
+              webSearchBaseEnabled: true,
+              mutationBlockedReason: null,
+              canAdmin: true,
+              adminBlockedReason: null,
+              onLoadSkills: vi.fn(),
+              onPatchToolOverrides: vi.fn(),
+              onNavigate: vi.fn(),
+            },
+          }}
+        />
+      </>
+    ));
+    await waitForSolid(() =>
+      expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBeTruthy(),
+    );
+    const back = view.getByRole("menuitem", { name: "Back", hidden: true });
+    await waitForSolid(() =>
+      expect(back.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
+    );
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      back.focus();
+      back.click();
+      let focused: HTMLElement;
+      if (target === "item") {
+        flush();
+        expect(document.activeElement).toBe(back);
+        focused = view.getByRole("menuitemcheckbox", { name: "docs Enabled", hidden: true });
+      } else if (target === "closed") {
+        setOpen(false);
+        focused = document.body;
+      } else {
+        focused = view.getByRole("textbox", { name: "Newer focus" });
+      }
+      if (target !== "closed") {
+        focused.focus();
+      }
+      flush();
+      for (const callback of frames) {
+        callback(0);
+      }
+      expect(document.activeElement).toBe(focused);
+      if (target === "item") {
+        back.focus();
+        back.click();
+        flush();
+        expect(back.isConnected).toBe(false);
+        expect(document.activeElement).toBe(
+          view.getByRole("menuitem", { name: "Take photo", hidden: true }),
+        );
+      }
+    } finally {
+      raf.mockRestore();
+    }
+  },
+);

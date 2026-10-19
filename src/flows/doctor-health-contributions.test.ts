@@ -58,6 +58,7 @@ const mocks = vi.hoisted(() => {
     maybeMigrateLegacyPluginModelCatalogs: vi.fn<() => Promise<unknown>>(catalogMigration),
     maybeMigrateModelCatalogCredentials: vi.fn(catalogMigration),
     maybeRepairGatewayDaemon: noOp(),
+    maybeRepairNodeServiceConfig: noOp(),
     maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
       config: cfg,
       retiredProfileCleanupPlans: [] as Array<{
@@ -253,6 +254,11 @@ vi.mock("../gateway/auth-token-resolution.js", () => ({
 
 vi.mock("../secrets/exec-resolution-policy.js", () => ({
   getSkippedExecRefStaticError: mocks.getSkippedExecRefStaticError,
+}));
+
+vi.mock("../commands/doctor-node-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-node-services.js")>()),
+  maybeRepairNodeServiceConfig: mocks.maybeRepairNodeServiceConfig,
 }));
 
 vi.mock("../commands/doctor-gateway-services.js", () => ({
@@ -1409,7 +1415,7 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it("silently skips the host-service contribution in a container without an OpenClaw service", async () => {
+  it("checks the node independently of Gateway service ownership in a container", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
     mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     await runDoctor("doctor:gateway-services", {
@@ -1417,6 +1423,7 @@ describe("doctor health contributions", () => {
       prompter: createDoctorPrompterFixture(true),
     });
 
+    expect(mocks.maybeRepairNodeServiceConfig).toHaveBeenCalledTimes(1);
     expectNoCalls(
       mocks.maybeScanExtraGatewayServices,
       mocks.maybeResolveDuelingSystemdGatewayScopes,
@@ -1481,6 +1488,7 @@ describe("doctor health contributions", () => {
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
+      integrityCheck: "quick",
       legacySessionSurfaces,
     });
   });

@@ -32,7 +32,7 @@ import {
   resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
-import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { unlinkIfExists } from "../media/temp-files.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -67,6 +67,7 @@ import {
 } from "./ingress-attribution.js";
 import {
   resolveManagedImageOriginalPath,
+  deleteAgedOrphanManagedImageFiles,
   deleteManagedImageRecordArtifacts,
   insertManagedImageRecordWithFile,
 } from "./managed-image-attachments.custody.js";
@@ -79,7 +80,6 @@ import {
 import {
   attachManagedImageRecordsToMessage,
   captureManagedImageContext,
-  listManagedImageOriginalMediaIds,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
@@ -87,6 +87,7 @@ import {
 } from "./managed-image-record-store.js";
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
 import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
+import { handleManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   buildManagedOutgoingArtifactId,
@@ -253,61 +254,6 @@ function getManagedImageMetadataLimitError(
     return `Managed image attachment ${JSON.stringify(alt)} exceeds the ${limits.maxPixels.toLocaleString("en-US")} pixel limit`;
   }
   return null;
-}
-
-function resolveManagedImageOriginalsDir(stateDir: string): string {
-  const runtimeMediaRoot =
-    path.resolve(stateDir) === path.resolve(resolveStateDir())
-      ? getMediaDir()
-      : path.join(stateDir, "media");
-  return path.join(runtimeMediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR);
-}
-
-async function hasUnmigratedManagedImageMetadata(stateDir: string): Promise<boolean> {
-  try {
-    const names = await fs.readdir(path.join(stateDir, "media", "outgoing", "records"));
-    return names.some((name) => name.endsWith(".json") || name.includes(".json.doctor-importing-"));
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-async function deleteAgedOrphanManagedImageFiles(params: {
-  stateDir: string;
-  nowMs: number;
-  minAgeMs: number;
-}): Promise<number> {
-  // Destructive migration barrier only: runtime never parses or serves legacy metadata.
-  // Any legacy source may own an old file, so Doctor must retire all JSON before orphan reaping.
-  if (await hasUnmigratedManagedImageMetadata(params.stateDir)) {
-    return 0;
-  }
-  const referencedMediaIds = new Set(await listManagedImageOriginalMediaIds(params.stateDir));
-  const originalsDir = resolveManagedImageOriginalsDir(params.stateDir);
-  let names: string[];
-  try {
-    names = await fs.readdir(originalsDir);
-  } catch {
-    return 0;
-  }
-  let deletedCount = 0;
-  for (const name of names) {
-    if (referencedMediaIds.has(name)) {
-      continue;
-    }
-    const filePath = path.join(originalsDir, name);
-    try {
-      const stat = await fs.lstat(filePath);
-      if (!stat.isFile() || params.nowMs - stat.mtimeMs < params.minAgeMs) {
-        continue;
-      }
-      await fs.rm(filePath, { force: true });
-      deletedCount += 1;
-    } catch {
-      // A later maintenance pass retries transient filesystem failures and races.
-    }
-  }
-  return deletedCount;
 }
 
 function deriveAltText(source: string, index: number) {
@@ -1456,12 +1402,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
               respondNotFound();
               return true;
             }
-            const sourceName = path.parse(responseFilename ?? "generated-image").name;
-            res.statusCode = 200;
-            res.setHeader("content-length", String(thumbnail.byteLength));
-            writeMediaHeaders("image/webp", `${sourceName}-thumbnail.webp`);
-            res.end(req.method === "HEAD" ? undefined : thumbnail);
-            return true;
+            return handleManagedImageThumbnailResponse(req, res, {
+              thumbnail,
+              filename: responseFilename,
+              cacheControl: immutableCacheControl,
+            });
           }
 
           const isPlayback =

@@ -25,7 +25,7 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
@@ -180,6 +180,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  buildCacheInputs?: ReadonlySet<string>;
   signal?: AbortSignal;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   params.signal?.throwIfAborted();
@@ -192,6 +193,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     params.signal?.throwIfAborted();
     throw error;
   }
+  const retained = buildCacheInputPaths(params.buildCacheInputs);
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const directories: string[] = [];
   let totalBytes = 0;
@@ -306,7 +308,13 @@ export async function readActualWorkspaceManifestImpl(params: {
     includedNodes: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
-    if (isDerivedWorkspacePath(relative, await isStagedInput(relative))) {
+    if (
+      isDerivedWorkspacePath(
+        relative,
+        retained.has(relative) || (await isStagedInput(relative)),
+        params.buildCacheInputs !== undefined,
+      )
+    ) {
       return "derived-only";
     }
     checkTraversal(relative);
@@ -331,7 +339,11 @@ export async function readActualWorkspaceManifestImpl(params: {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
         if (
-          isDerivedWorkspacePath(child, await isStagedInput(child)) ||
+          isDerivedWorkspacePath(
+            child,
+            retained.has(child) || (await isStagedInput(child)),
+            params.buildCacheInputs !== undefined,
+          ) ||
           derivedOnlyDirectories.has(child)
         ) {
           hasDerivedEntry = true;
@@ -360,7 +372,13 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (!relativeDirectory && name === ".git") {
         continue;
       }
-      if (isDerivedWorkspacePath(relative, await isStagedInput(relative))) {
+      if (
+        isDerivedWorkspacePath(
+          relative,
+          retained.has(relative) || (await isStagedInput(relative)),
+          params.buildCacheInputs !== undefined,
+        )
+      ) {
         hasDerivedEntry = true;
         continue;
       }
@@ -426,6 +444,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   const manifest: WorkerWorkspaceManifest = {
     version: 1,
     baseCommit: params.baseCommit,
+    ...(params.buildCacheInputs !== undefined ? { buildCacheInputs: [...retained] } : {}),
     entries: entries.toSorted((left, right) => left.path.localeCompare(right.path)),
     directories: directories.toSorted((left, right) => left.localeCompare(right)),
   };

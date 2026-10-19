@@ -6,6 +6,7 @@ import {
   type PluginInstallSourceInfo,
 } from "./install-source-info.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index.js";
+import { isPluginManifestOnboardingScope } from "./manifest-capability-normalizers.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -21,6 +22,7 @@ import {
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 
 /** Provider setup choice paired with install metadata for the owning plugin. */
 export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
@@ -46,12 +48,6 @@ type PreferredInstallSource = {
 type PreferredInstallSources = {
   installedPluginIds: ReadonlySet<string>;
   installsByPluginId: Map<string, PreferredInstallSource>;
-};
-const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
 };
 
 function resolveInstallInfoFromInstallRecord(
@@ -158,7 +154,8 @@ function resolvePreferredInstallsByPluginId(
     const existing = preferredByPluginId.get(record.pluginId);
     if (
       !existing ||
-      INSTALL_ORIGIN_PRIORITY[record.origin] < INSTALL_ORIGIN_PRIORITY[existing.origin]
+      PLUGIN_ORIGIN_PRIORITIES[record.origin]?.provider <
+        PLUGIN_ORIGIN_PRIORITIES[existing.origin]?.provider
     ) {
       preferredByPluginId.set(record.pluginId, {
         origin: record.origin,
@@ -170,19 +167,13 @@ function resolvePreferredInstallsByPluginId(
   return { installedPluginIds, installsByPluginId: preferredByPluginId };
 }
 
-function isProviderFlowScope(
-  value: unknown,
-): value is "text-inference" | "image-generation" | "music-generation" {
-  return value === "text-inference" || value === "image-generation" || value === "music-generation";
-}
-
 function normalizeProviderAuthChoiceScopes(
   scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
 ): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
   if (!Array.isArray(scopes)) {
     return undefined;
   }
-  const normalized = scopes.filter(isProviderFlowScope);
+  const normalized = scopes.filter(isPluginManifestOnboardingScope);
   return normalized.length > 0 ? normalized : undefined;
 }
 

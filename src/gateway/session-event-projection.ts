@@ -1,14 +1,28 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  hasGatewayClientCap,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { prepareSessionAncestor } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication, serializeSessionRow } from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
+
+type ProjectedPayload = Record<string, unknown> & {
+  session: SessionRow;
+  ancestorSessions?: SessionRow[];
+};
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
 export function prepareSessionEventProjection(
@@ -18,6 +32,8 @@ export function prepareSessionEventProjection(
     ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
+    /** Rechecked per recipient after row projection; exact interest always wins. */
+    omitMessage?: (client: GatewayClient) => boolean;
     controlUiOnly?: boolean;
   },
 ): PrepareSessionEventProjection {
@@ -92,9 +108,26 @@ export function prepareSessionEventProjection(
         row: NonNullable<ReturnType<ReturnType<typeof presentRecipient>["present"]>>;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: string[];
-        payloads: Map<string | undefined, Record<string, unknown>>;
+        payloads: Map<string | undefined, ProjectedPayload>;
       }
     >();
+    const diff = createSessionRowDeltaDiffer();
+    const deltaPayloads = new WeakMap<object, Map<string, Record<string, unknown>>>();
+    const fieldRefPayloads = new WeakMap<object, Record<string, unknown>>();
+    const bodylessPayloads = new WeakMap<object, Record<string, unknown>>();
+    const baselineIds = new WeakMap<object, number>();
+    let nextBaselineId = 0;
+    const baselineId = (baseline: object | undefined) => {
+      if (!baseline) {
+        return 0;
+      }
+      let id = baselineIds.get(baseline);
+      if (id === undefined) {
+        id = ++nextBaselineId;
+        baselineIds.set(baseline, id);
+      }
+      return id;
+    };
     let revision = projection.state.revision;
     let accessRevision = readGatewayAccessRevision();
     // Run display facts belong to this synchronous publication; recipient authority stays live.
@@ -172,11 +205,77 @@ export function prepareSessionEventProjection(
         }
         audience.payloads.set(deliveryKey, projected);
       }
+      const rowDelivery = hasGatewayClientCap(
+        client.connect.caps,
+        GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      )
+        ? references.prepareRows([row, ...(projected.ancestorSessions ?? [])], diff)
+        : undefined;
+      let wirePayload: Record<string, unknown> = projected;
+      if (rowDelivery) {
+        if (
+          hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS)
+        ) {
+          let compact = fieldRefPayloads.get(projected);
+          if (!compact) {
+            compact = { ...projected };
+            const sessionFieldRefs: number[] = [];
+            // Reference the reconstructed JSON row, independent of patch insertion order.
+            const fields = Object.entries(row)
+              .filter(([, value]) => value !== undefined)
+              .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+            for (const [index, [field, value]] of fields.entries()) {
+              if (
+                field !== "key" &&
+                field !== "agentId" &&
+                Object.hasOwn(projected, field) &&
+                isDeepStrictEqual(projected[field], value)
+              ) {
+                sessionFieldRefs.push(index);
+                delete compact[field];
+              }
+            }
+            compact.sessionFieldRefs = sessionFieldRefs;
+            fieldRefPayloads.set(projected, compact);
+          }
+          wirePayload = compact;
+        }
+        const cacheKey = JSON.stringify([rowDelivery.key, rowDelivery.bases.map(baselineId)]);
+        let cached = deltaPayloads.get(wirePayload);
+        if (!cached) {
+          cached = new Map();
+          deltaPayloads.set(wirePayload, cached);
+        }
+        let deltaPayload = cached.get(cacheKey);
+        if (!deltaPayload) {
+          deltaPayload = {
+            ...wirePayload,
+            session: rowDelivery.wire[0],
+            ...(Array.isArray(projected.ancestorSessions)
+              ? { ancestorSessions: rowDelivery.wire.slice(1) }
+              : {}),
+          };
+          cached.set(cacheKey, deltaPayload);
+        }
+        wirePayload = deltaPayload;
+      }
+      const omitMessage = event === "session.message" && prepared?.omitMessage?.(client);
+      if (omitMessage) {
+        let bodyless = bodylessPayloads.get(wirePayload);
+        if (!bodyless) {
+          bodyless = { ...wirePayload };
+          delete bodyless.message;
+          bodylessPayloads.set(wirePayload, bodyless);
+        }
+        wirePayload = bodyless;
+      }
       return {
-        payload: projected,
-        serializeSession: () => serializeSessionRow(row),
-        serializeMessage,
+        payload: wirePayload,
+        serializeSession: () =>
+          rowDelivery ? JSON.stringify(rowDelivery.wire[0]) : serializeSessionRow(row),
+        serializeMessage: omitMessage ? undefined : serializeMessage,
         delivered: () => {
+          rowDelivery?.delivered();
           references.forget(row.key);
           if (event === "sessions.changed" && source.reason === "activity-summary") {
             // Rosters skip recaps, so a full recap row cannot certify a later reference.

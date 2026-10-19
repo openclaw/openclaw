@@ -166,7 +166,8 @@ export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-ap
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 export { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-export { recordOpenClawDatabaseQuarantine, readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
+export { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
+export { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
@@ -175,13 +176,17 @@ export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-
 export { createReadTool } from "../agents/sessions/tools/read.js";
 export { createEditTool } from "../agents/sessions/tools/edit.js";
 export { createWriteTool } from "../agents/sessions/tools/write.js";
+export { createWorkerPlacementTools } from "./worker-placement-tools.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";
 export { loadActivatedBundledPluginPublicSurfaceModuleSync, listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 export { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 export { getNativeFallbackDiagnostic } from ${JSON.stringify(pathToFileURL(fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/dist/native.js"))).href)};
-export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
+import { readOwnerAndDaclBatch as readBatch } from "@openclaw/fs-safe/permissions";
+export function readOwnerAndDaclBatch(paths: readonly string[]) {
+  return readBatch(paths);
+}`;
               }
               if (id === highlightSource) {
                 return `globalThis[Symbol.for("worker-highlight-initializations")] = (globalThis[Symbol.for("worker-highlight-initializations")] ?? 0) + 1;\n${code}`;
@@ -198,9 +203,13 @@ export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
         const builtEntries = vi
           .mocked(build)
           .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
-        expect(builtEntries.length).toBe(workerEntryNames.length + 1);
+        expect(builtEntries.length).toBe(workerEntryNames.length + 2);
         expect(builtEntries.toSorted()).toEqual(
-          [...workerEntryNames, "worker/worker-chunk-highlight"].toSorted(),
+          [
+            ...workerEntryNames,
+            "worker/worker-chunk-highlight",
+            "worker/worker-chunk-fs-safe-watch-io",
+          ].toSorted(),
         );
         const chunks = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
         expect(chunks).toContain("worker/worker.mjs");
@@ -240,6 +249,65 @@ export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
       }
     });
 
+    it("denies workspace exec without a Gateway transcript worker in the archive", async () => {
+      const root = tempDirs.make("openclaw-worker-exec-permission-");
+      const relocated = path.join(root, "bundle");
+      fs.mkdirSync(relocated);
+      await tar.extract({ file: preparedArchive, cwd: relocated });
+      expect(fs.existsSync(path.join(relocated, "session-transcript.worker.mjs"))).toBe(false);
+      const result = await runNodeScript(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { createWorkerPlacementTools, closeOpenClawStateDatabaseAsync } = await import(pathToFileURL(entry).href);
+try {
+  const exec = createWorkerPlacementTools({
+    policy: {
+      workspaceOnly: true, readOnly: false, applyPatchEnabled: false,
+      applyPatchWorkspaceOnly: true, imageSanitization: {},
+    }, cwd: process.cwd(), containmentRoot: process.cwd(),
+    execAuthority: { host: "gateway", security: "full", ask: "off" },
+    permissionMode: "workspace", agentId: "main", sessionKey: "worker:permission-proof",
+    sessionId: "permission-proof", runId: "permission-proof-run",
+    github: {
+      credentialScrubEnv: {}, localIdentityEnv: {}, excludedStoreNames: [], managedLocalIdentity: true,
+    },
+  }).find(tool => tool.name === "exec");
+  const result = await exec.execute("permission-proof", { command: "echo permission-proof" });
+  assert.match(JSON.stringify(result), /approval_required.*worker workspace permission mode/is);
+  console.log("relocated worker exec permission denied without Gateway storage");
+} finally {
+  await closeOpenClawStateDatabaseAsync();
+}
+`,
+          path.join(relocated, "worker.mjs"),
+        ],
+        {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          TMPDIR: root,
+          TMP: root,
+          TEMP: root,
+        },
+        30_000,
+        { cwd: root },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        "relocated worker exec permission denied without Gateway storage",
+      );
+    });
+
     it(
       "reads exec environment and commits authorization through SQLite workers in a relocated archive",
       ({ signal }) =>
@@ -276,7 +344,7 @@ const {
   closeOpenClawStateDatabaseAsync,
   resolveOpenClawStateSqlitePath,
   readStableSqliteFileGeneration,
-  recordOpenClawDatabaseQuarantine,
+  seedOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
@@ -297,10 +365,10 @@ try {
   assert.ok(stored.lastUsedAt > 0);
   await closeOpenClawStateDatabaseAsync();
   const statePath = resolveOpenClawStateSqlitePath();
-  assert.equal(recordOpenClawDatabaseQuarantine({
+  seedOpenClawDatabaseQuarantine({
     kind: "state", path: statePath, reason: "portable integrity failure",
     generation: readStableSqliteFileGeneration(statePath),
-  }), true);
+  });
   assert.equal(readOpenClawDatabaseQuarantineFailure("state", statePath)?.name, "SqliteIntegrityError");
   await assert.rejects(
     updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "deny", ask: "off" } } } }),
@@ -398,6 +466,19 @@ const {
   getNativeFallbackDiagnostic,
   readOwnerAndDaclBatch,
 } = await import(pathToFileURL(entry).href);
+const { Worker } = await import("node:worker_threads");
+const { once } = await import("node:events");
+const watcher = new Worker(new URL("./worker-chunk-fs-safe-watch-io.mjs", pathToFileURL(entry)), {
+  execArgv: [],
+  workerData: { native: getFsSafeNativeConfig(), diagnostics: false },
+});
+try {
+  const reply = once(watcher, "message");
+  watcher.postMessage({ id: 1, method: "metrics", args: [] });
+  assert.deepEqual((await reply)[0], { id: 1, value: {}, cleanupErrors: [] });
+} finally {
+  await watcher.terminate();
+}
 assert.equal(getFsSafeNativeConfig().mode, "off", "sealed policy must override host native mode");
 const diagnostic = getNativeFallbackDiagnostic();
 assert.equal(diagnostic.reason, "disabled");
@@ -911,6 +992,12 @@ export async function createAttachedBrowserToolRuntime(params) {
   });
 
   it.each([
+    {
+      name: "fs-safe watch worker",
+      modulePath: "node_modules/@openclaw/fs-safe/dist/watch-io.js",
+      mutate: (source: string) => source.replace("./watch-io-worker.js", "./changed-worker.js"),
+      error: "fs-safe watch worker bootstrap changed",
+    },
     {
       name: "fs-safe native batch",
       modulePath: "node_modules/@openclaw/fs-safe/dist/windows-security-command.js",

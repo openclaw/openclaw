@@ -1,90 +1,59 @@
+import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
+import * as sandboxWorkspace from "../../agents/sandbox/context.js";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
+import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import { abortChatRunById } from "../chat-abort.js";
+import * as attachments from "../chat-attachments.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { readLocalWorkspaceProjection } from "../worker-environments/local-workspace-store.test-support.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import {
+  attachmentConfig,
+  attachmentParams,
+  prepareAttachmentFixture,
+} from "./chat-send-attachments.test-support.js";
+import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
+import type { RespondFn } from "./types.js";
 
 it.each(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
   async (mode) => {
     await withOpenClawTestState({ label: "gateway-media-owner" }, async (state) => {
       await loadOrCreateProcessDeviceIdentityAsync();
-      const cfg = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: {
-            main: { workspace: state.path("main") },
-            work: { workspace: state.path("work") },
-          },
-          defaults: {
-            skipBootstrap: true,
-            sandbox: {
-              mode,
-              scope: "agent" as const,
-              workspaceRoot: state.path("sandboxes"),
-              workspaceAccess: "none" as const,
-            },
-          },
-        },
-        session: { scope: "global" as const },
-      };
+      const cfg = attachmentConfig(state, { mode, global: true });
       const paths: string[] = [];
       for (const agentId of ["main", "work"]) {
         const bytes = `${agentId} attachment contents`;
         const fileName = "notes café 雪 🦞.txt";
-        const request = await normalizeChatSendRequest({
-          client: null,
-          params: {
+        const { result, respond } = await prepareAttachmentFixture({
+          params: attachmentParams(`media-${agentId}`, fileName, bytes, {
             agentId,
             sessionKey: "global",
-            message: "read the file",
-            idempotencyKey: `media-${agentId}`,
-            attachments: [
-              {
-                fileName,
-                mimeType: "text/plain",
-                content: Buffer.from(bytes).toString("base64"),
-              },
-            ],
-          },
-        });
-        expect(request.ok).toBe(true);
-        if (!request.ok) {
-          throw new Error(request.error);
-        }
-        const respond = vi.fn();
-        const controller = new AbortController();
-        const result = await prepareChatSendAttachments({
-          request: request.value,
+          }),
           session: {
             cfg,
             sessionKey: "global",
             agentId,
-            resolvedSessionModel: { provider: "fixture", model: "fixture" },
-            clientRunId: `media-${agentId}`,
           },
-          admission: {
-            activeRunAbort: { controller },
-            assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
-            cleanupAdmittedRun() {},
-          },
-          context: { logGateway: createSubsystemLogger("test/media-owner") },
-          respond,
-        } as unknown as Parameters<typeof prepareChatSendAttachments>[0]);
+        });
         expect(respond.mock.calls).toEqual([]);
-        expect(result.ok).toBe(true);
-        if (!result.ok) {
-          throw new Error("attachment preparation failed");
-        }
+        assert(result.ok, "attachment preparation failed");
         const media = result.value.mediaPathOffloads[0]!;
         expect(media.fileName).toBe(fileName);
         const file = path.resolve(media.workspaceDir!, media.path!);
@@ -163,45 +132,23 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
           ? { spawnedBy: "agent:main:parent", spawnedWorkspaceDir: checkout }
           : {}),
       };
-      const request = await normalizeChatSendRequest({
-        client: null,
-        params: {
-          sessionKey,
-          message: "read the selection comment",
-          idempotencyKey: `managed-${selection}`,
-          attachments: [
-            {
-              fileName: "selection-comment.txt",
-              mimeType: "text/plain",
-              content: Buffer.from("Please clarify this selection.").toString("base64"),
-            },
-          ],
-        },
-      });
-      if (!request.ok) {
-        throw new Error(request.error);
-      }
-      const respond = vi.fn();
-      const controller = new AbortController();
-      const result = await prepareChatSendAttachments({
-        request: request.value,
+      const { result, respond } = await prepareAttachmentFixture({
+        params: attachmentParams(
+          `managed-${selection}`,
+          "selection-comment.txt",
+          "Please clarify this selection.",
+          { sessionKey, message: "read the selection comment" },
+        ),
         session: {
           cfg,
           sessionKey,
           agentId: "main",
           entry: { ...entry, spawnedCwd: state.workspaceDir },
-          resolvedSessionModel: { provider: "fixture", model: "fixture" },
-          clientRunId: `managed-${selection}`,
         },
-        admission: {
-          activeRunAbort: { controller, cleanup() {} },
-          admittedSessionEntry: selectedEntry,
-          assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
-          cleanupAdmittedRun() {},
-        },
+        admission: { admittedSessionEntry: selectedEntry },
+        abortCleanup() {},
         context: { logGateway: createSubsystemLogger("test/managed-media") },
-        respond,
-      } as unknown as Parameters<typeof prepareChatSendAttachments>[0]);
+      });
       if (selection === "unrelated" || selection === "removed") {
         expect(result.ok).toBe(false);
         expect(respond).toHaveBeenCalledWith(
@@ -215,10 +162,7 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
         continue;
       }
       expect(respond.mock.calls).toEqual([]);
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error("managed attachment preparation failed");
-      }
+      assert(result.ok, "managed attachment preparation failed");
       const media = result.value.mediaPathOffloads[0]!;
       const projection = await readLocalWorkspaceProjection(worktree.id);
       expect(projection?.session_key).toBe(sessionKey);
@@ -231,6 +175,314 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
       await expect(fs.stat(path.resolve(checkout, media.path!))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    }
+  });
+});
+
+it.each([
+  { canTransfer: true, stopped: false },
+  { canTransfer: false, stopped: false },
+  { canTransfer: false, stopped: true },
+  { canTransfer: true, stopped: true },
+])("routes chat uploads: %j", async ({ canTransfer, stopped }) => {
+  await withOpenClawTestState({ label: "remote-chat-attachment" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const cfg = attachmentConfig(state, { sandboxRoot: "sandbox" });
+    await state.writeConfig(cfg);
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const respond = vi.fn<RespondFn>();
+    const runId = "remote-attachment";
+    const setup = await prepareAndAdmitChatSend({
+      client: null,
+      context,
+      respond,
+      params: attachmentParams(runId, "input.txt", "original upload", { agentId: "main" }),
+    });
+    assert(setup, "chat admission failed");
+    const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+      ...(canTransfer ? { prepareTurnAttachments: vi.fn(async () => undefined) } : {}),
+      bridge: {
+        readFile: async () => {
+          throw new Error("unexpected workspace read");
+        },
+        writeFile: async () => {
+          throw new Error("unexpected workspace write");
+        },
+        stat: async () => {
+          throw new Error("unexpected workspace stat");
+        },
+      },
+    });
+    if (stopped) {
+      release();
+    }
+    const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
+    let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
+    const admission = setup.admission;
+    try {
+      prepared = await prepareChatSendAttachments({
+        request: setup.request,
+        session: setup.session,
+        admission,
+        respond,
+        context,
+      });
+      if (canTransfer && stopped) {
+        expect(prepared.ok).toBe(false);
+        expect(sandboxSpy).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        return;
+      }
+      assert(prepared.ok, "attachment preparation failed");
+      const source = prepared.value.offloadedRefs[0]!.path;
+      const media = prepared.value.mediaPathOffloads[0]!;
+      expect(await fs.readFile(source, "utf8")).toBe("original upload");
+      if (canTransfer) {
+        expect(media).toMatchObject({ path: source, fileName: "input.txt" });
+        expect(sandboxSpy).not.toHaveBeenCalled();
+      } else {
+        expect(sandboxSpy).toHaveBeenCalled();
+        expect(media.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
+        expect(await fs.readFile(path.join(media.workspaceDir!, media.path!), "utf8")).toBe(
+          "original upload",
+        );
+      }
+    } finally {
+      release();
+      sandboxSpy.mockRestore();
+      admission.cleanupAdmittedRun();
+      clearAgentRunContext(runId, admission.lifecycleGeneration);
+      if (prepared?.ok) {
+        await attachments.discardPreparedInboundMedia(prepared.value.offloadedRefs);
+      }
+    }
+  });
+});
+
+it.each([
+  ["signal-only TXT cleanup", false, "signal", "abort", "aborted", "stage"],
+  ["managed-PDF cancellation without fallback", true, "signal", "abort", "aborted", "stage"],
+  ["ordinary TXT failure with aborted signal", false, "signal", "ordinary", "unavailable", "stage"],
+  ["RPC abort precedence over later TXT failure", false, "marker", "ordinary", "aborted", "stage"],
+  ["ordinary managed-PDF host-path fallback", true, "none", "ordinary", "fallback", "stage"],
+  ["unsandboxed cleanup before cancellation", false, "signal", "abort", "aborted", "sandbox-null"],
+  ["managed-PDF pass-through cleanup", true, "signal", "abort", "aborted", "pass-through"],
+  ["TXT failure before late abort", false, "late-marker", "ordinary", "unavailable", "stage"],
+] as const)("%s", async (_name, pdf, interruption, stageError, outcome, preparation) => {
+  await withOpenClawTestState({ label: "gateway-attachment-cancellation" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const cfg = attachmentConfig(state, {
+      mode: preparation === "sandbox-null" ? "off" : "all",
+      ...(preparation === "pass-through" ? { mediaMaxMb: 51 } : {}),
+    });
+    await state.writeConfig(cfg);
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const runId = "attachment-cancellation";
+    const bytes =
+      preparation === "pass-through"
+        ? Buffer.alloc(staging.SANDBOX_MEDIA_MAX_BYTES + 1, " ")
+        : Buffer.from(pdf ? "%PDF-1.4\n% synthetic attachment\n%%EOF\n" : "synthetic attachment");
+    if (preparation === "pass-through") {
+      bytes.write("%PDF-1.4\n% synthetic attachment\n");
+      bytes.write("%%EOF\n", bytes.length - 6);
+    }
+    let inboundPath: string | undefined;
+    const filesPresentAtResponse: boolean[] = [];
+    const respond = vi.fn<RespondFn>(() => {
+      filesPresentAtResponse.push(inboundPath !== undefined && existsSync(inboundPath));
+    });
+    const setup = await prepareAndAdmitChatSend({
+      client: null,
+      context,
+      respond,
+      params: attachmentParams(runId, pdf ? "notes.pdf" : "notes.txt", bytes, {
+        agentId: "main",
+        message: "read the attached file",
+      }),
+    });
+    expect(respond).not.toHaveBeenCalled();
+    assert(setup, "chat admission failed before attachment preparation");
+    const admission = setup.admission;
+    const signal = admission.activeRunAbort.controller.signal;
+    const ordinaryFailure = new Error("synthetic staging filesystem failure");
+    const stageRelease = createDeferred();
+    const cleanupRelease = createDeferred();
+    const discard = attachments.discardPreparedInboundMedia;
+    const parse = attachments.parseMessageWithAttachments;
+    const ensureSandbox = sandboxWorkspace.ensureSandboxWorkspaceForSession;
+    const preparationEntered = createDeferred();
+    const parseSpy = vi
+      .spyOn(attachments, "parseMessageWithAttachments")
+      .mockImplementation(async (...args) => {
+        const result = await parse(...args);
+        inboundPath = result.offloadedRefs[0]?.path;
+        if (preparation === "pass-through") {
+          preparationEntered.resolve();
+          await stageRelease.promise;
+        }
+        return result;
+      });
+    const sandboxSpy =
+      preparation === "sandbox-null"
+        ? vi
+            .spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession")
+            .mockImplementation(async (...args) => {
+              const result = await ensureSandbox(...args);
+              if (result !== null) {
+                throw new Error("the unsandboxed fixture unexpectedly provisioned a workspace");
+              }
+              preparationEntered.resolve();
+              await stageRelease.promise;
+              return result;
+            })
+        : undefined;
+    const failureSpy = vi.spyOn(attachments, "logAttachmentFailure");
+    const discardSpy = vi
+      .spyOn(attachments, "discardPreparedInboundMedia")
+      .mockImplementation(async (...args) => {
+        await cleanupRelease.promise;
+        await discard(...args);
+      });
+    const stageSpy = vi.spyOn(staging, "stageSandboxMedia").mockImplementation(async ({ ctx }) => {
+      inboundPath = ctx.media?.[0]?.path;
+      preparationEntered.resolve();
+      await stageRelease.promise;
+      throw stageError === "abort" ? signal.reason : ordinaryFailure;
+    });
+    let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
+    const preparing = prepareChatSendAttachments({
+      request: setup.request,
+      session: setup.session,
+      admission,
+      respond,
+      context,
+    }).then((result) => {
+      prepared = result;
+      return result;
+    });
+    const abort = () =>
+      abortChatRunById(createChatAbortOps(context), {
+        runId,
+        sessionKey: setup.session.sessionKey,
+        stopReason: "rpc",
+      });
+
+    try {
+      await Promise.race([
+        preparationEntered.promise,
+        preparing.then(() => {
+          throw new Error("attachment preparation completed before reaching the held boundary");
+        }),
+      ]);
+      if (preparation === "stage") {
+        expect(stageSpy).toHaveBeenCalledOnce();
+      } else {
+        expect(stageSpy).not.toHaveBeenCalled();
+      }
+      assert(inboundPath, "the real attachment parser did not create an inbound file");
+      expect((await fs.readFile(inboundPath)).equals(bytes)).toBe(true);
+      if (interruption === "marker") {
+        expect(abort()).toEqual({ aborted: true });
+      } else if (interruption === "signal") {
+        admission.activeRunAbort.controller.abort(createAgentRunDirectAbortError());
+      }
+      expect(signal.aborted).toBe(interruption === "signal" || interruption === "marker");
+      expect(context.chatRunState.hasAbortMarker(runId)).toBe(interruption === "marker");
+      stageRelease.resolve();
+
+      if (outcome === "fallback") {
+        const result = await preparing;
+        assert(result.ok, "ordinary managed-PDF fallback failed");
+        expect(result.value.mediaPathOffloads).toEqual([
+          {
+            path: inboundPath,
+            contentType: "application/pdf",
+            fileName: "notes.pdf",
+            workspaceDir: path.dirname(inboundPath),
+          },
+        ]);
+        expect((await fs.readFile(inboundPath)).equals(bytes)).toBe(true);
+        expect(discardSpy).not.toHaveBeenCalled();
+        expect(respond).not.toHaveBeenCalled();
+        return;
+      }
+
+      // Cancellation must retain admission until the real abandoned-file
+      // cleanup settles; neither a PDF fallback nor an early response owns it.
+      await vi.waitFor(() => expect(discardSpy).toHaveBeenCalledOnce());
+      expect(prepared).toBeUndefined();
+      expect(admission.gatewayWorkAdmission.isActive()).toBe(true);
+      expect(respond).not.toHaveBeenCalled();
+      expect(existsSync(inboundPath)).toBe(true);
+      if (interruption === "late-marker") {
+        expect.soft(abort()).toEqual({ aborted: false });
+        expect.soft(signal.aborted).toBe(false);
+        expect.soft(context.chatRunState.hasAbortMarker(runId)).toBe(false);
+        expect(admission.gatewayWorkAdmission.isActive()).toBe(true);
+      }
+      cleanupRelease.resolve();
+      expect(await preparing).toEqual({ ok: false });
+      expect(admission.gatewayWorkAdmission.isActive()).toBe(false);
+      expect(filesPresentAtResponse).toEqual([false]);
+      expect(respond).toHaveBeenCalledOnce();
+      if (interruption === "late-marker") {
+        expect
+          .soft(vi.mocked(context.broadcast).mock.calls.filter(([event]) => event === "chat"))
+          .toHaveLength(0);
+        expect.soft(context.logGateway.error).toHaveBeenCalledOnce();
+      }
+      if (outcome === "aborted") {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+          }),
+          undefined,
+          { runId },
+        );
+        if (preparation === "stage" && stageError === "abort") {
+          expect(stageSpy).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: signal }));
+        }
+      } else {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            message: expect.stringContaining(ordinaryFailure.message),
+          }),
+        );
+        const failure = failureSpy.mock.calls[0]?.[2];
+        assert(
+          failure instanceof attachments.MediaOffloadError,
+          "staging failure lost its retryable attachment classification",
+        );
+        expect(failure.cause).toBe(ordinaryFailure);
+      }
+    } finally {
+      stageRelease.resolve();
+      cleanupRelease.resolve();
+      try {
+        await preparing;
+      } finally {
+        stageSpy.mockRestore();
+        sandboxSpy?.mockRestore();
+        parseSpy.mockRestore();
+        discardSpy.mockRestore();
+        failureSpy.mockRestore();
+        admission.cleanupAdmittedRun();
+        clearAgentRunContext(runId, admission.lifecycleGeneration);
+        if (prepared?.ok) {
+          await discard(prepared.value.offloadedRefs);
+        }
+      }
     }
   });
 });

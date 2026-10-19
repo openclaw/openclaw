@@ -17,6 +17,7 @@ import {
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import { captureNativeSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
 import { prepareSessionEntryPresenceRead } from "./session-entry-presence-read.js";
 import {
@@ -190,6 +191,10 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
   const { scope, database } = fixture();
   const admitted = await loadSessionEntryForAdmission(scope);
   expect(admitted.entry).toBeUndefined();
+  const absentId = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    sessionId: "created-memory",
+  });
   const claim = admitted.databaseClaim;
   if (!("kind" in claim)) {
     throw new Error("Expected an actor admission claim");
@@ -197,6 +202,7 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
   let actor: Awaited<ReturnType<typeof claim.acquireSessionActor>> | undefined;
   let next: typeof claim | undefined;
   try {
+    expect(() => absentId.source()).not.toThrow();
     await using preparation = prepareSessionEntryMutationDatabases(
       [{ scope, assertCurrent: () => claim.assertCurrent() }],
       Promise.resolve(),
@@ -207,6 +213,7 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
       entry: { sessionId: "created-memory", updatedAt: 1, incognito: true },
     }));
     expect(created.ok).toBe(true);
+    expect(() => absentId.source()).toThrow("selected session changed");
     actor = await claim.acquireSessionActor({ assertCurrent() {}, assertReadable() {} });
     expect(actor.target.database).toMatchObject({
       kind: "memory",
@@ -243,6 +250,7 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
     memorySessionActorOwners.closeDatabase(database);
     expect(() => next?.assertCurrent()).toThrow(/closed/);
   } finally {
+    absentId.release();
     await actor?.release();
     await next?.release();
     await claim.release();

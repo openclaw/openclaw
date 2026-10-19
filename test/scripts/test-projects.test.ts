@@ -328,6 +328,10 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each<[string[], string[]]>([
     [["src/plugin-sdk/provider-entry.ts"], ["src/plugin-sdk/provider-entry.test.ts"]],
     [
+      ["src/plugin-sdk/lazy-value.ts"],
+      ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
+    ],
+    [
       ["extensions/qa-lab/src/scenario-catalog.test.ts"],
       ["extensions/qa-lab/src/scenario-catalog.test.ts"],
     ],
@@ -533,6 +537,14 @@ describe("scripts/test-projects changed-target routing", () => {
       file: "src/agents/command/session-store.test.ts",
       owner: "infra",
       inventory: databaseWorkerCoreTestFiles,
+    },
+    {
+      file: "src/auto-reply/reply/agent-runner-execution-auth-failures.test.ts",
+      owner: "infra",
+    },
+    {
+      file: "src/auto-reply/reply/agent-runner-execution-cli-admission.test.ts",
+      owner: "infra",
     },
   ])("routes $file to $owner", ({ file, owner, source, inventory }) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([source ?? file]), {
@@ -1645,6 +1657,10 @@ export const single = {
     [
       "test/vitest/vitest.unit-fast-isolated.config.ts",
       "src/state/openclaw-agent-execution-cleanup.test.ts",
+    ],
+    [
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
+      "src/auto-reply/reply/agent-runner-execution-auth-failures.test.ts",
     ],
   ])("preserves whole-owner watch coverage for %s with %s", (config, file) => {
     const [plan] = buildVitestRunPlans(["--watch", config, file]);
@@ -3756,7 +3772,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       const gatewayTargets = targetedPlans("test/vitest/vitest.gateway-server.config.ts").map(
         (plan) => plan.forwardedArgs,
       );
-      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
       expect(gatewayTargets.flat()).toEqual(
         listGitTrackedFiles({ pathspecs: "src/gateway" })
           ?.filter(isGatewayServerTestFile)

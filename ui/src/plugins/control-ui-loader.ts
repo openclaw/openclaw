@@ -2,8 +2,10 @@ import type {
   ControlUiDisposer,
   ControlUiPlugin,
   ControlUiSettingsView,
+  ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
@@ -55,7 +57,7 @@ export async function initializeControlUiPlugin(
 export type ControlUiPluginModule = {
   default?: ControlUiPlugin;
   pluginId?: string;
-  settingsViews?: readonly ControlUiSettingsView[];
+  settingsViews?: readonly (ControlUiSettingsView | ControlUiChannelSettingsView)[];
 };
 
 /** Both activation and packaged Settings presentations share one asset loader. */
@@ -72,17 +74,18 @@ export async function loadControlUiPluginAssets(
     link.rel = "stylesheet";
     link.media = "not all";
     link.href = url;
+    const pending = new AbortController();
     const loaded = new Promise<void>((resolve, reject) => {
-      link.addEventListener("load", () => resolve(), { once: true, signal });
-      link.addEventListener(
+      const options = { once: true, signal: pending.signal };
+      listen(link, "load", () => resolve(), options);
+      listen(
+        link,
         "error",
         () => reject(new Error(`Could not load plugin stylesheet: ${pluginId}`)),
-        { once: true, signal },
+        options,
       );
-      signal.addEventListener("abort", () => reject(new Error("Plugin UI activation ended.")), {
-        once: true,
-      });
-    });
+      listen(signal, "abort", () => reject(new Error("Plugin UI activation ended.")), options);
+    }).finally(() => pending.abort());
     document.head.append(link);
     retain(() => link.remove());
     styles?.push(link);

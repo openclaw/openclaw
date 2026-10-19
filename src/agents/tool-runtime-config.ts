@@ -1,4 +1,3 @@
-// Selects the resolved runtime snapshot for agent tool surfaces.
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,

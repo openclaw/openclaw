@@ -88,3 +88,26 @@ export async function readSharedDatabaseVersion(
     db.close();
   }
 }
+
+/** A fresh PostgreSQL anchor has header version zero; versioned SQLite needs no payload copy. */
+export async function readUpdateStoreSchemaVersion(
+  file: string,
+  input: StateInput & { stagingRoot?: string; preserveSourceArtifacts?: boolean },
+): Promise<{ userVersion: number }> {
+  const { inspectSqliteSchemaHeaderInProcess } = await import("./sqlite-readonly-location.js");
+  const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
+    file,
+    input.stagingRoot,
+    undefined,
+    input.preserveSourceArtifacts,
+  );
+  if (userVersion === 0) {
+    const { readBackupEngine } = await import("../snapshot/database-backup.js");
+    if (readBackupEngine(file).engine === "postgres") {
+      const { readUpdatePostgresStoreVersion } =
+        await import("./update-candidate-state.postgres.js");
+      return { userVersion: await readUpdatePostgresStoreVersion(input, file) };
+    }
+  }
+  return { userVersion };
+}

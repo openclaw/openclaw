@@ -112,7 +112,16 @@ export type ChannelIngressDrain = {
 };
 
 type OwnedChannelIngressDrain = ChannelIngressDrain & {
-  dispose(options: { waitForSettlements: true }): Promise<void>;
+  dispose(this: void, options: { waitForSettlements: true }): Promise<void>;
+};
+
+type ChannelIngressDrainOwner<TPayload, TMetadata> = OwnedChannelIngressDrain & {
+  idleOwnerId: () => string | undefined;
+  dispatchClaimed: (
+    claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+    ready: Promise<void>,
+    admittedLaneKey?: string,
+  ) => void;
 };
 
 /** Creates a channel-agnostic durable ingress drain over an existing queue. */
@@ -124,6 +133,37 @@ export function createChannelIngressDrain<
   options: CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
   retainOwnerUntilDispose = false,
 ): OwnedChannelIngressDrain {
+  const { recoverStaleClaims, drainOnce, activeLaneKeys, waitForIdle, dispose } =
+    createChannelIngressDrainOwner(options, retainOwnerUntilDispose);
+  return { recoverStaleClaims, drainOnce, activeLaneKeys, waitForIdle, dispose };
+}
+
+type ChannelIngressDrainOwnerOptions<TPayload, TMetadata, TCompletedMetadata> = Omit<
+  CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
+  "dispatchClaimedEvent"
+> & {
+  dispatchClaimedEvent: (
+    claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+    lifecycle: ChannelIngressDispatchLifecycle,
+    admittedLaneKey?: string,
+  ) => ReturnType<
+    CreateChannelIngressDrainOptions<
+      TPayload,
+      TMetadata,
+      TCompletedMetadata
+    >["dispatchClaimedEvent"]
+  >;
+};
+
+/** Core monitor custody; these claim handoff methods are not part of the Plugin SDK. */
+export function createChannelIngressDrainOwner<
+  TPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+>(
+  options: ChannelIngressDrainOwnerOptions<TPayload, TMetadata, TCompletedMetadata>,
+  retainOwnerUntilDispose = false,
+): ChannelIngressDrainOwner<TPayload, TMetadata> {
   const queue = options.queue;
   // Unique per drain instance so same-process peers do not share claim ownership.
   const ownerId = options.ownerId ?? createIngressDrainOwnerId();
@@ -447,6 +487,8 @@ export function createChannelIngressDrain<
   const runClaimed = (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     laneKey: string,
+    ready?: Promise<void>,
+    admittedLaneKey?: string,
   ): ActiveHandlerState<TPayload, TMetadata> => {
     const abortController = new AbortController();
     const state = {
@@ -470,7 +512,9 @@ export function createChannelIngressDrain<
     activeByClaim.set(activeClaimKey(claim), state);
     laneOwnerByKey.set(laneKey, state);
     const lifecycle = createLifecycle(state);
-    armStallWatchdog(state);
+    if (!ready) {
+      armStallWatchdog(state);
+    }
     armClaimRefresh(state);
 
     // drainOnce starts dispatches without awaiting them, so this task outlives
@@ -484,10 +528,17 @@ export function createChannelIngressDrain<
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
     state.task = runOutsideAsyncWorkScope(async () => {
       try {
+        if (ready) {
+          // A transport ACK can await I/O. Own and refresh the claim now, but
+          // start the dispatch watchdog only when that callback has settled.
+          await ready;
+          state.startedAt = now();
+          armStallWatchdog(state);
+        }
         const result = await (releaseRootWork
-          ? options.dispatchClaimedEvent(claim, lifecycle)
+          ? options.dispatchClaimedEvent(claim, lifecycle, admittedLaneKey)
           : runOutsideGatewayRootWorkAdmission(() =>
-              options.dispatchClaimedEvent(claim, lifecycle),
+              options.dispatchClaimedEvent(claim, lifecycle, admittedLaneKey),
             ));
         if (result?.kind === "transferred") {
           // The downstream owner atomically tombstoned this exact claim. Do not
@@ -614,9 +665,12 @@ export function createChannelIngressDrain<
       claims
         .filter((claim) => {
           const state = activeByClaim.get(activeClaimKey(claim));
+          // A failed deferral still owns the lane until its release/backoff commits.
           return !(
             state?.phase === "deferred" &&
             !state.occupiesLane &&
+            !state.settlement &&
+            !state.settlementFailure &&
             !state.guillotined &&
             !state.superseded
           );
@@ -668,9 +722,17 @@ export function createChannelIngressDrain<
       }
       // The drain already selected this ordered lane head. The pending-only
       // update arbitrates competing claimants without rereading the backlog.
+      // Scheduling lanes may be per-event; only reconciliation may replace
+      // an existing transport identity checked by the monitor before delivery.
+      const claimLaneKey =
+        event.laneKey === undefined
+          ? options.deriveLaneKey?.(event)
+          : options.reconcileStoredLaneKey
+            ? selectedLaneKey
+            : event.laneKey;
       const claimed = await queue.claim(event.id, {
         ownerId,
-        laneKey: selectedLaneKey,
+        laneKey: claimLaneKey,
       });
       if (!claimed) {
         // A competing owner may still hold the head; its tail waits for the next pass.
@@ -739,6 +801,10 @@ export function createChannelIngressDrain<
   }
 
   return {
+    idleOwnerId: () => (!disposed && activeByClaim.size === 0 ? ownerId : undefined),
+    dispatchClaimed: (claim, ready, admittedLaneKey) => {
+      runClaimed(claim, admittedLaneKey ?? laneKeyFor(claim), ready, admittedLaneKey);
+    },
     recoverStaleClaims,
     drainOnce,
     activeLaneKeys: () => new Set(laneOwnerByKey.keys()),

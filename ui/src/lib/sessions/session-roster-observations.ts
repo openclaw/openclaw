@@ -431,8 +431,15 @@ export function createSessionRosterObservations(
       previous: SessionsListResult | null,
       agentId?: string | null,
     ) {
-      const previousRows = indexRows(previous?.sessions ?? [], agentId);
-      for (const row of result?.sessions ?? []) {
+      if (!result || result.sessions === previous?.sessions) {
+        return;
+      }
+      let previousRows: ReturnType<typeof indexRows> | undefined;
+      for (const row of result.sessions) {
+        if (rowRevision(row) > 0) {
+          continue;
+        }
+        previousRows ??= indexRows(previous?.sessions ?? [], agentId);
         inheritRow(row, previousRows.get(identity(row, agentId) ?? ""));
       }
     },

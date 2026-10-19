@@ -53,8 +53,19 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const roster = page.locator("openclaw-sessions-page");
-      const search = roster.locator(".sessions-toolbar__search input");
-      await search.waitFor();
+      const filters = roster.getByRole("button", { name: "Filters", exact: true });
+      const popover = roster.locator(".sessions-filter-popover");
+      const openFilters = async () => {
+        if ((await popover.getAttribute("data-phase")) === "closing") {
+          await expect.poll(() => popover.getAttribute("data-phase")).toBe("hidden");
+        }
+        if ((await popover.getAttribute("data-phase")) === "hidden") {
+          await filters.click();
+        }
+        await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
+      };
+      await openFilters();
+      const search = popover.locator("input[type='text']");
       await page.clock.install();
       await pauseVirtualClock(page);
       await search.pressSequentially("observatory", { delay: 40 });
@@ -83,7 +94,12 @@ suite.define(() => {
         }),
       ]);
       await gateway.deferNext("sessions.list", { search: "older" });
+      await openFilters();
+      await pauseVirtualClock(page);
       await search.fill("older");
+      expect(await search.inputValue()).toBe("older");
+      await page.clock.runFor(201);
+      await page.clock.resume();
       await expect
         .poll(() => gateway.getRequests("sessions.list"))
         .toContainEqual(
@@ -112,7 +128,11 @@ suite.define(() => {
         }),
       ]);
       expect(await roster.getByText("Retired result", { exact: true }).count()).toBe(0);
+      await openFilters();
+      await pauseVirtualClock(page);
       await search.fill("failed");
+      await page.clock.runFor(201);
+      await page.clock.resume();
       await roster.getByText("Metadata search unavailable", { exact: false }).waitFor();
       expect(
         await roster.getByText("No sessions match your filters.", { exact: true }).count(),

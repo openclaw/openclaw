@@ -1,20 +1,33 @@
 import { createMemo, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
-import { resolveChannelIconOwner } from "./plugin-presentation.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
+import {
+  createChannelSettingsPresentation,
+  type ChannelSettingsHooks,
+} from "./channel-settings-presentation.tsx";
 
-type PluginPresentationHooks = {
+function resolveChannelIconOwner(
+  plugins: Readonly<PluginListResult["plugins"]>,
+  channelId: string,
+) {
+  return (
+    plugins.find((plugin) => plugin.hasIcon && plugin.id === channelId) ??
+    plugins.find((plugin) => plugin.hasIcon && plugin.channelIds?.includes(channelId))
+  );
+}
+
+type PluginPresentationHooks = ChannelSettingsHooks & {
   getContext: () => ApplicationContext;
   getChannelIds: () => readonly string[];
   isConnected: () => boolean;
 };
 
-export type ChannelPluginPresentation = ReturnType<typeof createChannelPluginPresentation>;
-
 export function createChannelPluginPresentation(hooks: PluginPresentationHooks) {
+  const details = createChannelSettingsPresentation(hooks);
   let catalog: PluginListResult | null = null;
   let iconUrls: Record<string, string> = {};
   let publish = () => {};
@@ -30,7 +43,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
   });
   let request: { client: GatewayBrowserClient; controller: AbortController } | null = null;
   let disposed = false;
-  const icons = new PluginIconController({
+  const icons = new PluginIconOwner({
     getFetchContext: () => pluginIconFetchContext(hooks.getContext()),
     isConnected: hooks.isConnected,
     onUrlsChange: (urls) => {
@@ -66,7 +79,12 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
   }
 
   function ensure(client: GatewayBrowserClient | null) {
-    if (!client) {
+    const snapshot = hooks.getContext().gateway.snapshot;
+    if (!client || snapshot.phase !== "connected") {
+      return;
+    }
+    if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+      reset();
       return;
     }
     if (catalog) {
@@ -99,9 +117,15 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
       });
   }
 
-  function reset() {
+  function invalidateRequests() {
     request?.controller.abort();
     request = null;
+    icons.reconcileKeys(new Set(Object.keys(iconUrls)));
+  }
+
+  function reset() {
+    details.reset();
+    invalidateRequests();
     catalog = null;
     icons.reset();
   }
@@ -110,7 +134,9 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
     reset();
   });
   return {
+    details,
     ensure,
+    invalidateRequests,
     reset,
     get pluginCatalog() {
       return presentation.read().catalog;

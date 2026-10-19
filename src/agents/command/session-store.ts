@@ -24,7 +24,7 @@ import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
 export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   return Math.floor(value);

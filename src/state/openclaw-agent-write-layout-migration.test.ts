@@ -2,12 +2,19 @@ import fs from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
+import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
-import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  ensureOpenClawAgentSchema,
+} from "./openclaw-agent-db-schema.js";
 import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
@@ -74,6 +81,45 @@ describe("agent write layout migration", () => {
     expect(getOpenClawAgentMigrationSchema(27)).toBe(schemaV27);
   });
 
+  it.each([undefined, "full"] as const)(
+    "applies %s integrity policy to indexes outside the migration scope",
+    async (integrityCheck) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const pathname = state.path("write-layout-integrity.sqlite");
+        const source = new DatabaseSync(pathname);
+        seed(source);
+        source.exec(`
+          CREATE TABLE untouched_payloads (value TEXT);
+          CREATE INDEX idx_untouched_payload ON untouched_payloads(value);
+          INSERT INTO untouched_payloads VALUES ('retained');
+        `);
+        source.close();
+        corruptSqliteIndexKey(pathname, "idx_untouched_payload", "retained", "mismatch");
+        using database = new DatabaseSync(pathname);
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          const migrate = () =>
+            ensureOpenClawAgentDatabaseSchema(database, {
+              agentId: "main",
+              env: state.env,
+              path: pathname,
+              integrityCheck,
+            });
+          if (integrityCheck === "full") {
+            expect(migrate).toThrow(/integrity_check.*idx_untouched_payload/su);
+          } else {
+            expect(migrate).not.toThrow();
+          }
+        });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          integrityCheck === "full" ? 27 : OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(database.prepare("SELECT value FROM untouched_payloads NOT INDEXED").all()).toEqual([
+          { value: "retained" },
+        ]);
+      });
+    },
+  );
+
   it.each(["commit", "without-origins", "rollback"] as const)(
     "preserves rows, undeclared tables and atomic version publication (%s)",
     async (outcome) => {
@@ -117,18 +163,19 @@ describe("agent write layout migration", () => {
           database.setAuthorizer((action, name, value) =>
             action === constants.SQLITE_PRAGMA &&
             name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+            value === String(AGENT_WRITE_LAYOUT_SCHEMA_VERSION)
               ? constants.SQLITE_DENY
               : constants.SQLITE_OK,
           );
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           const migrate = () =>
-            ensureOpenClawAgentDatabaseSchema(database, {
-              agentId: "main",
-              env: state.env,
-              path: pathname,
-            });
+            ensureOpenClawAgentSchema(
+              database,
+              "main",
+              pathname,
+              AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+            );
           await assertSqliteMigrationScopePreserved(database, scope, () => {
             if (outcome === "rollback") {
               expect(migrate).toThrow(/authoriz/u);
@@ -163,7 +210,7 @@ describe("agent write layout migration", () => {
         ).toEqual(identities);
         expect(database.prepare("SELECT * FROM session_windows").all()).toEqual(windows);
         expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        const expectedVersion = outcome === "rollback" ? 27 : OPENCLAW_AGENT_SCHEMA_VERSION;
+        const expectedVersion = outcome === "rollback" ? 27 : AGENT_WRITE_LAYOUT_SCHEMA_VERSION;
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
         expect(
           database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
@@ -239,7 +286,7 @@ describe("agent write layout migration", () => {
         resolveSchemaMigrationBackupTables({
           kind: "agent",
           foundVersion: 27,
-          supportedVersion: 28,
+          supportedVersion: AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
         }),
       ).toEqual(scope);
       await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
@@ -249,11 +296,7 @@ describe("agent write layout migration", () => {
           tables: scope,
           beforePublish: () => lease.assertOwned(),
         });
-        ensureOpenClawAgentDatabaseSchema(database, {
-          agentId: "main",
-          env: state.env,
-          path: pathname,
-        });
+        ensureOpenClawAgentSchema(database, "main", pathname, AGENT_WRITE_LAYOUT_SCHEMA_VERSION);
       });
       database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
       await assertSqliteMigrationScopePreserved(database, scope, () =>

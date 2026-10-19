@@ -2,6 +2,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
@@ -16,7 +17,6 @@ import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraft } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -28,9 +28,9 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { createNewSessionTitle } from "./draft-title.ts";
+import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -52,6 +52,7 @@ export type PageHost = SolidBridgeElement<
 
 export class NewSessionPageOwner {
   private readonly listeners = new Set<() => void>();
+  private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
   readonly changed = () => {
@@ -115,6 +116,7 @@ export class NewSessionPageOwner {
   };
   imageLightbox: ImageLightboxItem | null = null;
   agentPickerOpen = false;
+  agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
   readonly browser: DraftPlaceBrowser;
@@ -134,9 +136,7 @@ export class NewSessionPageOwner {
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         changed: this.changed,
-        querySelector: (selector) => this.host.querySelector(selector),
         activeElement: () => this.host.ownerDocument.activeElement,
-        body: () => this.host.ownerDocument.body,
         onInvalidate: () => {
           this.closeAttachmentPanel();
           this.connectMachine?.close();
@@ -146,7 +146,7 @@ export class NewSessionPageOwner {
         closeTransientUi: () => {
           this.closeAttachmentPanel();
           this.draft.browser.close();
-          closeSessionMenus(this.host);
+          closeMenusWithin(this.host);
         },
         takePreparedTitle: () => this.titlePreparation?.takePreparedTitle(),
         updateComplete: () => this.host.updateComplete,
@@ -221,6 +221,19 @@ export class NewSessionPageOwner {
       return;
     }
     this.isConnected = true;
+    // These receipts reconcile the draft and prepared title before the view reads them.
+    const context = this.context;
+    if (context) {
+      this.contextSubscriptions = [
+        context.theme,
+        context.agents,
+        context.agentIdentity,
+        context.sessions,
+        context.placementStartup,
+        context.runtimeConfig,
+        context.config,
+      ].map((source) => source.subscribe(this.changed));
+    }
     this.draft.connect();
     this.submission.draftPersistence.connect();
     this.critterImport.schedule();
@@ -230,6 +243,9 @@ export class NewSessionPageOwner {
   disconnect() {
     if (!this.isConnected) {
       return;
+    }
+    for (const stop of this.contextSubscriptions.splice(0)) {
+      stop();
     }
     this.closeAttachmentPanel();
     this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);
@@ -323,7 +339,9 @@ export class NewSessionPageOwner {
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
-    closeAgentPicker(this.host);
+    if (this.agentPicker) {
+      closeMenusWithin(this.agentPicker);
+    }
     this.browser.close();
     this.connectMachine.close();
     this.place.adoptAgentDefaults();
@@ -364,6 +382,7 @@ export class NewSessionPageOwner {
       agent: place.selectedAgent(),
       agentId: place.agentId,
       attachmentDraft: submission.attachmentDraft,
+      draftSource: submission.composerDraft,
       canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
       submitDisabledReason: submission.submitDisabledReason(),
       blockedSubmitNotice: submission.blockedSubmitNotice(),
@@ -389,7 +408,6 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
-      textareaController: submission.composerTextarea,
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);

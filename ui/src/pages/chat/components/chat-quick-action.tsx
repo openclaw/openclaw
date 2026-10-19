@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createMemo, mapArray, merge, Show, type Accessor } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
@@ -23,50 +23,70 @@ export type ChatQuickAction = HeaderMenuQuickAction & {
   shortcut?: KeyboardShortcutCombo;
 };
 
-export function chatQuickActionEntry(
-  action: ChatQuickAction,
-  id: string,
+export function useChatQuickActionEntries(
+  actions: Accessor<readonly ChatQuickAction[]>,
   layout = false,
-): Exclude<MenuEntry, { kind: "group" }> {
-  const label = (
-    <span class="session-menu__text">
-      {action.label}
-      <Show when={action.description}>
-        <span class="session-menu__description">{action.description}</span>
-      </Show>
-    </span>
-  );
-  if (action.kind === "status") {
-    return {
-      kind: "content",
-      id,
-      content: (
-        <div class="session-menu__status" data-menu-status={action.id} role="note">
-          <span class="session-menu__check" aria-hidden="true">
-            <Icon name={action.icon} />
-          </span>
-          {label}
-        </div>
+  prefix = "",
+): Accessor<readonly MenuEntry[]> {
+  const entries = createMemo(
+    () =>
+      mapArray(
+        actions,
+        (current) => {
+          const action = merge(current);
+          const label = (
+            <span class="session-menu__text">
+              {action.label}
+              <Show when={action.description}>
+                <span class="session-menu__description">{action.description}</span>
+              </Show>
+            </span>
+          );
+          const icon = (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name={action.icon} />
+            </span>
+          );
+          const shortcut = (
+            <Show when={action.shortcut}>
+              {(combo) => (
+                <KeyboardShortcut combo={combo()} class="side-panel-type-option__shortcut" />
+              )}
+            </Show>
+          );
+          const status = createMemo(
+            () => (
+              <div class="session-menu__status" data-menu-status={action.id} role="note">
+                <span class="session-menu__check" aria-hidden="true">
+                  <Icon name={action.icon} />
+                </span>
+                {label}
+              </div>
+            ),
+            { lazy: true },
+          );
+          return createMemo((): MenuEntry => {
+            const id = `${prefix}${action.id}`;
+            if (action.kind === "status") {
+              return { kind: "content", id, content: status() };
+            }
+            return {
+              id,
+              label: action.label,
+              class: ["session-menu__item", layout && action.className],
+              type: action.active === undefined ? undefined : "checkbox",
+              checked: action.active,
+              disabled: action.disabled,
+              variant: layout ? undefined : action.variant,
+              icon,
+              content: label,
+              details: layout && action.shortcut ? shortcut : undefined,
+            };
+          });
+        },
+        { keyed: (action) => action.id },
       ),
-    };
-  }
-  return {
-    id,
-    label: action.label,
-    class: `session-menu__item${layout && action.className ? ` ${action.className}` : ""}`,
-    type: action.active === undefined ? undefined : "checkbox",
-    checked: action.active,
-    disabled: action.disabled,
-    variant: layout ? undefined : action.variant,
-    icon: (
-      <span class="session-menu__icon" aria-hidden="true">
-        <Icon name={action.icon} />
-      </span>
-    ),
-    content: label,
-    details:
-      layout && action.shortcut ? (
-        <KeyboardShortcut combo={action.shortcut} class="side-panel-type-option__shortcut" />
-      ) : undefined,
-  };
+    { lazy: true },
+  );
+  return createMemo(() => entries()().map((entry) => entry()), { lazy: true });
 }

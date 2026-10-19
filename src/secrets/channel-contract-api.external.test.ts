@@ -37,54 +37,41 @@ vi.mock("../plugins/hardlink-policy.js", () => ({
 
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
-type ChannelSecretContractApi = NonNullable<ReturnType<typeof loadChannelSecretContractApi>>;
-
-function requireChannelSecretContractApi(
-  api: ReturnType<typeof loadChannelSecretContractApi>,
-): ChannelSecretContractApi {
-  if (!api) {
-    throw new Error("expected channel secret contract API");
-  }
-  return api;
+function loadContract(options: Partial<Parameters<typeof loadChannelSecretContractApi>[0]> = {}) {
+  return loadChannelSecretContractApi({
+    channelId: "discord",
+    config: { channels: { discord: {} } },
+    env: {},
+    loadablePluginOrigins: new Map([["discord", "global"]]),
+    ...options,
+  });
 }
 
-function expectDiscordTokenRegistryEntry(contractApi: ChannelSecretContractApi): void {
-  const entries = contractApi.secretTargetRegistryEntries ?? [];
-  const entry = entries.find((record) => record.id === "channels.discord.token");
-  expect(entry?.id).toBe("channels.discord.token");
+function expectOfficialFallback() {
+  const api = loadContract({
+    channelId: "qqbot",
+    config: { channels: { qqbot: { appId: "app" } } },
+    loadablePluginOrigins: undefined,
+  });
+  expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+    "channels.qqbot.accounts.*.clientSecret",
+    "channels.qqbot.clientSecret",
+  ]);
+  return api;
 }
 
 function channelSecretContractModuleSource(channelId: string) {
   return `
 module.exports = {
-  secretTargetRegistryEntries: [
-    {
-      id: "channels.${channelId}.token",
-      targetType: "channels.${channelId}.token",
-      configFile: "openclaw.json",
-      pathPattern: "channels.${channelId}.token",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true
-    }
-  ],
-  collectRuntimeConfigAssignments(params) {
-    params.context.assignments.push({
-      path: "channels.${channelId}.token",
-      ref: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-      expected: "string",
-      apply() {}
-    });
-  }
+  secretTargetRegistryEntries: [{ id: "channels.${channelId}.token" }],
+  collectRuntimeConfigAssignments() {}
 };
 `;
 }
 
 function writeExternalChannelPlugin(params: {
-  pluginId: string;
-  channelId: string;
+  pluginId?: string;
+  channelId?: string;
   directory?: string;
 }) {
   const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract", tempDirs);
@@ -92,13 +79,13 @@ function writeExternalChannelPlugin(params: {
   fs.mkdirSync(contractDir, { recursive: true });
   fs.writeFileSync(
     path.join(contractDir, "secret-contract-api.cjs"),
-    channelSecretContractModuleSource(params.channelId),
+    channelSecretContractModuleSource(params.channelId ?? "discord"),
     "utf8",
   );
   return {
-    id: params.pluginId,
+    id: params.pluginId ?? "discord",
     origin: "global",
-    channels: [params.channelId],
+    channels: [params.channelId ?? "discord"],
     channelConfigs: {},
     rootDir,
   };
@@ -108,13 +95,10 @@ describe("external channel secret contract api", () => {
   beforeEach(() => {
     loadPluginMetadataSnapshotMock.mockReset();
     loadBundledPublicArtifactMock.mockClear();
-    shouldRejectHardlinkedPluginFilesMock.mockReset();
-    shouldRejectHardlinkedPluginFilesMock.mockReturnValue(true);
+    shouldRejectHardlinkedPluginFilesMock.mockReset().mockReturnValue(true);
   });
 
-  afterEach(() => {
-    cleanupTrackedTempDirs(tempDirs);
-  });
+  afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
   it("keeps a healthy external contract available when another artifact fails to load", () => {
     const broken = writeExternalChannelPlugin({ pluginId: "custom", channelId: "custom" });
@@ -133,31 +117,19 @@ describe("external channel secret contract api", () => {
   });
 
   it("loads dist/ secret-contract-api sidecars for compiled npm-published external channel plugins", () => {
-    const record = writeExternalChannelPlugin({
-      pluginId: "discord",
-      channelId: "discord",
-      directory: "dist",
-    });
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      plugins: [record],
-    });
-
-    const api = loadChannelSecretContractApi({
-      channelId: "discord",
-      config: { channels: { discord: {} } },
-      env: {},
-      loadablePluginOrigins: new Map([["discord", "global"]]),
-    });
-
-    const contractApi = requireChannelSecretContractApi(api);
-    expectDiscordTokenRegistryEntry(contractApi);
-    expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
+    const record = writeExternalChannelPlugin({ directory: "dist" });
+    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+    const contractApi = loadContract();
+    expect(contractApi?.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
+      "channels.discord.token",
+    );
+    expect(contractApi?.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
   it.runIf(process.platform !== "win32")(
     "loads hardlinked external channel contracts when the plugin hardlink policy allows them",
     () => {
-      const record = writeExternalChannelPlugin({ pluginId: "discord", channelId: "discord" });
+      const record = writeExternalChannelPlugin({});
       const outsideDir = makeTrackedTempDir(
         "openclaw-channel-secret-contract-hardlink-outside",
         tempDirs,
@@ -168,39 +140,24 @@ describe("external channel secret contract api", () => {
       );
       shouldRejectHardlinkedPluginFilesMock.mockReturnValue(false);
       const env = { OPENCLAW_NIX_MODE: "1" };
-      loadPluginMetadataSnapshotMock.mockReturnValue({
-        plugins: [record],
-      });
-
-      const api = loadChannelSecretContractApi({
-        channelId: "discord",
-        config: { channels: { discord: {} } },
-        env,
-        loadablePluginOrigins: new Map([["discord", "global"]]),
-      });
+      loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+      const api = loadContract({ env });
 
       expect(shouldRejectHardlinkedPluginFilesMock).toHaveBeenCalledWith({
         origin: "global",
         rootDir: record.rootDir,
         env,
       });
-      const contractApi = requireChannelSecretContractApi(api);
-      expectDiscordTokenRegistryEntry(contractApi);
+      expect(api?.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
+        "channels.discord.token",
+      );
     },
   );
 
   it("skips external channel records outside the loadable plugin origin set", () => {
-    const record = writeExternalChannelPlugin({ pluginId: "discord", channelId: "discord" });
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      plugins: [record],
-    });
-
-    const api = loadChannelSecretContractApi({
-      channelId: "discord",
-      config: { channels: { discord: {} } },
-      env: {},
-      loadablePluginOrigins: new Map([["other", "global"]]),
-    });
+    const record = writeExternalChannelPlugin({});
+    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+    const api = loadContract({ loadablePluginOrigins: new Map([["other", "global"]]) });
 
     expect(api).toBeUndefined();
   });
@@ -208,16 +165,7 @@ describe("external channel secret contract api", () => {
   it("falls back to official host secret metadata when an external plugin has no artifact", () => {
     loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
 
-    const api = loadChannelSecretContractApi({
-      channelId: "qqbot",
-      config: { channels: { qqbot: { appId: "app" } } },
-      env: {},
-    });
-
-    expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
-      "channels.qqbot.accounts.*.clientSecret",
-      "channels.qqbot.clientSecret",
-    ]);
+    const api = expectOfficialFallback();
     expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
@@ -226,15 +174,6 @@ describe("external channel secret contract api", () => {
       throw new Error("metadata unavailable");
     });
 
-    const api = loadChannelSecretContractApi({
-      channelId: "qqbot",
-      config: { channels: { qqbot: { appId: "app" } } },
-      env: {},
-    });
-
-    expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
-      "channels.qqbot.accounts.*.clientSecret",
-      "channels.qqbot.clientSecret",
-    ]);
+    expectOfficialFallback();
   });
 });

@@ -17,6 +17,7 @@ export function DraftWelcome(props: {
   sessions: WelcomeSessions | undefined;
   options: Omit<ChatWelcomeProps, "composer">;
   composer?: JSX.Element;
+  assistantNameControl?: JSX.Element;
 }) {
   const source = createMemo(() => props.sessions);
   const sessions = createMemo(() =>
@@ -54,5 +55,12 @@ export function DraftWelcome(props: {
       selected.defaultAgentId,
     );
   }, presented);
-  return <ChatWelcome {...options()} composer={props.composer} preparedRecents={recents()} />;
+  return (
+    <ChatWelcome
+      {...options()}
+      assistantNameControl={props.assistantNameControl}
+      composer={props.composer}
+      preparedRecents={recents()}
+    />
+  );
 }

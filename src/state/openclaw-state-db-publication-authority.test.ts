@@ -186,12 +186,15 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "task-run-indexes-v24", path: databasePath },
         { kind: "subagent-operator-recovery-v25", path: databasePath },
         { kind: "session-state-head-layout-v26", path: databasePath },
+        { kind: "state-write-indexes-v27", path: databasePath },
+        { kind: "github-publication-draft-v28", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
             "Added original requester authority to GitHub publication receipts (v18)",
             "Replaced retained task indexes with ordered cron history indexes (v24)",
+            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
           ],
           warnings: [],
         });

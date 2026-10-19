@@ -10,12 +10,14 @@ import {
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
   configChildRenderOptions,
+  createCollectionFocus,
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
   CollectionRemoveButton,
   FieldRow,
   JsonTextareaControl,
+  type CollectionRowFocus,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.tsx";
@@ -50,7 +52,11 @@ function resolveMapContent(params: MapParams) {
 }
 
 function ConfigMapRow(
-  props: MapProps & { entry: [string, unknown]; anySchema: boolean },
+  props: MapProps & {
+    entry: [string, unknown];
+    anySchema: boolean;
+    focus: CollectionRowFocus;
+  },
 ): JSX.Element {
   const key = createMemo(() => props.entry[0]);
   const entryValue = () => props.entry[1];
@@ -122,6 +128,7 @@ function ConfigMapRow(
         </div>
         <div class="settings-row__control">
           <CollectionRemoveButton
+            focus={props.focus}
             label={t("configForm.removeEntry")}
             disabled={props.params.disabled}
             remove={() => {
@@ -161,6 +168,7 @@ function ConfigMapRow(
 export function ConfigMapField(props: MapProps): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
@@ -172,6 +180,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
           </Show>
           <div class="settings-row__control">
             <button
+              ref={focus.addRef}
               type="button"
               class="btn btn--sm"
               aria-controls={content().draftId}
@@ -223,6 +232,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                   renderNode={props.renderNode}
                   entry={entry()}
                   anySchema={content().anySchema}
+                  focus={focus.row(() => entry()[0])}
                 />
               )}
             </For>

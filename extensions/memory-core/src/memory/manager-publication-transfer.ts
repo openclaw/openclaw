@@ -120,12 +120,14 @@ function* rowFragments(
 export function memoryPublicationHeader(
   replacement: MemorySourceIndexReplacement,
 ): MemorySourceIndexHeader {
-  const { chunks: _chunks, embeddings: _embeddings, ...fields } = replacement;
-  if (fields.source !== "sessions") {
-    return fields;
-  }
   // Retained rows travel in the bounded transfer, never the header.
-  const { retained: _retained, removedIds, ...header } = fields;
+  const {
+    chunks: _chunks,
+    embeddings: _embeddings,
+    retained: _retained,
+    removedIds,
+    ...header
+  } = replacement;
   return { ...header, delta: removedIds !== undefined };
 }
 
@@ -133,13 +135,10 @@ export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    if (replacement.source === "sessions") {
-      for (const removedId of replacement.removedIds ?? []) {
-        yield { removedId };
-      }
+    for (const removedId of replacement.removedIds ?? []) {
+      yield { removedId };
     }
-    const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
-    for (const chunk of retained) {
+    for (const chunk of replacement.retained ?? []) {
       yield {
         // Retained rows keep their stored text; identity and provenance suffice.
         chunk: { ...row(chunk), text: "" },

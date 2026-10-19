@@ -97,17 +97,21 @@ function execute(
 }
 
 describe("release shard timing refresh CLI", () => {
-  it.each(["bun-all", "dual-all"])("leaves all timing bytes unchanged for a %s trial", (policy) => {
-    const { result, before, bytes } = execute({
-      jobs: [job, { ...job, id: 2 }],
+  it.each(["bun-all", "dual-all"])("keeps %s release wall costs separate from Node", (policy) => {
+    const runtimeLog =
+      policy === "bun-all"
+        ? log("fixture").replaceAll("[shard:fixture]", "[shard:bun:fixture]")
+        : log("fixture") + log("fixture").replaceAll("[shard:fixture]", "[shard:bun:fixture]");
+    const { result, bytes } = execute({
       logs: {
-        "1": log("fixture"),
-        "2": `2026-09-01T01:01:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}\n${log("trial")}`,
+        "1": `2026-09-01T01:01:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}\n${runtimeLog}`,
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("runtime trial is excluded from timing refresh");
-    expect(bytes).toBe(before);
+    expect(JSON.parse(bytes).compactGroupSeconds.github).toEqual({
+      ...baseline.compactGroupSeconds.github,
+      [`${policy}:release-full-fixture`]: 900,
+    });
   });
 
   it.each([

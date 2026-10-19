@@ -212,6 +212,9 @@ export function buildLlamaServerPreset(
     ...(params.mediaModels ?? []),
   ];
   for (const model of models) {
+    // batch-size/ubatch-size deliberately stay at llama.cpp's defaults. llama.cpp applies a cancel
+    // only between logical batches; on a 24-thread CPU run, 1024/512 cut cancel release from ~2.7 s
+    // to ~0.6 s but slowed 4k/8k prefill by ~10% (#137557). Tune via localService.args if needed.
     updateModelSection(
       sections,
       model.id,

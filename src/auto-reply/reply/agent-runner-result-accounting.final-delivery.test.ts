@@ -16,6 +16,7 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createChatSendReplyDispatch } from "../../gateway/server-methods/chat-send-reply-dispatch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -31,7 +32,6 @@ import {
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { applyPreparedReplyMedia } from "./reply-media-paths.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];

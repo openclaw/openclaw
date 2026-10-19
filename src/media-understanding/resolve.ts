@@ -3,8 +3,12 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
@@ -21,7 +25,6 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 export type ResolvedMediaModelEntry = {
@@ -149,16 +152,57 @@ export function resolveEntryRunOptions(params: MediaEntryRunParams): {
   };
 }
 
+type MediaUnderstandingScopeDecision = "allow" | "deny";
+
+function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "allow") {
+    return "allow";
+  }
+  if (normalized === "deny") {
+    return "deny";
+  }
+  return undefined;
+}
+
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
 }): "allow" | "deny" {
-  return resolveMediaUnderstandingScope({
-    scope: params.scope,
-    sessionKey: params.ctx.SessionKey,
-    channel: params.ctx.Surface ?? params.ctx.Provider,
-    chatType: params.ctx.ChatType,
-  });
+  const scope = params.scope;
+  if (!scope) {
+    return "allow";
+  }
+
+  const channel = normalizeOptionalLowercaseString(params.ctx.Surface ?? params.ctx.Provider);
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  const sessionKey = normalizeOptionalLowercaseString(params.ctx.SessionKey) ?? "";
+
+  for (const rule of scope.rules ?? []) {
+    // Rules are first-match-wins so operators can place specific denials before
+    // broader default allow rules.
+    if (!rule) {
+      continue;
+    }
+    const action = normalizeDecision(rule.action) ?? "allow";
+    const match = rule.match ?? {};
+    const matchChannel = normalizeOptionalLowercaseString(match.channel);
+    const matchChatType = normalizeChatType(match.chatType);
+    const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+
+    if (matchChannel && matchChannel !== channel) {
+      continue;
+    }
+    if (matchChatType && matchChatType !== chatType) {
+      continue;
+    }
+    if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
+      continue;
+    }
+    return action;
+  }
+
+  return normalizeDecision(scope.default) ?? "allow";
 }
 
 export function resolveModelEntries(params: {

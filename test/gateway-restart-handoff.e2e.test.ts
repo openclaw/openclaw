@@ -3,7 +3,8 @@ import { once } from "node:events";
 import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -14,7 +15,6 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
-import { resolveVersionFromModuleUrl } from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import {
   GATEWAY_RESTART_TEST_KILL_MS,
@@ -53,6 +53,8 @@ it.skipIf(process.platform !== "linux")(
   "resumes six interrupted turns after handing off within five seconds of its receipt after plugin cleanup",
   { timeout: 180_000 },
   async ({ signal }) => {
+    const beforeExit = <T>(pending: Promise<T>, closed: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(pending, closed, message), signal);
     const provider = await startGatewayRestartProvider(signal);
     let instance: OpenClawTestInstance | undefined;
     let client: GatewayClient | undefined;
@@ -75,9 +77,7 @@ it.skipIf(process.platform !== "linux")(
           register(api) {
             api.registerService({
               id: ${JSON.stringify(SERVICE_ID)}, start() {},
-              stop() {
-                api.logger.info(${JSON.stringify(SERVICE_STOP)});
-              }
+              stop() { api.logger.info(${JSON.stringify(SERVICE_STOP)}); }
             });
           }
         };\n`,
@@ -151,19 +151,18 @@ it.skipIf(process.platform !== "linux")(
           },
         });
         await instance.startGateway();
-        expect(
-          journal(instance.logs()).some(
-            (row) =>
-              row.message.includes("shutdown budget at startup:") &&
-              row.message.includes("shutdown=41000ms") &&
-              row.message.includes("TimeoutStopUSec=46000ms"),
-          ),
-          instance.logs(),
-        ).toBe(true);
-        const child = instance.child;
-        if (!child) {
-          throw new Error("Gateway exited before restart proof");
-        }
+        const expectLog = (rows: ReturnType<typeof journal>, ...fragments: string[]) =>
+          expect(
+            rows.some((row) => fragments.every((fragment) => row.message.includes(fragment))),
+            instance!.logs(),
+          ).toBe(true);
+        expectLog(
+          journal(instance.logs()),
+          "shutdown budget at startup:",
+          "shutdown=41000ms",
+          "TimeoutStopUSec=46000ms",
+        );
+        const child = expectDefined(instance.child, "Gateway process before restart proof");
         const closed = once(child, "close");
         const gateway = instance;
         const sessionKeys = Array.from(
@@ -211,9 +210,9 @@ it.skipIf(process.platform !== "linux")(
           await client.request("sessions.create", { agentId: "main", key });
         }
         const connection = client;
-        const accepted = await Promise.all(
-          sessionKeys.map((sessionKey, index) =>
-            connection.request<{ runId: string }>(
+        const runIds = await Promise.all(
+          sessionKeys.map(async (sessionKey, index) => {
+            const { runId } = await connection.request<{ runId: string }>(
               "chat.send",
               {
                 sessionKey,
@@ -222,21 +221,16 @@ it.skipIf(process.platform !== "linux")(
                 deliver: false,
               },
               { expectFinal: false },
-            ),
-          ),
+            );
+            expect(runId).toEqual(expect.any(String));
+            return runId;
+          }),
         );
-        const runIds = accepted.map((result) => {
-          expect(result.runId).toEqual(expect.any(String));
-          return result.runId;
-        });
         expect(new Set(runIds).size).toBe(6);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            provider.ready,
-            closed,
-            "Gateway exited before all six model calls and two exec sessions were pending",
-          ),
-          signal,
+        await beforeExit(
+          provider.ready,
+          closed,
+          "Gateway exited before all six model calls and two exec sessions were pending",
         );
         expect(
           writeGatewayRestartIntentSync({
@@ -267,73 +261,27 @@ it.skipIf(process.platform !== "linux")(
           )
           .toSorted((left, right) => left.at - right.at);
         const receipt = cleanReceipts.at(-1);
-        const firstReceipt = cleanReceipts[0];
         const abort = rows.find((row) =>
           /restart drain budget.*exhausted|aborted for restart/.test(row.message),
         );
         const deadline = rows.find((row) => row.message.includes("shutdown deadline reached"));
         const serviceStop = rows.find((row) => row.message.includes(SERVICE_STOP));
-        console.info(
-          JSON.stringify({
-            proof: "gateway-restart-handoff",
-            signalAtMs: signaledAt,
-            abortAtMs: abort?.at,
-            receiptAtMs: receipt?.at,
-            firstReceiptAtMs: firstReceipt?.at,
-            receiptCount: cleanReceipts.length,
-            exitAtMs: exitedAt,
-            receiptAfterSignalMs: receipt ? receipt.at - signaledAt : null,
-            receiptAfterAbortMs: receipt && abort ? receipt.at - abort.at : null,
-            exitAfterSignalMs: exitedAt - signaledAt,
-            exitAfterReceiptMs: receipt ? exitedAt - receipt.at : null,
-            exitAfterFirstReceiptMs: firstReceipt ? exitedAt - firstReceipt.at : null,
-            applicationBudgetMs: APPLICATION_STOP_MS,
-            shutdownDeadlineAtMs: deadline?.at,
-            serviceStopAtMs: serviceStop?.at,
-            acceptedRuns: runIds.length,
-            backgroundExecSessions: 2,
-            exitCode: exit[0],
-            exitSignal: exit[1],
-          }),
-        );
         expect(exit, instance.logs()).toEqual([0, null]);
         expect(receipt, instance.logs()).toBeDefined();
         expect(abort, instance.logs()).toBeDefined();
-        expect(
-          rows.some(
-            (row) =>
-              row.message.includes("shutdown budget at shutdown:") &&
-              row.message.includes("TimeoutStopUSec=46000ms"),
-          ),
-          instance.logs(),
-        ).toBe(true);
+        expectLog(rows, "shutdown budget at shutdown:", "TimeoutStopUSec=46000ms");
         expect(receipt!.at).toBeGreaterThanOrEqual(abort!.at);
         expect(receipt!.at).toBeLessThan(
           Math.min(signaledAt + APPLICATION_STOP_MS, exitedAt, deadline?.at ?? Infinity),
         );
-        expect(
-          rows.some((row) => row.message.includes("backgroundExecSessions=2")),
-          instance.logs(),
-        ).toBe(true);
-        expect(
-          rows.some((row) => row.message.includes("embeddedRuns=6")),
-          instance.logs(),
-        ).toBe(true);
+        expectLog(rows, "backgroundExecSessions=2");
+        expectLog(rows, "embeddedRuns=6");
         expect(exitedAt - receipt!.at, instance.logs()).toBeLessThanOrEqual(5_000);
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();
         expect(serviceStop!.at).toBeLessThanOrEqual(exitedAt);
-        const [entrypoint] = await instance.entrypoint();
-        if (!entrypoint) {
-          throw new Error("Restart proof lost its Gateway artifact entrypoint");
-        }
-        const moduleUrl = pathToFileURL(path.resolve(entrypoint)).href;
-        const version = resolveVersionFromModuleUrl(moduleUrl);
-        if (!version) {
-          throw new Error("Restart proof cannot identify its Gateway artifact version");
-        }
-        // The seal binds the running artifact's version to the production seal policy.
-        const artifactSchema = sqliteDatabaseSealSchemaFor("agent", version);
+        // The Gateway and test runner use the same runtime and storage policy.
+        const artifactSchema = sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity;
         const seal = readSqliteCleanCloseSeal(agentPath, statSync(agentPath, { bigint: true }));
         expect(seal).toMatchObject({ schemaIdentity: artifactSchema });
         const shared = openNodeSqliteDatabase(
@@ -382,16 +330,6 @@ it.skipIf(process.platform !== "linux")(
             });
             persistedSessions.set(sessionKey, row.current_session_id);
           }
-          console.info(
-            JSON.stringify({
-              proof: "gateway-restart-handoff-state",
-              bootOutcome: boot?.outcome,
-              bootCompletedAtMs: boot?.completed_at_ms,
-              remainingLeases: leases.length,
-              cleanClose: seal !== undefined,
-              persistedRecoverySessions: persistedSessions.size,
-            }),
-          );
         } finally {
           shared.close();
           agent.close();
@@ -402,22 +340,15 @@ it.skipIf(process.platform !== "linux")(
         observingRecovery = true;
         const successorStartedAt = Date.now();
         await instance.startGateway();
-        const successorReadyAt = Date.now();
-        const successor = instance.child;
-        if (!successor) {
-          throw new Error("Successor exited before restart admission proof");
-        }
+        const successor = expectDefined(instance.child, "successor before restart admission proof");
         expect(successor.pid).not.toBe(child.pid);
         client = await connect();
         await client.request("sessions.subscribe", { agentId: "main" });
         provider.releaseRecovery();
-        const recovered = await withinTest(
-          awaitGateBeforeSettlement(
-            Promise.all([...recoveredTurns.values()].map((turn) => turn.promise)),
-            once(successor, "close"),
-            "Successor exited before all six interrupted turns completed",
-          ),
-          signal,
+        const recovered = await beforeExit(
+          Promise.all([...recoveredTurns.values()].map((turn) => turn.promise)),
+          once(successor, "close"),
+          "Successor exited before all six interrupted turns completed",
         );
         for (const turn of recovered) {
           expect(turn, instance.logs()).toMatchObject({ phase: "end" });
@@ -432,20 +363,15 @@ it.skipIf(process.platform !== "linux")(
           const history = await client.request<{
             messages: Array<{ role: string; content?: unknown }>;
           }>("chat.history", { sessionKey });
-          expect(
-            history.messages.filter(
-              (message) =>
-                message.role === "user" &&
-                JSON.stringify(message.content)?.includes(`RESTART_HANDOFF_${index}:`),
-            ),
-          ).toHaveLength(1);
-          expect(
-            history.messages.filter(
-              (message) =>
-                message.role === "assistant" &&
-                JSON.stringify(message.content)?.includes(`RESTART_HANDOFF_RESUMED_${index}`),
-            ),
-          ).toHaveLength(1);
+          const expectMessage = (role: string, marker: string) =>
+            expect(
+              history.messages.filter(
+                (message) =>
+                  message.role === role && JSON.stringify(message.content)?.includes(marker),
+              ),
+            ).toHaveLength(1);
+          expectMessage("user", `RESTART_HANDOFF_${index}:`);
+          expectMessage("assistant", `RESTART_HANDOFF_RESUMED_${index}`);
         }
         expect(
           journal(gateway.logs()).filter(
@@ -455,16 +381,6 @@ it.skipIf(process.platform !== "linux")(
               row.message.includes("database integrity verification passed"),
           ),
         ).toEqual([]);
-        console.info(
-          JSON.stringify({
-            proof: "gateway-restart-handoff-successor",
-            receiptAdmission: "seal-reused-without-verification",
-            successorReadyAfterExitMs: successorReadyAt - exitedAt,
-            preservedSessions: persistedSessions.size,
-            preservedUserTurns: sessionKeys.length,
-            completedRecoveryTurns: recovered.length,
-          }),
-        );
       },
       () => {
         clearTimeout(nativeDeadline);

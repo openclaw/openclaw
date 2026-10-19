@@ -58,11 +58,6 @@ export type OpenClawStateWorkerOperations = Omit<
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
   };
 
-/** Internal inspection cannot open canonical state or execute a domain command. */
-export type OpenClawStateWorkerInspectionOperations = {
-  "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
-};
-
 /** Retiring owners dispatch only exact, physically bound cleanup receipts. */
 export type OpenClawStateWorkerCleanupOperations = Pick<
   OpenClawStateLeaseLifecycleOperations,
@@ -77,9 +72,7 @@ export type OpenClawStateWorkerCleanupOperations = Pick<
   };
 
 export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
-  OpenClawStateWorkerOperations &
-    OpenClawStateWorkerInspectionOperations &
-    OpenClawStateWorkerCleanupOperations
+  OpenClawStateWorkerOperations & OpenClawStateWorkerCleanupOperations
 >;
 
 /** Host-only admission options; never serialized with a worker command. */

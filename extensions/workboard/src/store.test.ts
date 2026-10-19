@@ -181,7 +181,7 @@ describe("WorkboardStore", () => {
     changes.mockImplementation(() => {
       throw new Error("listener failed");
     });
-    store.subscribeChanges(changes);
+    store.onChange = changes;
     const card = await store.create({ title: "Idempotent", idempotencyKey: "same" });
     await store.create({ title: "Duplicate", idempotencyKey: "same" });
     await store.delete("missing");
@@ -2216,7 +2216,7 @@ describe("WorkboardStore", () => {
       }
       const archived = await store.archive(card.id, true);
       const changes = vi.fn();
-      const unsubscribe = store.subscribeChanges(changes);
+      store.onChange = changes;
       await expect(store.refreshDiagnostics(now + 1)).resolves.toEqual({
         diagnostics: [],
         count: 0,
@@ -2244,7 +2244,7 @@ describe("WorkboardStore", () => {
       await expect(store.get(card.id)).resolves.toEqual(archived);
       await expect(store.list()).resolves.toEqual([archived]);
       expect(changes).not.toHaveBeenCalled();
-      unsubscribe();
+      store.onChange = undefined;
       await store.archive(card.id, false);
       if (status === "done") {
         await expect(store.diagnostics(now + 2)).resolves.toMatchObject(missingProof);
@@ -3292,7 +3292,7 @@ describe("Workboard dependency and scheduled promotion", () => {
       });
       const archived = await store.archive(card.id, true);
       const changes = vi.fn();
-      store.subscribeChanges(changes);
+      store.onChange = changes;
 
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await expect(store.dispatch(3_000 + attempt)).resolves.toEqual({

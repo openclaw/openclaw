@@ -19,7 +19,6 @@ describe("stateless Claw package install", () => {
     ]);
 
     const refs = await installClawPackages(plan, {
-      stateless: true,
       deps: {
         installSkill: installed,
         preflightSkill: vi.fn().mockResolvedValue({ ok: true, action: "install", integrity }),

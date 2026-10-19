@@ -461,9 +461,11 @@ export async function recoverEmbeddedRunAttempt(input: {
           data: {
             phase: "retrying",
             message:
-              reason === "rate_limit" || reason === "output_limit"
-                ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
-                : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+              reason === "rate_limit"
+                ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
+                : reason === "output_limit"
+                  ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+                  : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
             retryAttempt,
             maxRetries,
             delayMs,

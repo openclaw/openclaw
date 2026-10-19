@@ -310,7 +310,7 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
                 <button
                   class="btn primary"
                   data-test-id="memory-import-provider-button"
-                  disabled={selectedIds().size === 0 || disabled()}
+                  disabled={!props.view.connected || selectedIds().size === 0 || disabled()}
                   onClick={() => props.view.onRequestImport(props.provider.providerId)}
                 >
                   {props.view.applyingProviderId === props.provider.providerId
@@ -380,7 +380,7 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
               data-test-id={
                 props.backfill ? "memory-backfill-rollback-confirm" : "memory-import-confirm"
               }
-              disabled={busy()}
+              disabled={!props.view.connected || busy()}
               onClick={() =>
                 props.backfill
                   ? props.view.onBackfillRollbackConfirm()
@@ -409,7 +409,11 @@ function IntroSection(props: { view: MemoryImportViewProps }) {
       title={t("memoryImport.title")}
       description={t("memoryImport.subtitle")}
       actions={
-        <button class="btn btn--sm" disabled={busy()} onClick={props.view.onRefresh}>
+        <button
+          class="btn btn--sm"
+          disabled={!props.view.connected || busy()}
+          onClick={props.view.onRefresh}
+        >
           {t(props.view.loading ? "common.refreshing" : "common.refresh")}
         </button>
       }
@@ -492,7 +496,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                 <button
                   class="btn"
                   data-test-id="memory-backfill-preview"
-                  disabled={busy()}
+                  disabled={!props.view.connected || busy()}
                   onClick={props.view.onBackfillPreview}
                 >
                   {t(
@@ -504,7 +508,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                 <button
                   class="btn primary"
                   data-test-id="memory-backfill-apply"
-                  disabled={busy()}
+                  disabled={!props.view.connected || busy()}
                   onClick={props.view.onBackfillApply}
                 >
                   {t(
@@ -516,7 +520,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                 <button
                   class="btn danger"
                   data-test-id="memory-backfill-rollback"
-                  disabled={busy()}
+                  disabled={!props.view.connected || busy()}
                   onClick={props.view.onBackfillRollbackRequest}
                 >
                   {t("memoryImport.backfill.rollback")}
@@ -616,52 +620,47 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
 export function MemoryImport(props: MemoryImportViewProps) {
   return (
     <Show
-      when={props.connected}
+      when={props.canAdmin}
       fallback={
         <SettingsPage>
-          <SettingsEmpty message={t("memoryImport.disconnected")} />
+          <SettingsEmpty
+            message={t(
+              props.connected ? "memoryImport.adminRequired" : "memoryImport.disconnected",
+            )}
+          />
         </SettingsPage>
       }
     >
-      <Show
-        when={props.canAdmin}
-        fallback={
-          <SettingsPage>
-            <SettingsEmpty message={t("memoryImport.adminRequired")} />
-          </SettingsPage>
-        }
-      >
-        <div class="memory-import" data-test-id="memory-import-page">
-          <SettingsPage>
-            <IntroSection view={props} />
-            <BackfillSection view={props} />
-            <Show when={props.error}>
-              <div class="callout danger" role="alert">
-                {props.error}
-              </div>
-            </Show>
-            <Show when={props.applyError}>
-              <div class="callout danger" role="alert">
-                {props.applyError}
-              </div>
-            </Show>
-            <Show
-              when={props.loading && !props.plan}
-              fallback={
-                <For each={props.plan?.providers ?? []} keyed={(provider) => provider.providerId}>
-                  {(provider) => <Provider view={props} provider={provider()} />}
-                </For>
-              }
-            >
-              <div class="settings-group memory-import__loading" aria-busy="true">
-                <div class="skeleton memory-import__skeleton" />
-                <div class="skeleton memory-import__skeleton" />
-              </div>
-            </Show>
-            <Confirmation view={props} />
-          </SettingsPage>
-        </div>
-      </Show>
+      <div class="memory-import" data-test-id="memory-import-page">
+        <SettingsPage>
+          <IntroSection view={props} />
+          <BackfillSection view={props} />
+          <Show when={props.error}>
+            <div class="callout danger" role="alert">
+              {props.error}
+            </div>
+          </Show>
+          <Show when={props.applyError}>
+            <div class="callout danger" role="alert">
+              {props.applyError}
+            </div>
+          </Show>
+          <Show
+            when={props.loading && !props.plan}
+            fallback={
+              <For each={props.plan?.providers ?? []} keyed={(provider) => provider.providerId}>
+                {(provider) => <Provider view={props} provider={provider()} />}
+              </For>
+            }
+          >
+            <div class="settings-group memory-import__loading" aria-busy="true">
+              <div class="skeleton memory-import__skeleton" />
+              <div class="skeleton memory-import__skeleton" />
+            </div>
+          </Show>
+          <Confirmation view={props} />
+        </SettingsPage>
+      </div>
     </Show>
   );
 }

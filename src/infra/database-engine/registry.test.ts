@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  assertHomogeneousDatabaseEngines,
   listDatabaseEngineStores,
   resolveDatabaseFamilyEngines,
   selectDatabaseEngine,
@@ -19,32 +18,6 @@ describe("database engine selection", () => {
         .filter((store) => store.postgres)
         .map((store) => store.id),
     ).toEqual(["state", "agent", "workboard", "logbook", "team-reports"]);
-  });
-
-  it.each(["port", "backup", "restore", "update"] as const)(
-    "refuses %s for effective mixed engines regardless of the default",
-    (operation) => {
-      for (const database of [
-        { engine: "sqlite", families: { state: { engine: "postgres" } } },
-        { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
-      ] as const) {
-        expect(() => assertHomogeneousDatabaseEngines({ database }, operation)).toThrow(
-          `${operation} for mixed-engine installs is not supported yet; use a single engine`,
-        );
-      }
-    },
-  );
-
-  it("preserves homogeneous defaults and ignores fixed-local families", () => {
-    for (const database of [undefined, { engine: "sqlite" }, { engine: "postgres" }] as const) {
-      expect(() => assertHomogeneousDatabaseEngines({ database }, "backup")).not.toThrow();
-    }
-    expect(() =>
-      assertHomogeneousDatabaseEngines(
-        { database: { engine: "postgres", families: { agent: { engine: "sqlite" } } } },
-        "update",
-      ),
-    ).toThrow("update for mixed-engine installs is not supported yet");
   });
 
   it.each([
@@ -76,6 +49,17 @@ describe("database engine selection", () => {
     },
   ] as const)("selects PostgreSQL agents independently: $database", ({ database, expected }) => {
     expect(resolveDatabaseFamilyEngines({ database })).toMatchObject(expected);
+  });
+
+  it("allows PostgreSQL state and agents with unrelated SQLite plugins", () => {
+    expect(
+      resolveDatabaseFamilyEngines({
+        database: {
+          engine: "postgres",
+          families: { logbook: { engine: "sqlite" } },
+        },
+      }),
+    ).toMatchObject({ state: "postgres", agent: "postgres", logbook: "sqlite" });
   });
 
   it("allows explicit SQLite agents alongside PostgreSQL families", () => {

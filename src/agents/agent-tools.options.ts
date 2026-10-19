@@ -18,15 +18,15 @@ import type {
   AgentRunChannelContext,
 } from "./command/shared-types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
+import type { SandboxContext } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
+import type { OpenClawCodingToolConstructionPlan } from "./tool-catalog.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import type {
   ToolSearchCatalogRef,

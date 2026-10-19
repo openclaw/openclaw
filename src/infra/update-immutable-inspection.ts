@@ -8,11 +8,12 @@ import {
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
 import { resolveClientCredentialStorePath } from "./client-credential-store.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
+import { readBuiltRuntimeIsolation } from "./update-git-runtime.js";
 import { readImmutableSchemaContracts } from "./update-immutable-generation.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import { assertImmutableDescriptorCurrent, directoryIdentity } from "./update-immutable-layout.js";
@@ -63,6 +64,12 @@ export async function inspectImmutableUpdateCoverage(params: {
     throw new Error("Immutable adoption record is unavailable.");
   }
   assertImmutableDescriptorCurrent(record.descriptor);
+  const currentBuild = await readBuiltRuntimeIsolation(record.descriptor.current.path);
+  if (currentBuild) {
+    result.warnings.push(
+      `Current generation was built by the operator${currentBuild.account ? ` ${currentBuild.account} (uid ${currentBuild.uid}, gid ${currentBuild.gid})` : ""} without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.`,
+    );
+  }
   const selected = record.prepared;
   const hasPrepared = selected && (!params.targetSha || selected.sha === params.targetSha);
   if (hasPrepared) {
@@ -70,6 +77,12 @@ export async function inspectImmutableUpdateCoverage(params: {
     try {
       if (directoryIdentity(selected.path) !== selected.identity) {
         throw new Error("Prepared generation identity differs from its receipt.");
+      }
+      const preparedBuild = await readBuiltRuntimeIsolation(selected.path);
+      if (preparedBuild) {
+        result.warnings.push(
+          `Prepared generation was built by the operator${preparedBuild.account ? ` ${preparedBuild.account} (uid ${preparedBuild.uid}, gid ${preparedBuild.gid})` : ""} without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.`,
+        );
       }
       const contracts = await readImmutableSchemaContracts(record);
       result.currentSchemaVersions = contracts.current;
@@ -225,12 +238,7 @@ export async function inspectImmutableUpdateCoverage(params: {
             kind: resource.kind,
             present: await fs.stat(resource.path).then(
               () => true,
-              (error: unknown) => {
-                if (hasErrnoCode(error, "ENOENT")) {
-                  return false;
-                }
-                throw error;
-              },
+              (error: unknown) => ignoreMissingPath(error) ?? false,
             ),
             external: !isPathInside(stateDir, resource.path),
             coverage: "unknown" as const,

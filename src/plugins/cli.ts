@@ -14,7 +14,7 @@ import {
 } from "./cli-registry-loader.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import { createPluginRuntimeLoaderLogger } from "./runtime/load-context.js";
+import { pluginRuntimeLoaderLogger as logger } from "./runtime/load-context.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
 
@@ -25,8 +25,6 @@ type RegisterPluginCliOptions = {
   session?: PluginCliLoadSession;
 };
 
-const logger = createPluginRuntimeLoaderLogger();
-
 export async function registerPluginCliCommandsFromValidatedConfig(
   program: Command,
   env?: NodeJS.ProcessEnv,
@@ -36,7 +34,10 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
   try {
     const snapshot = await session.readConfig(() =>
-      readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation }),
+      readConfigFileSnapshot({
+        observe: false,
+        skipPluginValidation: options?.skipPluginValidation,
+      }),
     );
     if (!snapshot.valid) {
       throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));

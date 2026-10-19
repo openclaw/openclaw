@@ -101,6 +101,62 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "thread reply" }]);
   });
 
+  it.each([
+    {
+      label: "new question with an already-sent answer",
+      text: "The answer remains unchanged.",
+      question: "What about the new case?",
+      sentText: "The answer remains unchanged.",
+      duplicate: false,
+    },
+    {
+      label: "already-rendered short answer",
+      text: "323",
+      question: "What is 17 * 19?",
+      sentText: `BTW
+Question: What is 17 * 19?
+
+323`,
+      duplicate: true,
+    },
+    {
+      label: "different questions sharing the same long answer",
+      text: "The answer remains unchanged.",
+      question: "What about the second case?",
+      sentText: `BTW
+Question: What about the first case?
+
+The answer remains unchanged.`,
+      duplicate: false,
+    },
+  ])(
+    "dedupes the visible side-question reply: $label",
+    ({ text, question, sentText, duplicate }) => {
+      const payload = { text, btw: { question } };
+      const delivered = vi.fn();
+      expect(
+        resolveFollowupDeliveryPayloads({
+          cfg: baseConfig,
+          payloads: [payload],
+          messageProvider: "slack",
+          originatingTo: "channel:C1",
+          originatingThreadId: "111.000",
+          sentTargets: [
+            {
+              tool: "slack",
+              provider: "slack",
+              to: "channel:C1",
+              threadId: "111.000",
+              text: sentText,
+            },
+          ],
+          onDeliveredTerminalDuplicate: delivered,
+        }),
+      ).toEqual(duplicate ? [] : [payload]);
+      expect(delivered).toHaveBeenCalledTimes(duplicate ? 1 : 0);
+    },
+  );
+
   it("delivers distinct replies when originating channel resolves the provider", () => {
     expect(
       resolveFollowupDeliveryPayloads({

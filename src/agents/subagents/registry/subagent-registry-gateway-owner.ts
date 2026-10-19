@@ -1,11 +1,13 @@
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -13,16 +15,27 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { readRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   assertSubagentRegistryWriteSourceCurrent,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
-import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  isRequesterSettleWakeForRun,
+  sameRequesterSettleRunIdentity,
+} from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
+
+type ActivationMetrics = {
+  authorityRestoreMs: number;
+  publishMs: number;
+  recoveredRuns: number;
+  publishedRuns: number;
+};
 
 const log = createSubsystemLogger("agents/subagents");
 // Worker admission and unavailable policy startup retry; revoked custody never re-arms itself.
@@ -40,6 +53,7 @@ async function restoreSubagentCompletionSource(
   entry: SubagentRunRecord,
   resolver: GatewayContextResolver,
   isGatewayCurrent: () => boolean,
+  metrics?: ActivationMetrics,
 ): Promise<void> {
   const runtimeKey = getSubagentRunRuntimeKey(entry);
   deferredCompletionSources.delete(runtimeKey);
@@ -55,12 +69,15 @@ async function restoreSubagentCompletionSource(
   // A refused restoration must leave a restricted row, never a synthetic system caller.
   subagentRuns.requireCompletionAuthority(entry);
   if (
-    entry.execution.status === "terminal" &&
+    (entry.execution.status === "terminal" || !entry.operatorRecoverySource) &&
     !entry.requesterSettleWake &&
-    entry.suppressCompletionDelivery
+    (entry.suppressCompletionDelivery ||
+      (entry.delivery?.status === "suspended" &&
+        entry.delivery.disposition === "intentional_non_delivery"))
   ) {
     return;
   }
+  const beforeRestore = performance.now();
   let releaseRestored: (() => void) | undefined;
   let continuation:
     | Awaited<
@@ -71,11 +88,10 @@ async function restoreSubagentCompletionSource(
     | undefined;
   try {
     const source = entry.operatorRecoverySource;
+    const missingSourceReason =
+      "The original operator source was not saved for this requester continuation";
     if (!source) {
-      unrestorableCompletionSources.set(
-        runtimeKey,
-        "The original operator source was not saved for this requester continuation",
-      );
+      unrestorableCompletionSources.set(runtimeKey, missingSourceReason);
     } else if (
       source.agentId !== entry.requesterAgentId ||
       source.sessionKey !== entry.requesterSessionKey ||
@@ -89,21 +105,26 @@ async function restoreSubagentCompletionSource(
     }
     const gateway = resolver();
     const storePath = entry.requesterStorePath;
-    if (!gateway || !source || !storePath || unrestorableCompletionSources.has(runtimeKey)) {
-      throw new Error("Subagent restart recovery lacks its original operator source");
-    }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const context = captureOpenClawStateWorkerContext();
-    const assertCurrent = () => {
+    const assertGatewayCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(context);
+      if (
+        !gateway ||
+        !isGatewayCurrent() ||
+        resolver() !== gateway ||
+        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+      ) {
+        throw new SubagentRegistryMutationRejectedError("Subagent recovery Gateway owner changed");
+      }
+    };
+    const assertCurrent = () => {
+      assertGatewayCurrent();
       const current = getCurrentSubagentRunOwner(subagentRuns, entry);
       if (
         !current ||
         subagentRuns.isCompletionAuthorityRetired(current) ||
-        !isGatewayCurrent() ||
-        resolver() !== gateway ||
-        getEntryGatewayContextResolver(current) !== resolver ||
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+        getEntryGatewayContextResolver(current) !== resolver
       ) {
         throw new SubagentRegistryMutationRejectedError(
           "Subagent recovery completion owner changed",
@@ -111,6 +132,120 @@ async function restoreSubagentCompletionSource(
       }
     };
     assertCurrent();
+    if (!source) {
+      if (
+        storePath &&
+        entry.requesterAgentId &&
+        entry.completionTarget !== "parent" &&
+        (entry.requesterSettleWake?.attemptCount ?? 0) > 0
+      ) {
+        const { resolveRequesterSettleRecoveryCustody } =
+          await import("../announce/subagent-announce-controller-source.js");
+        const requester = await readSessionEntryReadOnlyInWorker(
+          {
+            agentId: entry.requesterAgentId,
+            sessionKey: entry.requesterSessionKey,
+            storePath,
+          },
+          assertCurrent,
+        );
+        assertCurrent();
+        const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+        if (
+          current &&
+          sameRequesterSettleRunIdentity(current, entry) &&
+          current.completionTarget !== "parent" &&
+          (current.requesterSettleWake?.attemptCount ?? 0) > 0 &&
+          requester?.sessionId &&
+          requester.sessionId === current.completionRequesterSessionId &&
+          requester.lifecycleRevision === current.completionRequesterLifecycleRevision &&
+          requester.archivedAt === undefined &&
+          isSystemEventStoreCurrent(
+            current.requesterSessionKey,
+            storePath,
+            current.requesterAgentId,
+          )
+        ) {
+          const runIds = [
+            requester.restartRecoveryRequesterSource?.sourceRunId,
+            ...(requester.restartRecoveryTerminalRunIds ?? []),
+            ...(requester.restartRecoveryTerminalDeliveryEvidence?.map(
+              (receipt) => receipt.runId,
+            ) ?? []),
+          ];
+          for (const runId of runIds) {
+            if (
+              !runId ||
+              !isRequesterSettleWakeForRun({
+                entry: current,
+                runId,
+                requesterSessionKey: current.requesterSessionKey,
+                requesterAgentId: current.requesterAgentId,
+                runsById: subagentRuns,
+              })
+            ) {
+              continue;
+            }
+            const custody = resolveRequesterSettleRecoveryCustody(requester, { runId });
+            const requesterOrigin = readRestartRecoveryRequesterSource({
+              entry: requester,
+              agentId: entry.requesterAgentId,
+              sessionKey: current.requesterSessionKey,
+              sourceRunId: runId,
+            });
+            if (
+              custody?.status === "settled" ||
+              (custody?.status === "pending" &&
+                requesterOrigin &&
+                !requesterOrigin.operatorProfileId)
+            ) {
+              // Recovery owns this admitted input. Preserve only receipt reconciliation;
+              // the row remains restricted and cannot start another continuation.
+              unrestorableCompletionSources.delete(runtimeKey);
+              deferredCompletionSources.add(runtimeKey);
+              return;
+            }
+          }
+        }
+      }
+      // Legacy wakes and yields may have no recoverable requester cohort or final outcome.
+      // Close their unavailable continuation here; execution keeps its own recovery owner.
+      deferredCompletionSources.add(runtimeKey);
+      // Queue receipts and replaced-store notifications retain their settlement owners.
+      if (
+        entry.delivery?.queueId ||
+        (entry.execution.status === "terminal" &&
+          entry.execution.outcome &&
+          entry.pauseReason !== "sessions_yield" &&
+          entry.expectsCompletionMessage === true &&
+          ["pending", "in_progress"].includes(entry.delivery?.status ?? "") &&
+          entry.delivery?.deliveredAt === undefined &&
+          entry.delivery?.announcedAt === undefined &&
+          !isSystemEventStoreCurrent(entry.requesterSessionKey, storePath, entry.requesterAgentId))
+      ) {
+        return;
+      }
+      if (entry.execution.status === "terminal" || entry.cleanupCompletedAt !== undefined) {
+        const { blockSubagentCompletionDelivery } =
+          await import("../completion/subagent-completion-admission.store.js");
+        if (
+          await blockSubagentCompletionDelivery({
+            subagent: entry,
+            reason: missingSourceReason,
+            disposition: "permanent_failure",
+            operatorAuthorityUnavailable: true,
+            context,
+            assertCurrent,
+          })
+        ) {
+          deferredCompletionSources.delete(runtimeKey);
+          return;
+        }
+      }
+    }
+    if (!gateway || !source || !storePath || unrestorableCompletionSources.has(runtimeKey)) {
+      throw new Error("Subagent restart recovery lacks its original operator source");
+    }
     const [
       { restoreGatewayOperatorSource },
       { captureOperatorToolGatewayContinuationContext },
@@ -125,7 +260,8 @@ async function restoreSubagentCompletionSource(
       snapshot: source.snapshot,
       target: source,
       context: gateway,
-      assertCurrent,
+      // Descendants retain this authority after the original completion row settles.
+      assertCurrent: assertGatewayCurrent,
       prepareCurrent: async () => {
         const requester = await readSessionEntryReadOnlyInWorker(
           {
@@ -149,6 +285,8 @@ async function restoreSubagentCompletionSource(
     continuation = await withPluginRuntimeGatewayRequestScope(
       {
         client: createSyntheticPluginRuntimeClient({
+          // Retried private inputs retain the sender fields included in their accepted hash.
+          authenticatedUserProfile: restored.authenticatedUserProfile,
           operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
           operatorRunAuthority: restored.authority,
           scopes: [...restored.authority.scopes],
@@ -186,6 +324,9 @@ async function restoreSubagentCompletionSource(
   } finally {
     continuation?.release();
     releaseRestored?.();
+    if (metrics) {
+      metrics.authorityRestoreMs += performance.now() - beforeRestore;
+    }
   }
 }
 
@@ -210,6 +351,7 @@ async function recoverSubagentRunGatewayOwner(
   resolver: GatewayContextResolver,
   onRecovered: (entry: SubagentRunRecord) => void,
   isGatewayCurrent: () => boolean,
+  metrics: ActivationMetrics,
 ): Promise<boolean> {
   const previousResolver = getEntryGatewayContextResolver(expected);
   const gateway = resolver();
@@ -217,34 +359,42 @@ async function recoverSubagentRunGatewayOwner(
     return false;
   }
   let recovered: SubagentRunRecord | undefined;
-  const committed = await mutateSubagentRuns(
-    [expected.runId],
-    (rows) => {
-      const current = rows.get(expected.runId);
-      if (!current) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Subagent Gateway recovery row disappeared",
-        );
-      }
-      return { value: true, postimages: new Map([[current.runId, structuredClone(current)]]) };
-    },
-    {
-      gatewayRecovery: { expected, previousResolver, resolver, gateway },
-      onPublished: (postimages) => {
-        const row = postimages.get(expected.runId);
-        if (row) {
-          bindGatewayContextResolver(row, resolver);
-          if (!row.collect) {
-            subagentRuns.requireCompletionAuthority(row);
-          }
-          recovered = row;
-          subagentRuns.commitOwnership(row);
+  const beforePublish = performance.now();
+  let committed: boolean;
+  try {
+    committed = await mutateSubagentRuns(
+      [expected.runId],
+      (rows) => {
+        const current = rows.get(expected.runId);
+        if (!current) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Subagent Gateway recovery row disappeared",
+          );
         }
+        return { value: true, postimages: new Map([[current.runId, { ...current }]]) };
       },
-    },
-  );
+      {
+        gatewayRecovery: { expected, previousResolver, resolver, gateway },
+        onPublished: (postimages) => {
+          const row = postimages.get(expected.runId);
+          if (row) {
+            bindGatewayContextResolver(row, resolver);
+            if (!row.collect) {
+              subagentRuns.requireCompletionAuthority(row);
+            }
+            recovered = row;
+            subagentRuns.commitOwnership(row);
+            metrics.publishedRuns += 1;
+          }
+        },
+      },
+    );
+  } finally {
+    metrics.publishMs += performance.now() - beforePublish;
+  }
   if (recovered) {
-    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent);
+    metrics.recoveredRuns += 1;
+    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent, metrics);
     if (isGatewayCurrent()) {
       onRecovered(recovered);
     }
@@ -252,12 +402,14 @@ async function recoverSubagentRunGatewayOwner(
   return committed;
 }
 
-/** Bind only the captured inventory, retaining the same Gateway across batch yields. */
+/** Activate unfinished obligations; the registry owns later retention of cold rows. */
 export async function bindSubagentRunGatewayOwners(params: {
   runs: Map<string, SubagentRunRecord>;
+  entries: readonly SubagentRunRecord[];
   resumedRuns: Set<object>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   onRecovered: (entry: SubagentRunRecord) => void;
+  startupTrace?: GatewayStartupTrace;
 }): Promise<boolean> {
   const resolver = params.getGatewayContextResolver();
   const gateway = resolver?.();
@@ -265,45 +417,65 @@ export async function bindSubagentRunGatewayOwners(params: {
     return false;
   }
   const isCurrent = () => params.getGatewayContextResolver() === resolver && resolver() === gateway;
-  // New registrations during a yield belong to the next pass, not this captured owner set.
-  const capturedRuns = [...params.runs.values()];
-  let visited = 0;
-  for (const snapshot of capturedRuns) {
-    if (++visited % 128 === 0) {
-      await yieldToEventLoop();
-      if (!isCurrent()) {
-        return false;
+  bindGatewayContextResolver(params.runs, resolver);
+  const capturedRuns = params.entries;
+  const metrics: ActivationMetrics = {
+    authorityRestoreMs: 0,
+    publishMs: 0,
+    recoveredRuns: 0,
+    publishedRuns: 0,
+  };
+  let activeRuns = 0;
+  try {
+    for (const snapshot of capturedRuns) {
+      if (snapshot.execution.status !== "terminal") {
+        activeRuns += 1;
       }
-    }
-    const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
-    if (!entry) {
-      continue;
-    }
-    const previous = getEntryGatewayContextResolver(entry);
-    if (previous) {
-      if (
-        previous() ||
-        (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
-          !isRetiredSubagentExecution(entry))
-      ) {
+      const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
+      if (!entry) {
         continue;
       }
-      const previousResumeKey = getSubagentRunRuntimeKey(entry);
-      if (await recoverSubagentRunGatewayOwner(entry, resolver, params.onRecovered, isCurrent)) {
-        params.resumedRuns.delete(previousResumeKey);
+      const previous = getEntryGatewayContextResolver(entry);
+      if (previous) {
+        if (
+          previous() ||
+          (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
+            !isRetiredSubagentExecution(entry))
+        ) {
+          continue;
+        }
+        const previousResumeKey = getSubagentRunRuntimeKey(entry);
+        if (
+          await recoverSubagentRunGatewayOwner(
+            entry,
+            resolver,
+            params.onRecovered,
+            isCurrent,
+            metrics,
+          )
+        ) {
+          params.resumedRuns.delete(previousResumeKey);
+        }
+        if (!isCurrent()) {
+          return false;
+        }
+        continue;
       }
+      bindGatewayContextResolver(entry, resolver);
+      await restoreSubagentCompletionSource(entry, resolver, isCurrent, metrics);
       if (!isCurrent()) {
         return false;
       }
-      continue;
     }
-    bindGatewayContextResolver(entry, resolver);
-    await restoreSubagentCompletionSource(entry, resolver, isCurrent);
-    if (!isCurrent()) {
-      return false;
-    }
-    // Binding an existing owner must not supersede a registration already in preparation.
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return isCurrent();
+  } finally {
+    params.startupTrace?.detail("sidecars.subagent-activation", [
+      ["registryActivationAuthorityRestoreMs", metrics.authorityRestoreMs],
+      ["registryActivationPublishMs", metrics.publishMs],
+      ["registryActivationRuns", capturedRuns.length],
+      ["registryActivationActiveRuns", activeRuns],
+      ["registryActivationRecoveredRuns", metrics.recoveredRuns],
+      ["registryActivationPublishedRuns", metrics.publishedRuns],
+    ]);
   }
-  return isCurrent();
 }

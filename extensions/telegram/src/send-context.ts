@@ -393,6 +393,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
       "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
       `Input was: ${JSON.stringify(params.input)}.`,
     ].join(" "),
+    { cause: err },
   );
 }
 

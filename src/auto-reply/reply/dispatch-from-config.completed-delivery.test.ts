@@ -143,7 +143,6 @@ describe("completed delivery through runner and dispatcher", () => {
       const { replyPayloads } = await buildReplyPayloads({
         payloads: embedded,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",

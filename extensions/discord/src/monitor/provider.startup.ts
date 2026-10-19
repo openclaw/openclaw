@@ -46,11 +46,6 @@ type DiscordListenerConfig = {
   dangerouslyAllowNameMatching?: boolean;
   intents?: { presence?: boolean };
 };
-type CreateClientFn = (
-  options: ConstructorParameters<typeof Client>[0],
-  handlers: ConstructorParameters<typeof Client>[1],
-  plugins: ConstructorParameters<typeof Client>[2],
-) => Client;
 type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
 export async function createDiscordMonitorClient(params: {
@@ -66,7 +61,6 @@ export async function createDiscordMonitorClient(params: {
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0];
   runtime: RuntimeEnv;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
-  createClient: CreateClientFn;
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
@@ -74,7 +68,6 @@ export async function createDiscordMonitorClient(params: {
   const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
-    listenerTimeout: 120_000,
     slowListenerThreshold: 30_000,
   } satisfies DiscordEventQueueOptions;
   const readyDiscordConfig = params.discordConfig;
@@ -87,7 +80,7 @@ export async function createDiscordMonitorClient(params: {
       gateway.updatePresence(resolveDiscordPresenceUpdate(readyDiscordConfig));
     }
   })();
-  const client = params.createClient(
+  const client = new Client(
     {
       clientId: params.applicationId,
       token: params.token,

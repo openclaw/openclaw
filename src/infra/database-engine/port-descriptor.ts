@@ -9,10 +9,11 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schem
 import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
 import type { PortDescriptor, PortEndpoint } from "./port-types.js";
 import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
+import { DatabasePortDataError } from "./postgres-store-metadata.js";
 
 export type { PortDescriptor, PortEndpoint, PortRow, PortTable } from "./port-types.js";
 
-export class DatabasePortDataError extends Error {}
+export { DatabasePortDataError };
 
 export type DatabasePortProvider = {
   id: string;
@@ -23,7 +24,7 @@ export type DatabasePortProvider = {
     config: OpenClawConfig;
     stateDir: string;
     env: NodeJS.ProcessEnv;
-    plugins: ReturnType<typeof resolvePluginMetadataSnapshot>;
+    plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins">;
   }): readonly string[] | Promise<readonly string[]>;
   matchesSqlite(tables: ReadonlySet<string>): boolean;
   /** Includes the expected catalog from the same generated source as the bundled DDL. */

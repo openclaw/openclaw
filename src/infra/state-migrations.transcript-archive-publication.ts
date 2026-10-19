@@ -18,6 +18,7 @@ import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "./migration-warning-summary.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const TRANSCRIPT_ARCHIVE_RECOVERY_KEY = "historical-canonical-transcript-archive-recovery-v1";
@@ -85,7 +86,7 @@ export function transcriptArchiveRecoveryRowKey(
 }
 
 export function readTranscriptArchiveRecoveryJournal(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): TranscriptArchiveRecoveryJournal | undefined {
   const db = getNodeSqliteKysely<TranscriptArchivePublicationDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(

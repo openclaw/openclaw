@@ -22,14 +22,15 @@ import {
   type SourceLocation,
 } from "./code-mode-source-location.js";
 import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
-import type {
-  CodeModeConfig,
-  CodeModeFailurePhase,
-  CodeModeNodeInput,
-  CodeModeWorkerContinuation,
-  CodeModeWorkerThreadResult,
-  PendingBridgeRequest,
-  SettledBridgeRequest,
+import {
+  CODE_MODE_BRIDGE_METHODS,
+  type CodeModeConfig,
+  type CodeModeFailurePhase,
+  type CodeModeNodeInput,
+  type CodeModeWorkerContinuation,
+  type CodeModeWorkerThreadResult,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
@@ -129,24 +130,7 @@ observeGcSamples((samples) => {
   majorCollections = 0;
 });
 
-const bridgeMethods = new Set<string>([
-  "search",
-  "describe",
-  "callValue",
-  "resultSave",
-  "resultLoad",
-  "resultDelete",
-  "nodes",
-  "yield",
-  "namespace",
-  "agentSpawn",
-  "agentWait",
-  "skillsList",
-  "skillsSearch",
-  "skillsRead",
-  "sleep",
-  "swarmNote",
-]);
+const bridgeMethods = new Set<string>(CODE_MODE_BRIDGE_METHODS);
 
 function isBridgeMethod(method: string): method is PendingBridgeRequest["method"] {
   return bridgeMethods.has(method);

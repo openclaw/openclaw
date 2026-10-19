@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyOpencodeZenModelDefault,
+  applyAgentDefaultMediaModel,
   createAliasOnlyPresetAppliers,
   OPENCODE_ZEN_DEFAULT_MODEL,
   resolveAgentModelPrimaryValue,
@@ -14,6 +15,21 @@ function expectConfigUnchanged(
   expect(applied.changed).toBe(false);
   expect(applied.next).toEqual(cfg);
 }
+
+describe("applyAgentDefaultMediaModel", () => {
+  it("preserves selected media defaults and the original config on no-op", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { mediaModels: { image: { primary: "operator/image" } } } },
+    };
+    expect(applyAgentDefaultMediaModel(cfg, "image", "provider/image")).toBe(cfg);
+    const next = applyAgentDefaultMediaModel(cfg, "video", "provider/video");
+    expect(next.agents?.defaults?.mediaModels).toEqual({
+      image: { primary: "operator/image" },
+      video: { primary: "provider/video" },
+    });
+    expect(cfg.agents?.defaults?.mediaModels).toEqual({ image: { primary: "operator/image" } });
+  });
+});
 
 describe("createAliasOnlyPresetAppliers", () => {
   const modelRef = "example/default";

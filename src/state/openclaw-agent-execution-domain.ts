@@ -160,9 +160,6 @@ export function createAgentDatabaseDomainOwner(context: {
       await loading;
     }
     await current.backend.prepare?.(input.command);
-    if (requireBinding(input.id) !== current) {
-      throw new Error("Agent publication changed during command preparation");
-    }
   };
   const closeBinding = () => {
     if (!binding) {

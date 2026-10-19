@@ -5,6 +5,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "../app/co
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type {
   SessionConnectionScope,
   SessionListSnapshot,
@@ -18,7 +19,7 @@ import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -69,7 +70,7 @@ export function hidePersonalSidebarCatalog(
   recoveryLink.className = "session-link";
   recoveryLink.href = recoveryHref;
   recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-  recoveryLink.addEventListener("click", (event) => {
+  listen(recoveryLink, "click", (event) => {
     if (!shouldHandleNavigationClick(event)) {
       return;
     }
@@ -89,7 +90,7 @@ export function hidePersonalSidebarCatalog(
 export function createSidebarPinnedSessions(host: {
   readonly isConnected: boolean;
   readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-  readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;
+  readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
 }) {
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;

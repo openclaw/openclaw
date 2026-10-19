@@ -30,7 +30,6 @@ describe("extractPdfContent", () => {
     extractDocumentContentMock.mockResolvedValue({
       text: "extracted pdf",
       images: [],
-      extractor: "pdf",
       metadata,
     });
 

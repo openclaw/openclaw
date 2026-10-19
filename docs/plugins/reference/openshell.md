@@ -19,4 +19,4 @@ OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local worksp
 
 ## Surface
 
-This plugin declares no channels, providers, commands, or contracts.
+- CLI commands: `openclaw openshell`

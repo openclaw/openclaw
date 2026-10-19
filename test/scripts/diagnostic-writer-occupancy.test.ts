@@ -1,15 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { attributeWriterOccupancy } from "../../scripts/diagnostic-writer-occupancy.mts";
 
+const patchOperation = "session-entry.patch";
+const at = (time: string) => `2026-10-13T${time}`;
+const timing = (reservationMs: number, queueWaitMs: number) => ({
+  operation: patchOperation,
+  reservationMs,
+  queueWaitMs,
+});
+const reservation = (estimatedEnd: string, reservationMs: number, queueWaitMs: number) => ({
+  estimatedEnd,
+  ...timing(reservationMs, queueWaitMs),
+});
+const minute = (time: string, overlap: number, reservationMs: number, queueWaitMs: number) => ({
+  minute: at(`${time}Z`),
+  maxObservedWaitOverlap: overlap,
+  operations: [timing(reservationMs, queueWaitMs)],
+});
+
 function warning(
   fields: Record<string, unknown> = {},
   time = "2026-10-13T14:01:01.500Z",
   message = "slow SQLite session write",
 ) {
   return JSON.stringify({
-    "0": '{"subsystem":"session-sqlite"}',
     "1": {
-      operation: "session-entry.patch",
+      operation: patchOperation,
       pid: 123,
       threadId: 0,
       reentrant: false,
@@ -33,39 +49,13 @@ describe("writer occupancy log report", () => {
       warning({}, undefined, "slow session lifecycle operation"),
       warning({}, undefined, "session lifecycle queue waiting"),
     ]);
-    expect(report.observedReservations).toBe(1);
-    expect(report.ignoredLines).toBe(3);
-    expect(report.operations).toEqual([
-      {
-        operation: "session-entry.patch",
-        count: 1,
-        reservationMs: 2_000,
-        queueWaitMs: 1_000,
-        maxReservationMs: 2_000,
-      },
-    ]);
-    expect(report.minutes).toEqual([
-      {
-        minute: "2026-10-13T14:00:00.000Z",
-        maxObservedWaitOverlap: 1,
-        operations: [
-          { operation: "session-entry.patch", reservationMs: 1_000, queueWaitMs: 1_000 },
-        ],
-      },
-      {
-        minute: "2026-10-13T14:01:00.000Z",
-        maxObservedWaitOverlap: 0,
-        operations: [{ operation: "session-entry.patch", reservationMs: 1_000, queueWaitMs: 0 }],
-      },
-    ]);
-    expect(report.topReservations).toEqual([
-      {
-        estimatedEnd: "2026-10-13T14:01:01.000Z",
-        operation: "session-entry.patch",
-        reservationMs: 2_000,
-        queueWaitMs: 1_000,
-      },
-    ]);
+    expect(report).toMatchObject({
+      observedReservations: 1,
+      ignoredLines: 3,
+      operations: [{ ...timing(2_000, 1_000), count: 1, maxReservationMs: 2_000 }],
+      minutes: [minute("14:00:00.000", 1, 1_000, 1_000), minute("14:01:00.000", 0, 1_000, 0)],
+      topReservations: [reservation("2026-10-13T14:01:01.000Z", 2_000, 1_000)],
+    });
   });
 
   it("counts simultaneous observed waits only within the same process/thread", async () => {
@@ -77,46 +67,30 @@ describe("writer occupancy log report", () => {
       // A wait beginning exactly where the preceding waits end does not overlap them.
       warning({}, "2026-10-13T14:01:02.500Z", "SQLite session write failed"),
     ]);
-    expect(report.observedReservations).toBe(5);
-    expect(report.minutes[0]?.maxObservedWaitOverlap).toBe(2);
-    expect(report.minutes[1]?.maxObservedWaitOverlap).toBe(0);
+    expect(report).toMatchObject({
+      observedReservations: 5,
+      minutes: [{ maxObservedWaitOverlap: 2 }, { maxObservedWaitOverlap: 0 }],
+    });
     expect(report.operations.find((row) => row.operation === "direct")?.reservationMs).toBe(2_000);
   });
 
   it("clips intervals using offset-qualified bounds, including warnings emitted after the window", async () => {
-    const report = await attributeWriterOccupancy([warning()], {
-      from: "2026-10-13T07:00:59.500-07:00",
-      until: "2026-10-13T14:01:00.500+00:00",
-    });
-    expect(report.operations[0]).toMatchObject({
-      reservationMs: 1_000,
-      queueWaitMs: 0,
-      maxReservationMs: 1_000,
-    });
-    expect(report.minutes.map((row) => row.operations[0]?.reservationMs)).toEqual([500, 500]);
-    expect(report.topReservations).toEqual([
-      {
-        estimatedEnd: "2026-10-13T14:01:00.500Z",
-        operation: "session-entry.patch",
-        reservationMs: 1_000,
-        queueWaitMs: 0,
-      },
-    ]);
-    const waitOnly = await attributeWriterOccupancy([warning()], {
-      from: "2026-10-13T14:00:58.250Z",
-      until: "2026-10-13T14:00:58.750Z",
-    });
-    expect(waitOnly.operations[0]).toMatchObject({
-      reservationMs: 0,
-      queueWaitMs: 500,
-      maxReservationMs: 0,
-    });
-    expect(waitOnly.topReservations[0]).toEqual({
-      estimatedEnd: "2026-10-13T14:00:58.750Z",
-      operation: "session-entry.patch",
-      reservationMs: 0,
-      queueWaitMs: 500,
-    });
+    for (const [from, until, end, held, waited, minutes] of [
+      ["07:00:59.500-07:00", "14:01:00.500+00:00", "14:01:00.500", 1_000, 0, [500, 500]],
+      ["14:00:58.250Z", "14:00:58.750Z", "14:00:58.750", 0, 500, [0]],
+    ] as const) {
+      const report = await attributeWriterOccupancy([warning()], {
+        from: at(from),
+        until: at(until),
+      });
+      expect(report.operations[0]).toMatchObject({
+        reservationMs: held,
+        queueWaitMs: waited,
+        maxReservationMs: held,
+      });
+      expect(report.minutes.map((row) => row.operations[0]?.reservationMs)).toEqual(minutes);
+      expect(report.topReservations).toEqual([reservation(at(`${end}Z`), held, waited)]);
+    }
     await expect(attributeWriterOccupancy([], { from: "2026-10-13T14:00:00" })).rejects.toThrow(
       "explicit UTC offsets",
     );
@@ -126,45 +100,58 @@ describe("writer occupancy log report", () => {
   });
 
   it("keeps native transaction phases separate and allowlists nested numeric fields", async () => {
-    const nativeWarning = (operation: string, phases: Record<string, unknown>, elapsedMs = 3_415) =>
+    const append = "session.actor.appendTranscriptEvent";
+    const phases = (
+      hostAdmissionWaitMs: number,
+      databaseAdmissionWaitMs: number,
+      prepareMs: number,
+      sqlMs: number,
+    ) => ({
+      beginMs: 0,
+      commitMs: 0,
+      hostAdmissionWaitMs,
+      databaseAdmissionWaitMs,
+      prepareMs,
+      sqlMs,
+    });
+    const nativeWarning = (
+      values: Record<string, unknown>,
+      elapsedMs = 3_415,
+      operation = append,
+    ) =>
       JSON.stringify({
-        "0": '{"subsystem":"sqlite/transaction"}',
         "2": "slow SQLite transaction hold",
-        "1": { operation, elapsedMs, phases, path: "private-path", error: "private-error" },
+        "1": { operation, elapsedMs, phases: values, path: "private-path", error: "private-error" },
         _meta: { logLevelName: "WARN" },
         time: "2026-10-13T14:55:38.478Z",
       });
     const native = [
-      nativeWarning("session.actor.appendTranscriptEvent", {
-        beginMs: 0,
-        commitMs: 0,
-        hostAdmissionWaitMs: 2_715,
-        prepareMs: 3,
-        sqlMs: 700,
-        privateData: "private-value",
-      }),
-      nativeWarning(
-        "session.actor.appendTranscriptEvent",
-        { beginMs: 0, commitMs: 0, hostAdmissionWaitMs: 4, prepareMs: 1, sqlMs: 1_036 },
-        1_040,
-      ),
-      nativeWarning("private-operation", { sqlMs: 5 }, 5),
-      nativeWarning("session.actor.patch", { sqlMs: "private-value" }),
+      nativeWarning({ ...phases(2_015, 700, 3, 700), privateData: "private-value" }),
+      nativeWarning(phases(4, 6, 1, 1_030), 1_040),
+      nativeWarning({ sqlMs: 5 }, 5, "private-operation"),
+      nativeWarning({ databaseAdmissionWaitMs: 0 }, 0, "session.actor.patch"),
+      nativeWarning({ sqlMs: "private-value" }, undefined, "session.actor.patch"),
+      nativeWarning({ databaseAdmissionWaitMs: "private-value" }),
     ];
     const report = await attributeWriterOccupancy(native);
-    expect(report.observedReservations).toBe(0);
-    expect(report.operations).toEqual([]);
+    expect(report).toMatchObject({ observedReservations: 0, operations: [], ignoredLines: 2 });
     expect(report.nativeTransactions).toEqual([
       {
-        operation: "session.actor.appendTranscriptEvent",
+        operation: append,
         count: 2,
         elapsedMs: 4_455,
         maxElapsedMs: 3_415,
-        phases: { beginMs: 0, commitMs: 0, hostAdmissionWaitMs: 2_719, prepareMs: 4, sqlMs: 1_736 },
+        phases: phases(2_019, 706, 4, 1_730),
       },
       { operation: "other", count: 1, elapsedMs: 5, maxElapsedMs: 5, phases: { sqlMs: 5 } },
+      {
+        operation: "session.actor.patch",
+        count: 1,
+        elapsedMs: 0,
+        maxElapsedMs: 0,
+        phases: { databaseAdmissionWaitMs: 0 },
+      },
     ]);
-    expect(report.ignoredLines).toBe(1);
     expect(JSON.stringify(report)).not.toContain("private");
     const combined = await attributeWriterOccupancy([warning(), ...native]);
     expect(combined.operations[0]?.reservationMs).toBe(2_000);
@@ -194,9 +181,11 @@ describe("writer occupancy log report", () => {
         agentId: privateValue,
       }),
     ]);
-    expect(report.observedReservations).toBe(1);
-    expect(report.ignoredLines).toBe(10);
-    expect(report.operations[0]?.operation).toBe("other");
+    expect(report).toMatchObject({
+      observedReservations: 1,
+      ignoredLines: 10,
+      operations: [{ operation: "other" }],
+    });
     expect(JSON.stringify(report)).not.toContain(privateValue);
     expect(JSON.stringify(report)).not.toMatch(/"(?:pid|threadId|scope|storePath|agentId|error)":/);
   });

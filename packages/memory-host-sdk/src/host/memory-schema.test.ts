@@ -45,6 +45,13 @@ describe("memory index schema", () => {
         ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
         expect(
           db
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name GLOB 'memory_index_*_revision_after_*'",
+            )
+            .all(),
+        ).toEqual([]);
+        expect(
+          db
             .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_memory_index_chunks_path'")
             .get(),
         ).toBeUndefined();

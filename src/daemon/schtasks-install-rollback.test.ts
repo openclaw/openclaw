@@ -120,6 +120,38 @@ async function fixture(enabled = false) {
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
 }
 
+it.each([false, true])(
+  "accepts publication timestamp settlement and restores after activation failure (%s)",
+  async (failActivation) => {
+    const f = await fixture();
+    const rename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === f.scriptPath || to === f.launcherPath) {
+        const stat = await fs.stat(to);
+        // Windows can settle the writer's mtime after the staged snapshot.
+        await fs.utimes(to, stat.atime, new Date(stat.mtimeMs + 10));
+      }
+    });
+    const failure = new Error("Synthetic activation failure");
+    if (failActivation) {
+      native.run.mockRejectedValueOnce(failure);
+      await expect(installScheduledTask(f.args)).rejects.toBe(failure);
+      await f.assertRestored();
+    } else {
+      await expect(installScheduledTask(f.args)).resolves.toEqual({ scriptPath: f.scriptPath });
+      expect((await readScheduledTaskCommand(f.args.env))?.programArguments).toEqual(
+        f.args.programArguments,
+      );
+    }
+    await f.assertBackups();
+    expect(f.args.stdout.read(f.args.stdout.readableLength)?.toString()).toContain(
+      `${f.scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+    );
+    expect(f.args.warn).not.toHaveBeenCalled();
+  },
+);
+
 it.each(
   ["runtime", "arguments", "environment"].flatMap((change) => [
     { change, unattended: false },
@@ -244,6 +276,25 @@ it.each(
     expect(native.run).toHaveBeenCalledTimes(phase === "publication" ? 0 : 1);
   },
 );
+
+it("restores the previous definition when registration fails after changing its action", async () => {
+  const f = await fixture();
+  const execute = native.exec.getMockImplementation()!;
+  let rejected = false;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/Change" && command.includes("/TR")) {
+      f.registration.xml = f.registration.xml.replace("original", "replacement");
+    }
+    if (command[0] === "/Create" && !rejected) {
+      rejected = true;
+      throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    }
+    return execute(command);
+  });
+  await expect(installScheduledTask(f.args)).rejects.toThrow("spawn EINVAL");
+  await f.assertRestored();
+  expect(f.args.warn).not.toHaveBeenCalled();
+});
 
 it.each(["process", "definition"])(
   "preserves a replacement %s observed during stop",

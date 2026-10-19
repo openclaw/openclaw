@@ -14,7 +14,7 @@ import {
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -148,7 +148,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     .mockImplementation(async function (this: ManagedWorktreeService, record, withRollback) {
       failedWorktreeId = record.id;
       markRollbackStarted();
-      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
+      expect(isSessionMutationActive(storePath, [key])).toBe(true);
       await rollbackGate;
       await originalRollback(this, record, withRollback);
     });
@@ -387,7 +387,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   const createSpy = vi
     .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
     .mockImplementation(async function (this: ManagedWorktreeService, params) {
-      expect(isSessionLifecycleMutationActive(storePath, [params.ownerId])).toBe(true);
+      expect(isSessionMutationActive(storePath, [params.ownerId])).toBe(true);
       return await originalCreate(this, params);
     });
   let sessionKey: string | undefined;

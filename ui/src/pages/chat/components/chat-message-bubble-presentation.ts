@@ -146,7 +146,7 @@ export function prepareGroupedMessage(
     connectionEpoch: opts.connectionEpoch,
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
-    onRequestUpdate: opts.onRequestUpdate,
+    mediaOwner: opts.mediaOwner,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,

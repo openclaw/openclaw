@@ -4,8 +4,8 @@ import { canonicalPathFromExistingAncestor } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
 export type RuntimeRelocation = {

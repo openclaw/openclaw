@@ -1,3 +1,5 @@
+// Temporary #174343 upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import os from "node:os";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -15,6 +17,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-s
 import { updateCurrentConversationBindingRecordInDatabase } from "./outbound/current-conversation-bindings.kernel.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
+import { listRetiredRestartSentinelFiles } from "./state-migrations.restart-sentinel.js";
 import {
   archiveRetiredStateFiles,
   importRetiredStateSource,
@@ -229,12 +232,11 @@ export async function migrateRetiredRuntimeState(
   const archived = await archiveRetiredStateFiles({
     label: "runtime replay and notification state",
     paths: [
-      "acp/event-ledger.json",
-      "acp/event-ledger.json.doctor-import",
-      "update-check.json",
-      "restart-sentinel.json",
-      "restart-sentinel.json.doctor-importing",
-    ].map((file) => path.join(params.stateDir, file)),
+      ...["acp/event-ledger.json", "acp/event-ledger.json.doctor-import", "update-check.json"].map(
+        (file) => path.join(params.stateDir, file),
+      ),
+      ...listRetiredRestartSentinelFiles(params.stateDir),
+    ],
     assertCurrent: params.assertCurrent,
     recoveryInstructions:
       "Replay history and restart notifications are no longer active. Consult this archive to recover old event or notification details; new sessions and update checks rebuild runtime state.",

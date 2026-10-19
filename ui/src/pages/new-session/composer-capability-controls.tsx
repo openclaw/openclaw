@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, Show, useContext } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -8,8 +8,8 @@ import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu
 import type {
   ChatComposerPlusMenuProps,
   ChatComposerCapabilityMenuProps,
-  ChatComposerPlusMenuView,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
@@ -21,10 +21,6 @@ type NewSessionComposerCapabilityOptions = {
   draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
-  textareaController: {
-    capabilityMenuOpen: boolean;
-    capabilityMenuView: ChatComposerPlusMenuView;
-  };
   onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
@@ -56,17 +52,19 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
 export function NewSessionPlusMenu(props: {
   options: NewSessionComposerCapabilityOptions;
   attachments: ChatComposerPlusMenuProps["attachments"];
+  inputHandle: ChatComposerPlusMenuProps["inputHandle"];
 }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const menu = createMemo((): ChatComposerPlusMenuProps => {
     const options = props.options;
     const disabled = options.submitting || options.messageLocked === true;
-    const controller = options.textareaController;
     return {
       attachments: props.attachments,
+      inputHandle: props.inputHandle,
       capabilityMenu: options.capabilityMenu,
       disabled,
-      open: controller.capabilityMenuOpen,
-      view: controller.capabilityMenuView,
+      open: textarea.capabilityMenuOpen,
+      view: textarea.capabilityMenuView,
       toolOverrides: options.toolOverrides,
       rootToggles: options.draftAvailable
         ? [
@@ -82,14 +80,14 @@ export function NewSessionPlusMenu(props: {
           ]
         : undefined,
       onOpenChange: (open) => {
-        controller.capabilityMenuOpen = open;
+        textarea.capabilityMenuOpen = open;
         if (!open) {
-          controller.capabilityMenuView = "root";
+          textarea.capabilityMenuView = "root";
         }
         options.onChange();
       },
       onViewChange: (view) => {
-        controller.capabilityMenuView = view;
+        textarea.capabilityMenuView = view;
         options.onChange();
       },
     };
@@ -98,6 +96,7 @@ export function NewSessionPlusMenu(props: {
 }
 
 export function NewSessionSelectionStatus(props: { options: NewSessionComposerCapabilityOptions }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const count = createMemo(() => countSessionToolOverrides(props.options.toolOverrides));
   return (
     <Show when={count() > 0}>
@@ -106,8 +105,8 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         class="new-session-page__selection-status"
         disabled={props.options.submitting || props.options.messageLocked === true}
         onClick={() => {
-          props.options.textareaController.capabilityMenuView = "root";
-          props.options.textareaController.capabilityMenuOpen = true;
+          textarea.capabilityMenuView = "root";
+          textarea.capabilityMenuOpen = true;
           props.options.onChange();
         }}
       >

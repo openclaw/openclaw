@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), fetch: vi.fn(), release: vi.fn() }));
@@ -11,7 +12,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetch,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => ({}),
 }));
-import { registerClawRouterPoolMethod } from "./pool-gateway.js";
+import plugin from "./index.js";
 
 type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 let handler: Handler;
@@ -29,11 +30,17 @@ beforeEach(() => {
     response: Response.json({ version: "clawrouter.pool.v1" }),
     release: mocks.release,
   });
-  registerClawRouterPoolMethod({
-    registerGatewayMethod: (name, fn, options) => {
-      expect(name).toBe("clawrouter.pool.get");
-      expect(options).toEqual({ scope: "operator.read" });
-      handler = fn;
+  capturePluginRegistration({
+    id: plugin.id,
+    register(api) {
+      plugin.register({
+        ...api,
+        registerGatewayMethod: (name, fn, options) => {
+          expect(name).toBe("clawrouter.pool.get");
+          expect(options).toEqual({ scope: "operator.read" });
+          handler = fn;
+        },
+      });
     },
   });
   request = {

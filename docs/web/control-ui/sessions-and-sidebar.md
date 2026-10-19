@@ -46,6 +46,11 @@ buttons is selected; click any view to open its list. Selecting a different view
 while the list is open switches directly to that view. Clicking Users again keeps
 its list open; use the collapse button or keyboard shortcut to hide it.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
+When gateway switching is available, the account menu shows one current-gateway row.
+Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
+when the current gateway supports it. In the Mac app, Command-click or Control-click
+a gateway to open a new window. **Get the apps** remains available in the browser,
+but is omitted in the Mac app.
 Open your account menu and choose **Updates** to go directly to **Settings → Updates**.
 This opens the update settings page without starting an update. For the `stable` and
 `beta` update channels, an **Available** badge appears beside **Updates** when a new
@@ -124,9 +129,14 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears in the sidebar immediately, clearing the previous
-chat’s highlight without changing the saved session until creation is accepted.
+A temporary selected row appears in the sidebar immediately, at the top of the
+session list or under its agent in the agent roster, clearing the previous chat’s
+highlight without changing the saved session until creation is accepted.
 The temporary row has no session actions; a failed creation restores the draft.
+Sessions created by another client or an agent appear through the sidebar's batched
+refresh, normally within five seconds. A busy Gateway can extend the refresh interval
+to fifteen seconds after the previous refresh finishes. Creating a conversation here
+still updates its list immediately when accepted.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The
 submitted browser draft is retired before the confirmed conversation URL is
@@ -182,7 +192,7 @@ can differ from the personal default selected when the actual chat starts.
 
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
-While a name is pending, the sidebar and chat header show a gently waving blob
+While a name is pending, the sidebar and chat header show a subtle loading bar
 instead of “New session.” A ready name replaces it immediately; if naming ends
 without a name, the ordinary fallback label returns. Reduced-motion preferences
 keep the placeholder still.
@@ -331,6 +341,21 @@ mode, Display omits grouping and empty-group controls because the sidebar always
 groups by agent. Reset leaves those hidden preferences unchanged. It also preserves
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
+In **Show all agents**, compact agent rows show a muted preview of the agent's
+most recent available assistant reply across its visible, non-archived sessions.
+A newer user message does not replace that preview. Agents without an available
+assistant reply keep a name-only row. The top-level roster does not show the
+session list's empty-filter hint.
+
+Choose **Pin** in an agent's options menu to move it into the icon section above
+the roster. Hover or focus its avatar to read the full name and a short preview
+of its latest assistant reply. Select the avatar to open its main chat, or use
+**Sessions** in its options menu to browse its conversations. The menu also
+offers **Settings** and a confirmed **Delete** action when permitted. Create a
+new conversation from the Sessions page. **Unpin** returns
+the agent to the roster. Agent pins are saved in this browser profile and shared
+with the agent switcher's pin preference.
+
 Switching to the all-agents roster or another navigation view, or closing
 navigation releases background sidebar activity streams. Open conversation panes
 keep their live messages. The active agent's session list retains critical observer
@@ -376,7 +401,7 @@ Follow-up turns in an existing subagent session keep the parent’s activity rin
 
 When a child run fails or publishes an attention request, the parent chat shows the child’s name and full diagnostic above the composer, even if the parent has no new reply. **Open session** opens that child’s details. Opening the parent does not acknowledge a child’s active attention request; its notice follows the child’s read state, explicit clearing, and expiry.
 
-Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The preview shows all PRs supplied by the Gateway, which returns up to three for the branch. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
+Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The sidebar also counts pull requests published by the session and its accessible descendants, including delegated work on other branches. The hovercard combines those recorded publications with up to three PRs for the current branch, deduplicates links, and identifies each task branch. Recorded links remain available after a checkout changes or the Gateway restarts; unavailable GitHub metadata is labeled **Status unavailable**, never guessed from a publication receipt. The preview shows up to 20 recorded publications and indicates when more exist. Merely mentioning a PR in chat does not associate it with the task. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
 
 Hover a session with an enabled automation to inspect its attached jobs without leaving the conversation. The clock row shows the automation name for one job or a count for multiple jobs. Hover or focus that row to open a read-only flyout; clicking keeps it open. The flyout lists attached jobs, including paused jobs, and shows the selected job’s schedule, next run, current state, last outcome, and instructions. Expand **Full instructions** to read long prompts, commands, or scripts. Loading, empty, and unavailable states are explicit; a failed read offers **Retry**. **Open automation** opens the selected job in the existing editor, with the usual permissions for settings, history, and changes. Escape dismisses the flyout before the session hovercard. Cmd/Ctrl-click retains normal new-tab navigation. **Show all automations** on the Automations page clears the session filter.
 
@@ -406,7 +431,19 @@ In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. C
 
 Choosing **Show all** defaults the shared page scope to **All agents**. Choosing a named agent tile leaves team mode and scopes pages to that agent. This sets a default once when the mode changes: you can select an individual agent afterward, and page navigation preserves your choice. Automations, Dashboards, Sessions, and Usage support all-agent views. Mixed-agent lists identify the agent on each row with an avatar and name where needed. Each identity chip includes the agent ID in its tooltip and screen-reader label, such as `Molty (agent:main)`, so agents with the same display name remain distinguishable. If no name is available, the label uses `agent:<id>`. In Settings, the agent selector below the sidebar title keeps the same target across Agents, Models, Memory, and Skills; global settings remain global. Skill Workshop uses the agent selected through chat. Open an agent's main chat from its group header to select it for Skill Workshop. Chat actions still target the conversation's agent.
 
-Personal session shortcuts stay in the icon rail in both sidebar modes, mixed with page, dashboard, and person shortcuts in your saved order. They remain available when an agent’s group is collapsed. Rail shortcuts are flat icons: pinning a parent does not move or duplicate its child tree into the rail or Pages. Each agent group still contains its ordinary sessions, including those with personal rail shortcuts, with the usual session menus, unread badges, nested child sessions, section limits, and **Show more** controls. Selecting any session switches the active agent for chat while the rail workspace button keeps its neutral identity. The **Sessions** filters apply across all agent groups. Select the separate **Users** view in the rail to see who is online. Category, person, and project grouping controls remain in chip mode; team mode always groups by agent and keeps empty agent groups visible. The open conversation keeps its selected row, including an archived conversation opened directly under the default **Active** filter. The filter button in the sidebar header keeps the same session filters. Each agent header has a **New conversation** action and an options menu with **Open main chat**, **All sessions**, and **Collapse others**. **All sessions** opens the Sessions page and sets the shared agent filter to that agent. Agent-header metadata uses a wrapping second row, keeping the name and actions readable and the indicators visible on hover, keyboard focus, and touch. The expand control appears when the agent has other sessions or descendants to display. Session rows reserve space only for present indicators, so quiet titles can use the full row width.
+Personal session shortcuts stay in the icon rail in both sidebar modes, mixed
+with page, dashboard, and person shortcuts in your saved order. Agent pins are
+separate, larger avatar tiles above the agent roster; pinning an agent does not
+move or duplicate its conversations. In **Show all agents**, each roster row
+represents one agent rather than an expandable session tree. Its latest
+available assistant reply appears beneath the name, and an activity ring
+surrounds the avatar while the agent or one of its sessions is working. Select
+an agent to open its main chat. The agent menu offers **Pin/Unpin**, **Sessions**,
+**Settings**, and a confirmed **Delete** action when permitted. **Sessions**
+opens the Sessions page filtered to that agent, where you can browse and create
+conversations. Select the separate **Users** view in the rail to see who is
+online. Category, person, and project grouping controls remain in chip mode;
+team mode keeps empty agent rows visible.
 
 Groups share a window of at most 300 sessions across agents with [Agents home](/web/control-ui#agents-home). This bounds the session rows loaded for the groups, not the number of saved rail shortcuts; a personal pin does not reserve a place in that window. The open conversation can remain visible outside this window. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions across groups.
 
@@ -508,6 +545,12 @@ or replace them explicitly. New Android device labels are stored separately, so
 a generated conversation title can replace the device label without changing
 your custom name.
 
+In team mode, the chat header shows the conversation's agent avatar and name.
+Select the agent to open its session and workspace context: rename the session,
+open its parent conversation, or use the workspace actions. **Details** also
+keeps workspace information available. The regular session view and external
+CLI catalog headers keep their workspace/session breadcrumbs.
+
 ### Session menu
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions reject pin requests, including when they appear as top-level threads. Subagent runs also reject pin requests and remain outside sidebar navigation.
@@ -574,9 +617,11 @@ Choose **Advanced → Icon & color** from a session menu and select a color swat
 
 ## Direct session shortcuts
 
-- **⌘⇧O** on Mac or **Ctrl+Shift+O** on Windows/Linux opens **New Session**
+- In desktop apps, **⌘N** on Mac or **Ctrl+N** on Windows/Linux opens **New Session**.
+  Web browsers keep **⌘⇧O** on Mac or **Ctrl+Shift+O** on Windows/Linux.
+  The shortcut opens **New Session**
   and focuses its composer. It opens a draft, without creating an empty session
-  or sending a message. **⌘N / Ctrl+N** remains **New Window**.
+  or sending a message. In web browsers, **⌘N / Ctrl+N** remains **New Window**.
 - **⌘⇧A** on Mac or **Ctrl+Shift+A** on Windows/Linux requests **Archive**
   for the current chat pane only, not other sessions selected in the sidebar.
   It uses the same permissions, protected-session checks, archive lifecycle, and

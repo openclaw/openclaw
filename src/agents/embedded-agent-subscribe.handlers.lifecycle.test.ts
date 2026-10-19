@@ -15,7 +15,8 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
   stopHookActive: false,
 };
 
-vi.mock("../infra/agent-events.js", () => ({
+vi.mock(import("../infra/agent-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   emitAgentEvent: emitAgentEventMock,
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
@@ -39,55 +40,57 @@ function expectEvent(onAgentEvent: ReturnType<typeof vi.fn>, data: Record<string
 }
 
 describe("embedded lifecycle", () => {
-  it("keeps identity and the same observed start time on the bus and callback", () => {
+  it.each(["start", "end"] as const)("keeps identity on %s events", async (phase) => {
     emitAgentEventMock.mockClear();
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
-    Object.assign(ctx.params, identity);
-    handleAgentStart(ctx);
-    expect(emitAgentEventMock).toHaveBeenCalledWith({
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      ...identity,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: expect.any(Number) },
-    });
-    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
-      stream: "lifecycle",
-      data: emitAgentEventMock.mock.calls[0]?.[0].data,
-    });
-  });
-  it("keeps the execution lifecycle generation on terminal events", async () => {
-    emitAgentEventMock.mockClear();
-    const ctx = createContext(undefined);
+    const terminal = phase === "end";
     Object.assign(ctx.params, {
-      lifecycleGeneration: "pre-restart-generation",
       ...identity,
+      ...(terminal ? { lifecycleGeneration: "pre-restart-generation" } : {}),
     });
-    await handleAgentEnd(ctx);
+    if (terminal) {
+      await handleAgentEnd(ctx);
+    } else {
+      handleAgentStart(ctx);
+    }
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
       sessionKey: "agent:main:main",
       ...identity,
-      lifecycleGeneration: "pre-restart-generation",
+      ...(terminal ? { lifecycleGeneration: "pre-restart-generation" } : {}),
       stream: "lifecycle",
-      data: expect.objectContaining({ phase: "end" }),
+      data: terminal
+        ? expect.objectContaining({ phase })
+        : { phase, startedAt: expect.any(Number) },
     });
+    if (!terminal) {
+      expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
+        stream: "lifecycle",
+        data: emitAgentEventMock.mock.calls[0]?.[0].data,
+      });
+    }
   });
 
   it("omits raw HTML auth bodies from console diagnostics", async () => {
-    const { ctx } = errorContext("403 <!DOCTYPE html><html><body>Access denied</body></html>", {
-      provider: "openai",
-      model: "test-model",
-    });
+    const { ctx, onAgentEvent } = errorContext(
+      "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+      {
+        provider: "openai",
+        model: "test-model",
+      },
+    );
     await handleAgentEnd(ctx);
-    expect(warnMeta(ctx)).toMatchObject({
-      error:
-        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
-      providerRuntimeFailureKind: "auth_html",
-    });
+    expect(warnMeta(ctx)).toMatchObject({ providerRuntimeFailureKind: "auth_html" });
     expect(warnMeta(ctx).consoleMessage).not.toContain("rawError=");
     expect(warnMeta(ctx).consoleMessage).not.toContain("<html>");
+    expectEvent(onAgentEvent, {
+      phase: "error",
+      error:
+        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+      errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "auth_html" }),
+      livenessState: "blocked",
+    });
   });
 
   it.each([
@@ -96,26 +99,27 @@ describe("embedded lifecycle", () => {
       secret: "sk-abcdefghijklmnopqrstuvwxyz123456",
       error: "LLM request failed.",
       observation: { providerRuntimeFailureKind: "unclassified" },
-      preview: "x-api-key: ***",
     },
     {
-      raw: '{"type":"error","error":{"type":"server_error","message":"Upstream failed x-api-key: SECRET_CANARY_69737"}}',
+      raw: '{"type":"error","error":{"type":"server_error","message":"Upstream failed synthetic-private-tool-output x-api-key: SECRET_CANARY_69737"}}',
       secret: "SECRET_CANARY_69737",
       error: "⚠️ The AI service is having trouble. Please try again in a moment.",
       observation: {
         providerErrorType: "server_error",
-        providerErrorMessagePreview: "Upstream failed x-api-key: ***",
+        providerErrorMessagePreview: "Upstream failed synthetic-private-tool-output x-api-key: ***",
       },
     },
   ])(
     "redacts provider diagnostics before publishing: $secret",
-    async ({ raw, secret, error, observation, preview }) => {
+    async ({ raw, secret, error, observation }) => {
       const { ctx, onAgentEvent } = errorContext(raw);
       await handleAgentEnd(ctx);
-      expect(warnMeta(ctx).error).toBe(error);
-      if (preview) {
-        expect(warnMeta(ctx).rawErrorPreview).toBe(preview);
-      }
+      expect(warnMeta(ctx)).not.toHaveProperty("error");
+      expect(warnMeta(ctx)).not.toHaveProperty("rawErrorPreview");
+      expect(warnMeta(ctx)).not.toHaveProperty("providerErrorMessagePreview");
+      expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain(
+        "synthetic-private-tool-output",
+      );
       expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(secret);
       expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("rawError");
       expectEvent(onAgentEvent, {
@@ -132,9 +136,10 @@ describe("embedded lifecycle", () => {
       model: "claude\tsonnet\n4",
     });
     await handleAgentEnd(ctx);
-    expect(warnMeta(ctx).consoleMessage).toBe(
-      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`. rawError=connection refused",
+    expect(warnMeta(ctx).consoleMessage).toContain(
+      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test failoverReason=",
     );
+    expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain("connection refused");
     for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
       expect(warnMeta(ctx).consoleMessage).not.toContain(control);
     }
@@ -174,14 +179,7 @@ describe("embedded lifecycle", () => {
       lastToolError.toolName === "edit" ? "Received arguments" : "secret-token",
     );
   });
-  it.each<{
-    name: string;
-    stopReason?: string;
-    content?: unknown[];
-    state: Partial<EmbeddedAgentSubscribeContext["state"]>;
-    params?: Partial<EmbeddedAgentSubscribeContext["params"]>;
-    expected: Record<string, unknown>;
-  }>([
+  it.each([
     {
       name: "surfaces replay-invalid paused lifecycle end state when present",
       state: {
@@ -223,7 +221,6 @@ describe("embedded lifecycle", () => {
       name: "preserves token-limited message-tool-only delivery before runner finalization",
       stopReason: "length",
       state: { messageToolOnlySourceReplyDelivered: true },
-      params: { sourceReplyDeliveryMode: "message_tool_only" },
       expected: { livenessState: "working" },
     },
     {
@@ -246,16 +243,13 @@ describe("embedded lifecycle", () => {
       },
       expected: { livenessState: "working", replayInvalid: true },
     },
-  ])("$name", async ({ stopReason, content = [], state, params, expected }) => {
+  ])("$name", async ({ stopReason, content = [], state, expected }) => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(stopReason ? { role: "assistant", stopReason, content } : undefined, {
       onAgentEvent,
     });
     Object.assign(ctx.state, { livenessState: "working" }, state);
-    Object.assign(ctx.params, params);
-
     await handleAgentEnd(ctx);
-
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: { phase: "end", ...(stopReason ? { stopReason } : {}), ...expected },
@@ -277,8 +271,7 @@ describe("embedded lifecycle", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
-    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(ctx.state).toMatchObject({ pendingToolMediaUrls: [], pendingToolAudioAsVoice: false });
     expect(onAgentEvent.mock.invocationCallOrder[0]).toBeGreaterThan(
       vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] ?? Infinity,
     );
@@ -378,15 +371,12 @@ describe("embedded lifecycle", () => {
       const onAgentEvent = vi.fn(() => {
         order.push("event");
       });
+      const fail = () => {
+        order.push("before");
+        throw new Error("hook failed");
+      };
       const onBeforeLifecycleTerminal = vi.fn(() => {
-        if (kind === "throw") {
-          order.push("before");
-          throw new Error("hook failed");
-        }
-        return Promise.resolve().then(() => {
-          order.push("before");
-          throw new Error("hook failed");
-        });
+        return kind === "throw" ? fail() : Promise.resolve().then(fail);
       });
       await handleAgentEnd(createContext(undefined, { onAgentEvent, onBeforeLifecycleTerminal }));
       expect(order).toEqual(["before", "event"]);

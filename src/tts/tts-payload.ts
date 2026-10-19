@@ -187,7 +187,8 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const maxLength = getTtsMaxLength(prefsPath);
+  // Synthesis rejects text over config.maxTextLength, so never prepare more than that.
+  const maxLength = Math.min(getTtsMaxLength(prefsPath), config.maxTextLength);
   let textForAudio = ttsText;
   let wasSummarized = false;
 

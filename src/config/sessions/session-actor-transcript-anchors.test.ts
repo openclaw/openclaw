@@ -70,25 +70,25 @@ function fixture() {
       { rawSeq: 4, event: { type: "message", id: "reply", message } },
     ],
   };
-  return { hot, user, reply, tail, message };
+  const read = (
+    selection: Parameters<typeof readSessionActorTranscriptAnchors>[2],
+    state = hot,
+    suffix: Parameters<typeof readSessionActorTranscriptAnchors>[3] | null = tail,
+  ) => readSessionActorTranscriptAnchors(state, scope, selection, suffix ?? undefined);
+  return { hot, user, reply, tail, message, read };
 }
 
 describe("actor transcript anchor projection", () => {
   it("returns the committed reply and user anchors from a complete suffix", () => {
-    const { hot, user, reply, tail, message } = fixture();
+    const { user, reply, message, read } = fixture();
     expect(
-      readSessionActorTranscriptAnchors(
-        hot,
-        scope,
-        {
-          entryIds: ["user"],
-          afterSeq: 2,
-          includeMessagesForRunId: "run",
-          includeMessagePresence: true,
-          includeWatermark: true,
-        },
-        tail,
-      ),
+      read({
+        entryIds: ["user"],
+        afterSeq: 2,
+        includeMessagesForRunId: "run",
+        includeMessagePresence: true,
+        includeWatermark: true,
+      }),
     ).toEqual({
       anchors: [user, reply],
       messagePresence: true,
@@ -104,24 +104,19 @@ describe("actor transcript anchor projection", () => {
   });
 
   it("uses admitted user bounds while validating the current writer and context", () => {
-    const { hot, user, tail } = fixture();
+    const { hot, user, read } = fixture();
     expect(
-      readSessionActorTranscriptAnchors(
-        hot,
-        scope,
-        {
-          entryIds: ["user", "reply"],
-          includeMessagePresence: true,
-          contextValidation: { version: hot.transcript.version },
-          replayValidation: {
-            allowInitial: false,
-            expectedLifecycleRevision: "lifecycle",
-            expectedWriterRunId: "run",
-            admission: { ...user, logicalTurnId: "turn", role: "user" },
-          },
+      read({
+        entryIds: ["user", "reply"],
+        includeMessagePresence: true,
+        contextValidation: { version: hot.transcript.version },
+        replayValidation: {
+          allowInitial: false,
+          expectedLifecycleRevision: "lifecycle",
+          expectedWriterRunId: "run",
+          admission: { ...user, logicalTurnId: "turn", role: "user" },
         },
-        tail,
-      ),
+      }),
     ).toEqual({
       anchors: [],
       contextValidated: true,
@@ -131,45 +126,56 @@ describe("actor transcript anchor projection", () => {
   });
 
   it("refuses replay when the writer or selected session has changed", () => {
-    const { hot } = fixture();
+    const { hot, read } = fixture();
     for (const current of [
       { ...hot.entry!, activeWriterRunId: "replacement-run" },
       { ...hot.entry!, sessionId: "replacement-session" },
     ]) {
       expect(() =>
-        readSessionActorTranscriptAnchors({ ...hot, entry: current }, scope, {
-          entryIds: [],
-          replayValidation: { allowInitial: false, expectedWriterRunId: "run" },
-        }),
+        read(
+          {
+            entryIds: [],
+            replayValidation: { allowInitial: false, expectedWriterRunId: "run" },
+          },
+          { ...hot, entry: current },
+          null,
+        ),
       ).toThrow(SessionTranscriptWriterClaimReboundError);
     }
   });
 
   it("rejects a rewritten completed-turn anchor and changed exact replay context", () => {
-    const { hot, user } = fixture();
+    const { hot, user, read } = fixture();
     expect(() =>
-      readSessionActorTranscriptAnchors(hot, scope, {
-        entryIds: [],
-        contextValidation: { through: { ...user, generation: "old-generation" } },
-      }),
+      read(
+        {
+          entryIds: [],
+          contextValidation: { through: { ...user, generation: "old-generation" } },
+        },
+        hot,
+        null,
+      ),
     ).toThrow(SessionTranscriptReadFenceError);
     expect(() =>
-      readSessionActorTranscriptAnchors(hot, scope, {
-        entryIds: [],
-        replayValidation: { allowInitial: false },
-        contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
-      }),
+      read(
+        {
+          entryIds: [],
+          replayValidation: { allowInitial: false },
+          contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
+        },
+        hot,
+        null,
+      ),
     ).toThrow(SessionTranscriptReadFenceError);
   });
 
   it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the reader", () => {
-    const { hot, tail } = fixture();
+    const { hot, tail, read } = fixture();
     const selection = { entryIds: [], afterSeq: 2, includeMessagesForRunId: "run" };
+    expect(read(selection, hot, { ...tail, coveredAfterSeq: 3 })).toBeUndefined();
     expect(
-      readSessionActorTranscriptAnchors(hot, scope, selection, { ...tail, coveredAfterSeq: 3 }),
-    ).toBeUndefined();
-    expect(
-      readSessionActorTranscriptAnchors(
+      read(
+        selection,
         {
           ...hot,
           transcript: {
@@ -178,8 +184,6 @@ describe("actor transcript anchor projection", () => {
             version: { generation: "generation", rawSeq: 5, updatedAt: 2 },
           },
         },
-        scope,
-        selection,
         {
           ...tail,
           events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }],
@@ -187,12 +191,7 @@ describe("actor transcript anchor projection", () => {
       ),
     ).toBeUndefined();
     expect(
-      readSessionActorTranscriptAnchors(
-        { ...hot, transcript: { ...hot.transcript, anchorsState: "unavailable" } },
-        scope,
-        selection,
-        tail,
-      ),
+      read(selection, { ...hot, transcript: { ...hot.transcript, anchorsState: "unavailable" } }),
     ).toBeUndefined();
   });
 });

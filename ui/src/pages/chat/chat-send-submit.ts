@@ -100,6 +100,9 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
+  if (host.isRouteSessionPending?.()) {
+    return undefined;
+  }
   if (
     chatProviderReviewRow(host)?.providerReview &&
     !isChatStopCommand(messageOverride ?? host.chatMessage)
@@ -116,7 +119,6 @@ export async function handleSendChat(
     return undefined;
   }
   if (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason) {
-    host.requestUpdate?.();
     return undefined;
   }
   const previousDraft = host.chatMessage;
@@ -314,7 +316,6 @@ export async function handleSendChat(
       (!parsed?.command.executeLocal || forwardModel) &&
       chatProviderReviewRow(host)?.sendDisabledReason
     ) {
-      host.requestUpdate?.();
       return undefined;
     }
     host.chatRunError = null;
@@ -348,7 +349,6 @@ export async function handleSendChat(
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (chatSendHoldReason(host, submittedSessionKey)) {
-          host.requestUpdate?.();
           return undefined;
         }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
@@ -380,6 +380,7 @@ export async function handleSendChat(
               host.chatMentions = previousMentions ?? [];
               host.chatReplyTarget = previousReplyTarget;
               host.chatAttachments = attachmentsToSend;
+              host.composerDraftChanged?.();
             }
             setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
             return;
@@ -532,8 +533,6 @@ export async function handleSendChat(
         ? chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)
         : chatSendAdmissionHoldReason(host, submittedSessionKey, submittedAgentId);
     if (admissionHoldReason()) {
-      // The composer owns transient recovery notices, including their removal.
-      host.requestUpdate?.();
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
@@ -597,9 +596,7 @@ export async function handleSendChat(
       const hold = admissionHoldReason();
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
-        if (hold) {
-          host.requestUpdate?.();
-        } else {
+        if (!hold) {
           setChatError(host, t("chat.goals.busy"));
         }
         return;
@@ -631,9 +628,13 @@ export async function handleSendChat(
       guard.releaseAttachments();
       if (messageOverride == null && !rawParsedCommand && !intent && submissionOwnerIsCurrent()) {
         // Pending admissions retain their files until their own composer snapshot can settle.
-        host.chatAttachments = host.chatAttachments.filter(
+        const attachments = host.chatAttachments.filter(
           (attachment) => !guard.canRetireAttachment(attachment),
         );
+        if (attachments.length !== host.chatAttachments.length) {
+          host.chatAttachments = attachments;
+          host.composerDraftChanged?.();
+        }
       }
     }
     if (resumedEdit) {

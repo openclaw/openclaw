@@ -1,3 +1,4 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   readAgentRunTerminalOutcome,
@@ -41,7 +42,6 @@ import {
   handleReplySkip,
   resetReasoningStepState,
 } from "./bot-message-dispatch-reply.js";
-import { resolveHumanDelayConfig } from "./bot-message-dispatch.agent.runtime.js";
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";

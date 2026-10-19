@@ -3,6 +3,26 @@ import { minimatch } from "minimatch";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
 
+it("keeps Node without workspace dependencies for the macOS Cargo tests", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const job = workflow.jobs["test-macos"];
+  const setup = job.steps.find(
+    (step: { uses?: string }) => step.uses === "./.github/actions/setup-node-env",
+  );
+  expect(setup.with).toMatchObject({
+    "cache-mode": "off",
+    "install-bun": "false",
+    "install-deps": "false",
+  });
+  expect(job.steps.at(-1).run).toBe("cargo +stable test --locked --all-targets");
+  for (const name of ["build", "test-windows-power"]) {
+    const siblingSetup = workflow.jobs[name].steps.find(
+      (step: { uses?: string }) => step.uses === "./.github/actions/setup-node-env",
+    );
+    expect(siblingSetup.with["install-deps"]).not.toBe("false");
+  }
+});
+
 it("runs synthetic Gateway startup failures with the fixture-compiled candidate", () => {
   const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
   const steps: { run?: string }[] = workflow.jobs.build.steps;
@@ -54,13 +74,46 @@ it.each(["build_linux", "build_windows", "build_macos"])(
   },
 );
 
-it.each([
-  ["build", "Build native inline browser candidate"],
-  ["test-windows-power", "Build Windows installer without publishing"],
-])("budgets source packaging within desktop job %s", (jobName, stepName) => {
+it("uses fast NSIS compression only for Windows validation", () => {
   const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
-  const job = workflow.jobs[jobName];
-  const build = job.steps.find((step: { name: string }) => step.name === stepName);
+  const build = workflow.jobs["test-windows-power"].steps.find((step: { run?: string }) =>
+    step.run?.includes("@tauri-apps/cli"),
+  );
+  const override = JSON.parse(build.run.match(/--config '([^']+)'/)[1]);
+  expect(override).toEqual({
+    bundle: { createUpdaterArtifacts: false, windows: { nsis: { compression: "zlib" } } },
+  });
+
+  const release = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const releaseBuild = release.jobs.build_windows.steps.find((step: { run?: string }) =>
+    step.run?.includes("@tauri-apps/cli"),
+  );
+  const releaseOverride = JSON.parse(
+    releaseBuild.run.match(/--config "(.+)"/)[1].replaceAll('\\"', '"'),
+  );
+  expect(releaseOverride.bundle.windows?.nsis?.compression).toBeUndefined();
+  const config = JSON.parse(readFileSync("apps/linux/src-tauri/tauri.conf.json", "utf8"));
+  expect(config.bundle.windows?.nsis?.compression).toBeUndefined();
+});
+
+it("uses runtime-only staging before the Linux fixture supplies its package", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const build = workflow.jobs.build.steps.find(
+    (step: { name: string }) => step.name === "Build native inline browser candidate",
+  );
+  expect(build.run).toContain("node ../scripts/stage-runtime.mjs --runtime-only");
+  expect(build.env?.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS).toBeUndefined();
+  const config = JSON.parse(readFileSync("apps/linux/src-tauri/tauri.conf.json", "utf8"));
+  expect(config.build.beforeBuildCommand.script).toBe("node scripts/stage-runtime.mjs");
+  expect(config.build.beforeDevCommand.script).toBe("node scripts/stage-runtime.mjs");
+});
+
+it("budgets source packaging within the Windows installer job", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const job = workflow.jobs["test-windows-power"];
+  const build = job.steps.find(
+    (step: { name: string }) => step.name === "Build Windows installer without publishing",
+  );
   const packageMinutes = Number(build.env?.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS) / 60_000;
 
   expect(packageMinutes).toBeGreaterThanOrEqual(60);

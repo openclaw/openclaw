@@ -782,6 +782,7 @@ export function selectDiagnosticStabilitySnapshot(
   };
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();

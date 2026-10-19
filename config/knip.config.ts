@@ -8,6 +8,7 @@ import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
+import aiBuildConfig from "../tsdown.ai.config.ts";
 import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -23,6 +24,8 @@ const repositoryScriptEntries = [
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
+  "scripts/generate-control-ui-validators.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
   "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",
@@ -37,6 +40,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
   "apps/linux/scripts/test-native-control-auth.mjs!",
+  // The proof-video skill invokes these image and video CLIs by path.
+  "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
   // db:postgres:gen/check invoke this generator through the source loader.
@@ -67,12 +72,35 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // docs/reference/test/performance.md invokes the Decision transport comparison driver.
+  "scripts/bench-decision-transport.mts!",
+  // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
+  "scripts/build-decision-transport-bench.mts!",
+  // scripts/perf/README.md invokes this shared-writer benchmark by path.
+  "scripts/bench-channel-ingress-writer.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
+  "scripts/perf/catalog-polling-measure.ts",
+  // The history/diff benchmark guide invokes this measurement CLI by path.
+  "scripts/perf/history-diff-measure.ts!",
+  // scripts/perf/README.md invokes this checkout-diff measurement CLI by path.
+  "scripts/perf/checkout-diff-measure.ts!",
+  // scripts/perf/README.md invokes this isolated viewer-presence measurement CLI.
+  "scripts/perf/presence-churn-measure.ts!",
+  // scripts/perf/README.md invokes this isolated session-roster measurement CLI.
+  "scripts/perf/session-roster-churn-measure.ts!",
+  "scripts/perf/seal-version-restart.ts!",
+  // Worker-environment shutdown proof invokes this measurement CLI by path.
+  "scripts/perf/worker-environment-shutdown-measure.ts!",
+  // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
+  "scripts/perf/branch-rotation-measure.ts!",
+  "scripts/perf/branch-rotation-measure-preload.ts!",
+  // The documented placement shutdown reproduction is invoked as a standalone CLI.
+  "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
@@ -140,6 +168,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  // The Docker custody shell copies the server and mounts the scenario by path.
+  "scripts/e2e/lib/mcp-docker-custody/scenario.mjs!",
+  "scripts/e2e/lib/mcp-docker-custody/server.cjs!",
   // Muse Docker shells invoke auth directly and select deterministic/live by mode.
   "scripts/e2e/lib/muse-runtime/auth.mjs!",
   "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
@@ -206,6 +237,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
   "scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs!",
+  // run.sh wraps the legacy operator-state updater with this timeout observer.
+  "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -312,6 +345,8 @@ const repositoryScriptEntries = [
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
   "scripts/verify-mac-runtime.mjs!",
+  // App packaging verifies reusable source artifacts before preserving their build identity.
+  "scripts/verify-mac-source-build.mts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
@@ -444,10 +479,7 @@ const rootEntries = [
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
   // OpenGrep rule tests read these as static source inputs; they are never executed.
-  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
-  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
-  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
-  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
+  "security/opengrep/rules/*/*.{js,ts}!",
   "{openclaw,docker-entrypoint}.mjs!",
   // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
   // Remove this audit root after those in-tree callers land.
@@ -705,6 +737,30 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
   return source;
 }
 
+function compileBundledPackageConsumers(source: string, filePath: string): string {
+  const manifestPath = path.resolve(filePath);
+  if (
+    manifestPath === path.resolve("package.json") ||
+    manifestPath === path.resolve("packages/ai/package.json")
+  ) {
+    // The bundled SDK imports these runtime externals. Project the real build
+    // policy into each shipping manifest; the root config alone has one owner.
+    const manifest: {
+      dependencies?: Record<string, string>;
+    } = JSON.parse(source);
+    const neverBundle = aiBuildConfig.deps?.neverBundle;
+    if (typeof neverBundle !== "function") {
+      throw new Error("Expected the AI build's externalization callback.");
+    }
+    return Object.keys(manifest.dependencies ?? {})
+      .filter((dependency) => neverBundle(dependency, undefined, false))
+      .map((dependency) => `import ${JSON.stringify(dependency)};`)
+      .join("\n");
+  }
+  // JSON has no import graph in Knip unless a compiler supplies one.
+  return "";
+}
+
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
@@ -775,6 +831,7 @@ const config = {
     yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
     mjs: compileDynamicMjsConsumers,
+    json: compileBundledPackageConsumers,
   },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
@@ -784,6 +841,9 @@ const config = {
     "packages/*/dist/**",
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
+    // MCP compatibility tests launch these subprocess fixtures by path; the full-tree scan owns them.
+    "extensions/browser/src/browser/chrome-mcp.v1-peer.fixture.mjs",
+    "extensions/qa-lab/src/suite-runtime-agent-tools.v1-peer.fixture.mjs",
     "**/live-*.ts",
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.
@@ -817,6 +877,14 @@ const config = {
     "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
+    // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
+    "src/logging/diagnostic-memory.ts": ["exports"],
+    "src/logging/diagnostic-phase.ts": ["exports"],
+    "src/logging/diagnostic-run-activity.ts": ["exports"],
+    "src/logging/diagnostic-runtime.ts": ["exports"],
+    "src/logging/diagnostic-session-recovery-coordinator.ts": ["exports"],
+    "src/logging/diagnostic-session-state.ts": ["exports"],
+    "src/logging/diagnostic-stability.ts": ["exports"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
@@ -943,7 +1011,7 @@ const config = {
         "*.config.{js,mjs,cjs,ts,mts,cts}!",
         "*.mjs!",
       ],
-      entry: rootEntries,
+      entry: ["package.json!", ...rootEntries],
     },
     "examples/ai-chat": {
       entry: ["index.mjs!"],
@@ -982,6 +1050,8 @@ const config = {
     "packages/ai": {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
+        // The JSON compiler models the shared build's external runtime consumers.
+        "package.json!",
         "src/index.ts!",
         "src/provider-types.ts!",
         "src/providers.ts!",

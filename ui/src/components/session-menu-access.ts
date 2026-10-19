@@ -1,14 +1,17 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   readSessionMethodAccess,
   sessionAccessRowForBatch,
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionMenuActionKind } from "./session-menu.ts";
+import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
+
+registerSessionOrganizationEnglish();
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,

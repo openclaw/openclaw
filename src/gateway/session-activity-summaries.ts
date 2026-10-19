@@ -31,7 +31,7 @@ import {
   isIncognitoSessionKey,
   isSubagentSessionKey,
 } from "../routing/session-key.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import {
   onSessionIdentityMutation,
   type SessionLifecycleEvent,
@@ -257,7 +257,7 @@ export function createSessionActivitySummaries(deps: {
     if (
       !current(state) ||
       // Deletion and reset retain exact-row snapshots across awaited preparation.
-      isSessionLifecycleMutationActive(state.storePath, [state.key, state.sessionId]) ||
+      isSessionMutationActive(state.storePath, [state.key, state.sessionId]) ||
       modelRef(state) !== expectedModel ||
       state.controller?.signal.aborted
     ) {
@@ -303,7 +303,9 @@ export function createSessionActivitySummaries(deps: {
       state.immediate ? 0 : state.lastStartedAt + REFRESH_MS,
       state.calls >= MAX_CALLS_PER_HOUR ? state.windowStart + HOUR_MS : 0,
     );
-    publish(state, "updating");
+    if (!readSessionActivitySummary(state.entry) || state.readyAt > now()) {
+      publish(state, "updating");
+    }
     // The tracked-session bound also bounds the queue, with at most one entry per session.
     if (!queue.includes(state)) {
       queue.push(state);
@@ -330,11 +332,9 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       assertCurrentOwner(state, ref);
-      const entry = state.entry;
-      const transcriptScope = { ...scope(state), sessionId: state.sessionId };
       const source = await readActivitySummarySource({
-        scope: transcriptScope,
-        previous: readSessionActivitySummary(entry),
+        scope: { ...scope(state), sessionId: state.sessionId },
+        previous: readSessionActivitySummary(state.entry),
         assertCurrent: () => assertCurrentOwner(state, ref),
       });
       if (!source) {
@@ -355,6 +355,8 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "current");
         return;
       }
+      // An immediate ensure of a current recap has no visible transition to publish.
+      publish(state, "updating");
       let text = previous?.text ?? "";
       if (text.endsWith(OMISSION_NOTICE)) {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
@@ -591,16 +593,19 @@ export function createSessionActivitySummaries(deps: {
       return { state: "unavailable" as const };
     }
     const state = admit(target, entry);
-    if (state) {
-      schedule(state, true);
-    }
-    return prepareSessionActivitySummaryView({
+    const readView = await prepareSessionActivitySummaryView({
       ...target,
       cfg: deps.getConfig(),
       entry: state?.entry ?? entry,
       storePath: scope(target).storePath,
       admitted: state !== undefined,
     });
+    if (state && readView().state !== "current") {
+      schedule(state, true);
+    }
+    const view = readView();
+    // A stale recap is admitted work even before the queued source read starts.
+    return state && view.state === "stale" ? { ...view, state: "updating" as const } : view;
   };
   const trackAdmission = <T>(work: Promise<T>): Promise<T> => {
     admissions.add(work);
@@ -657,12 +662,11 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       const sessionId = event.target?.sessionId ?? event.sessionId;
-      const lifecycleRevision = event.lifecycleRevision;
       requestInBackground(
         target,
         (state) =>
           (!sessionId || sessionId === state.sessionId) &&
-          (!lifecycleRevision || lifecycleRevision === state.lifecycleRevision),
+          (!event.lifecycleRevision || event.lifecycleRevision === state.lifecycleRevision),
       );
     },
     handleEvent(event) {

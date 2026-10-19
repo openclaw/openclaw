@@ -15,11 +15,7 @@ import {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
-import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  isOpenAIGpt56Model,
-} from "../providers/openai-reasoning-effort.js";
+import { applyOpenAICompletionsToolReasoning } from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAIRequestReasoning,
   resolveOpenAISimpleReasoningEffort,
@@ -317,6 +313,10 @@ export function buildOpenAICompletionsRequest(
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
+  const converted =
+    supportsTools && context.tools
+      ? convertTools(context.tools, compat, model, policy.mode)
+      : undefined;
   // The converter needs intact boundaries for Runtime relocation or cache markers.
   const providerModel: ProviderModel = {
     ...model,
@@ -326,6 +326,7 @@ export function buildOpenAICompletionsRequest(
   const convertedMessages = convertMessages(providerModel, context, compat, {
     cacheOptOutIndexes,
     supportsTools,
+    declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined && !managedCompat?.requiresStringContent,
   });
@@ -392,8 +393,7 @@ export function buildOpenAICompletionsRequest(
   }
   let directToolProjection: ReturnType<typeof projectOpenAITools> | undefined;
   if (supportsTools) {
-    if (context.tools) {
-      const converted = convertTools(context.tools, compat, model, policy.mode);
+    if (converted) {
       if (policy.mode === "direct") {
         directToolProjection = converted.projection;
       }
@@ -443,6 +443,8 @@ export function buildOpenAICompletionsRequest(
       cacheControl ?? null,
       cacheOptOutIndexes,
       markTools,
+      true,
+      compat.cacheControlSystemOnly,
     );
   }
   if (policy.mode === "direct" && options?.toolChoice) {
@@ -568,16 +570,11 @@ export function buildOpenAICompletionsRequest(
       cacheOptOutIndexes,
       markTools,
       !managedCompat?.requiresStringContent,
+      compat.cacheControlSystemOnly,
     );
   }
   if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
-    // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
-    // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
-    if (isOpenAIGpt56Model(model)) {
-      params.reasoning_effort = "none";
-    } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
-      delete params.reasoning_effort;
-    }
+    applyOpenAICompletionsToolReasoning(params, model);
   }
   if (contextOutputCap !== undefined) {
     contextOutputBudgets.set(params, {

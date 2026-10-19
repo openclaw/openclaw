@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -206,6 +207,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const hasTargetSessionRequest = hasTargetedSessionSyncParams(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
+      if (!needsFullReindex && this.sources.has("sessions")) {
+        const excluded = await resolveActiveMemoryRecallSources({
+          rows: await this.database.readSourceState({ source: "sessions" }),
+          cfg: this.cfg,
+          agentId: this.agentId,
+        });
+        // Invalid helper rows do not need an embedding provider or a forced rebuild.
+        // Reconcile them before an unrelated source can fail to embed.
+        for (const row of excluded) {
+          await this.deleteIndexedFile(row.path, "sessions", row.hash);
+        }
+      }
       // An unavailable configured provider must not replace semantic vectors
       // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
       this.assertFtsOnlySyncAllowed();
@@ -240,9 +253,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       const hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
-        return;
-      }
       if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
@@ -270,6 +280,27 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         hasIndexedChunks,
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
+      if (
+        indexIdentity.status === "valid" &&
+        syncProvider &&
+        meta?.model === syncProvider.model &&
+        meta.providerKey &&
+        syncProviderKey &&
+        meta.providerKey !== syncProviderKey
+      ) {
+        // Validate the full legacy identity before retiring its credential-dependent key.
+        const database = this.database;
+        const upgraded = await database.updateIndexStructure(
+          { type: "index.upgradeProviderKey", input: { meta, providerKey: syncProviderKey } },
+          () => this.assertDatabaseMutationCurrent(database),
+        );
+        if (!upgraded) {
+          return MEMORY_SYNC_DEFERRED;
+        }
+      }
+      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
+        return;
+      }
       if (
         indexIdentity.status === "mismatched" &&
         indexIdentity.owner === "openclaw" &&
@@ -604,6 +635,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             cacheEnabled: this.cache.enabled,
             ftsEnabled: shadow.fts.enabled,
             ftsTokenizer: this.settings.store.fts.tokenizer,
+            fresh: postgresStage ? undefined : true,
           });
 
           await this.executeSourceSync({
@@ -652,7 +684,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return {
             nextMeta,
             vectorIndexComplete,
-            hasVectors: shadow.facts.hasVectorTable,
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -686,7 +717,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               sourceIdentity: readMemoryShadowIdentity(tempDbPath),
               metaKey: MEMORY_INDEX_META_KEY,
               expectedRevision: originalRevision,
-              sourceHasVectors: rebuilt.hasVectors,
+              sourceSchema: shadow.searchSchema,
               vectorIndexComplete: rebuilt.vectorIndexComplete,
               extensionPath: shadow.vector.extensionPath,
             },

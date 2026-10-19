@@ -1,11 +1,16 @@
-import { createMemo, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
+import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
@@ -14,16 +19,16 @@ import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
-import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
+import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
@@ -40,19 +45,55 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
 
+const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
+  export: "CreationComposer",
+});
+
 export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
   // Instant-thread handoff parks and restores this exact registered host across route roots.
   return (
     <Show
       when={restoredInstantThreadPage(props.data)}
       fallback={<openclaw-new-session-page prop:data={props.data} />}
+      keyed
     >
-      {(page) => page()}
+      {(page) => page}
     </Show>
   );
 }
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
+// Retained draft hosts can reconnect under a fresh native bridge root.
+const renderedPages = new WeakSet<PageHost>();
+
+function DraftAgentSelect(props: {
+  page: () => NewSessionPageOwner;
+  ref?: (element: HTMLSpanElement) => void;
+}) {
+  const place = () => props.page().place;
+  const submission = () => props.page().submission;
+  return (
+    <Show when={place().agents().length > 1}>
+      <AgentSelect
+        ref={(node) => {
+          props.page().agentPicker = node;
+          props.ref?.(node);
+        }}
+        params={{
+          agents: place().agents(),
+          agentId: place().agentId,
+          agentIdentity: props.page().context?.agentIdentity,
+          disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
+          onSelect: (agentId) => place().selectAgentId(agentId),
+          onOpenChange: (open) => {
+            props.page().agentPickerOpen = open;
+            props.page().changed();
+          },
+        }}
+      />
+    </Show>
+  );
+}
 
 function DraftBlock(props: {
   page: () => NewSessionPageOwner;
@@ -61,6 +102,23 @@ function DraftBlock(props: {
 }) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
+  let root: HTMLDivElement | undefined;
+  let agent: HTMLSpanElement | undefined;
+  let notice: HTMLDivElement | undefined;
+  let catalogElements: () => readonly HTMLElement[] = () => [];
+  let placeElements: () => readonly HTMLElement[] = () => [];
+  const surroundings = () =>
+    root
+      ? {
+          root,
+          obstacles: [
+            agent,
+            ...catalogElements(),
+            ...placeElements(),
+            ...(submission().visibility === "incognito" ? [notice] : []),
+          ].filter((element): element is HTMLElement => element?.isConnected === true),
+        }
+      : undefined;
   const placeOptions = createMemo((): NewSessionPlaceControlsOptions => ({
     context: props.page().context,
     data: props.page().data,
@@ -100,12 +158,18 @@ function DraftBlock(props: {
   return (
     <div
       class="new-session-page__draft"
+      ref={(element) => {
+        root = element;
+      }}
       aria-busy={submission().submitting ? "true" : "false"}
       onCompositionStart={() => props.page().titlePreparation?.setComposing(true)}
       onCompositionEnd={() => props.page().titlePreparation?.setComposing(false)}
       onFocusOut={() => props.page().titlePreparation?.setComposing(false)}
     >
       <CatalogBar
+        ref={(read) => {
+          catalogElements = read;
+        }}
         data={props.page().data}
         groupPending={catalog.isGroupRoutePending(
           props.page().data,
@@ -119,24 +183,23 @@ function DraftBlock(props: {
         }
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
-          <Show when={place().agents().length > 1}>
-            <AgentSelect
-              params={{
-                agents: place().agents(),
-                agentId: place().agentId,
-                agentIdentity: props.page().context?.agentIdentity,
-                disabled:
-                  submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
-                onSelect: (agentId) => place().selectAgentId(agentId),
-                onOpenChange: (open) => {
-                  props.page().agentPickerOpen = open;
-                  props.page().changed();
-                },
+          <Show when={Boolean(props.page().submission.completedSubmission)}>
+            <DraftAgentSelect
+              page={props.page}
+              ref={(element) => {
+                agent = element;
               }}
             />
           </Show>
         }
-        placeSelect={<NewSessionPlaceControls params={placeOptions()} />}
+        placeSelect={
+          <NewSessionPlaceControls
+            params={placeOptions()}
+            ref={(read) => {
+              placeElements = read;
+            }}
+          />
+        }
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -168,6 +231,7 @@ function DraftBlock(props: {
         />
       </Show>
       <NewSessionComposer
+        surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,
           dictationStatus,
@@ -175,13 +239,52 @@ function DraftBlock(props: {
         })}
       />
       <Show when={!catalog.isTarget(props.page().data)}>
-        <NewSessionIncognitoNotice active={submission().visibility === "incognito"} />
+        <NewSessionIncognitoNotice
+          active={submission().visibility === "incognito"}
+          ref={(element) => {
+            notice = element;
+          }}
+        />
       </Show>
     </div>
   );
 }
 
 function PageContent(_props: { data: NewSessionRouteData | undefined }, host: PageHost) {
+  const context = useOptionalApplication();
+  // Native bridge roots do not inherit the router's error boundary.
+  const Content = () => {
+    const content = renderPageContent(host);
+    onSettled(() => {
+      renderedPages.add(host);
+    });
+    return content;
+  };
+  const RenderError = (props: { error: unknown; reset: () => void }) => {
+    onSettled(() => {
+      let active = true;
+      if (context && !renderedPages.has(host)) {
+        // Only failed initial mounts reload; later errors must preserve active drafts.
+        void reloadAfterRenderErrorOnce(
+          createGatewayControlUiReloadOptions(context.gateway, () => active && host.isConnected),
+        );
+      }
+      return () => {
+        active = false;
+      };
+    });
+    return <LazyViewError error={props.error} onRetry={props.reset} />;
+  };
+  return (
+    <SessionBackgroundLayoutScope>
+      <Errored fallback={(error, reset) => <RenderError error={error()} reset={reset} />}>
+        <Content />
+      </Errored>
+    </SessionBackgroundLayoutScope>
+  );
+}
+
+function renderPageContent(host: PageHost) {
   const owner = pageOwners.get(host) ?? new NewSessionPageOwner(host);
   pageOwners.set(host, owner);
   owner.context = useOptionalApplication();
@@ -197,36 +300,32 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
+  const Draft = () => (
+    <NewSessionComposerTextareaContext value={owner.submission.composerTextarea}>
+      <DraftBlock page={page} revision={revision} options={options} />
+    </NewSessionComposerTextareaContext>
+  );
   // Bind gateway facts before publishing the first reconciled draft snapshot.
   owner.connect();
   onCleanup(() => owner.disconnect());
   onSettled(() => {
-    const context = owner.context;
-    const notify = owner.changed;
-    const stops = context
-      ? [
-          context.theme,
-          context.agents,
-          context.agentIdentity,
-          context.sessions,
-          context.placementStartup,
-          context.runtimeConfig,
-          context.config,
-        ].map((source) => source.subscribe(notify))
-      : [];
     const document = host.ownerDocument;
-    const window = document.defaultView!;
-    const dismiss = installChatComposerPickerDismissal(document);
-    const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);
-    document.addEventListener("keydown", keydown, true);
-    window.addEventListener("beforeunload", owner.flushDraft);
-    notify();
-    return () => {
-      stops.forEach((stop) => stop());
-      dismiss();
-      document.removeEventListener("keydown", keydown, true);
-      window.removeEventListener("beforeunload", owner.flushDraft);
-    };
+    const stops = [
+      installChatComposerPickerDismissal(document),
+      listen(
+        document,
+        "keydown",
+        (event) =>
+          focusChatComposerFromPrintableKeydown(
+            host,
+            event,
+            owner.submission.composerTextarea.getTextarea(),
+          ),
+        true,
+      ),
+      listen(document.defaultView!, "beforeunload", owner.flushDraft),
+    ];
+    return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {
     get visibility() {
@@ -316,20 +415,31 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 <DraftWelcome
                   sessions={page().context?.sessions}
                   options={page().welcomeOptions()}
-                  composer={<DraftBlock page={page} revision={revision} options={options} />}
+                  assistantNameControl={
+                    !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
+                      <DraftAgentSelect page={page} />
+                    ) : undefined
+                  }
+                  composer={<Draft />}
                 />
               }
             >
-              <DraftBlock page={page} revision={revision} options={options} />
+              <Draft />
             </Show>
           )}
           onOpenImage={owner.setImageLightbox}
         />
-        <CreationComposer
-          composer={creationComposer()}
-          onOpenImage={owner.setImageLightbox}
-          renderRevision={revision()}
-        />
+        <Show when={creationComposer()}>
+          {(composer) => (
+            <Errored
+              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
+            >
+              <Loading fallback={<LoadingState />}>
+                <CreationComposer composer={composer()} onOpenImage={owner.setImageLightbox} />
+              </Loading>
+            </Errored>
+          )}
+        </Show>
         <ConnectMachineDialog
           {...page().connectMachine.view(page().place.isAdmin(), () => {
             owner.connectMachine.close();
@@ -395,6 +505,12 @@ defineSolidBridge<
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },
 });
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-new-session-page": PageHost;
+  }
+}
 
 declare module "@solidjs/web" {
   namespace JSX {

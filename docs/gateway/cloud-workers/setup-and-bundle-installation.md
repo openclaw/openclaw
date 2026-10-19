@@ -51,6 +51,8 @@ The worker bundle includes the pinned Windows permission-inspection helper along
 
 Archives and successful installs are verified by content digest, rather than version alone, and reused when they match. A snapshot fork tops up an older runtime before enrollment. Native dependencies install for the destination OS and CPU, so registry access is still required; this is not an offline dependency bundle. Enrollment and archive-download credentials are not passed to npm or the node process.
 
+Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
+
 For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy raw edits over the running build. Missing or mismatched build metadata gives a rebuild-and-restart error. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
 
 OpenClaw worker turns install the matching worker bundle, reusing a verified archive retained in a prepared image when available. Codex remote execution starts its managed exec-server directly. Node-command allowlists and invocation approval still apply. See [runtime support](/gateway/cloud-workers/dispatching-a-session#runtime-support) and [the security model](/gateway/cloud-workers/security-model).

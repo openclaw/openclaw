@@ -18,6 +18,7 @@ const decision = {
       maxImageOptions: 20,
     },
     sort: { probabilities: "none", abstention: false },
+    box: { probabilities: "none", abstention: false },
   },
   reasoning: {
     modes: ["auto", "off", "on"],

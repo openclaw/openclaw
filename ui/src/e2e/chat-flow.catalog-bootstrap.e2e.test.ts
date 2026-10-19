@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
@@ -162,6 +163,7 @@ suite.define(() => {
       const foreign = { ...current, id: "foreign", name: "Another context's model" };
       const scope = { agentId: "alpha", sessionKey };
       const gateway = await installMockGateway(page, {
+        connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
         defaultAgentId: "alpha",
         sessionKey,
         sessionScope,

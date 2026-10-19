@@ -124,7 +124,6 @@ export async function appendTranscriptEventInWorker(params: {
         await restoreSessionColdTranscript({ ...scope, storePath: scope.path }, assertCurrent);
       },
       beforeWrite: assertCurrent,
-      async release() {},
     }),
     run: (worker, commit) =>
       commit(() =>

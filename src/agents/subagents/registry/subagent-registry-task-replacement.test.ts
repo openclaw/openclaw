@@ -242,6 +242,13 @@ it.each(["end", "error"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
     });
+    // Required completion reserves its real requester before the mocked transport runs.
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      defaultSessionId: "late-owner-requester-session",
+    });
     await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,

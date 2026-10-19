@@ -61,6 +61,13 @@ it("round-trips escaped and quoted ExecStart arguments", () => {
   expect(parseSystemdExecStart(execStart(unit))).toEqual(programArguments);
 });
 
+it("quotes empty ExecStart arguments without shifting later arguments", () => {
+  const unit = buildSystemdUnit({
+    programArguments: ["/usr/bin/node", "gateway", "--label", "", "--port", "18789", ""],
+  });
+  expect(execStart(unit)).toBe('/usr/bin/node gateway --label "" --port 18789 ""');
+});
+
 it("preserves explicit NODE_OPTIONS while omitting other empty values", () => {
   for (const nodeOptions of ["", "--max-old-space-size=24576"]) {
     const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];

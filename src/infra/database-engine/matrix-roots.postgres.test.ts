@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./database-suite-workers.test-support.js";
 import * as terminal from "../../../packages/terminal-core/src/note.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
@@ -40,6 +40,7 @@ import * as snapshots from "../sqlite-snapshot.js";
 import { runPluginDoctorStateMigrationPlans } from "../state-migrations.plugin-doctor.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -65,6 +66,8 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
   let matrix: MatrixPaths;
+
+  beforeEach(resetDatabaseEngineSelectionForTest);
 
   beforeAll(async () => {
     await client.connect();
@@ -119,6 +122,10 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
           ).run(`chunk-${index}`, cryptoValue);
         }
         await closeOpenClawStateDatabaseAsync();
+        // Current crypto roots without legacy dedupe rows do not require a migration receipt.
+        await expect(
+          doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+        ).resolves.toMatchObject({ phase: "preflight" });
         const retainedEntries = files.map(sqliteEntries);
         // Fresh crypto roots are port-ready; only genuine legacy dedupe rows require repair.
         const legacy = {
@@ -135,7 +142,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'inbound-dedupe', ?, ?, ?)",
           ).run(legacyKey, JSON.stringify(legacy), legacy.ts);
         }
-        await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
+        await expect(
+          doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+        ).rejects.toThrow(
           "Run openclaw doctor --fix first, then retry port. If a named plugin is disabled, enable it for repair.",
         );
         // Complete Doctor's retained-root scan before porting, then keep testing a disabled plugin.
@@ -211,10 +220,11 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
     return roots;
   }
 
-  it("ports every retained token/account root and restores matched backups into fresh namespaces", async () => {
+  // Green CI runs 39068774273/39071119824 measured p95 at 310s across the real root round trip.
+  it("ports every retained token/account root with the state family and restores fresh namespaces", async () => {
     await withRoots(async (state, files, config) => {
       const expected = files.map(sqliteEntries);
-      const forward = await doctorDatabasePort({ to: "postgres" });
+      const forward = await doctorDatabasePort({ family: "state", to: "postgres" });
       expect(forward).toMatchObject({ engine: "postgres" });
       const physical = await postgresRoots(files);
       expect(physical.map((root) => root.entries)).toEqual(expected);
@@ -241,10 +251,10 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         `INSERT INTO "${globalAnchor.namespace}".agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('retained', $1, $2, 1)`,
         [agentPath, OPENCLAW_AGENT_SCHEMA_VERSION],
       );
-      const postgresConfig: OpenClawConfig = {
+      const postgresConfig = {
         ...config,
-        database: { ...config.database, engine: "postgres" },
-      };
+        database: { ...config.database, families: { state: { engine: "postgres" } } },
+      } satisfies OpenClawConfig;
       const deferredRegistry = await preparePostgresBackupDiscovery({
         stateDir: state.stateDir,
         config: postgresConfig,
@@ -255,7 +265,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       expect(files.every((file) => deferredRegistry.paths.includes(file))).toBe(true);
       const note = vi.spyOn(terminal, "note").mockImplementation(() => {});
       for (const database of [
-        postgresConfig.database,
+        { ...config.database, engine: "postgres" as const },
         {
           ...config.database,
           families: { state: { engine: "postgres" as const } },
@@ -267,9 +277,23 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const findings = await withDatabaseEngineSelection(selection, () =>
           noteDatabaseEngines(doctorConfig, { env: state.env }),
         );
-        expect(findings.filter((finding) => finding.path !== "database.engine")).toEqual([]);
+        const storeFindings = findings.filter((finding) => files.includes(finding.path ?? ""));
+        expect(storeFindings).toHaveLength(files.length);
         const output = String(note.mock.lastCall?.[0]);
         for (const [index, file] of files.entries()) {
+          expect(storeFindings.find((finding) => finding.path === file)).toMatchObject({
+            severity: "info",
+            details: {
+              family: "state",
+              observed: "postgres",
+              mismatch: false,
+              connectivity: "reachable",
+              namespace: physical[index]!.anchor.namespace,
+              storeId: physical[index]!.anchor.storeId,
+              schema: { pending: 0 },
+              issues: [],
+            },
+          });
           expect(output).toContain(
             `Shared state root: ${file} (physical=postgres, namespace=${physical[index]!.anchor.namespace})`,
           );
@@ -350,12 +374,12 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       await client.query(
         `DELETE FROM "${globalAnchor.namespace}".agent_databases WHERE agent_id = 'retained'`,
       );
-      await doctorDatabasePort({ to: "sqlite" });
+      await doctorDatabasePort({ family: "state", to: "sqlite" });
       expect(files.map(readBackupEngine)).toEqual(files.map(() => ({ engine: "sqlite" })));
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
     });
-  }, 300_000);
+  }, 650_000);
 
   it.each(["resume", "rollback"] as const)(
     "%s recovers a partially published multi-root port and blocks ordinary startup meanwhile",
@@ -405,6 +429,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         expect(files.map(sqliteEntries)).toEqual(expected);
       });
     },
-    300_000,
+    // Green CI runs 39068774273/39071119824 measured p95 at 190s for interrupted-root recovery.
+    400_000,
   );
 });

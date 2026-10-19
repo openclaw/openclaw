@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
 import {
   getCurrentPluginMetadataSnapshotRequiredRuntime,
+  listKnownProviderAuthEnvVarNamesRuntime,
+  listOpenClawPluginManifestMetadataRuntime,
   loadPluginMetadataSnapshotRuntime,
 } from "./plugin-metadata-snapshot-required.js";
 
@@ -11,7 +13,12 @@ vi.mock("./native-module-require.js", async (importOriginal) => ({
   tryNativeRequireModule: loadNative,
 }));
 
-const readerKeys = ["getCurrentPluginMetadataSnapshot", "loadPluginMetadataSnapshot"] as const;
+const readerKeys = [
+  "getCurrentPluginMetadataSnapshot",
+  "loadPluginMetadataSnapshot",
+  "listOpenClawPluginManifestMetadata",
+  "listKnownProviderAuthEnvVarNamesCore",
+] as const;
 let previousReaders: PropertyDescriptorMap;
 beforeEach(() => {
   previousReaders = Object.getOwnPropertyDescriptors(snapshotReaderSlot);
@@ -37,6 +44,8 @@ const reads = [
     run: () => getCurrentPluginMetadataSnapshotRequiredRuntime({}),
   },
   { name: "snapshot load", run: () => loadPluginMetadataSnapshotRuntime({ config: {} }) },
+  { name: "manifest metadata", run: () => listOpenClawPluginManifestMetadataRuntime() },
+  { name: "provider env names", run: () => listKnownProviderAuthEnvVarNamesRuntime() },
 ];
 
 function captureFailure(run: () => unknown): unknown {
@@ -60,8 +69,9 @@ describe("required plugin metadata readers", () => {
     const fail = () => {
       throw failure;
     };
-    snapshotReaderSlot.getCurrentPluginMetadataSnapshot = fail;
-    snapshotReaderSlot.loadPluginMetadataSnapshot = fail;
+    for (const key of readerKeys) {
+      snapshotReaderSlot[key] = fail;
+    }
     expect(captureFailure(run)).toBe(failure);
     expect(loadNative).not.toHaveBeenCalled();
   });
@@ -78,4 +88,28 @@ describe("required plugin metadata readers", () => {
     loadNative.mockReturnValue({ ok: false });
     expect(run).toThrow("Host plugin metadata runtime requires native loading");
   });
+
+  it.each(["registered", "native"] as const)(
+    "forwards policy inputs and results unchanged through the %s owner",
+    (owner) => {
+      const manifests = [{ pluginDir: "/fixture", manifest: { id: "fixture" }, origin: "global" }];
+      const names = ["FIXTURE_API_KEY"];
+      const readers = {
+        listOpenClawPluginManifestMetadata: vi.fn(() => manifests),
+        listKnownProviderAuthEnvVarNamesCore: vi.fn(() => names),
+      };
+      if (owner === "registered") {
+        Object.assign(snapshotReaderSlot, readers);
+      } else {
+        loadNative.mockReturnValue({ ok: true, moduleExport: readers });
+      }
+      const env = { OPENCLAW_HOME: "/fixture" };
+      const params = { env, config: {}, includeUntrustedWorkspacePlugins: false };
+      expect(listOpenClawPluginManifestMetadataRuntime(env)).toBe(manifests);
+      expect(listKnownProviderAuthEnvVarNamesRuntime(params)).toBe(names);
+      expect(readers.listOpenClawPluginManifestMetadata).toHaveBeenCalledExactlyOnceWith(env);
+      expect(readers.listKnownProviderAuthEnvVarNamesCore).toHaveBeenCalledExactlyOnceWith(params);
+      expect(loadNative).toHaveBeenCalledTimes(owner === "registered" ? 0 : 2);
+    },
+  );
 });

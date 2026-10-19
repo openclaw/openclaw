@@ -10,7 +10,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { createSkillUploadStore, observeSkillUploadRenewal } from "./upload-store.test-support.js";
+import { defaultSkillUploadStore } from "./upload-store.js";
+import {
+  observeSkillUploadRenewal,
+  useSkillUploadStoreLocation,
+} from "./upload-store.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -19,10 +23,11 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-async function makeStore(options?: { installLeaseHeartbeatMs?: number }) {
+async function makeStore() {
   const root = dirs.make("openclaw-upload-lifetime-");
   const databasePath = path.join(root, "openclaw.sqlite");
-  const store = createSkillUploadStore({ path: databasePath, tempRootDir: root, ...options });
+  useSkillUploadStoreLocation(databasePath, root);
+  const store = defaultSkillUploadStore;
   const { uploadId } = await store.begin({ kind: "skill-archive", slug: "fixture", sizeBytes: 1 });
   await store.chunk({ uploadId, offset: 0, dataBase64: "YQ==" });
   await store.commit({ uploadId });
@@ -47,7 +52,7 @@ function uploadExists(databasePath: string, uploadId: string) {
 
 describe("skill upload installation lifetime", () => {
   it("joins an accepted renewal and the install callback before closing and releasing its lease", async () => {
-    const { databasePath, store, uploadId } = await makeStore({ installLeaseHeartbeatMs: 47_123 });
+    const { databasePath, store, uploadId } = await makeStore();
     await closeOpenClawStateDatabaseAsync();
     const intervals = vi.spyOn(globalThis, "setInterval");
     const renewalSettled = observeSkillUploadRenewal();
@@ -61,7 +66,7 @@ describe("skill upload installation lifetime", () => {
     let closing: Promise<unknown> | undefined;
     try {
       await entered.promise;
-      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 47_123)?.[0];
+      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
       if (!heartbeat) {
         throw new Error("Install heartbeat was not scheduled");
       }
@@ -155,11 +160,8 @@ describe("skill upload installation lifetime", () => {
     const { databasePath, uploadId } = await makeStore();
     const alias = path.join(path.dirname(databasePath), "alias.sqlite");
     await fs.link(databasePath, alias);
-    const aliased = createSkillUploadStore({
-      path: alias,
-      tempRootDir: path.dirname(databasePath),
-    });
-    await aliased.withCommittedUpload(uploadId, async (record) => {
+    useSkillUploadStoreLocation(alias, path.dirname(databasePath));
+    await defaultSkillUploadStore.withCommittedUpload(uploadId, async (record) => {
       expect(await fs.readFile(record.archivePath, "utf8")).toBe("a");
     });
     expect(installLeaseCount(databasePath, uploadId)).toBe(0);

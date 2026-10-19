@@ -6,7 +6,7 @@ import {
   isImageWithMediaPayload,
   splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
-} from "openclaw/plugin-sdk/provider-transport-runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeOllamaToolCallName } from "./tool-name-aliases.js";
 

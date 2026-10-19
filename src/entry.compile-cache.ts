@@ -1,5 +1,3 @@
-// Manages compile-cache respawn behavior for the CLI entrypoint.
-import { spawn } from "node:child_process";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
@@ -15,7 +13,6 @@ import {
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
-import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
 
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
@@ -123,7 +120,6 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
     args: plan.args,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
-    runtime: { spawn, attachChildProcessBridge },
     onError: (error) =>
       writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${

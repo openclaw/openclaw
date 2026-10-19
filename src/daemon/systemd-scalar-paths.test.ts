@@ -264,24 +264,22 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     );
   });
 
-  it.each([true])(
-    "does not read an authored relative EnvironmentFile (optional=%s)",
-    async (optional) => {
-      const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
-      await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
-      const unit = `[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\nEnvironmentFile=${optional ? "-" : ""}./operator.env\n`;
-      await writeUnit(unit);
-      const readFile = vi.spyOn(fs, "readFile");
-      try {
-        const command = await readSystemdServiceExecStart(serviceEnv());
-        expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
-        expect(command?.environment).toEqual({ INLINE: "retained" });
-        await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
-      } finally {
-        readFile.mockRestore();
-      }
-    },
-  );
+  it("does not read an authored optional relative EnvironmentFile", async () => {
+    const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
+    await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
+    const unit =
+      "[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\nEnvironmentFile=-./operator.env\n";
+    await writeUnit(unit);
+    const readFile = vi.spyOn(fs, "readFile");
+    try {
+      const command = await readSystemdServiceExecStart(serviceEnv());
+      expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
+      expect(command?.environment).toEqual({ INLINE: "retained" });
+      await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
 
   it.each([true])(
     "rejects a relative manager EnvironmentFile tuple (optional=%s)",

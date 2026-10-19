@@ -434,6 +434,11 @@ If a checkout's `.git` link points to missing administrative files, OpenClaw pre
 
 ## Snapshots, cleanup, and restore
 
+Registry lookups, pending-slot inspection, and template listings use read-only
+workers so they do not wait in the shared SQLite writer queue. Creation, activity,
+and removal still await their durable writes; an unchanged registry update does
+not rewrite the row. Inspecting an empty registry does not create its database.
+
 Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
 
 For an ordinary clean checkout, the snapshot reuses the original HEAD tree after checking working files with a private index that clears hidden status flags. It checks object availability in one batch before creating the same recovery commit and snapshot ref. Missing objects preserve the checkout with a repository-repair error, including in partial clones. Exact-state snapshots continue capturing their complete recorded state.

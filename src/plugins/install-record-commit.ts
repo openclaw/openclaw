@@ -68,12 +68,12 @@ function mergeUnsetPaths(
 }
 
 /** Return whether config still contains legacy/transient plugin install records. */
-export function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean {
+function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean {
   return Object.keys(config.plugins?.installs ?? {}).length > 0;
 }
 
 /** Find pending install records that match the base config and can be stripped as unchanged. */
-export function unchangedPendingPluginInstallRecordIds(
+function unchangedPendingPluginInstallRecordIds(
   config: OpenClawConfig,
   baseConfig: OpenClawConfig,
 ): string[] {
@@ -620,7 +620,7 @@ type PluginConfigCommit = ConfigReplaceResult & {
 };
 
 /** Commit config while migrating any pending install records into the install index. */
-export async function commitConfigWriteWithPendingPluginInstalls(params: {
+async function commitConfigWriteWithPendingPluginInstalls(params: {
   nextConfig: OpenClawConfig;
   /** Source snapshot whose transient records migrate below the canonical index. */
   sourceConfig?: OpenClawConfig;

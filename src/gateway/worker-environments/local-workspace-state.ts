@@ -12,6 +12,8 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import {
   admitLocalWorkspaceSourcePaths,
+  decodeLocalWorkspaceGitPaths,
+  parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
@@ -25,6 +27,7 @@ import {
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
   applyStagedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
@@ -112,20 +115,68 @@ export function projectionOperations(
     target === "canonical" ? current().projection_path : owner.worktree.path;
   const targetPath = (target: Direction) =>
     target === "canonical" ? owner.worktree.path : current().projection_path;
+  let inputPaths: Promise<string[]> | undefined;
+  let preparedInputPaths: Set<string> | undefined;
+  const buildCacheInputs = () =>
+    (inputPaths ??= (async () => {
+      const selected = current();
+      const admitted = parseLocalWorkspaceSourcePaths(selected.source_paths_json);
+      const paths =
+        owner.worktree.removedAt === undefined
+          ? await selectLocalWorkspaceCanonicalPaths({
+              root: owner.worktree.path,
+              admittedPaths: selected.source_paths_json,
+              signal,
+              assertCurrent,
+            })
+          : new Set(admitted);
+      preparedInputPaths = paths;
+      const retained = buildCacheInputPaths(paths);
+      if (owner.worktree.snapshotRef && selected.baseline_json && selected.baseline_ref) {
+        const baseline = parseWorkerWorkspaceManifest(
+          selected.baseline_json,
+          selected.baseline_ref,
+        );
+        const prior = buildCacheInputPaths(baseline.entries.map((entry) => entry.path));
+        if ([...prior].some((entryPath) => !retained.has(entryPath))) {
+          const archived = await requireGitBuffer(
+            owner.worktree.repoRoot,
+            ["ls-tree", "-r", "-z", "--name-only", owner.worktree.snapshotRef],
+            { signal, beforeRun: assertCurrent },
+          );
+          current();
+          // Older archives lost later index membership. Preserve exact archived inputs,
+          // including ambiguous old caches, without admitting future directory contents.
+          for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
+            retained.add(entryPath);
+            paths.add(entryPath);
+          }
+        }
+      }
+      const known = new Set(admitted);
+      const added = [...retained].filter((entryPath) => !known.has(entryPath));
+      // Keep acquired input custody when later recovery no longer has the checkout or archive.
+      if (added.length) {
+        await update({ source_paths_json: JSON.stringify([...admitted, ...added]) });
+      }
+      return [...retained];
+    })());
   const canonicalPaths = async () => {
+    const retained = await buildCacheInputs();
     const selected = current();
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
       admittedPaths: selected.source_paths_json,
+      preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
       baseline:
         selected.baseline_json && selected.baseline_ref
-          ? parseWorkerWorkspaceManifest(selected.baseline_json, selected.baseline_ref)
+          ? parseWorkerWorkspaceManifest(selected.baseline_json, selected.baseline_ref, retained)
           : undefined,
     });
   };
-  const capture = async (target: Direction) => {
+  const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {
     const selected = current();
     const root = sourcePath(target);
     await assertOwnedDirectory(root);
@@ -137,6 +188,8 @@ export function projectionOperations(
       root,
       baseCommit: selected.base_commit,
       includePaths,
+      buildCacheInputs: new Set(await buildCacheInputs()),
+      preserveDirectories,
       signal,
     });
     current();
@@ -157,6 +210,7 @@ export function projectionOperations(
     await recoverWorkerWorkspaceReconciliation({
       root: targetPath(pendingDirection(selected.pending_target)!),
       journal,
+      buildCacheInputs: await buildCacheInputs(),
       assertCurrent,
     });
     await update({ journal_json: null, journal_pack: null });
@@ -213,13 +267,18 @@ export function projectionOperations(
         currentManifestRef: snapshot.manifestRef,
         baseManifestRaw: selected.baseline_json,
         currentManifestRaw: snapshot.rawManifest,
+        buildCacheInputs: await buildCacheInputs(),
         assertCurrent,
       });
       current();
     }
     let conflictPaths: string[] | undefined;
     await withStagedWorkerWorkspaceResult(
-      { root: owner.worktree.path, stagedResultRef: selected.pending_ref },
+      {
+        root: owner.worktree.path,
+        stagedResultRef: selected.pending_ref,
+        buildCacheInputs: await buildCacheInputs(),
+      },
       async (snapshot) => {
         current();
         if (
@@ -265,7 +324,8 @@ export function projectionOperations(
                         }
                       : {
                           ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
-                          baseline_json: serializeWorkerWorkspaceManifest(snapshot.current),
+                          // Parsing can filter old runtime paths; retain bytes matching the receipt digest.
+                          baseline_json: snapshot.currentManifestRaw,
                           baseline_ref: snapshot.currentManifestRef,
                           // Retain the accepted ref until its Git cleanup completes.
                           pending_target: null,
@@ -399,10 +459,11 @@ export function projectionOperations(
             prepareLocalWorkspaceCheckout(checkout),
           );
         }
-        const initial = await timeWorktreePreparationPhase("snapshot", () =>
+        const initial = await timeWorktreePreparationPhase("snapshot", async () =>
           captureWorkspaceSnapshot({
             root: repo,
             baseCommit: selected.base_commit,
+            buildCacheInputs: new Set(await buildCacheInputs()),
             signal,
           }),
         );
@@ -424,6 +485,7 @@ export function projectionOperations(
     current,
     workerAuthority,
     canonicalPaths,
+    buildCacheInputs,
     prepare,
     reuse: async () => (row?.baseline_ref ? await prepare() : undefined),
     synchronize,
@@ -434,11 +496,23 @@ export function projectionOperations(
         throw new Error("Workspace base refresh requires its own source result");
       }
       await settle();
-      // One immutable source result reaches both copies before the shared baseline advances.
-      await update({ pending_ref: stagedResultRef, pending_target: "canonical" });
+      // The host-produced current manifest includes unchanged inputs omitted by its delta tree.
+      // Its producer admits only selected source or already-admitted inputs under cache roots.
+      const snapshot = await readStagedWorkerWorkspaceResult(owner.worktree.path, stagedResultRef);
+      const incoming = buildCacheInputPaths(snapshot.current.entries.map((entry) => entry.path));
+      const admitted = parseLocalWorkspaceSourcePaths(current().source_paths_json);
+      // Admission and its pending fence settle together, including after a restart.
+      await update({
+        pending_ref: stagedResultRef,
+        pending_target: "canonical",
+        source_paths_json: JSON.stringify([...new Set([...admitted, ...incoming])]),
+      });
+      inputPaths = undefined;
+      preparedInputPaths = undefined;
       await settle();
     },
     restoreSnapshot: async () => {
+      await buildCacheInputs();
       await recover();
       const selected = current();
       if (!selected.pending_ref) {
@@ -450,13 +524,14 @@ export function projectionOperations(
         const receipt = await readStagedWorkerWorkspaceResult(
           owner.worktree.repoRoot,
           selected.pending_ref,
+          await buildCacheInputs(),
         );
         current();
         if (receipt.currentManifestRef !== selected.baseline_ref) {
           throw new Error("Archive restore receipt changed");
         }
         await update({
-          baseline_json: serializeWorkerWorkspaceManifest(receipt.base),
+          baseline_json: receipt.baseManifestRaw,
           baseline_ref: receipt.baseManifestRef,
           pending_target: "canonical",
         });
@@ -531,6 +606,7 @@ export function projectionOperations(
         baseManifestRef: baseRef,
         currentManifestRaw: serializeWorkerWorkspaceManifest(accepted.manifest),
         currentManifestRef: accepted.manifestRef,
+        buildCacheInputs: await buildCacheInputs(),
         assertCurrent,
       });
       current();
@@ -555,19 +631,32 @@ export function projectionOperations(
           const receipt = await readStagedWorkerWorkspaceResult(
             owner.worktree.repoRoot,
             selected.pending_ref,
+            await buildCacheInputs(),
           );
           current();
           if (receipt.baseManifestRef !== selected.baseline_ref) {
             throw new Error("Archive retention receipt changed");
           }
           accepted = {
-            raw: serializeWorkerWorkspaceManifest(receipt.current),
+            raw: receipt.currentManifestRaw,
             ref: receipt.currentManifestRef,
           };
         }
       }
-      if (accepted && (await capture("canonical")).manifestRef !== accepted.ref) {
-        throw new Error("Local sandbox has unaccepted edits; restore its worktree before cleanup");
+      if (accepted) {
+        // Authenticate the retained bytes, then compare eligible content under
+        // today's exclusions without changing the immutable receipt identity.
+        const acceptedManifest = parseWorkerWorkspaceManifest(
+          accepted.raw,
+          accepted.ref,
+          await buildCacheInputs(),
+        );
+        const actual = await capture("canonical", new Set(acceptedManifest.directories));
+        if (actual.rawManifest !== serializeWorkerWorkspaceManifest(acceptedManifest)) {
+          throw new Error(
+            "Local sandbox has unaccepted edits; restore its worktree before cleanup",
+          );
+        }
       }
       const { readLocalWorkspaceRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");

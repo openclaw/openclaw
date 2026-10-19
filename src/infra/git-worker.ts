@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,7 +31,14 @@ import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./work
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
-const POOL_OWNERS = ["reads", "content", "workspace", "worktrees", "worktreeMaintenance"] as const;
+const POOL_OWNERS = [
+  "reads",
+  "summary",
+  "content",
+  "workspace",
+  "worktrees",
+  "worktreeMaintenance",
+] as const;
 type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> & {
   pending: Set<Promise<unknown>>;
   closing?: Promise<void>;
@@ -38,6 +46,7 @@ type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> &
 const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
+const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
@@ -110,14 +119,16 @@ function poolFor(
   state: GitWorkerRuntime,
   command: GitWorkerCommand,
   contentRead: boolean,
+  interactive: boolean,
 ): GitPool {
-  const owner =
-    command.type === "worktree.snapshot" ||
-    command.type === "worktree.cleanup-inspection" ||
-    command.type === "worktree.cleanup-fingerprint" ||
-    command.type === "worktree.eviction-classify" ||
-    command.type === "worktree.eviction-repositories" ||
-    command.type === "worktree.eviction-purge"
+  const owner = interactive
+    ? "summary"
+    : command.type === "worktree.snapshot" ||
+        command.type === "worktree.cleanup-inspection" ||
+        command.type === "worktree.cleanup-fingerprint" ||
+        command.type === "worktree.eviction-classify" ||
+        command.type === "worktree.eviction-repositories" ||
+        command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"
       : command.type.startsWith("worktree.")
         ? "worktrees"
@@ -129,17 +140,22 @@ function poolFor(
   // Preparation can hold the allocation lease; unrelated maintenance must not block it.
   // Each worktree lane stays serial; host allocation and shared-ref guards still own writes.
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
+  // Summary polls and their revision scans share one worker outside the full-content queue.
   return (state[owner] ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
     workerClass:
-      owner === "reads" || owner === "content"
-        ? "reader"
-        : owner === "workspace"
-          ? "compute"
-          : "writer",
-    // Overlay retains three maximum-size manifests plus its decoded result.
+      owner === "summary"
+        ? "singleton"
+        : owner === "reads" || owner === "content"
+          ? "reader"
+          : owner === "workspace"
+            ? "compute"
+            : "writer",
+    // Summary's singleton keeps the reader heap bound; overlay retains three manifests.
     workerOptions:
-      owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
+      owner === "summary" || owner === "workspace"
+        ? { resourceLimits: { maxOldGenerationSizeMb: owner === "summary" ? 512 : 1024 } }
+        : undefined,
     // Discovery refreshes and PR polls can leave readers idle for just over a minute.
     idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
     sharedCompute: owner === "workspace",
@@ -200,9 +216,9 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
       ? createHash("sha256")
           .update(
             JSON.stringify(
-              Object.entries(baseEnv).filter(([key]) =>
-                /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key),
-              ),
+              Object.entries(baseEnv)
+                .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+                .toSorted(([left], [right]) => left.localeCompare(right)),
             ),
           )
           .digest("hex")
@@ -222,6 +238,7 @@ async function executeOperation(
   baseEnv: NodeJS.ProcessEnv,
   options: GitWorkerOperationOptions,
 ): Promise<GitWorkerResult> {
+  const observedAt = operationDiagnostics.hasSubscribers ? performance.now() : undefined;
   const contentRoot =
     command.type === "checkout.diff" || command.type === "checkout.baseline"
       ? command.input.cwd
@@ -230,6 +247,9 @@ async function executeOperation(
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;
+  const interactive =
+    (command.type === "checkout.diff" && command.input.summaryOnly === true) ||
+    (command.type === "checkout.revision" && command.input.scope === "diff");
   const snapshot =
     command.type === "worktree.snapshot" || command.type === "worktree.snapshot-verify-exact";
   const contentGit = contentRead || snapshot;
@@ -252,6 +272,12 @@ async function executeOperation(
     contentRoot !== undefined
       ? startGitOperationTiming("content-read", log, () => ({
           operation: command.type,
+          ...(command.type === "checkout.diff"
+            ? {
+                scope: command.input.scope ?? "all",
+                summaryOnly: command.input.summaryOnly === true,
+              }
+            : {}),
           checkoutId: createHash("sha256")
             .update(path.resolve(contentRoot))
             .digest("hex")
@@ -356,7 +382,9 @@ async function executeOperation(
             }
           }
         };
-        const output = await (contentGit ? withContentGitSlot(execute, signal) : execute());
+        const output = await (contentGit
+          ? withContentGitSlot(execute, signal, interactive)
+          : execute());
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };
@@ -400,7 +428,7 @@ async function executeOperation(
           return command;
         }
       : command;
-    const reply = await poolFor(state, command, contentRead).run(input, {
+    const reply = await poolFor(state, command, contentRead, interactive).run(input, {
       inputBytes: options.inputBytes,
       transferList: options.transferList,
       signal: options.signal,
@@ -456,6 +484,13 @@ async function executeOperation(
       cleanupSucceeded = true;
     } finally {
       timing?.finish(cleanupSucceeded ? outcome : "threw");
+      if (observedAt !== undefined) {
+        operationDiagnostics.publish({
+          operation: command.type,
+          outcome: cleanupSucceeded && outcome === "returned" ? "ok" : "error",
+          elapsedMs: performance.now() - observedAt,
+        });
+      }
     }
   }
 }

@@ -40,7 +40,6 @@ import {
   resolveAcpAgentFromSessionKey,
 } from "./manager.utils.js";
 import {
-  normalizeRuntimeOptions,
   normalizeText,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
@@ -195,12 +194,9 @@ export async function ensureManagerRuntimeHandle(
     });
     try {
       assertCurrent();
-      if (params.readAcpControl?.()) {
-        await assertControlBindingCurrent();
-      }
       return ensured;
     } catch (error) {
-      // A control read can yield to reset before the caller receives this handle.
+      // Ensure may finish after its actor was reset.
       if (!isCurrentActor()) {
         await closeSupersededRuntimeHandle({
           runtime,
@@ -213,7 +209,6 @@ export async function ensureManagerRuntimeHandle(
   };
   let ensured: AcpRuntimeHandle;
   if (shouldPrepareFreshPersistentSession) {
-    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
     if (expectedControlBinding || params.readAcpControl?.()) {
       await assertControlBindingCurrent();
     }
@@ -269,10 +264,10 @@ export async function ensureManagerRuntimeHandle(
 
   const now = Date.now();
   const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
-  const nextRuntimeOptions = normalizeRuntimeOptions({
+  const nextRuntimeOptions = {
     ...runtimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-  });
+  };
   const ensuredIdentity = createIdentityFromEnsure({ handle: ensured, now });
   // A new physical record cannot inherit resolved IDs from the previous record.
   // In particular, a completed oneshot may be re-ensured for cleanup or status.
@@ -363,9 +358,6 @@ export async function ensureManagerRuntimeHandle(
       if (publication.refusal) {
         throw publication.refusal.error;
       }
-    }
-    if (expectedControlBinding || params.readAcpControl?.()) {
-      await assertControlBindingCurrent();
     }
     assertCurrent();
     params.runtimeHandles.set(params, {

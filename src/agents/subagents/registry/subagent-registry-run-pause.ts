@@ -189,7 +189,7 @@ export async function claimSubagentYieldInRuns(params: {
       if (entry.requesterSettleWake?.pauseNotice) {
         return { value: { messageWaitRegistered: true } };
       }
-      const next = structuredClone(entry);
+      const next = { ...entry };
       next.requesterSettleWake = {
         ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
         batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],

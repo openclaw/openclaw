@@ -2,26 +2,33 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import type { PendingWorktreeSlot } from "./pending-slots.worker.js";
+import { readWorktreeRegistryCommand } from "./registry-read.js";
 import { runWorktreeRunEndCommand } from "./registry-run-end.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "./types.js";
 
 export async function readWorktreeSlotCount(env: NodeJS.ProcessEnv): Promise<number> {
   const context = captureWorktreeRunEndContext(env);
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.slotCount",
-    input: undefined,
-  });
+  return (
+    (
+      await readWorktreeRegistryCommand(context, {
+        type: "worktrees.slotCount",
+        input: undefined,
+      })
+    )?.count ?? 0
+  );
 }
 
 export async function readPendingWorktrees(env: NodeJS.ProcessEnv): Promise<PendingWorktreeSlot[]> {
   const context = captureWorktreeRunEndContext(env);
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.pendingSlots",
-    input: undefined,
-  });
+  return (
+    (
+      await readWorktreeRegistryCommand(context, {
+        type: "worktrees.pendingSlots",
+        input: undefined,
+      })
+    )?.records ?? []
+  );
 }
 
 export function reservePendingWorktree(

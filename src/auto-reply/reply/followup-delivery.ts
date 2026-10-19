@@ -40,11 +40,11 @@ import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
@@ -319,7 +319,6 @@ export async function resolveFollowupDeliveryDecision(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (!hasTerminalPayload && completion.outcome === "missing" && !turn.operation.result) {
-    turn.operation.retainFailureUntilComplete();
     turn.operation.fail("run_failed", new Error(MISSING_REPLY_NOTICE_TEXT));
     opts?.onAgentRunTerminalOutcome?.("failed");
   }
@@ -549,13 +548,13 @@ async function sendFollowupPayloads(params: {
       }
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
-        logVerbose(`followup queue: route-reply failed: ${routeError}`);
+        (dispatcherAvailable ? logVerbose : defaultRuntime.error)?.(
+          `followup queue: route-reply failed: ${routeError}`,
+        );
         if (sameChannelOrigin && dispatcherAvailable) {
           await dispatchPayload(payload);
         } else if (dispatcherAvailable) {
           crossChannelFailures.push(payload);
-        } else {
-          defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
         for (const correlation of turn.queued.deliveryCorrelations ?? []) {
@@ -634,12 +633,16 @@ export async function deliverFollowupDecision(params: {
       sourceDisposition?.kind === "deliver"
         ? sourceDisposition.deliver.createSourceRetry?.()
         : undefined;
-    const retryRun = retryDelivery
-      ? {
-          ...decision.run,
-          queuedFollowupReplyDisposition: { kind: "deliver" as const, deliver: retryDelivery },
-        }
-      : decision.run;
+    // A sanctioned stranded-final retry is a new input, not replay of the
+    // consumed source or its already-released controller claim.
+    const retryRun = {
+      ...decision.run,
+      controllerInput: undefined,
+      controllerClaim: undefined,
+      ...(retryDelivery
+        ? { queuedFollowupReplyDisposition: { kind: "deliver" as const, deliver: retryDelivery } }
+        : {}),
+    };
     const enqueued =
       key &&
       enqueueFollowupRun(
@@ -653,7 +656,10 @@ export async function deliverFollowupDecision(params: {
         "none",
         params.runFollowup,
         false,
-        { position: "front" },
+        {
+          position: "front",
+          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+        },
       );
     if (enqueued) {
       return { kind: "source-retry" };

@@ -30,6 +30,7 @@ import {
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import { replaceChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { normalizeChatComposerDraft } from "./composer-draft.ts";
 import {
   captureChatComposerDraftSnapshot,
@@ -460,7 +461,7 @@ export function restoreChatComposerState(
     state.chatReplyTarget = snapshot.replyTarget ?? null;
   }
   if ((!options.preserveCurrent && snapshot.queue.length > 0) || state.chatQueue.length === 0) {
-    state.chatQueue = snapshot.queue;
+    replaceChatOutboxQueue(state, snapshot.queue);
   }
   return true;
 }
@@ -487,12 +488,14 @@ export class ChatComposerPersistence {
       }
       state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
       state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-      state.requestUpdate?.();
     },
-    () => this.getState()?.requestUpdate?.(),
+    () => this.persistChangedState(),
   );
 
-  constructor(private readonly getState: () => DurableChatComposerPersistenceState | undefined) {}
+  constructor(
+    private readonly getState: () => DurableChatComposerPersistenceState | undefined,
+    private readonly onRestored: () => void = () => {},
+  ) {}
 
   get active(): boolean {
     return this.ready;
@@ -560,6 +563,7 @@ export class ChatComposerPersistence {
     this.lastPersisted = this.snapshot(state, revisions.committed, revisions.committed);
     this.durableRestoreProtected = false;
     this.durablePersistence.resetRestoreScope();
+    this.onRestored();
     return restored;
   }
 
@@ -896,6 +900,7 @@ export class ChatComposerPersistence {
       this.durableRestoreProtected = false;
       this.forceDurableOwnerRestore = true;
       this.durablePersistence.resetRestoreScope();
+      this.onRestored();
     }
     if (this.durableRestoreProtected) {
       this.durableRestoreProtected = false;
@@ -965,7 +970,7 @@ export class ChatComposerPersistence {
             expectedRevision: draft.revision,
           });
         }
-        state.requestUpdate?.();
+        this.onRestored();
       },
     );
   }

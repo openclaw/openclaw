@@ -3,7 +3,7 @@ import {
   decodePostgresError,
   decodePostgresRows,
   isPostgresConnectionError,
-  rewritePostgresPlaceholders,
+  preparePostgresQuery,
   validatePostgresBindings,
 } from "./protocol.js";
 
@@ -21,17 +21,44 @@ describe("experimental PostgreSQL SQL boundary", () => {
     ["SELECT $$?$$, $tag$?$tag$, ?", "SELECT $$?$$, $tag$?$tag$, $1"],
     ["SELECT data ?? ?, data ??| ?", "SELECT data ? $1, data ?| $2"],
   ])("rewrites only anonymous placeholders: %s", (input, expected) => {
-    expect(rewritePostgresPlaceholders(input)).toBe(expected);
+    expect(preparePostgresQuery(input).sql).toBe(expected);
   });
 
   it.each(["SELECT 1; /* x */ pragma foreign_keys"])(
     "refuses unsupported PRAGMA commands: %s",
     (input) => {
-      expect(() => rewritePostgresPlaceholders(input)).toThrow(
+      expect(() => preparePostgresQuery(input)).toThrow(
         "The experimental PostgreSQL engine does not support PRAGMA statements",
       );
     },
   );
+
+  it.each([
+    ["WITH changed AS (UPDATE entries SET value = ? RETURNING *) SELECT * FROM changed", "scoped"],
+    [
+      "WITH changed AS (WITH input AS (SELECT 1) DELETE FROM entries RETURNING *) SELECT * FROM changed",
+      "scoped",
+    ],
+    [
+      "WITH changed AS (INSERT INTO entries VALUES (?) RETURNING *) SELECT * FROM changed",
+      "scoped",
+    ],
+    ["MERGE INTO entries USING source ON false WHEN NOT MATCHED THEN INSERT VALUES (?)", "scoped"],
+    ["SELECT * INTO copied_entries FROM entries", "unscoped"],
+    ['SELECT t."id" INTO copied_entries FROM entries AS t', "unscoped"],
+    ['SELECT 1 AS "id" INTO copied_entries', "unscoped"],
+    ["SELECT 1. INTO copied_entries", "unscoped"],
+    [
+      "SELECT * INTO copied_entries FROM entries; INSERT INTO copied_entries VALUES (?)",
+      "unscoped",
+    ],
+    ["SELECT * FROM entries FOR UPDATE", undefined],
+    ["SELECT * FROM entries FOR NO KEY UPDATE", undefined],
+    ["SELECT t.update, t . /* column */ into FROM entries AS t", undefined],
+    ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", undefined],
+  ] as const)("retains mutation evidence while preparing %s", (input, expected) => {
+    expect(preparePostgresQuery(input).mutation).toBe(expected);
+  });
 
   it("accepts SQLite scalar and binary bindings", () => {
     expect(() =>
@@ -66,7 +93,6 @@ describe("experimental PostgreSQL SQL boundary", () => {
               truth: true,
             },
           ],
-          rowCount: 1,
           fields: [
             { name: "count", dataTypeID: 20 },
             { name: "bytes", dataTypeID: 17 },

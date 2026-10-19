@@ -74,16 +74,12 @@ it.runIf(process.platform !== "win32").each([
       : "process.stdout.write('settled-output'); process.exitCode = 143;";
     const source =
       owner === "entry"
-        ? "import {spawn} from 'node:child_process';" +
-          "import {attachChildProcessBridge} from " +
-          JSON.stringify(new URL("./child-process-bridge.ts", import.meta.url).href) +
-          ";" +
-          "import {runRespawnChildWithSignalBridge} from " +
+        ? "import {runRespawnChildWithSignalBridge} from " +
           JSON.stringify(new URL("./respawn-child-runner.ts", import.meta.url).href) +
           ";" +
           "process.exitCode = await runRespawnChildWithSignalBridge({command:process.execPath,args:['-e'," +
           JSON.stringify(child) +
-          "],env:{},runtime:{spawn,attachChildProcessBridge},onError:console.error});"
+          "],env:{},onError:console.error});"
         : "import {runRespawnedChild} from " +
           JSON.stringify(new URL("../../node-runtime-recovery.mjs", import.meta.url).href) +
           ";" +

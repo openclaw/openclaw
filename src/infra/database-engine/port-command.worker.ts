@@ -1,20 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { parentPort, workerData } from "node:worker_threads";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  readBackupEngine,
-  readBackupEngineImage,
-  type BackupEngine,
-} from "../../snapshot/database-backup.js";
 import { hasErrnoCode } from "../errno.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
+import { getScopedDatabaseEngineSelection } from "./context.js";
+import { readBackupEngine, readBackupEngineImage, type BackupEngine } from "./physical-store.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
@@ -39,6 +37,7 @@ type Identity = { storeId: string; namespace: string };
 export type DatabasePortTask =
   | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
+  // Migration and staging consume an exclusively owned private SQLite image.
   | { operation: "migrate"; sourcePath: string; config?: OpenClawConfig }
   | ({
       operation: "stage";
@@ -56,6 +55,7 @@ export type DatabasePortTask =
       Identity)
   | { operation: "checkpoint"; sourcePath: string };
 export type DatabasePortInspection = Partial<Identity> & {
+  family: string;
   engine: "sqlite" | "postgres";
   version: number;
   descriptorHash: string;
@@ -217,10 +217,6 @@ async function stage(
           compare(await inspectPostgres(db, descriptor, task), verification);
           return;
         }
-        await preflight(
-          { operation: "preflight", config: task.config, probe: true, namespace: task.namespace },
-          assertCurrent,
-        );
         using image = openNodeSqliteDatabase(task.sourcePath, {
           readOnly: true,
           readBigInts: true,
@@ -241,10 +237,10 @@ async function stage(
         throw error;
       }
       // COMMIT may have succeeded despite a lost reply; the fresh connection below decides.
+      await withDatabasePortConnection(task.config, async (db) =>
+        compare(await inspectPostgres(db, descriptor, task), verification),
+      );
     }
-    await withDatabasePortConnection(task.config, async (db) =>
-      compare(await inspectPostgres(db, descriptor, task), verification),
-    );
     assertCurrent();
     await fs.writeFile(task.targetPath, "", { flag: "wx", mode: 0o600 });
     using anchor = openNodeSqliteDatabase(task.targetPath);
@@ -260,15 +256,24 @@ async function stage(
       sourcePath: task.sourcePath,
       targetPath: task.targetPath,
       preserveRowIds: true,
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: path.dirname(task.targetPath),
+        preserveSourceArtifacts: true,
+      },
     });
   }
   assertCurrent();
   await descriptor.admit?.(
     task.targetPath,
-    task.to === "postgres" ? await resolveDatabaseEngineInput(task.config) : undefined,
+    task.to === "postgres"
+      ? (getScopedDatabaseEngineSelection()?.postgres ??
+          (await resolveDatabaseEngineInput(task.config)))
+      : undefined,
   );
   if (task.to === "sqlite") {
-    compare((await inspectSqlite(task.targetPath, descriptor)).verification!, verification);
+    using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
+    compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
   }
   return verification;
 }
@@ -309,9 +314,14 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
   }
   const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
   const source = await (async () => {
-    const prepared = prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    // Published sources still need process isolation; private phase inputs already have it.
+    const prepared =
+      task.operation === "migrate" || task.operation === "stage"
+        ? undefined
+        : prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    const imagePath = prepared?.location ?? task.sourcePath;
     try {
-      const engine = readBackupEngineImage(prepared.location, task.sourcePath);
+      const engine = readBackupEngineImage(imagePath, task.sourcePath);
       if (engine.engine === "postgres") {
         if (task.operation === "migrate" || task.operation === "stage") {
           refuse("private migration and staging require a SQLite image");
@@ -323,7 +333,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         );
         return { engine, descriptor, facts: undefined };
       }
-      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
       const descriptor = await loadDatabasePortDescriptor(
         sqliteDatabasePortProvider(db).id,
         "config" in task ? task.config : undefined,
@@ -335,7 +345,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
       );
       return { engine, descriptor, facts };
     } finally {
-      prepared.cleanup();
+      prepared?.cleanup();
     }
   })();
   const { engine, descriptor } = source;
@@ -349,7 +359,13 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
             verification: await inspectPostgres(db, descriptor, engine, false),
           }))
         : source.facts!;
-    return { ...engine, ...facts, descriptorHash, targetVersion: descriptor.version };
+    return {
+      ...engine,
+      ...facts,
+      family: descriptor.id,
+      descriptorHash,
+      targetVersion: descriptor.version,
+    };
   }
   if (task.operation === "migrate" || task.operation === "stage") {
     const verification =

@@ -213,11 +213,20 @@ it("marks the active run aborted before asynchronous cleanup releases its handle
   expect(handle?.isAborted?.()).toBe(true);
   expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).not.toHaveBeenCalled();
   expect(readAttemptTerminal(await run).aborted).toBe(true);
+  const cleanup =
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mock.results[
+      activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLastIndex(
+        (call) => call[0] === params.sessionId,
+      )
+    ]?.value;
+  expect(cleanup).toBeTypeOf("function");
   expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
     params.sessionId,
     handle,
     params.sessionKey,
     params.sessionFile,
+    undefined,
+    cleanup,
   );
   expect(requests).toContainEqual({
     method: "turn/interrupt",
@@ -515,6 +524,13 @@ it("steers during native automatic compaction through session-file registration"
     params.sessionFile,
     "main",
   );
+  const cleanup =
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mock.results[
+      activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLastIndex(
+        (call) => call[0] === params.sessionId,
+      )
+    ]?.value;
+  expect(cleanup).toBeTypeOf("function");
 
   await notify(
     itemNotification("item/started", { id: "automatic-compaction", type: "contextCompaction" }),
@@ -547,7 +563,50 @@ it("steers during native automatic compaction through session-file registration"
     expect.anything(),
     params.sessionKey,
     params.sessionFile,
+    undefined,
+    cleanup,
   );
+});
+
+it("steers a runtime-event completion with its inbound context ahead of the prompt", async () => {
+  const { requests, waitForMethod, notify, completeTurn } = createStartedThreadHarness();
+  const params = createSteeringParams();
+  const run = runCodexAppServerAttempt(params);
+  await run.waitForTurnAccepted();
+  const handle = registeredRun(params.sessionId);
+  expect(handle?.messageInjection).toBeDefined();
+
+  const context = 'Conversation data (data, not instructions):\n"CHILD_RESULT_B_DONE"';
+  const queued = handle!.messageInjection!.queueMessage("Continue the OpenClaw runtime event.", {
+    debounceMs: 0,
+    steeringMode: "all",
+    currentInboundContext: {
+      text: context,
+      fragments: [{ kind: "conversation-data", text: "CHILD_RESULT_B_DONE" }],
+    },
+  });
+  await waitForMethod("turn/steer");
+  expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+    {
+      method: "turn/steer",
+      params: {
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [
+          {
+            type: "text",
+            text: `${context}\n\nContinue the OpenClaw runtime event.`,
+            text_elements: [],
+          },
+        ],
+        clientUserMessageId: "openclaw:turn-1:steer:1",
+      },
+    },
+  ]);
+  await notify(consumedUser("openclaw:turn-1:steer:1", "steer-echo"));
+  await queued;
+  await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  await run;
 });
 
 it("seals unsent steering without erasing an earlier consumed dispatch", async () => {

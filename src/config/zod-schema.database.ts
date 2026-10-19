@@ -5,7 +5,7 @@ import { configUiMetadata, sensitive } from "./zod-schema.sensitive.js";
 
 const DatabaseFamilyEngineSchema = z.enum(["sqlite", "postgres"]).register(configUiMetadata, {
   label: "Family Database Engine (Experimental)",
-  help: "Override database.engine for this family. Changing an engine requires a port and a restart; it does not migrate existing data. Port, backup/restore, and update refuse mixed-engine installations until family-scoped support is available.",
+  help: "Override database.engine for this family. Changing an engine requires database port --family and a restart; editing config does not migrate existing data. Mixed-engine backup/restore preserves each store's engine, and updates require candidate family support.",
 });
 
 const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema }).optional();

@@ -153,7 +153,6 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
     const snapshot = vi.spyOn(projection, "withCurrentProjectionSnapshot");
     expect(await read()).toEqual(expected);
     expect(await read()).toEqual(expected);
-    expect(fixture.snapshot()).toEqual(fixture.original);
     expect(restore).toHaveBeenCalledWith(
       expect.objectContaining({
         workerData: expect.objectContaining({ operation: "cold-mutate" }),
@@ -161,6 +160,9 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
     );
     expect(decode).not.toHaveBeenCalled();
     expect(snapshot).not.toHaveBeenCalled();
+
+    // The fixture's full snapshot deliberately decodes rows on this thread.
+    expect(fixture.snapshot()).toEqual(fixture.original);
 
     // Exact reads still validate their selected payload after an external rewrite.
     fixture

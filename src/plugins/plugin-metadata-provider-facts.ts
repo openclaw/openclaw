@@ -13,8 +13,8 @@ import type {
   PluginProviderAuthAliasCandidate,
   PluginProviderAuthContribution,
 } from "./plugin-metadata-snapshot.types.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { collectPluginProviderRequestOwners } from "./plugin-provider-request-policy.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
@@ -22,6 +22,10 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
     " ",
   ),
 );
+
+export function isPluginProviderEndpointClass(endpointClass: string): boolean {
+  return PROVIDER_ENDPOINT_CLASSES.has(endpointClass);
+}
 
 function normalizeProviderHosts(value: unknown): string[] {
   return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
@@ -94,13 +98,6 @@ export function prepareProviderEndpoints(value: unknown): PluginManifestProvider
   return endpoints;
 }
 
-const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
-};
-
 /** Prepares package alias candidates without capturing current workspace trust. */
 export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginManifestRecord[]) {
   const aliases = new Map<string, PluginProviderAuthAliasCandidate[]>();
@@ -135,8 +132,8 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   for (const candidates of aliases.values()) {
     candidates.sort(
       (left, right) =>
-        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[left.plugin.origin] ?? Number.MAX_SAFE_INTEGER) -
-        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[right.plugin.origin] ?? Number.MAX_SAFE_INTEGER),
+        (PLUGIN_ORIGIN_PRIORITIES[left.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER) -
+        (PLUGIN_ORIGIN_PRIORITIES[right.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER),
     );
   }
   return aliases;
@@ -148,7 +145,7 @@ export function buildPluginMetadataProviderFacts(
 ) {
   const providerEndpoints = [...plugins, ...listOfficialExternalProviderEndpointManifests()]
     .flatMap((plugin) => prepareProviderEndpoints(plugin.providerEndpoints))
-    .filter((endpoint) => PROVIDER_ENDPOINT_CLASSES.has(endpoint.endpointClass));
+    .filter((endpoint) => isPluginProviderEndpointClass(endpoint.endpointClass));
   const providerRequests = new Map(
     [...collectPluginProviderRequestOwners(plugins)].map(([provider, { policy }]) => [
       provider,

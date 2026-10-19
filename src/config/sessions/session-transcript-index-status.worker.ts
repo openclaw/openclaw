@@ -140,42 +140,6 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
   });
 }
 
-/** Consume the writer's clean receipt without taking a write lock or host write grants. */
-export function isSessionTranscriptIndexStatusClean(db: EngineConnection): boolean {
-  if (isPostgresSqlConnection(db)) {
-    return false;
-  }
-  const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  if (
-    siblingWriteRevision === undefined ||
-    !schema ||
-    installations.get(db)?.schemaVersion !== schema.schemaVersion
-  ) {
-    return false;
-  }
-  const temporary = getNodeSqliteKysely<StatusDatabase>(db).withSchema("temp");
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      temporary
-        .selectFrom("openclaw_transcript_index_status")
-        .select("id")
-        .where("id", "=", 1)
-        .where("sibling_write_revision", "=", siblingWriteRevision)
-        .where("schema_version", "=", schema.schemaVersion)
-        .where("complete", "=", 1)
-        .where((eb) =>
-          eb.not(
-            eb.exists(
-              temporary.selectFrom("openclaw_transcript_index_pending").select("session_id"),
-            ),
-          ),
-        ),
-    ) !== undefined
-  );
-}
-
 /** Advance bounded maintenance inside the canonical writer's transaction. */
 export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   sessionIds: string[];

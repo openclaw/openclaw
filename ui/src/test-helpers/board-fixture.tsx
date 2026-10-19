@@ -3,8 +3,29 @@ import { createSignal } from "solid-js";
 import { BoardView } from "../components/board/board-view.tsx";
 import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../lib/board/view-types.ts";
-// The standalone fixture loads the app stylesheet for its board surfaces and menus.
 import "../styles.css";
+
+type Widget = BoardSnapshot["widgets"][number];
+function makeWidget(
+  name: string,
+  position: number,
+  sizeW: number,
+  sizeH: number,
+  overrides: Partial<Widget> = {},
+): Widget {
+  return {
+    name,
+    title: name.replaceAll("-", " ").replace(/^./, (letter) => letter.toUpperCase()),
+    position,
+    sizeW,
+    sizeH,
+    tabId: "overview",
+    contentKind: "html",
+    grantState: "none",
+    revision: 1,
+    ...overrides,
+  };
+}
 
 const initialSnapshot: BoardSnapshot = {
   sessionKey: "agent:main:board-fixture",
@@ -14,103 +35,27 @@ const initialSnapshot: BoardSnapshot = {
     { tabId: "operations", title: "Operations", position: 1, chatDock: "bottom" },
   ],
   widgets: [
-    {
-      name: "service-pulse",
-      tabId: "overview",
-      title: "Service pulse",
-      contentKind: "html",
-      presentation: "full-bleed",
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none",
-      revision: 3,
-    },
-    {
-      name: "content-controls",
-      tabId: "overview",
-      title: "Content controls",
-      contentKind: "html",
-      sizeW: 6,
-      sizeH: 6,
-      position: 1,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "local-time",
-      tabId: "overview",
-      title: "Local time",
-      contentKind: "html",
-      presentation: "frameless",
-      sizeW: 6,
-      sizeH: 5,
-      position: 2,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "deploy-window",
-      tabId: "overview",
-      title: "Deploy window",
+    makeWidget("service-pulse", 0, 6, 4, { presentation: "full-bleed", revision: 3 }),
+    makeWidget("content-controls", 1, 6, 6),
+    makeWidget("local-time", 2, 6, 5, { presentation: "frameless" }),
+    makeWidget("deploy-window", 3, 6, 4, {
       contentKind: "mcp-app",
-      sizeW: 6,
-      sizeH: 4,
-      position: 3,
       grantState: "granted",
       revision: 2,
-    },
-    {
-      name: "latency-bands",
-      tabId: "overview",
-      title: "Latency bands",
-      contentKind: "html",
-      presentation: "full-bleed",
-      sizeW: 4,
-      sizeH: 5,
-      position: 4,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "incident-tools",
-      tabId: "overview",
-      title: "Incident tools",
-      contentKind: "html",
-      sizeW: 4,
-      sizeH: 5,
-      position: 5,
-      grantState: "pending",
-      revision: 1,
-    },
-    {
-      name: "retired-report",
-      tabId: "overview",
-      title: "Retired report",
-      contentKind: "html",
-      sizeW: 4,
-      sizeH: 5,
-      position: 6,
-      grantState: "rejected",
-      revision: 4,
-    },
-    {
-      name: "worker-queue",
+    }),
+    makeWidget("latency-bands", 4, 4, 5, { presentation: "full-bleed" }),
+    makeWidget("incident-tools", 5, 4, 5, { grantState: "pending" }),
+    makeWidget("retired-report", 6, 4, 5, { grantState: "rejected", revision: 4 }),
+    makeWidget("worker-queue", 0, 12, 6, {
       tabId: "operations",
-      title: "Worker queue",
-      contentKind: "html",
       presentation: "full-bleed",
-      sizeW: 12,
-      sizeH: 6,
-      position: 0,
-      grantState: "none",
       revision: 5,
-    },
+    }),
   ],
 };
 
-function contentControlsDocument(): string {
-  return `<!doctype html><meta charset="utf-8"><style>
+const frameDocuments = {
+  "content-controls": `<!doctype html><meta charset="utf-8"><style>
     :root{color-scheme:dark;font-family:ui-sans-serif,system-ui,sans-serif}
     *{box-sizing:border-box}body{margin:0;color:#d9dce3;background:transparent}
     main{display:grid;gap:12px}h2{font-size:18px;margin:0}p{color:#8f98a6;font-size:12px;margin:0}
@@ -121,17 +66,14 @@ function contentControlsDocument(): string {
   <input aria-label="Release note" placeholder="Release note"></main><script>
     const report=()=>parent.postMessage({type:"openclaw:widget-size",height:document.body.scrollHeight},"*");
     addEventListener("load",report);addEventListener("resize",report);new ResizeObserver(report).observe(document.documentElement);
-  </script>`;
-}
-
-function clockDocument(): string {
-  return `<!doctype html><meta charset="utf-8"><style>
+  </script>`,
+  "local-time": `<!doctype html><meta charset="utf-8"><style>
     :root{color-scheme:dark;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     body{align-items:center;background:transparent;color:#d9dce3;display:grid;height:100vh;margin:0;text-align:center}
     .time{font-size:clamp(54px,12vw,104px);font-weight:680;letter-spacing:-.08em;line-height:.9}
     .zone{color:#778291;font-size:11px;letter-spacing:.18em;margin-top:14px}
-  </style><main><div class="time">10:42</div><div class="zone">LOCAL / SAN FRANCISCO</div></main>`;
-}
+  </style><main><div class="time">10:42</div><div class="zone">LOCAL / SAN FRANCISCO</div></main>`,
+};
 
 const frameCopy: Record<string, { eyebrow: string; value: string; detail: string }> = {
   "service-pulse": { eyebrow: "UPTIME / 24H", value: "99.982%", detail: "All regions nominal" },
@@ -141,11 +83,8 @@ const frameCopy: Record<string, { eyebrow: string; value: string; detail: string
 };
 
 function frameUrl(name: string): string {
-  if (name === "content-controls") {
-    return `data:text/html;charset=utf-8,${encodeURIComponent(contentControlsDocument())}`;
-  }
-  if (name === "local-time") {
-    return `data:text/html;charset=utf-8,${encodeURIComponent(clockDocument())}`;
+  if (name === "content-controls" || name === "local-time") {
+    return `data:text/html;charset=utf-8,${encodeURIComponent(frameDocuments[name])}`;
   }
   const copy = frameCopy[name] ?? { eyebrow: "WIDGET", value: name, detail: "Mock fixture" };
   const document = `<!doctype html><meta charset="utf-8"><style>
@@ -167,17 +106,19 @@ function frameUrl(name: string): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(document)}`;
 }
 
+function sortedTabWidgets(widgets: readonly Widget[], tabId: string) {
+  const siblings = widgets.filter((widget) => widget.tabId === tabId);
+  return siblings.toSorted(
+    (left, right) => left.position - right.position || left.name.localeCompare(right.name),
+  );
+}
+
 function normalizePositions(snapshot: BoardSnapshot): BoardSnapshot {
   const widgets = snapshot.widgets.map((widget) => ({ ...widget }));
   for (const tab of snapshot.tabs) {
-    widgets
-      .filter((widget) => widget.tabId === tab.tabId)
-      .toSorted(
-        (left, right) => left.position - right.position || left.name.localeCompare(right.name),
-      )
-      .forEach((widget, position) => {
-        widget.position = position;
-      });
+    sortedTabWidgets(widgets, tab.tabId).forEach((widget, position) => {
+      widget.position = position;
+    });
   }
   return { ...snapshot, widgets };
 }
@@ -192,11 +133,7 @@ function moveFixtureWidget(
   }
   const tabId = op.tabId ?? moving.tabId;
   const remaining = snapshot.widgets.filter((widget) => widget.name !== op.name);
-  const destination = remaining
-    .filter((widget) => widget.tabId === tabId)
-    .toSorted(
-      (left, right) => left.position - right.position || left.name.localeCompare(right.name),
-    );
+  const destination = sortedTabWidgets(remaining, tabId);
   const afterIndex = op.after ? destination.findIndex((widget) => widget.name === op.after) : -1;
   const requestedPosition =
     afterIndex >= 0
@@ -222,30 +159,19 @@ export function applyBoardFixtureOps(
     if (op.kind === "widget_remove") {
       next.widgets = next.widgets.filter((widget) => widget.name !== op.name);
     } else if (op.kind === "widget_resize") {
-      next.widgets = next.widgets.map((widget) => {
-        if (widget.name !== op.name) {
-          return widget;
-        }
-        if (
-          widget.sizeW === op.sizeW &&
-          widget.sizeH === op.sizeH &&
-          (op.heightMode === undefined || widget.heightMode === op.heightMode)
-        ) {
-          return widget;
-        }
-        return {
-          ...widget,
-          sizeW: op.sizeW,
-          sizeH: op.sizeH,
-          ...(op.heightMode !== undefined ? { heightMode: op.heightMode } : {}),
-        };
-      });
+      const size = {
+        sizeW: op.sizeW,
+        sizeH: op.sizeH,
+        ...(op.heightMode !== undefined ? { heightMode: op.heightMode } : {}),
+      };
+      next.widgets = next.widgets.map((widget) =>
+        widget.name === op.name ? { ...widget, ...size } : widget,
+      );
     } else if (op.kind === "widget_move") {
       next = moveFixtureWidget(next, op);
     }
   }
-  next = normalizePositions(next);
-  return { ...next, revision: next.revision + 1 };
+  return { ...normalizePositions(next), revision: next.revision + 1 };
 }
 
 function BoardFixture() {
@@ -274,7 +200,7 @@ function BoardFixture() {
           <h1>Launch control</h1>
         </div>
         <div class="board-fixture-status">
-          <i></i> fixture online
+          <i /> fixture online
         </div>
       </header>
       <BoardView

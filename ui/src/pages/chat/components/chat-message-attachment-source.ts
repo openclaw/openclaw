@@ -99,7 +99,7 @@ function setManagedAttachmentAvailability(
 function resolveManagedAttachmentAvailability(
   attachment: AttachmentItem["attachment"],
   resolveArtifactDownload: ArtifactDownloadResolver | undefined,
-  onRequestUpdate: (() => void) | undefined,
+  onMediaChange: (() => void) | undefined,
   connectionEpoch: number | undefined,
 ): ManagedAttachmentAvailability {
   if (!isManagedOutgoingMediaSource(attachment.url)) {
@@ -119,7 +119,7 @@ function resolveManagedAttachmentAvailability(
   const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
     "managed-media",
     cacheKey,
-    onRequestUpdate,
+    onMediaChange,
     attachment.url,
   );
   const cached = resource.value;
@@ -241,7 +241,7 @@ function resolveManagedAttachmentAvailability(
 
 function retryManagedAttachmentAvailability(
   attachment: AttachmentItem["attachment"],
-  onRequestUpdate: (() => void) | undefined,
+  onMediaChange: (() => void) | undefined,
   connectionEpoch: number | undefined,
 ): void {
   if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
@@ -250,20 +250,20 @@ function retryManagedAttachmentAvailability(
   const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
     "managed-media",
     `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
-    onRequestUpdate,
+    onMediaChange,
     attachment.url,
   );
   resource.value = undefined;
   resource.retryAttempted = false;
   notifyChatMediaResourceSubscribers(resource);
-  onRequestUpdate?.();
+  onMediaChange?.();
 }
 
 export function resolveAttachmentSource(
   attachment: AttachmentItem["attachment"],
   options: ImageRenderOptions,
 ) {
-  const { resourceBasePath, authToken, onRequestUpdate, resolveArtifactDownload, connectionEpoch } =
+  const { resourceBasePath, authToken, onMediaChange, resolveArtifactDownload, connectionEpoch } =
     options;
   const assistantAvailability = resolveAssistantAttachmentAvailability(attachment.url, options);
   if (assistantAvailability.status !== "available") {
@@ -285,7 +285,7 @@ export function resolveAttachmentSource(
   const managedAvailability = resolveManagedAttachmentAvailability(
     attachment,
     resolveArtifactDownload,
-    onRequestUpdate,
+    onMediaChange,
     connectionEpoch,
   );
   if (managedAvailability.status !== "available") {
@@ -297,7 +297,7 @@ export function resolveAttachmentSource(
         managedAvailability.status === "unavailable" &&
         attachment.artifactId &&
         resolveArtifactDownload
-          ? () => retryManagedAttachmentAvailability(attachment, onRequestUpdate, connectionEpoch)
+          ? () => retryManagedAttachmentAvailability(attachment, onMediaChange, connectionEpoch)
           : undefined,
     };
   }

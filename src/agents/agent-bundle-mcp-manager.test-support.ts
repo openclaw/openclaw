@@ -93,20 +93,22 @@ export async function getOrCreateSessionMcpRuntime(
 
 export function createSessionMcpRuntimeManager({
   scheduler = createTestGatewayScheduler(),
-  ...opts
-}: Partial<Parameters<typeof createManager>[0]> = {}) {
+  createRuntime,
+}: Partial<Parameters<typeof createManager>[0]> & {
+  createRuntime?: CreateSessionMcpRuntime;
+} = {}) {
   const createLifecycle = managerLifecycle.createSessionMcpRuntimeManagerLifecycle;
   let store: ManagerStore | undefined;
   const lifecycleSpy = vi
     .spyOn(managerLifecycle, "createSessionMcpRuntimeManagerLifecycle")
-    .mockImplementation((...args) => {
-      const lifecycle = createLifecycle(...args);
+    .mockImplementation((options, defaultCreateRuntime) => {
+      const lifecycle = createLifecycle(options, createRuntime ?? defaultCreateRuntime);
       store = lifecycle.store;
       return lifecycle;
     });
   let manager: ReturnType<typeof createManager>;
   try {
-    manager = createManager({ ...opts, scheduler });
+    manager = createManager({ scheduler });
   } finally {
     lifecycleSpy.mockRestore();
   }

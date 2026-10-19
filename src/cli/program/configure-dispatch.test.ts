@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { defaultRuntime, ExitError } from "../../runtime.js";
+import { ExitError } from "../../runtime.js";
 import { registerConfigCli } from "../config-cli.js";
 import { registerConfigureCommand } from "./register.configure.js";
 
@@ -43,18 +43,15 @@ describe("registered configure dispatch", { concurrent: false }, () => {
 
   it.each(routes)("%s omits sections for the full chooser", async (route) => {
     await parse(route);
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({}, defaultRuntime);
-    expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(defaultRuntime);
+    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({});
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each(routes)("%s preserves repeated, trimmed section values", async (route) => {
     await parse(route, ["--section", " channels ", "--section", "health", "--section", "channels"]);
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(
-      { sections: ["channels", "health", "channels"] },
-      defaultRuntime,
-    );
-    expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(defaultRuntime);
+    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({
+      sections: ["channels", "health", "channels"],
+    });
   });
 
   it.each(routes)("%s waits for the admitted wizard to settle", async (route) => {

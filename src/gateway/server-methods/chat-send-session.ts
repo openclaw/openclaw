@@ -44,6 +44,7 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -386,6 +387,7 @@ export async function prepareChatSendSession(params: {
     goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
     eligible:
+      !readChatInputRecoveryAdmission(p.idempotencyKey) &&
       (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
       turnKind === "main" &&
       normalizedAttachments.length === 0 &&
@@ -465,7 +467,8 @@ function assertCurrentChatSendSession(
   if (
     latest.agentId !== session.sessionTarget.agentId ||
     (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
-    !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource)
+    (session.sessionTarget.readSource &&
+      !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource))
   ) {
     throw new Error("Session storage changed while starting work. Retry.");
   }

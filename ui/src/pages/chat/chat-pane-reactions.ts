@@ -14,7 +14,6 @@ import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 
 export abstract class ChatPaneReactions extends ChatPaneSharingActions {
-  protected messageReactions = new Map<string, MessageReactionSummary[]>();
   private reactionTarget = "";
   private reactionGeneration = 0;
   private reactionReadUpdates: Map<string, MessageReactionSummary[]> | undefined;
@@ -24,7 +23,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   protected resetSessionReactions(): void {
     this.reactionGeneration += 1;
     this.reactionTarget = "";
-    this.messageReactions = new Map();
+    this.collaboration.reactions = new Map();
     this.reactionReadUpdates = undefined;
     this.reactionRevisions.clear();
     this.reactionWrites.clear();
@@ -81,7 +80,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
           return;
         }
         // Events committed after the list began outrank its older snapshot.
-        this.messageReactions = new Map([...Object.entries(result.reactions), ...updates]);
+        this.collaboration.reactions = new Map([...Object.entries(result.reactions), ...updates]);
       })
       .catch((error: unknown) => {
         if (isCurrent()) {
@@ -91,7 +90,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       .finally(() => {
         if (generation === this.reactionGeneration) {
           this.reactionReadUpdates = undefined;
-          this.invalidate();
         }
       });
   }
@@ -119,8 +117,10 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       (this.reactionRevisions.get(event.messageId) ?? 0) + 1,
     );
     this.reactionReadUpdates?.set(event.messageId, event.reactions);
-    this.messageReactions = new Map(this.messageReactions).set(event.messageId, event.reactions);
-    this.invalidate();
+    this.collaboration.reactions = new Map(this.collaboration.reactions).set(
+      event.messageId,
+      event.reactions,
+    );
   }
 
   protected readonly handleMessageReaction = (
@@ -170,7 +170,10 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         return;
       }
       if ((this.reactionRevisions.get(messageId) ?? 0) === revision) {
-        this.messageReactions = new Map(this.messageReactions).set(messageId, result.reactions);
+        this.collaboration.reactions = new Map(this.collaboration.reactions).set(
+          messageId,
+          result.reactions,
+        );
         this.reactionReadUpdates?.set(messageId, result.reactions);
       }
     } catch (error) {
@@ -184,7 +187,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         this.reactionWrites.get(messageId) === operation
       ) {
         this.reactionWrites.delete(messageId);
-        this.invalidate();
       }
     }
   };

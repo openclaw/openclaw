@@ -148,6 +148,7 @@ export interface DecisionRuntimeV1 {
       /** Defaults to requested; optional work leaves capacity for requested evaluations. */
       readonly priority?: "requested" | "optional";
       readonly rubricVersion: string;
+      /** Budget includes preparation; provider cleanup remains physically awaited. */
       readonly timeoutMs: number;
       readonly signal: AbortSignal;
     },

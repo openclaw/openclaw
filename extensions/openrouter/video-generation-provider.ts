@@ -9,14 +9,13 @@ import {
   createProviderOperationDeadline,
   pollProviderOperation,
   postJsonRequest,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeVideoGenerationDuration,
-  selectSupportedVideoDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
   type VideoGenerationRequest,
@@ -66,22 +65,6 @@ type OpenRouterImagePart = {
 type OpenRouterFrameImagePart = OpenRouterImagePart & {
   frame_type: "first_frame" | "last_frame";
 };
-
-async function readOpenRouterVideoJson(response: Response): Promise<Record<string, unknown>> {
-  let payload: unknown;
-  try {
-    payload = await readProviderJsonResponse<unknown>(response, "OpenRouter video generation");
-  } catch (error) {
-    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
-      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE, { cause: error });
-    }
-    throw error;
-  }
-  if (!isRecord(payload)) {
-    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-  }
-  return payload;
-}
 
 function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRouterVideoResponse {
   const unsignedUrls = payload.unsigned_urls;
@@ -169,19 +152,6 @@ function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined)
   return { frameImages, inputReferences };
 }
 
-function resolveDurationSeconds(
-  durationSeconds: number | undefined,
-  supportedDurations: readonly number[] = SUPPORTED_DURATION_SECONDS,
-): number | undefined {
-  const rounded = normalizeVideoGenerationDuration({ durationSeconds });
-  if (rounded === undefined) {
-    return undefined;
-  }
-  const effectiveDurations =
-    supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS;
-  return selectSupportedVideoDuration(rounded, effectiveDurations);
-}
-
 function resolveSeed(seed: unknown): number | undefined {
   if (typeof seed !== "number") {
     return undefined;
@@ -203,7 +173,11 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
     prompt: req.prompt,
   };
 
-  const duration = resolveDurationSeconds(req.durationSeconds, supportedDurations);
+  const duration = normalizeVideoGenerationDuration({
+    durationSeconds: req.durationSeconds,
+    supportedDurationSeconds:
+      supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS,
+  });
   if (duration != null) {
     body.duration = duration;
   }
@@ -289,7 +263,11 @@ async function pollOpenRouterVideo(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video status request failed");
-        return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
+        return readOpenRouterVideoResponse(
+          await readProviderJsonObjectResponse(response, "OpenRouter video generation", {
+            malformedResponseError: OPENROUTER_VIDEO_MALFORMED_RESPONSE,
+          }),
+        );
       } finally {
         await release();
       }
@@ -412,7 +390,11 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
 
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video generation failed");
-        const submitted = readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
+        const submitted = readOpenRouterVideoResponse(
+          await readProviderJsonObjectResponse(response, "OpenRouter video generation", {
+            malformedResponseError: OPENROUTER_VIDEO_MALFORMED_RESPONSE,
+          }),
+        );
         const jobId = submitted.id;
         const pollingUrl = submitted.polling_url;
         if (!jobId || !pollingUrl) {

@@ -12,6 +12,7 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -23,9 +24,29 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import * as rowInputs from "../session-utils-row.js";
+import { listProjectRecents } from "./projects-recents.js";
 import { loadProjectSessionStore } from "./projects-session-store.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
+
+test("folder recents deduplicate normalized nodes without merging different runners", async () => {
+  const candidates = [" node-a ", "node-a", "node-b", " ", undefined].map((execNode, index) => ({
+    key: `agent:main:folder-${index}`,
+    agentId: "main",
+    entry: { sessionId: `folder-${index}`, updatedAt: index, spawnedCwd: "/work/app", execNode },
+  }));
+  const usedSessions = new Set<string>();
+  expect(await listProjectRecents(candidates, [], usedSessions)).toEqual([
+    { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-a" },
+    { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-b" },
+    { kind: "folder", folder: "/work/app", displayName: "app" },
+  ]);
+  expect([...usedSessions]).toEqual([
+    "agent:main:folder-0",
+    "agent:main:folder-2",
+    "agent:main:folder-3",
+  ]);
+});
 
 test("projects.list reuses durable metadata until a committed session change", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-reuse-" });
@@ -367,7 +388,14 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     }
     const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
-    const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
+    const databasePath = openOpenClawStateDatabase().path;
+    projection.dispose();
+    projection = undefined;
+    releaseCatalog();
+    releaseCatalog = undefined;
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    // External repairs require offline custody; live writes use the profile owner.
+    const external = new (requireNodeSqlite().DatabaseSync)(databasePath);
     try {
       external
         .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
@@ -375,6 +403,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     } finally {
       external.close();
     }
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const afterAliasChange = await invokeProjectMethod(
       "projects.list",
       {},

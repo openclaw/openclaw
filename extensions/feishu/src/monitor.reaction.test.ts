@@ -18,6 +18,7 @@ import {
 } from "./monitor.account.js";
 import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
 import { setFeishuRuntime } from "./runtime.js";
+import * as send from "./send.js";
 import type { FeishuMessageInfo, ResolvedFeishuAccount } from "./types.js";
 
 const handleFeishuMessageMock = vi.hoisted(() =>
@@ -92,16 +93,18 @@ function fetchedMessage(overrides: Partial<FeishuMessageInfo> = {}): FeishuMessa
   };
 }
 function resolveReaction(
-  params: Partial<Parameters<typeof resolveReactionSyntheticEvent>[0]> = {},
+  params: Partial<Parameters<typeof resolveReactionSyntheticEvent>[0]> & {
+    fetchMessage?: typeof send.getMessageFeishu;
+  } = {},
 ) {
+  const { fetchMessage = async () => fetchedMessage(), ...options } = params;
+  vi.spyOn(send, "getMessageFeishu").mockImplementation(fetchMessage);
   return resolveReactionSyntheticEvent({
     cfg: {},
     accountId: "default",
     event: makeReactionEvent(),
     botOpenId: "ou_bot",
-    fetchMessage: async () => fetchedMessage(),
-    uuid: () => "fixed-uuid",
-    ...params,
+    ...options,
   });
 }
 function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
@@ -275,10 +278,9 @@ describe("resolveReactionSyntheticEvent", () => {
   it("drops unverified reactions when sender verification times out", async () => {
     vi.useFakeTimers();
     const pending = resolveReaction({
-      verificationTimeoutMs: 1,
       fetchMessage: () => new Promise<never>(() => {}),
     });
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_500);
     await expect(pending).resolves.toBeNull();
   });
 

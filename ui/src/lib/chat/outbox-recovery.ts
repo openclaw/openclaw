@@ -11,7 +11,6 @@ import type {
 } from "./chat-types.ts";
 import { findChatSubmissionMessage } from "./history-message-identity.ts";
 import { outboxPayloadCanRecover } from "./outbox-payload-store.runtime.ts";
-import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
 import type { ComposerStorageTarget, StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
@@ -493,7 +492,7 @@ function consumeChatOutboxRecovery(
       delivered && (hasStoredComposerDraftInput(current.session) || remainingQueue?.length)
         ? {
             ...current,
-            session: normalizeStoredSession({ ...current.session, queue: remainingQueue })!,
+            session: { ...current.session, queue: remainingQueue },
           }
         : undefined;
     // Publication or retirement consumes the account recovery row in the same write.

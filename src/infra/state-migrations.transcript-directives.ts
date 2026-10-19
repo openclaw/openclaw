@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
+import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import {
   OpenClawAgentDatabaseLeaseActiveError,
   assertNoOpenClawAgentDatabaseLeases,
@@ -15,9 +17,11 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db-maintenance.js";
+import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
+import { requireNativeDatabaseFile } from "./database-engine/physical-facts.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -25,6 +29,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { backupDoctorSqliteRepair } from "./sqlite-index-recovery.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
@@ -36,6 +41,7 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import {
+  type ArchiveSessionLineTransform,
   migrateTranscriptDirectiveArchives,
   recoverPendingTranscriptArchivePublication,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
@@ -43,12 +49,22 @@ import {
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import {
-  parseDirectiveMigrationTranscriptEvent,
-  transformHistoricalTranscriptEvent,
+  createMaskedProviderResolver,
+  type MaskedProviderResolver,
+  recordRestoredProviders,
+} from "./state-migrations.transcript-directives-providers.js";
+import {
+  type HistoricalTranscriptLineResult,
+  type HistoricalTranscriptRepairScope,
+  MASKED_PROVIDER_JSON,
+  MASKED_TRANSCRIPT_PROVIDER,
+  repairHistoricalTranscriptEventJson,
 } from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const MIGRATION_META_KEY = "historical-transcript-directives-v1";
+// Version 2 added masked-provider repair. Unversioned cursors were written by version 1.
+const MIGRATION_CURSOR_VERSION = 2;
 
 type TranscriptDirectiveMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -56,25 +72,35 @@ type TranscriptDirectiveMigrationDatabase = Pick<
 >;
 
 type MigrationCursor =
-  | { phase: "transcripts"; sessionId: string }
-  | { generation: string; phase: "archives"; sessionId: string }
+  | { phase: "transcripts"; scope: HistoricalTranscriptRepairScope; sessionId: string }
+  | {
+      generation: string;
+      phase: "archives";
+      scope: HistoricalTranscriptRepairScope;
+      sessionId: string;
+    }
   | { phase: "complete" };
 
 type TranscriptRowPlan = {
+  directivesChanged: boolean;
   eventJson: string;
+  maskedProvider?: HistoricalTranscriptLineResult["maskedProvider"];
   rewrittenEventJson: string;
   seq: number;
 };
 
+type MaskedProviderCounts = { restored: number; unresolved: number };
+
 type DatabaseMigrationResult = {
   archivedTranscripts: number;
+  maskedProviders: MaskedProviderCounts;
   transcriptSessions: number;
   warnings: string[];
 };
 
 function parseMigrationCursor(value: string | null | undefined, pathname: string): MigrationCursor {
   if (!value) {
-    return { phase: "transcripts", sessionId: "" };
+    return { phase: "transcripts", scope: "all", sessionId: "" };
   }
   let parsed: unknown;
   try {
@@ -87,11 +113,29 @@ function parseMigrationCursor(value: string | null | undefined, pathname: string
   if (!isRecord(parsed)) {
     throw new Error(`${pathname} has an invalid historical transcript migration cursor`);
   }
+  if (parsed.version === undefined) {
+    // A completed version 1 pass reopens once for masked-provider repair alone. An
+    // interrupted one restarts both idempotent transforms so no earlier session is skipped.
+    if (parsed.phase === "complete") {
+      return { phase: "transcripts", scope: "masked-provider", sessionId: "" };
+    }
+    if (parsed.phase === "transcripts" || parsed.phase === "archives") {
+      return { phase: "transcripts", scope: "all", sessionId: "" };
+    }
+    throw new Error(`${pathname} has an invalid historical transcript migration cursor`);
+  }
+  if (parsed.version !== MIGRATION_CURSOR_VERSION) {
+    throw new Error(`${pathname} has an invalid historical transcript migration cursor`);
+  }
   if (parsed.phase === "complete") {
     return { phase: "complete" };
   }
+  const scope = parsed.scope;
+  if (scope !== "all" && scope !== "masked-provider") {
+    throw new Error(`${pathname} has an invalid historical transcript migration cursor`);
+  }
   if (parsed.phase === "transcripts" && typeof parsed.sessionId === "string") {
-    return { phase: "transcripts", sessionId: parsed.sessionId };
+    return { phase: "transcripts", scope, sessionId: parsed.sessionId };
   }
   if (
     parsed.phase === "archives" &&
@@ -101,13 +145,14 @@ function parseMigrationCursor(value: string | null | undefined, pathname: string
     return {
       generation: parsed.generation,
       phase: "archives",
+      scope,
       sessionId: parsed.sessionId,
     };
   }
   throw new Error(`${pathname} has an invalid historical transcript migration cursor`);
 }
 
-function readMigrationCursor(database: DatabaseSync, pathname: string): MigrationCursor {
+function readMigrationCursor(database: EngineConnection, pathname: string): MigrationCursor {
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -125,7 +170,7 @@ function writeMigrationCursor(
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
   const row = {
     agent_id: agentId,
-    app_version: JSON.stringify(cursor),
+    app_version: JSON.stringify({ ...cursor, version: MIGRATION_CURSOR_VERSION }),
     role: "agent",
     schema_version: 1,
     updated_at: now,
@@ -143,22 +188,51 @@ function writeMigrationCursor(
   );
 }
 
-function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: string): string[] {
+/**
+ * Candidate rows without decoding every payload. Identity rows hold the masked value in
+ * `event_json`; compressed rows always carry a navigation projection that keeps
+ * `message.provider`, so only matching compressed rows are decoded.
+ */
+function transcriptCandidateFilter(
+  database: EngineConnection,
+  scope: HistoricalTranscriptRepairScope,
+) {
+  const maskedProvider = isPostgresSqlConnection(database)
+    ? /* kysely-allow-raw: substring prefilter over stored JSON columns; parsed events decide. */ sql<boolean>`(strpos(transcript_events.event_json, ${MASKED_PROVIDER_JSON}) > 0 OR strpos(transcript_events.navigation_json, ${MASKED_PROVIDER_JSON}) > 0)`
+    : /* kysely-allow-raw: substring prefilter over stored JSON columns; parsed events decide. */ sql<boolean>`(instr(transcript_events.event_json, ${MASKED_PROVIDER_JSON}) > 0 OR instr(transcript_events.navigation_json, ${MASKED_PROVIDER_JSON}) > 0)`;
+  return scope === "masked-provider"
+    ? maskedProvider
+    : /* kysely-allow-raw: directive rows still need the decoded payload predicate. */ sql<boolean>`(${transcriptEventJsonSql(database)} LIKE '%[[%' OR ${maskedProvider})`;
+}
+
+/**
+ * Candidate sessions after the cursor, from one rowid-order scan. Ordering, DISTINCT or a
+ * session range would walk the primary-key index and fetch every row out of order, which
+ * is several times slower on large databases.
+ */
+function listTranscriptCandidateSessions(
+  database: EngineConnection,
+  scope: HistoricalTranscriptRepairScope,
+  afterSessionId: string,
+): string[] {
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
-  return executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     database,
     db
       .selectFrom("transcript_events")
       .select("session_id")
-      .distinct()
-      .where("session_id", ">", afterSessionId)
-      .where(transcriptEventJsonSql(database), "like", "%[[%")
-      .orderBy("session_id", "asc")
-      .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE),
-  ).rows.map((row) => row.session_id);
+      .where(transcriptCandidateFilter(database, scope)),
+  ).rows;
+  return [...new Set(rows.map((row) => row.session_id))]
+    .filter((sessionId) => sessionId > afterSessionId)
+    .toSorted();
 }
 
-function readTranscriptSessionRows(database: DatabaseSync, sessionId: string) {
+function readTranscriptSessionRows(
+  database: EngineConnection,
+  scope: HistoricalTranscriptRepairScope,
+  sessionId: string,
+) {
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
   return executeSqliteQuerySync(
     database,
@@ -166,25 +240,31 @@ function readTranscriptSessionRows(database: DatabaseSync, sessionId: string) {
       .selectFrom("transcript_events")
       .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
       .where("session_id", "=", sessionId)
-      .where(transcriptEventJsonSql(database), "like", "%[[%")
+      .where(transcriptCandidateFilter(database, scope))
       .orderBy("seq", "asc"),
   ).rows;
 }
 
-function planTranscriptSession(
-  database: DatabaseSync,
-  pathname: string,
-  sessionId: string,
-): TranscriptRowPlan[] {
-  return readTranscriptSessionRows(database, sessionId).map((row) => {
-    const event = parseDirectiveMigrationTranscriptEvent(
-      row.event_json,
-      `${pathname}:${sessionId}:${row.seq}`,
-    );
-    const transformed = transformHistoricalTranscriptEvent(event);
+function planTranscriptSession(params: {
+  database: EngineConnection;
+  pathname: string;
+  resolveMaskedProvider: MaskedProviderResolver;
+  scope: HistoricalTranscriptRepairScope;
+  sessionId: string;
+}): TranscriptRowPlan[] {
+  const resolveMaskedProvider = params.resolveMaskedProvider(params.sessionId);
+  return readTranscriptSessionRows(params.database, params.scope, params.sessionId).map((row) => {
+    const repaired = repairHistoricalTranscriptEventJson({
+      raw: row.event_json,
+      owner: `${params.pathname}:${params.sessionId}:${row.seq}`,
+      scope: params.scope,
+      resolveMaskedProvider,
+    });
     return {
+      directivesChanged: repaired.directivesChanged,
       eventJson: row.event_json,
-      rewrittenEventJson: transformed.changed ? JSON.stringify(transformed.event) : row.event_json,
+      maskedProvider: repaired.maskedProvider,
+      rewrittenEventJson: repaired.content,
       seq: row.seq,
     };
   });
@@ -192,10 +272,11 @@ function planTranscriptSession(
 
 function assertTranscriptSessionSourceUnchanged(
   database: DatabaseSync,
+  scope: HistoricalTranscriptRepairScope,
   sessionId: string,
   planned: readonly TranscriptRowPlan[],
 ): void {
-  const current = readTranscriptSessionRows(database, sessionId);
+  const current = readTranscriptSessionRows(database, scope, sessionId);
   if (
     current.length !== planned.length ||
     current.some(
@@ -208,27 +289,52 @@ function assertTranscriptSessionSourceUnchanged(
 }
 
 function transcriptSessionsNeedMigration(
-  database: DatabaseSync,
+  database: EngineConnection,
   pathname: string,
-  afterSessionId: string,
+  start: Extract<MigrationCursor, { phase: "transcripts" }>,
+  resolveMaskedProvider: MaskedProviderResolver,
 ): boolean {
-  let cursor = afterSessionId;
-  while (true) {
-    const sessionIds = listTranscriptSessionBatch(database, cursor);
-    if (sessionIds.length === 0) {
-      return false;
-    }
-    for (const sessionId of sessionIds) {
-      if (
-        planTranscriptSession(database, pathname, sessionId).some(
-          (row) => row.rewrittenEventJson !== row.eventJson,
-        )
-      ) {
-        return true;
+  return listTranscriptCandidateSessions(database, start.scope, start.sessionId).some((sessionId) =>
+    planTranscriptSession({
+      database,
+      pathname,
+      resolveMaskedProvider,
+      scope: start.scope,
+      sessionId,
+    }).some((row) => row.rewrittenEventJson !== row.eventJson),
+  );
+}
+
+type ArchiveRepairObservations = {
+  directivesChanged: boolean;
+  // Changed archives are streamed twice (inspect, then re-encode); key outcomes by line owner.
+  maskedProviderLines: Map<string, "restored" | "unresolved">;
+  unrecordedRestoredLines: Set<string>;
+};
+
+function createArchiveLineTransform(
+  scope: HistoricalTranscriptRepairScope,
+  resolveMaskedProvider: MaskedProviderResolver,
+  observed?: ArchiveRepairObservations,
+): ArchiveSessionLineTransform {
+  return (raw, owner, sessionId) => {
+    const repaired = repairHistoricalTranscriptEventJson({
+      raw,
+      owner,
+      scope,
+      resolveMaskedProvider: resolveMaskedProvider(sessionId),
+    });
+    if (observed) {
+      observed.directivesChanged ||= repaired.directivesChanged;
+      if (repaired.maskedProvider) {
+        observed.maskedProviderLines.set(owner, repaired.maskedProvider);
+      }
+      if (repaired.maskedProvider === "restored") {
+        observed.unrecordedRestoredLines.add(owner);
       }
     }
-    cursor = sessionIds.at(-1) ?? cursor;
-  }
+    return repaired;
+  };
 }
 
 function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): boolean {
@@ -246,81 +352,115 @@ function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): b
 async function migrateTranscriptSessions(params: {
   agentId: string;
   database: DatabaseSync;
+  maskedProviders: MaskedProviderCounts;
   owner: OpenClawAgentDatabase;
   pathname: string;
+  resolveMaskedProvider: MaskedProviderResolver;
   start: Extract<MigrationCursor, { phase: "transcripts" }>;
-  beforeRewrite: () => void;
+  backupBeforeDirectiveRewrite: () => void;
 }): Promise<number> {
+  const { scope } = params.start;
   let rewrittenSessions = 0;
-  let afterSessionId = params.start.sessionId;
-  while (true) {
-    const sessionIds = listTranscriptSessionBatch(params.database, afterSessionId);
-    if (sessionIds.length === 0) {
-      runSqliteImmediateTransactionSync(
-        params.database,
-        () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          writeMigrationCursor(params.database, params.agentId, {
-            generation: "",
-            phase: "archives",
-            sessionId: "",
-          });
-          assertAgentDatabaseMaintenanceAuthority();
-        },
-        {
-          databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-directives.cursor",
-        },
-      );
-      return rewrittenSessions;
-    }
-    for (const sessionId of sessionIds) {
-      const planned = planTranscriptSession(params.database, params.pathname, sessionId);
-      const changedRows = planned.filter((row) => row.rewrittenEventJson !== row.eventJson);
-      runSqliteImmediateTransactionSync(
-        params.database,
-        () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          assertTranscriptSessionSourceUnchanged(params.database, sessionId, planned);
-          if (changedRows.length > 0) {
-            params.beforeRewrite();
-          }
-          updateSqliteTranscriptEventJsonInTransaction(
-            params.owner,
-            sessionId,
-            changedRows.map((row) => ({
-              eventJson: row.rewrittenEventJson,
-              seq: row.seq,
-            })),
-          );
-          writeMigrationCursor(params.database, params.agentId, {
-            phase: "transcripts",
-            sessionId,
-          });
-          assertAgentDatabaseMaintenanceAuthority();
-        },
-        {
-          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-directives",
-        },
-      );
-      rewrittenSessions += changedRows.length > 0 ? 1 : 0;
-      afterSessionId = sessionId;
-    }
-    // Keep the caller responsive between bounded batches. The next transaction
-    // revalidates maintenance ownership before mutating state.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+  const sessionIds = listTranscriptCandidateSessions(
+    params.database,
+    scope,
+    params.start.sessionId,
+  );
+  for (const [index, sessionId] of sessionIds.entries()) {
+    const planned = planTranscriptSession({
+      database: params.database,
+      pathname: params.pathname,
+      resolveMaskedProvider: params.resolveMaskedProvider,
+      scope,
+      sessionId,
     });
+    const changedRows = planned.filter((row) => row.rewrittenEventJson !== row.eventJson);
+    const directivesChanged = changedRows.some((row) => row.directivesChanged);
+    const restoredSeqs = planned
+      .filter((row) => row.maskedProvider === "restored")
+      .map((row) => row.seq);
+    runSqliteImmediateTransactionSync(
+      params.database,
+      () => {
+        assertAgentDatabaseMaintenanceAuthority();
+        assertTranscriptSessionSourceUnchanged(params.database, scope, sessionId, planned);
+        if (directivesChanged) {
+          params.backupBeforeDirectiveRewrite();
+        }
+        updateSqliteTranscriptEventJsonInTransaction(
+          params.owner,
+          sessionId,
+          changedRows.map((row) => ({
+            eventJson: row.rewrittenEventJson,
+            seq: row.seq,
+          })),
+          // A provider is not part of any indexed fact.
+          { indexUnchanged: !directivesChanged },
+        );
+        if (restoredSeqs.length > 0) {
+          recordRestoredProviders(params.database, params.agentId, (record) => {
+            record.transcriptRows[sessionId] = [
+              ...(record.transcriptRows[sessionId] ?? []),
+              ...restoredSeqs,
+            ];
+          });
+        }
+        writeMigrationCursor(params.database, params.agentId, {
+          phase: "transcripts",
+          scope,
+          sessionId,
+        });
+        assertAgentDatabaseMaintenanceAuthority();
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: params.pathname,
+        operationLabel: "historical-transcript-directives",
+      },
+    );
+    rewrittenSessions += changedRows.length > 0 ? 1 : 0;
+    for (const row of planned) {
+      if (row.maskedProvider) {
+        params.maskedProviders[row.maskedProvider] += 1;
+      }
+    }
+    if ((index + 1) % TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE === 0) {
+      // Keep the caller responsive between bounded batches. The next transaction
+      // revalidates maintenance ownership before mutating state.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
   }
+  runSqliteImmediateTransactionSync(
+    params.database,
+    () => {
+      assertAgentDatabaseMaintenanceAuthority();
+      writeMigrationCursor(params.database, params.agentId, {
+        generation: "",
+        phase: "archives",
+        scope,
+        sessionId: "",
+      });
+      assertAgentDatabaseMaintenanceAuthority();
+    },
+    {
+      databaseLabel: params.pathname,
+      operationLabel: "historical-transcript-directives.cursor",
+    },
+  );
+  return rewrittenSessions;
 }
 
 async function migrateAgentDatabase(
   params: { agentId: string; pathname: string; changes: string[] },
   maintenance: OpenClawStateLeaseContext,
 ): Promise<DatabaseMigrationResult> {
-  await migrateOpenClawAgentDatabaseForMaintenance(params, maintenance);
+  // Schema maintenance verifies the whole database. A converged current schema needs no
+  // repeat before row rewrites; Doctor's schema steps own that verification.
+  if (!readAgentDatabaseSchemaCurrent(params)) {
+    await migrateOpenClawAgentDatabaseForMaintenance(params, maintenance);
+  }
   maintenance.assertOwned();
   const database = openNodeSqliteDatabase(params.pathname);
   try {
@@ -335,11 +475,25 @@ async function migrateAgentDatabase(
         pathname: params.pathname,
         signal: resolveSqliteInspectionSignal(maintenance.signal),
       });
-      return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
+      return {
+        archivedTranscripts: 0,
+        maskedProviders: { restored: 0, unresolved: 0 },
+        transcriptSessions: 0,
+        warnings,
+      };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
+    const resolveMaskedProvider = createMaskedProviderResolver(database);
+    const maskedProviders: MaskedProviderCounts = { restored: 0, unresolved: 0 };
+    const archiveObservations: ArchiveRepairObservations = {
+      directivesChanged: false,
+      maskedProviderLines: new Map(),
+      unrecordedRestoredLines: new Set(),
+    };
     let preserved = false;
-    const beforeRewrite = () => {
+    // Directive edits keep the full pre-repair backup; provider restores are undone from
+    // their recorded rows.
+    const backupBeforeDirectiveRewrite = () => {
       if (!preserved) {
         const backup = backupDoctorSqliteRepair(params.pathname, "transcript-directives");
         preserved = true;
@@ -351,10 +505,12 @@ async function migrateAgentDatabase(
         ? await migrateTranscriptSessions({
             agentId: params.agentId,
             database,
+            maskedProviders,
             owner,
             pathname: params.pathname,
+            resolveMaskedProvider,
             start: cursor,
-            beforeRewrite,
+            backupBeforeDirectiveRewrite,
           })
         : 0;
     const archiveCursor = readMigrationCursor(database, params.pathname);
@@ -366,20 +522,58 @@ async function migrateAgentDatabase(
             pathname: params.pathname,
             signal: maintenance.signal,
             start: archiveCursor,
-            beforeRewrite,
+            // Runs inside each archive rewrite transaction, after its batch was planned.
+            beforeRewrite: () => {
+              if (archiveObservations.directivesChanged) {
+                backupBeforeDirectiveRewrite();
+              }
+              const lines = [...archiveObservations.unrecordedRestoredLines];
+              if (lines.length > 0) {
+                recordRestoredProviders(database, params.agentId, (record) => {
+                  record.archiveLines.push(...lines);
+                });
+                archiveObservations.unrecordedRestoredLines.clear();
+              }
+            },
+            transformLine: createArchiveLineTransform(
+              archiveCursor.scope,
+              resolveMaskedProvider,
+              archiveObservations,
+            ),
             writeCursor: (next) =>
               writeMigrationCursor(
                 database,
                 params.agentId,
-                "phase" in next ? next : { ...next, phase: "archives" },
+                "phase" in next ? next : { ...next, phase: "archives", scope: archiveCursor.scope },
               ),
           })
         : { rewrittenArchives: 0, warnings: [] };
+    for (const outcome of archiveObservations.maskedProviderLines.values()) {
+      maskedProviders[outcome] += 1;
+    }
     return {
       archivedTranscripts: archives.rewrittenArchives,
+      maskedProviders,
       transcriptSessions,
       warnings: archives.warnings,
     };
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
+}
+
+function readAgentDatabaseSchemaCurrent(params: { agentId: string; pathname: string }): boolean {
+  const database = openNodeSqliteDatabase(params.pathname, { readOnly: true });
+  try {
+    const userVersion = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+    if (userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+      return false;
+    }
+    assertOpenClawAgentDatabaseForMaintenance(database, params);
+    return true;
+  } catch {
+    return false;
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
@@ -391,41 +585,55 @@ async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
   env: NodeJS.ProcessEnv;
   pathname: string;
 }): Promise<boolean> {
-  const database = openNodeSqliteDatabase(params.pathname, { readOnly: true });
+  const postgres = agentEngineInput() !== undefined;
+  if (!postgres && !readAgentDatabaseSchemaCurrent(params)) {
+    return true;
+  }
+  const retained = postgres
+    ? retainOpenClawAgentDatabaseReadOnly({
+        agentId: params.agentId,
+        path: params.pathname,
+        env: params.env,
+      })
+    : undefined;
+  if (retained && !retained.found) {
+    throw new Error(`Agent database is unavailable for transcript inspection: ${params.pathname}`);
+  }
+  const database = retained?.found
+    ? retained.database.db
+    : openNodeSqliteDatabase(params.pathname, { readOnly: true });
   try {
-    const userVersion = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-    if (userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
-      return true;
-    }
-    try {
-      assertOpenClawAgentDatabaseForMaintenance(database, params);
-    } catch {
-      return true;
-    }
     const cursor = readMigrationCursor(database, params.pathname);
-    if (cursor.phase === "complete") {
-      return transcriptDirectiveArchiveRecoveryPending(database);
+    const resolveMaskedProvider = createMaskedProviderResolver(database);
+    const needsRepair =
+      cursor.phase === "complete"
+        ? transcriptDirectiveArchiveRecoveryPending(database)
+        : // Native migration records a cursor even without changes. PostgreSQL inspects actual work.
+          (!postgres && !hasActiveAgentDatabaseLease(params.agentId, params.env)) ||
+          (cursor.phase === "transcripts" &&
+            transcriptSessionsNeedMigration(
+              database,
+              params.pathname,
+              cursor,
+              resolveMaskedProvider,
+            )) ||
+          (await transcriptDirectiveArchivesNeedMigration(
+            database,
+            cursor.phase === "archives" ? cursor : { generation: "", sessionId: "" },
+            createArchiveLineTransform(cursor.scope, resolveMaskedProvider),
+          ));
+    // Clean PostgreSQL history needs no file rewrite; real repairs retain their backup refusal.
+    if (postgres && needsRepair) {
+      requireNativeDatabaseFile("postgres", "repair");
     }
-    if (
-      cursor.phase === "transcripts" &&
-      transcriptSessionsNeedMigration(database, params.pathname, cursor.sessionId)
-    ) {
-      return true;
-    }
-    if (
-      await transcriptDirectiveArchivesNeedMigration(
-        database,
-        cursor.phase === "archives"
-          ? { generation: cursor.generation, sessionId: cursor.sessionId }
-          : { generation: "", sessionId: "" },
-      )
-    ) {
-      return true;
-    }
-    return !hasActiveAgentDatabaseLease(params.agentId, params.env);
+    return needsRepair;
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(database);
-    database.close();
+    if (retained?.found) {
+      retained.claim.release();
+    } else if (!isPostgresSqlConnection(database)) {
+      clearNodeSqliteKyselyCacheForDatabase(database);
+      database.close();
+    }
   }
 }
 
@@ -488,11 +696,22 @@ export async function migrateHistoricalTranscriptDirectives(
               { agentId: target.agentId, pathname: target.path, changes },
               maintenance,
             );
+            const { maskedProviders } = result;
+            if (maskedProviders.unresolved > 0) {
+              result.warnings.push(
+                `Left ${maskedProviders.unresolved} historical transcript row(s) with masked provider "${MASKED_TRANSCRIPT_PROVIDER}" in ${target.path}: no single provider was recorded for their session and model.`,
+              );
+            }
             warnings.push(...result.warnings);
             recoverableWarningCount += result.warnings.length;
+            if (maskedProviders.restored > 0) {
+              changes.push(
+                `Restored masked provider on ${maskedProviders.restored} historical transcript row(s) in ${target.path} from recorded session runtime facts.`,
+              );
+            }
             if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
               changes.push(
-                `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,
+                `Repaired historical transcripts in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,
               );
             }
           } catch (error) {

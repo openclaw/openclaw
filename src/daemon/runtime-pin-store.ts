@@ -1,15 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { resolveStateDir } from "../config/paths.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { preparePrivateStoreFileSync } from "../infra/private-store-file.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -41,17 +39,7 @@ export function resolveDaemonRuntimePinStorePath(env: NodeJS.ProcessEnv): string
   return path.join(resolveStateDir(env), "control", "services.sqlite");
 }
 
-function createPrivateIfMissing(create: () => void): void {
-  try {
-    create();
-  } catch (error) {
-    if (!(error instanceof FsSafeError && error.code === "already-exists")) {
-      throw error;
-    }
-  }
-}
-
-export function withDaemonRuntimePinStore<T>(
+function withDaemonRuntimePinDatabase<T>(
   env: NodeJS.ProcessEnv,
   writable: boolean,
   operation: (db: DatabaseSync) => T,
@@ -66,14 +54,7 @@ export function withDaemonRuntimePinStore<T>(
     return undefined;
   }
   if (writable) {
-    if (!parent) {
-      fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
-      createPrivateIfMissing(() => createDirectorySync(directory, { private: true }));
-    }
-    applyPrivateModeSync(directory, 0o700);
-    if (!fs.existsSync(pathname)) {
-      createPrivateIfMissing(() => createFileSync(pathname, { private: true }).close());
-    }
+    preparePrivateStoreFileSync(pathname, Boolean(parent));
   }
   const opened = openRootFileSync({
     absolutePath: pathname,
@@ -102,6 +83,18 @@ export function withDaemonRuntimePinStore<T>(
         timeout: 5000,
       },
     );
+    return operation(db);
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}
+
+export function withDaemonRuntimePinStore<T>(
+  env: NodeJS.ProcessEnv,
+  writable: boolean,
+  operation: (db: DatabaseSync) => T,
+): T | undefined {
+  return withDaemonRuntimePinDatabase(env, writable, (db) => {
     if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
       const version = readSqliteUserVersion(db);
       if (
@@ -128,9 +121,31 @@ export function withDaemonRuntimePinStore<T>(
       publishSqliteDatabaseAdmission(db, schemaAdmission, true);
     }
     return writable ? runSqliteImmediateTransactionSync(db, () => operation(db)) : operation(db);
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  });
+}
+
+/** The versioned receipt is independent of pin-data admission until a pin is used. */
+export function readDaemonRuntimePinMigrationReceipt(env: NodeJS.ProcessEnv) {
+  return withDaemonRuntimePinDatabase(env, false, (db) => {
+    try {
+      return executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<DaemonRuntimePinDatabase>(db)
+          .selectFrom("daemon_runtime_pin_migration")
+          .select(["source_state", "phase"])
+          .where("version", "=", 1),
+      );
+    } catch (error) {
+      // A crash before schema creation leaves an empty file; normal migration admits it.
+      if (
+        error instanceof Error &&
+        /no such table: daemon_runtime_pin_migration/u.test(error.message)
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+  });
 }
 
 export function readDaemonRuntimePinValue(db: DatabaseSync, key: string): unknown {
@@ -151,6 +166,11 @@ export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEn
   }
   const pathname = resolveDaemonRuntimePinStorePath(env);
   if (!unshippedMigrations.has(pathname)) {
+    const receipt = readDaemonRuntimePinMigrationReceipt(env);
+    if (receipt?.phase === "complete" && receipt.source_state === "none/unshipped") {
+      unshippedMigrations.add(pathname);
+      return true;
+    }
     withDaemonRuntimePinStore(env, true, (db) =>
       db
         .prepare(`INSERT INTO daemon_runtime_pin_migration VALUES (1, 'none/unshipped', 'complete', ?)

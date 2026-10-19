@@ -1079,6 +1079,7 @@ async function spawnManagedServiceUpdateHandoff(
   const logPath = path.join(dir, "handoff.log");
   const commandOptions = {
     acceptCapabilities: params.acceptCapabilities,
+    fullIntegrityCheck: params.fullIntegrityCheck,
     admission: params.admission,
     reapplyLocalOverrides: params.reapplyLocalOverrides,
     timeoutMs: params.timeoutMs,

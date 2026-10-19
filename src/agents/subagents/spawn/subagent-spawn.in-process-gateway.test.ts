@@ -164,6 +164,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     let launchCount = 0;
     gatewayContext.recoveryRuntime = {
       prepareRestartRecovery: () => undefined,
+      resumeChatInput: async () => {
+        throw new Error("Unexpected fixture chat input recovery");
+      },
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
@@ -500,6 +503,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
           throw new Error("worker execution authority is no longer active");
         }
       },
+      requesterOrigin: {
+        sessionKey: "agent:main:telegram:direct:worker-alice",
+        messageProvider: "telegram",
+        accountId: "default",
+        senderId: "worker-alice",
+      },
       sessionKey: "agent:main:main",
       sessionTarget: captureSessionTranscriptTargetBinding({
         agentId: "main",
@@ -519,6 +528,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       },
     };
     let childIdentity: AgentRuntimeIdentity | undefined;
+    let childRequester: WorkerTurnExecutionIdentity["requesterOrigin"];
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -526,6 +536,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
       ) => {
         childIdentity = readInProcessAgentRuntimeIdentity(options);
+        childRequester = options?.agentToolCaller?.requesterOrigin;
+        expect(params).not.toHaveProperty("requesterOrigin");
         return { runId: params.idempotencyKey, status: "accepted" } as T;
       },
     });
@@ -546,6 +558,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
                 operationalRunInstance: current.operationalRunInstance,
                 executionIdentityToken: current.executionIdentityToken,
                 receiptAuthority: current.receiptAuthority,
+                requesterOrigin: current.requesterOrigin,
                 workerTurnClaim: current.turnClaim,
                 workerTurnExecutionIdentityCapability: capability,
               },
@@ -563,6 +576,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
       expect(result.status).toBe("accepted");
       expect(validations).toBe(2);
+      expect(childRequester).toEqual(identity.requesterOrigin);
       expect(childIdentity?.delegatedAuthority).toMatchObject({
         kind: "worker",
         turnClaim,

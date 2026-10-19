@@ -10,7 +10,6 @@ import {
 import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -97,7 +96,6 @@ function replaceDispatchPayload(
 export type { ReplyDispatchBeforeDeliver };
 export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadlineOwned };
 
-const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const { deliveryOutcomeTrackers, undeliveredFallbacks, conversationContextsByDispatcher } =
   resolveGlobalSingleton(Symbol.for("openclaw.replyDispatcherState"), () => ({
     deliveryOutcomeTrackers: new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>(),
@@ -513,7 +511,6 @@ export function createReplyDispatcher(
     deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
-    const originalWasSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
     const normalizedPrimary =
       getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
         ? ({ kind: "deliver", payload } as const)
@@ -531,13 +528,6 @@ export function createReplyDispatcher(
           : null;
     const normalizedInput = normalized ? replaceDispatchPayload(input, normalized) : null;
     if (!normalizedInput) {
-      if (kind === "final" && originalWasSilent) {
-        silentReplyLogger.debug("silent final payload was skipped before delivery", {
-          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
-          surface: options.silentReplyContext?.surface,
-          conversationType: options.silentReplyContext?.conversationType,
-        });
-      }
       return false;
     }
     let deliveryFallback =

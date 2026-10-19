@@ -3,14 +3,12 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
@@ -208,7 +206,10 @@ export function createUpdateStatusRefresher(params: {
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
   onRefreshing: (refreshing: boolean) => void;
-  onStatus: (response: UpdateRestartStatusResponse) => void;
+  onStatus: (
+    response: UpdateRestartStatusResponse,
+    isCurrent: () => boolean,
+  ) => void | Promise<void>;
   onError: (error: unknown, mode: "manual" | "completion") => void;
 }) {
   const refresh = async (
@@ -230,34 +231,32 @@ export function createUpdateStatusRefresher(params: {
       params.onRefreshing(true);
     }
     try {
-      const pending = client
-        .request<UpdateRestartStatusResponse>(
-          "update.status",
-          refreshCheckout ? { refreshCheckout: true } : {},
-          // Checkout discovery uses the Gateway's Git command budgets.
-          { timeoutMs: refreshCheckout ? null : 5_000 },
-        )
-        .catch((error: unknown) => {
-          if (mode !== "background" && isCurrent()) {
-            params.onError(error, mode);
-          }
-          return null;
-        });
+      const pending = client.request<UpdateRestartStatusResponse>(
+        "update.status",
+        refreshCheckout ? { refreshCheckout: true } : {},
+        // Checkout discovery uses the Gateway's Git command budgets.
+        { timeoutMs: refreshCheckout ? null : 5_000 },
+      );
       // Start discovery first, but do not make progress wait for network Git.
       const progress = refreshCheckout ? refresh("background") : null;
       const response = await pending;
       if (response && isCurrent()) {
         if (refreshCheckout) {
           params.onError(null, "manual");
-          params.onStatus(response);
+          await params.onStatus(response, isCurrent);
           // The fast read may predate the fetch. Reconcile the target before
           // the caller opens confirmation.
           await progress;
           return isCurrent() && (await refresh("completion"));
         }
         params.onError(null, "completion");
-        params.onStatus(response);
-        return true;
+        await params.onStatus(response, isCurrent);
+        return isCurrent();
+      }
+      return false;
+    } catch (error) {
+      if (mode !== "background" && isCurrent()) {
+        params.onError(error, mode);
       }
       return false;
     } finally {
@@ -293,11 +292,11 @@ function projectUpdateCheckoutResponse(
   current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
 ) {
   const updateSchedule = Object.hasOwn(response, "schedule")
-    ? readUpdateScheduleValue(response.schedule)
+    ? (response.schedule ?? null)
     : undefined;
   return {
     ...(Object.hasOwn(response, "updateAvailable")
-      ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
+      ? { updateAvailable: response.updateAvailable ?? null }
       : {}),
     ...(updateSchedule !== undefined
       ? {
@@ -311,13 +310,16 @@ function projectUpdateCheckoutResponse(
   };
 }
 
-export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTriage | null {
+export async function projectUpdateRunFailure(
+  run: UpdateRunRecord,
+): Promise<UpdateFailureTriage | null> {
   if (
     isAcknowledgedAbandonedUpdateRun(run) ||
     (run.status !== "failed" && run.status !== "rolled-back")
   ) {
     return null;
   }
+  const { renderUpdateRunReport } = await import("../../../src/infra/update-run-report.js");
   const step = run.steps.findLast((entry) => entry.status === "failed");
   return {
     id: run.runId,

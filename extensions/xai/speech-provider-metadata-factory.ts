@@ -77,7 +77,7 @@ export function xaiSpeechResponseFormatToFileExtension(
 
 function normalizeXaiSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalObjectRecord(rawConfig.providers);
-  const xai = asOptionalObjectRecord(providers?.xai ?? rawConfig.xai ?? rawConfig) ?? {};
+  const xai = asOptionalObjectRecord(providers?.xai) ?? {};
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: xai.apiKey,

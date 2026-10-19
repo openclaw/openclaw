@@ -2,6 +2,9 @@ import { listCoreToolSections } from "../../../../src/agents/tool-catalog.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../../../src/agents/tools/automations-tool-name.js";
 import type { ToolCatalogProfile, ToolsCatalogResult } from "../../api/types.ts";
 import { t, translateActive } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+
+registerSettingsEnglish();
 
 export type AgentToolEntry = {
   id: string;

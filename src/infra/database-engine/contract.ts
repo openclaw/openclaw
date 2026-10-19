@@ -67,6 +67,7 @@ export type StoreSchema = {
   searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;

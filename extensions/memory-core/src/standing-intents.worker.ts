@@ -39,26 +39,18 @@ export function bindSqliteWorkerBackend(
   const db = context.database;
   const transact = <T>(run: () => T): T => {
     try {
-      return runSqliteImmediateTransactionSync(
-        db,
-        () => {
-          context.admit("transaction");
-          return run();
+      return runSqliteImmediateTransactionSync(db, run, {
+        withCommit(commit) {
+          context.admit("commit");
+          commit();
         },
-        {
-          withCommit(commit) {
-            context.admit("commit");
-            commit();
-          },
-        },
-      );
+      });
     } catch (error) {
       // A refused commit must not retain deadlines from its rolled-back transitions.
       invalidateStandingIntentLifecycle(db);
       throw error;
     }
   };
-  let schemaPrepared = false;
   if (isPostgresSqlConnection(db)) {
     const definition = standingIntentSearchSchema(db);
     try {
@@ -71,25 +63,16 @@ export function bindSqliteWorkerBackend(
         throw error;
       }
       context.admitSearchExtensions({ "memory.standing-intents": definition });
-      schemaPrepared = true;
     }
   } else {
-    // First-use installation commits independently and consumes this request's grant pair.
+    // Keep first-use installation durable if the following business transaction fails.
     withSqlitePostCommitPublications(db, () =>
-      ensureOpenClawAgentStandingIntentsSchema(db, (run) => {
-        const result = transact(run);
-        schemaPrepared = true;
-        return result;
-      }),
+      ensureOpenClawAgentStandingIntentsSchema(db, transact),
     );
   }
   return bindSqliteWorkerDatabase<StandingIntentWorkerOperations>(db, {
     execute(command) {
-      if (schemaPrepared) {
-        return { kind: "schema-prepared" };
-      }
       const result = <T>(value: T) => ({
-        kind: "result" as const,
         value,
         nextDueAt: getStandingIntentLifecycleDeadline(db),
       });

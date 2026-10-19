@@ -8,6 +8,7 @@ const subagentRegistryMocks = vi.hoisted(() => ({
   registryAnnounce: vi.fn<typeof runSubagentAnnounceFlow>(),
   registryWake: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(),
   registryWrite: vi.fn<() => void>(),
+  pendingWakeRoots: new Set<Promise<void>>(),
 }));
 
 export { subagentRegistryMocks };
@@ -60,14 +61,26 @@ vi.mock(
       await importOriginal<
         typeof import("../../agents/subagents/announce/subagent-announce.requester-settle-wake.js")
       >();
+    const { captureGatewayRootWorkReleaseObserver } =
+      await import("../../process/gateway-work-admission.js");
     return {
       ...actual,
       maybeWakeRequesterAfterAllChildrenSettled: (
         ...args: Parameters<typeof actual.maybeWakeRequesterAfterAllChildrenSettled>
-      ) =>
-        subagentRegistryMocks.registryWake.getMockImplementation()
+      ) => {
+        // Cleanup publication precedes this detached wake's worker reads and final release.
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        if (observeRelease) {
+          const released = new Promise<void>((resolve) => {
+            observeRelease(() => resolve());
+          });
+          subagentRegistryMocks.pendingWakeRoots.add(released);
+          void released.then(() => subagentRegistryMocks.pendingWakeRoots.delete(released));
+        }
+        return subagentRegistryMocks.registryWake.getMockImplementation()
           ? subagentRegistryMocks.registryWake(...args)
-          : actual.maybeWakeRequesterAfterAllChildrenSettled(...args),
+          : actual.maybeWakeRequesterAfterAllChildrenSettled(...args);
+      },
     };
   },
 );
@@ -80,6 +93,12 @@ vi.mock("../../agents/runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
   return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
 });
+
+export async function settleAgentSubagentWakeRoots(): Promise<void> {
+  while (subagentRegistryMocks.pendingWakeRoots.size > 0) {
+    await Promise.all(subagentRegistryMocks.pendingWakeRoots);
+  }
+}
 
 export function resetSubagentRegistryMocks() {
   subagentRegistryMocks.registryCallGateway.mockReset().mockResolvedValue({ status: "pending" });

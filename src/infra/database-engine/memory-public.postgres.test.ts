@@ -92,8 +92,18 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 function config(): OpenClawConfig {
   return {
+    database: {
+      engine: "postgres",
+      postgres: {
+        connection: { source: "env", provider: "default", id: "OPENCLAW_MEMORY_PUBLIC_POSTGRES" },
+        schemaPrefix: prefix,
+      },
+    },
     plugins: { enabled: false },
-    agents: { entries: { main: { workspace }, semantic: { workspace } } },
+    agents: {
+      ownership: "explicit",
+      entries: { main: { workspace }, semantic: { workspace } },
+    },
     memory: {
       search: {
         provider: providerId,
@@ -120,9 +130,10 @@ async function managerFor(
   cfg: OpenClawConfig,
   purpose: "cli" | "status" = "cli",
   agentId = "main",
+  inspectSources = false,
 ) {
   setRuntimeConfigSnapshot(cfg);
-  const result = await runtime.getMemorySearchManager({ cfg, agentId, purpose });
+  const result = await runtime.getMemorySearchManager({ cfg, agentId, purpose, inspectSources });
   assert(result.manager, result.error ?? "Expected public PostgreSQL memory manager");
   return result.manager;
 }
@@ -155,6 +166,7 @@ async function selectCapabilityDatabase(name: string) {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateRoot, "openclaw.json"));
   const url = new URL(connection!);
   url.pathname = `/${name}`;
+  vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", url.href);
   resetDatabaseEngineSelectionForTest();
   installDatabaseEngineSelection({
     effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
@@ -165,6 +177,7 @@ async function selectCapabilityDatabase(name: string) {
 
 describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", connection!);
     registerEmbeddingProvider({
       id: providerId,
       transport: "remote",
@@ -200,6 +213,7 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
       postgres: { connection: connection!, schemaPrefix: prefix },
     });
+    vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", connection!);
     client = new pg.Client({ connectionString: connection });
     await client.connect();
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
@@ -284,15 +298,41 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     expect(indexed.vector?.index?.state).toBe("complete");
     await runtime.closeAllMemorySearchManagers?.();
 
-    const reopened = await managerFor(config(), "status");
+    assert(indexed.dbPath);
+    let namespace: string;
+    {
+      using anchor = openNodeSqliteDatabase(indexed.dbPath, { readOnly: true });
+      const row = anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get();
+      assert(typeof row?.schema === "string");
+      namespace = row.schema;
+    }
+    const indexRows = async () => ({
+      sources: (await client.query(`SELECT * FROM "${namespace}".memory_index_sources ORDER BY id`))
+        .rows,
+      chunks: (await client.query(`SELECT * FROM "${namespace}".memory_index_chunks ORDER BY id`))
+        .rows,
+      metadata: (await client.query(`SELECT * FROM "${namespace}".memory_index_meta ORDER BY key`))
+        .rows,
+      revision: (
+        await client.query(`SELECT revision FROM "${namespace}".memory_index_state WHERE id = 1`)
+      ).rows,
+    });
+    const beforeDiagnostic = await indexRows();
+    const reopened = await managerFor(config(), "status", "main", true);
     assert(reopened.statusAsync);
     expect(await reopened.statusAsync()).toMatchObject({
       files: 3,
       chunks: 3,
+      dirty: false,
+      sourceCounts: [
+        { source: "memory", files: 2, chunks: 2, eligible: 2, issues: [] },
+        { source: "sessions", files: 1, chunks: 1, eligible: 1, issues: [] },
+      ],
       fts: { available: true },
       vector: { index: { state: "complete" } },
     });
     await runtime.closeAllMemorySearchManagers?.();
+    expect(await indexRows()).toEqual(beforeDiagnostic);
 
     await runMemoryCommand(["forget", "--agent", "main", "--session", "postgres-public-forget"]);
     const forgotten = await managerFor(config());

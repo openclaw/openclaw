@@ -20,38 +20,40 @@ const answer: EmbeddedAgentRunResult = {
   payloads: [{ text: "The fallback answered." }],
   meta: { durationMs: 1 },
 };
+type FallbackParams = Parameters<typeof runWithModelFallback<EmbeddedAgentRunResult>>[0];
+const runFallback = (run: FallbackParams["run"], options: Partial<FallbackParams> = {}) =>
+  runWithModelFallback({ ...defaults, cfg: makeConfig(), run, ...options });
+const overloaded = () => new FailoverError("temporarily overloaded", { reason: "overloaded" });
+const attemptedModels = (run: { mock: { calls: unknown[][] } }) =>
+  run.mock.calls.map((call) => call[1]);
 
 function makeConfig(fallbacks = ["capped", "fit-first", "fit-second"]): OpenClawConfig {
+  const model = {
+    primary: "fixture-overflow/primary",
+    fallbacks: fallbacks.map((id) => `fixture-overflow/${id}`),
+  };
+  const definition = (id: string, window: number, tokens: number): ModelDefinitionConfig => ({
+    id,
+    name: id,
+    contextWindow: window,
+    contextTokens: tokens,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 1024,
+  });
+  const provider = {
+    baseUrl: "http://127.0.0.1:11434",
+    models: [
+      definition("primary", 32768, 8192),
+      definition("capped", 131072, 4096),
+      definition("fit-first", 32768, 16384),
+      definition("fit-second", 65536, 32768),
+    ],
+  };
   return {
-    agents: {
-      defaults: {
-        model: {
-          primary: "fixture-overflow/primary",
-          fallbacks: fallbacks.map((model) => `fixture-overflow/${model}`),
-        },
-      },
-    },
-    models: {
-      providers: {
-        "fixture-overflow": {
-          baseUrl: "http://127.0.0.1:11434",
-          models: [
-            { id: "primary", contextWindow: 32768, contextTokens: 8192 },
-            { id: "capped", contextWindow: 131072, contextTokens: 4096 },
-            { id: "fit-first", contextWindow: 32768, contextTokens: 16384 },
-            { id: "fit-second", contextWindow: 65536, contextTokens: 32768 },
-          ].map<ModelDefinitionConfig>((model) =>
-            Object.assign(model, {
-              name: model.id,
-              reasoning: false,
-              input: ["text"] satisfies ModelDefinitionConfig["input"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 1024,
-            }),
-          ),
-        },
-      },
-    },
+    agents: { defaults: { model } },
+    models: { providers: { "fixture-overflow": provider } },
   };
 }
 
@@ -81,19 +83,12 @@ describe("context overflow model fallback", () => {
       const run = vi
         .fn()
         .mockResolvedValueOnce(blocked(kind))
-        .mockRejectedValueOnce(
-          new FailoverError("temporarily overloaded", { reason: "overloaded" }),
-        )
+        .mockRejectedValueOnce(overloaded())
         .mockResolvedValueOnce(answer);
       const onFallbackStep = vi.fn();
-      const result = await runWithModelFallback({
-        ...defaults,
-        cfg: makeConfig(),
-        run,
-        onFallbackStep,
-      });
+      const result = await runFallback(run, { onFallbackStep });
 
-      expect(run.mock.calls.map((call) => call[1])).toEqual(["primary", "fit-first", "fit-second"]);
+      expect(attemptedModels(run)).toEqual(["primary", "fit-first", "fit-second"]);
       expect(result).toMatchObject({ outcome: "completed", model: "fit-second", result: answer });
       expect(result.attempts[0]).toMatchObject({ model: "primary", reason: "context_overflow" });
       expect(onFallbackStep).toHaveBeenCalledWith(
@@ -114,14 +109,12 @@ describe("context overflow model fallback", () => {
       if (model === "capped") {
         return answer;
       }
-      throw new FailoverError("temporarily overloaded", { reason: "overloaded" });
+      throw overloaded();
     });
-    const result = await runWithModelFallback({
-      ...defaults,
+    const result = await runFallback(run, {
       cfg: makeConfig(["unknown", "capped", "fit-first", "fit-second"]),
-      run,
     });
-    expect(run.mock.calls.map((call) => call[1])).toEqual([
+    expect(attemptedModels(run)).toEqual([
       "primary",
       "fit-first",
       "fit-second",
@@ -131,28 +124,10 @@ describe("context overflow model fallback", () => {
     expect(result.result).toBe(answer);
   });
 
-  it("preserves overflow guidance when an explicit empty override disables fallback", async () => {
-    const failure = blocked();
-    const run = vi.fn().mockResolvedValue(failure);
-    const result = await runWithModelFallback({
-      ...defaults,
-      cfg: makeConfig(),
-      fallbacksOverride: [],
-      run,
-    });
-    expect(run).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ outcome: "exhausted", result: failure });
-  });
-
   it("preserves the blocked guidance after every candidate rejects the oversized request", async () => {
     const run = vi.fn().mockResolvedValue(blocked());
-    const result = await runWithModelFallback({ ...defaults, cfg: makeConfig(), run });
-    expect(run.mock.calls.map((call) => call[1])).toEqual([
-      "primary",
-      "fit-first",
-      "fit-second",
-      "capped",
-    ]);
+    const result = await runFallback(run);
+    expect(attemptedModels(run)).toEqual(["primary", "fit-first", "fit-second", "capped"]);
     expect(result).toMatchObject({
       outcome: "exhausted",
       result: {
@@ -162,41 +137,39 @@ describe("context overflow model fallback", () => {
     });
   });
 
-  it.each(["replay-invalid", "delivered"] as const)(
+  it.each(["replay-invalid", "delivered", "empty override", "TPM ceiling"] as const)(
     "does not replay %s overflow results",
     async (guard) => {
-      const failure = blocked();
+      const failure =
+        guard === "TPM ceiling"
+          ? blocked(
+              "context_overflow",
+              "413 Request too large for model `fixture` on tokens per minute (TPM): Limit 8000, Requested 12000, please reduce your message size and try again.",
+            )
+          : blocked();
       if (guard === "replay-invalid") {
         failure.meta.replayInvalid = true;
-      } else {
+      } else if (guard === "delivered") {
         failure.messagingToolSentTexts = ["Already delivered."];
       }
       const run = vi.fn().mockResolvedValue(failure);
-      const result = await runWithModelFallback({ ...defaults, cfg: makeConfig(), run });
+      const result = await runFallback(
+        run,
+        guard === "empty override" ? { fallbacksOverride: [] } : {},
+      );
       expect(run).toHaveBeenCalledOnce();
       expect(result.result).toBe(failure);
+      if (guard === "empty override") {
+        expect(result.outcome).toBe("exhausted");
+      }
     },
   );
 
   it("retains configured order for non-overflow failures", async () => {
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new FailoverError("temporarily overloaded", { reason: "overloaded" }))
-      .mockResolvedValueOnce(answer);
-    const result = await runWithModelFallback({ ...defaults, cfg: makeConfig(), run });
-    expect(run.mock.calls.map((call) => call[1])).toEqual(["primary", "capped"]);
+    const run = vi.fn().mockRejectedValueOnce(overloaded()).mockResolvedValueOnce(answer);
+    const result = await runFallback(run);
+    expect(attemptedModels(run)).toEqual(["primary", "capped"]);
     expect(result.result).toBe(answer);
-  });
-
-  it("does not reinterpret a surfaced provider TPM ceiling as model context pressure", async () => {
-    const failure = blocked(
-      "context_overflow",
-      "413 Request too large for model `fixture` on tokens per minute (TPM): Limit 8000, Requested 12000, please reduce your message size and try again.",
-    );
-    const run = vi.fn().mockResolvedValue(failure);
-    const result = await runWithModelFallback({ ...defaults, cfg: makeConfig(), run });
-    expect(run).toHaveBeenCalledOnce();
-    expect(result.result).toBe(failure);
   });
 
   it.each([
@@ -204,8 +177,8 @@ describe("context overflow model fallback", () => {
     "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
   ])("advances fallback for a thrown recognized overflow: %s", async (message) => {
     const run = vi.fn().mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce(answer);
-    const result = await runWithModelFallback({ ...defaults, cfg: makeConfig(), run });
-    expect(run.mock.calls.map((call) => call[1])).toEqual(["primary", "fit-first"]);
+    const result = await runFallback(run);
+    expect(attemptedModels(run)).toEqual(["primary", "fit-first"]);
     expect(result.result).toBe(answer);
     expect(result.attempts[0]?.reason).toBe("context_overflow");
   });

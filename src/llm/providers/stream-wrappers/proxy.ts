@@ -26,6 +26,13 @@ const BOOLEAN_PARAM_PARSE_OPTIONS = {
   falsy: ["0", "false", "no", "off", "disable", "disabled"],
 };
 
+export const OPENROUTER_RESPONSE_CACHE_TTL_KEYS = [
+  "responseCacheTtlSeconds",
+  "response_cache_ttl_seconds",
+  "responseCacheTtl",
+  "response_cache_ttl",
+] as const;
+
 function resolveModelEndpointClass(model: Parameters<StreamFn>[0]) {
   return (
     getModelProviderRequestRouteFacts(model)?.capabilities.endpointClass ??
@@ -99,12 +106,7 @@ function resolveOpenRouterResponseCacheHeaders(
   }
 
   const ttl = resolveOpenRouterResponseCacheTtlSeconds(
-    readExtraParam(extraParams, [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ]),
+    readExtraParam(extraParams, OPENROUTER_RESPONSE_CACHE_TTL_KEYS),
   );
   if (ttl) {
     headers["X-OpenRouter-Cache-TTL"] = ttl;

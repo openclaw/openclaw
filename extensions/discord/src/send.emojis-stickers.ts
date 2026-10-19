@@ -5,7 +5,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { listGuildEmojis } from "./internal/discord.js";
+import { listGuildEmojis } from "./internal/api.guild.js";
 import { normalizeEmojiName, resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordAssetUploadOpts,

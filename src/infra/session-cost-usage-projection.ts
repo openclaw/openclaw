@@ -258,6 +258,7 @@ export async function projectSessionCostSummaries(
   params: UsageCostRollupRowSource & {
     sessions: ReadonlyArray<{ sessionId?: string; sessionFile: string }>;
     files: ReadonlyArray<UsageCostTranscriptFile | undefined>;
+    deferredSessionIndexes?: ReadonlySet<number>;
     pricingFingerprint: string;
     startMs?: number;
     endMs?: number;
@@ -294,7 +295,7 @@ export async function projectSessionCostSummaries(
     (params.startMs === undefined && params.endMs === undefined);
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
   let cachedFiles = 0;
-  const deferredIndexes = new Set<number>();
+  const deferredIndexes = new Set(params.deferredSessionIndexes);
   const reader = createRollupProjectionReader(params);
   for (const [filePath, requests] of requestsByPath) {
     const { entry, checkpoint, requests: usableRequests } = await reader.read(filePath, requests);

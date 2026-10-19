@@ -37,12 +37,7 @@ export function createTextPartCodeRegionResolver(parts: readonly string[]) {
   const source = indexTextParts(parts);
   const spans = new Map(source.spans.map((span) => [span.index, span]));
   let regions: ReturnType<typeof findCodeRegions> | undefined;
-  const projected = new Map<number, ReturnType<typeof findCodeRegions>>();
   return (index: number): ReturnType<typeof findCodeRegions> => {
-    const cached = projected.get(index);
-    if (cached) {
-      return cached;
-    }
     const span = spans.get(index);
     if (!span) {
       return [];
@@ -70,7 +65,6 @@ export function createTextPartCodeRegionResolver(parts: readonly string[]) {
         block: region.block,
       });
     }
-    projected.set(index, result);
     return result;
   };
 }

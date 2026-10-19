@@ -1,4 +1,3 @@
-// Claude catalog terminal ownership: validated local and paired-node resume plans.
 import fs from "node:fs/promises";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";

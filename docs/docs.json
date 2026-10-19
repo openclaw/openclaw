@@ -1688,6 +1688,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-controller",
                   "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/session-pruning",
@@ -1839,6 +1840,7 @@
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
                       "plugins/onnx",
+                      "plugins/subq",
                       "plugins/typesafe"
                     ]
                   },
@@ -2221,6 +2223,7 @@
                       "providers/google",
                       "providers/groq",
                       "providers/huggingface",
+                      "providers/levanto",
                       "providers/longcat",
                       "providers/meta",
                       "providers/minimax",
@@ -2482,6 +2485,7 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
+                      "gateway/postgresql",
                       "gateway/doctor",
                       {
                         "group": "Doctor",

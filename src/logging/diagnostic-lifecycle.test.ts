@@ -23,7 +23,6 @@ import * as runActivity from "./diagnostic-run-activity.js";
 import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
-  peekDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 import * as stabilityBundle from "./diagnostic-stability-bundle.js";
 import * as stability from "./diagnostic-stability.js";
@@ -252,8 +251,11 @@ it("retires interrupted diagnostic observations before re-enable without revivin
     startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
     logMessageQueued({ ...session, source: "test" });
     logSessionStateChange({ ...session, state: "processing" });
-    const generation = peekDiagnosticSessionState(session)?.generation;
+    const generation = getDiagnosticSessionState(session).generation;
     expect(generation).toBeTypeOf("number");
+    expect(isDiagnosticSessionStateCurrent({ ...session, generation, state: "processing" })).toBe(
+      true,
+    );
     setDiagnosticsEnabledForProcess(false);
     startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
     logSessionStateChange({ ...session, state: "idle" });
