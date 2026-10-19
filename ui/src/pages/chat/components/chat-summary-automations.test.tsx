@@ -445,6 +445,7 @@ it("shares the session inventory with consumers without starting another catalog
     const inventory = createSessionAutomationInventory(props, () => host);
     return (
       <section ref={(element) => (host = element)}>
+        {inventory.lifecycle}
         <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
         <ChatSummaryAutomations {...props} inventory={inventory} />
       </section>
