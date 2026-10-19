@@ -37,6 +37,8 @@ export function createMeetingPluginFixture(options: MeetingPluginFixtureOptions)
       name: options.name,
       description: "test",
       version: "0",
+      source: "test",
+      config: {},
       pluginConfig: {},
       runtime: {
         gateway: createPluginGatewayRuntimeMock(),
@@ -118,16 +120,15 @@ export function createMeetingPluginFixture(options: MeetingPluginFixtureOptions)
 export function defineMeetingPluginSurfaceTests(
   fixture: ReturnType<typeof createMeetingPluginFixture>,
 ) {
-  const { methodPrefix, id, toolName, nodeCommand, descriptor, transcriptSource, url } = fixture;
   it("registers the bounded gateway, tool, CLI, and node surfaces", () => {
-    const methods = new Set<string>();
+    const methods = new Map<string, unknown>();
     const tools: Array<Record<string, unknown>> = [];
     const cli: Array<Parameters<OpenClawPluginApi["registerCli"]>[1]> = [];
     const nodeCommands: unknown[] = [];
     const policies: unknown[] = [];
     const transcriptProviders: TranscriptSourceProvider[] = [];
     const api = fixture.createApi({
-      registerGatewayMethod: (method) => methods.add(method),
+      registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
       registerTool: (tool: unknown) => {
         tools.push(
           (typeof tool === "function"
@@ -143,87 +144,132 @@ export function defineMeetingPluginSurfaceTests(
 
     fixture.plugin.register(api);
 
-    expect([...methods].toSorted()).toEqual(
-      ["join", "leave", "setup", "speak", "status", "testListen", "testSpeech", "transcript"]
-        .map((method) => `${methodPrefix}.${method}`)
-        .toSorted(),
+    expect([...methods.keys()].toSorted()).toEqual(
+      [
+        `${fixture.methodPrefix}.join`,
+        `${fixture.methodPrefix}.leave`,
+        `${fixture.methodPrefix}.setup`,
+        `${fixture.methodPrefix}.speak`,
+        `${fixture.methodPrefix}.status`,
+        `${fixture.methodPrefix}.testListen`,
+        `${fixture.methodPrefix}.testSpeech`,
+        `${fixture.methodPrefix}.transcript`,
+      ].toSorted(),
     );
-    expect(tools.map((tool) => tool.name)).toEqual([toolName]);
-    expect(cli).toEqual([expect.objectContaining({ commands: [methodPrefix] })]);
-    expect(cli[0]?.descriptors?.[0]).toBe(descriptor);
-    expect(nodeCommands).toEqual([expect.objectContaining({ command: nodeCommand, cap: id })]);
+    expect(tools.map((tool) => tool.name)).toEqual([fixture.toolName]);
+    expect(cli).toEqual([expect.objectContaining({ commands: [fixture.methodPrefix] })]);
+    expect(cli[0]?.descriptors?.[0]).toBe(fixture.descriptor);
+    expect(nodeCommands).toEqual([
+      expect.objectContaining({ command: fixture.nodeCommand, cap: fixture.id }),
+    ]);
     expect(policies).toHaveLength(1);
     expect(transcriptProviders).toEqual([
       expect.objectContaining({
-        id: transcriptSource.id,
-        aliases: transcriptSource.aliases,
+        id: fixture.transcriptSource.id,
+        aliases: fixture.transcriptSource.aliases,
         sourceKinds: ["live-caption"],
       }),
     ]);
   });
 
   it("scopes trusted tool session operations to the invoking agent", async () => {
-    const harness = fixture.authorizationHarness();
-    const call = (method: string, params: Record<string, unknown>, owner?: string) =>
-      harness.call(`${methodPrefix}.${method}`, params, owner);
-    const joined = await call("join", { agentId: "support", mode: "transcribe", url }, id);
+    const { call } = fixture.authorizationHarness();
+    const joined = await call(
+      `${fixture.methodPrefix}.join`,
+      { agentId: "support", mode: "transcribe", url: fixture.url },
+      fixture.id,
+    );
     const sessionId = (joined.session as { id: string }).id;
 
-    expect(await call("status", { agentId: "other" }, id)).toMatchObject({
-      found: true,
-      sessions: [],
-    });
+    expect(
+      await call(`${fixture.methodPrefix}.status`, { agentId: "other" }, fixture.id),
+    ).toMatchObject({ found: true, sessions: [] });
     for (const method of ["status", "leave", "transcript", "speak"] as const) {
       expect(
-        await call(method, { agentId: "other", message: "hello", sessionId }, id),
+        await call(
+          `${fixture.methodPrefix}.${method}`,
+          { agentId: "other", message: "hello", sessionId },
+          fixture.id,
+        ),
       ).toMatchObject({ found: false });
     }
 
-    expect(await call("status", { agentId: "spoofed", sessionId })).toMatchObject({
+    expect(
+      await call(`${fixture.methodPrefix}.status`, { agentId: "spoofed", sessionId }),
+    ).toMatchObject({
       found: true,
       session: { agentId: "support", id: sessionId },
     });
-    expect(await call("leave", { agentId: "support", sessionId }, id)).toMatchObject({
-      found: true,
-      session: { id: sessionId, state: "ended" },
+    expect(
+      await call(`${fixture.methodPrefix}.leave`, { agentId: "support", sessionId }, fixture.id),
+    ).toMatchObject({ found: true, session: { id: sessionId, state: "ended" } });
+  });
+
+  it.each([
+    ["mode", "observe-only", "mode must be agent, bidi, or transcribe"],
+    ["transport", "desktop", "transport must be chrome or chrome-node"],
+  ])("rejects an explicit invalid %s", async (field, value, message) => {
+    const { invoke } = fixture.authorizationHarness();
+    const response = await invoke(`${fixture.methodPrefix}.join`, {
+      [field]: value,
+      url: fixture.url,
+    });
+
+    expect(response).toMatchObject({
+      error: { code: ErrorCodes.INVALID_REQUEST },
+      ok: false,
+      payload: { error: message },
     });
   });
 
-  const invalid = ErrorCodes.INVALID_REQUEST;
-  it.each([
-    ["join", { mode: "observe-only" }, "mode must be agent, bidi, or transcribe", invalid],
-    ["join", { transport: "desktop" }, "transport must be chrome or chrome-node", invalid],
-    [
-      "join",
-      { mode: "transcribe", timeoutMs: 1 },
-      "timeoutMs is supported only by testSpeech or testListen",
-      undefined,
-    ],
-    [
-      "testSpeech",
-      { mode: "transcribe", timeoutMs: 1 },
-      "test_speech requires mode: agent or bidi",
-      invalid,
-    ],
-    [
-      "testListen",
-      { mode: "agent", timeoutMs: 1 },
-      "test_listen requires mode: transcribe",
-      invalid,
-    ],
-    ["join", { mode: "transcribe" }, "browser unavailable", ErrorCodes.UNAVAILABLE],
-  ])("classifies %s request %j: %s", async (method, params, message, code) => {
-    const { invoke } = fixture.authorizationHarness(
-      code === ErrorCodes.UNAVAILABLE ? { browserError: new Error(message) } : undefined,
-    );
-    const response = await invoke(`${methodPrefix}.${method}`, {
-      ...params,
-      url,
+  it("rejects timeoutMs on normal join instead of silently ignoring it", async () => {
+    const { invoke } = fixture.authorizationHarness();
+    const response = await invoke(`${fixture.methodPrefix}.join`, {
+      mode: "transcribe",
+      timeoutMs: 1,
+      url: fixture.url,
     });
+
     expect(response).toMatchObject({
       ok: false,
-      payload: { error: message },
-      ...(code ? { error: { code } } : {}),
+      payload: { error: "timeoutMs is supported only by testSpeech or testListen" },
+    });
+  });
+
+  it.each([
+    [
+      `${fixture.methodPrefix}.testSpeech`,
+      "transcribe",
+      "test_speech requires mode: agent or bidi",
+    ],
+    [`${fixture.methodPrefix}.testListen`, "agent", "test_listen requires mode: transcribe"],
+  ])(
+    "classifies invalid probe mode for %s as an invalid request",
+    async (method, mode, message) => {
+      const { invoke } = fixture.authorizationHarness();
+      const response = await invoke(method, { mode, timeoutMs: 1, url: fixture.url });
+
+      expect(response).toMatchObject({
+        error: { code: ErrorCodes.INVALID_REQUEST },
+        ok: false,
+        payload: { error: message },
+      });
+    },
+  );
+
+  it("classifies browser failures as unavailable, not invalid requests", async () => {
+    const { invoke } = fixture.authorizationHarness({
+      browserError: new Error("browser unavailable"),
+    });
+    const response = await invoke(`${fixture.methodPrefix}.join`, {
+      mode: "transcribe",
+      url: fixture.url,
+    });
+
+    expect(response).toMatchObject({
+      error: { code: ErrorCodes.UNAVAILABLE },
+      ok: false,
+      payload: { error: "browser unavailable" },
     });
   });
 }

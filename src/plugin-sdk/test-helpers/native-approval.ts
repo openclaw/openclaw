@@ -32,33 +32,45 @@ export function createNativeApprovalTestFixture(params: {
   const native = capability.nativeAsync ?? capability.native;
   const nativeRuntime = capability.nativeRuntimeAsync ?? capability.nativeRuntime;
   const directTarget = "+15551230000";
-  const origin = (to: string) => ({
-    agentId: "main",
-    turnSourceChannel: channel,
-    turnSourceTo: to,
-    turnSourceAccountId: "default",
-    sessionKey: `agent:main:${channel}:${to}`,
-  });
-  const envelope = <T extends ApprovalRequest["request"]>(id: string, request: T) => ({
-    id,
-    request,
-    createdAtMs: 0,
-    expiresAtMs: 1000,
-  });
-  const buildExecRequest = (
+  function buildExecRequest(
     to = directTarget,
     overrides: Partial<ExecApprovalRequest["request"]> = {},
-  ): ExecApprovalRequest => envelope("exec-1", { command: "echo hi", ...origin(to), ...overrides });
-  const buildPluginRequest = (
+  ): ExecApprovalRequest {
+    return {
+      id: "exec-1",
+      request: {
+        command: "echo hi",
+        agentId: "main",
+        turnSourceChannel: channel,
+        turnSourceTo: to,
+        turnSourceAccountId: "default",
+        sessionKey: `agent:main:${channel}:${to}`,
+        ...overrides,
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+  }
+  function buildPluginRequest(
     to = directTarget,
     overrides: Partial<PluginApprovalRequest["request"]> = {},
-  ): PluginApprovalRequest =>
-    envelope("plugin:approval-1", {
-      title: "Plugin approval",
-      description: "Allow plugin action",
-      ...origin(to),
-      ...overrides,
-    });
+  ): PluginApprovalRequest {
+    return {
+      id: "plugin:approval-1",
+      request: {
+        title: "Plugin approval",
+        description: "Allow plugin action",
+        agentId: "main",
+        turnSourceChannel: channel,
+        turnSourceTo: to,
+        turnSourceAccountId: "default",
+        sessionKey: `agent:main:${channel}:${to}`,
+        ...overrides,
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+  }
   function buildTargetModeConfig(
     approvalKind: "exec" | "plugin",
     targets: Array<{ channel: string; to: string; accountId?: string }>,
@@ -69,54 +81,64 @@ export function createNativeApprovalTestFixture(params: {
       approvals: { [approvalKind]: { enabled: true, mode: options.mode ?? "targets", targets } },
     });
   }
-  const getAvailability = (
+  function getAvailability(
     cfg: OpenClawConfig,
     accountId = "default",
     approvalKind: ChannelApprovalKind = "exec",
-  ) => capability.getActionAvailabilityState?.({ cfg, accountId, action: "approve", approvalKind });
-  const describeDelivery = async (
+  ) {
+    return capability.getActionAvailabilityState?.({
+      cfg,
+      accountId,
+      action: "approve",
+      approvalKind,
+    });
+  }
+  async function describeDelivery(
     cfg: OpenClawConfig,
     request: ApprovalRequest,
     approvalKind: ChannelApprovalKind = "exec",
-  ) => native?.describeDeliveryCapabilities({ cfg, accountId: "default", approvalKind, request });
-  const nativeShouldHandle = async (input: {
+  ) {
+    return native?.describeDeliveryCapabilities({
+      cfg,
+      accountId: "default",
+      approvalKind,
+      request,
+    });
+  }
+  async function nativeShouldHandle(input: {
     cfg: OpenClawConfig;
     approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
     accountId?: string | null;
-  }) =>
-    nativeRuntime?.availability.shouldHandle({
+  }) {
+    return nativeRuntime?.availability.shouldHandle({
       ...input,
       accountId: input.accountId ?? "default",
       context: {},
     });
-  const resolveExecOrigin = async (cfg: OpenClawConfig, request: ExecApprovalRequest) =>
-    native?.resolveOriginTarget?.({ cfg, accountId: "default", approvalKind: "exec", request });
-  const suppressForwardingFallback = async (input: ForwardingParams) =>
-    (
+  }
+  async function resolveExecOrigin(cfg: OpenClawConfig, request: ExecApprovalRequest) {
+    return native?.resolveOriginTarget?.({
+      cfg,
+      accountId: "default",
+      approvalKind: "exec",
+      request,
+    });
+  }
+  async function suppressForwardingFallback(input: ForwardingParams) {
+    const suppress =
       capability.delivery?.shouldSuppressForwardingFallbackAsync ??
-      capability.delivery?.shouldSuppressForwardingFallback
-    )?.(input);
-  const suppressTargetForwarding = (
-    cfg: OpenClawConfig,
-    to: string,
-    request = buildExecRequest(),
-  ) =>
-    suppressForwardingFallback({
+      capability.delivery?.shouldSuppressForwardingFallback;
+    return suppress?.(input);
+  }
+  function suppressTargetForwarding(cfg: OpenClawConfig, to: string, request = buildExecRequest()) {
+    return suppressForwardingFallback({
       cfg,
       approvalKind: "exec",
       target: { channel, to, source: "target" },
       request,
     });
-  const expectHandling = async (
-    cfg: OpenClawConfig,
-    request: ApprovalRequest,
-    expected: boolean,
-    approvalKind: ChannelApprovalKind = "exec",
-  ) => expect(await nativeShouldHandle({ cfg, approvalKind, request })).toBe(expected);
-  const enabledConfig = (
-    exec: NonNullable<OpenClawConfig["approvals"]>["exec"] = { enabled: true },
-  ) => buildConfig({ approvals: { exec } });
+  }
   return {
     buildConfig,
     buildExecRequest,
@@ -132,14 +154,19 @@ export function createNativeApprovalTestFixture(params: {
       disabledByDefault: async () => {
         const cfg = buildConfig();
         const execRequest = buildExecRequest();
+        const pluginRequest = buildPluginRequest();
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
         expect(getAvailability(cfg, "default", "plugin")).toEqual({ kind: "disabled" });
         expect((await describeDelivery(cfg, execRequest))?.enabled).toBe(false);
-        await expectHandling(cfg, execRequest, false);
-        await expectHandling(cfg, buildPluginRequest(), false, "plugin");
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request: execRequest })).toBe(
+          false,
+        );
+        expect(
+          await nativeShouldHandle({ cfg, approvalKind: "plugin", request: pluginRequest }),
+        ).toBe(false);
       },
       sessionDelivery: async () => {
-        const cfg = enabledConfig();
+        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
         const request = buildExecRequest();
         expect(await describeDelivery(cfg, request)).toEqual({
           enabled: true,
@@ -148,23 +175,41 @@ export function createNativeApprovalTestFixture(params: {
           supportsApproverDmSurface: false,
           notifyOriginWhenDmOnly: true,
         });
-        await expectHandling(cfg, request, true);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(true);
       },
       independentKinds: async () => {
-        const execOnly = enabledConfig();
+        const execOnly = buildConfig({ approvals: { exec: { enabled: true } } });
         const pluginOnly = buildConfig({ approvals: { plugin: { enabled: true } } });
-        await expectHandling(execOnly, buildPluginRequest(), false, "plugin");
-        await expectHandling(pluginOnly, buildExecRequest(), false);
-        await expectHandling(pluginOnly, buildPluginRequest(), true, "plugin");
+        expect(
+          await nativeShouldHandle({
+            cfg: execOnly,
+            approvalKind: "plugin",
+            request: buildPluginRequest(),
+          }),
+        ).toBe(false);
+        expect(
+          await nativeShouldHandle({
+            cfg: pluginOnly,
+            approvalKind: "exec",
+            request: buildExecRequest(),
+          }),
+        ).toBe(false);
+        expect(
+          await nativeShouldHandle({
+            cfg: pluginOnly,
+            approvalKind: "plugin",
+            request: buildPluginRequest(),
+          }),
+        ).toBe(true);
       },
       foreignOrigin: async () => {
-        const cfg = enabledConfig();
+        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
         const request = buildExecRequest("", {
           turnSourceChannel: "slack",
           turnSourceTo: "C123",
           sessionKey: "agent:main:slack:channel:c123",
         });
-        await expectHandling(cfg, request, false);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
         expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
       },
       targetMode: async (cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }])) => {
@@ -177,7 +222,7 @@ export function createNativeApprovalTestFixture(params: {
             context: {},
           }),
         ).toBe(false);
-        await expectHandling(cfg, request, false);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
         expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
       },
       noMatchingTarget: () => {
@@ -185,11 +230,22 @@ export function createNativeApprovalTestFixture(params: {
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
       },
       requestFilters: async () => {
-        const request = buildExecRequest();
-        const blockedByAgent = enabledConfig({ enabled: true, agentFilter: ["other"] });
-        const blockedBySession = enabledConfig({ enabled: true, sessionFilter: ["telegram"] });
-        await expectHandling(blockedByAgent, request, false);
-        await expectHandling(blockedBySession, request, false);
+        const request = buildExecRequest(directTarget, {
+          agentId: "main",
+          sessionKey: `agent:main:${channel}:+15551230000`,
+        });
+        const blockedByAgent = buildConfig({
+          approvals: { exec: { enabled: true, agentFilter: ["other"] } },
+        });
+        const blockedBySession = buildConfig({
+          approvals: { exec: { enabled: true, sessionFilter: ["telegram"] } },
+        });
+        expect(
+          await nativeShouldHandle({ cfg: blockedByAgent, approvalKind: "exec", request }),
+        ).toBe(false);
+        expect(
+          await nativeShouldHandle({ cfg: blockedBySession, approvalKind: "exec", request }),
+        ).toBe(false);
       },
       accountScopedTargets: () => {
         const cfg = buildTargetModeConfig(
@@ -201,7 +257,7 @@ export function createNativeApprovalTestFixture(params: {
         expect(getAvailability(cfg, "work")).toEqual({ kind: "enabled" });
       },
       exactSessionTarget: async () => {
-        const cfg = enabledConfig();
+        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
         const request = buildExecRequest();
         for (const [to, expected] of [
           [directTarget, true],
@@ -265,8 +321,6 @@ export function createLocalApprovalPromptTestFixture(params: {
     approvalKind: "exec",
     nativeRouteActive: true,
   } as const;
-  const localConfig = (exec: NonNullable<OpenClawConfig["approvals"]>["exec"]) =>
-    buildConfig({ channel: { allowFrom: ["+15551230000"] }, approvals: { exec } });
   function buildLocalApprovalPayload(
     input: {
       approvalKind?: ChannelApprovalKind;
@@ -274,13 +328,12 @@ export function createLocalApprovalPromptTestFixture(params: {
       sessionKey?: string | null;
     } = {},
   ) {
-    const approvalId = input.approvalKind === "plugin" ? "plugin:approval-1" : "exec-1";
     return {
       text: "Approval required.",
       channelData: {
         execApproval: {
-          approvalId,
-          approvalSlug: approvalId,
+          approvalId: input.approvalKind === "plugin" ? "plugin:approval-1" : "exec-1",
+          approvalSlug: input.approvalKind === "plugin" ? "plugin:approval-1" : "exec-1",
           approvalKind: input.approvalKind ?? "exec",
           agentId: input.agentId,
           sessionKey: input.sessionKey,
@@ -308,8 +361,23 @@ export function createLocalApprovalPromptTestFixture(params: {
   return {
     suppressLocalSessionPrompt,
     checks: {
+      eligibleSession: () => {
+        const cfg = buildConfig({
+          channel: { allowFrom: ["+15551230000"] },
+          approvals: { exec: { enabled: true, agentFilter: ["main"] } },
+        });
+        expect(
+          suppressLocalSessionPrompt(cfg, `agent:main:${channel}:+15551230000`, {
+            accountId: "default",
+            agentId: null,
+          }),
+        ).toBe(true);
+      },
       inactiveRoutes: () => {
-        const enabledConfig = localConfig({ enabled: true });
+        const enabledConfig = buildConfig({
+          channel: { allowFrom: ["+15551230000"] },
+          approvals: { exec: { enabled: true } },
+        });
         const payload = buildLocalApprovalPayload({
           agentId: "main",
           sessionKey: `agent:main:${channel}:+15551230000`,
@@ -317,14 +385,22 @@ export function createLocalApprovalPromptTestFixture(params: {
         const routes: LocalSuppressionParams[] = [
           { cfg: buildConfig(), payload },
           {
-            cfg: localConfig({ enabled: false }),
+            cfg: buildConfig({
+              channel: { allowFrom: ["+15551230000"] },
+              approvals: { exec: { enabled: false } },
+            }),
             payload,
           },
           {
-            cfg: localConfig({
-              enabled: true,
-              mode: "targets",
-              targets: [{ channel, to: "+15551230000" }],
+            cfg: buildConfig({
+              channel: { allowFrom: ["+15551230000"] },
+              approvals: {
+                exec: {
+                  enabled: true,
+                  mode: "targets",
+                  targets: [{ channel, to: "+15551230000" }],
+                },
+              },
             }),
             payload,
           },
@@ -337,7 +413,10 @@ export function createLocalApprovalPromptTestFixture(params: {
         }
       },
       sessionFilters: () => {
-        const cfg = localConfig({ enabled: true, agentFilter: ["ops"], sessionFilter: [channel] });
+        const cfg = buildConfig({
+          channel: { allowFrom: ["+15551230000"] },
+          approvals: { exec: { enabled: true, agentFilter: ["ops"], sessionFilter: [channel] } },
+        });
         for (const [sessionKey, expected] of [
           [`agent:ops:${channel}:+15551230000`, true],
           [`agent:main:${channel}:+15551230000`, false],

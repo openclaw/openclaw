@@ -9,15 +9,26 @@ import { createChannelReplyPipeline } from "../../channels/message/reply-pipelin
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createGenericMock } from "./plugin-runtime-generic-mock.js";
 
-type Inbound = PluginRuntime["channel"]["inbound"];
-type BuildContextParams = Parameters<Inbound["buildContext"]>[0];
-type BuildContextResult = ReturnType<Inbound["buildContext"]>;
+type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
+type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
 type ChannelStructuredContextEntries = NonNullable<
   Awaited<BuildContextResult>["ChannelStructuredContext"]
 >;
+type ChannelStructuredContextResolution =
+  | { kind: "absent" }
+  | { kind: "present"; entries: ChannelStructuredContextEntries };
+
+function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeInboundTextNewlines(value);
+  return normalized.trim().length > 0 ? normalized : undefined;
+}
+
 function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
-): ChannelStructuredContextEntries | undefined {
+): ChannelStructuredContextResolution {
   const entries: ChannelStructuredContextEntries = [];
   const extraEntries =
     params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
@@ -30,9 +41,9 @@ function resolveMockChannelStructuredContext(
     entries.push(...supplementalEntries);
   }
 
-  const prompt = params.supplemental?.untrustedGroupSystemPrompt;
-  const normalized = typeof prompt === "string" ? normalizeInboundTextNewlines(prompt) : undefined;
-  const groupPrompt = normalized?.trim() ? normalized : undefined;
+  const groupPrompt = normalizeUntrustedGroupPrompt(
+    params.supplemental?.untrustedGroupSystemPrompt,
+  );
   if (groupPrompt) {
     entries.push({
       label: "Group prompt context",
@@ -43,36 +54,21 @@ function resolveMockChannelStructuredContext(
 
   const contextProvided =
     extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
-  return contextProvided ? entries : undefined;
-}
-
-async function recordSession(
-  params: Pick<
-    Parameters<Inbound["runPreparedReply"]>[0],
-    "recordInboundSession" | "storePath" | "ctxPayload" | "record" | "afterRecord"
-  >,
-  sessionKey: string,
-) {
-  const { record, storePath, ctxPayload: ctx, recordInboundSession } = params;
-  await recordInboundSession({
-    storePath,
-    sessionKey,
-    ctx,
-    groupResolution: record?.groupResolution,
-    createIfMissing: record?.createIfMissing,
-    updateLastRoute: record?.updateLastRoute,
-    onRecordError: record?.onRecordError ?? (() => undefined),
-    trackSessionMetaTask: record?.trackSessionMetaTask,
-  });
-  await params.afterRecord?.();
+  return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
 export function createPluginInboundRuntimeMock(
   getRuntime: () => PluginRuntime | undefined,
-): Inbound {
-  const dispatchAssembledChannelTurnMock = vi.fn<Inbound["dispatchReply"]>(async (params) => {
+): PluginRuntime["channel"]["inbound"] {
+  const dispatchAssembledChannelTurnMock = vi.fn<
+    PluginRuntime["channel"]["inbound"]["dispatchReply"]
+  >(async (params) => {
     const admission = params.admission ?? { kind: "dispatch" as const };
-    const { ctxPayload, routeSessionKey, dispatchReplyWithBufferedBlockDispatcher } = params;
+    const ctxPayload = params.ctxPayload;
+    const record = params.record;
+    const recordInboundSession = params.recordInboundSession;
+    const routeSessionKey = params.routeSessionKey;
+    const storePath = params.storePath;
     const sourceDelivery = params.delivery as typeof params.delivery & {
       deliverWithProviderMessageSending?: typeof params.delivery.deliver;
     };
@@ -87,6 +83,8 @@ export function createPluginInboundRuntimeMock(
         : { ...sourceDelivery, deliver: sourceDeliver! };
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
+    const dispatchReplyWithBufferedBlockDispatcher =
+      params.dispatchReplyWithBufferedBlockDispatcher;
     const pipeline = params.replyPipeline
       ? createChannelReplyPipeline({
           ...(params.replyPipeline as Omit<
@@ -100,7 +98,17 @@ export function createPluginInboundRuntimeMock(
         })
       : undefined;
     const { onModelSelected, ...dispatcherPipeline } = pipeline ?? {};
-    await recordSession(params, sessionKey);
+    await recordInboundSession({
+      storePath,
+      sessionKey,
+      ctx: ctxPayload,
+      groupResolution: record?.groupResolution,
+      createIfMissing: record?.createIfMissing,
+      updateLastRoute: record?.updateLastRoute,
+      onRecordError: record?.onRecordError ?? (() => undefined),
+      trackSessionMetaTask: record?.trackSessionMetaTask,
+    });
+    await params.afterRecord?.();
     const rawDispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
@@ -135,59 +143,69 @@ export function createPluginInboundRuntimeMock(
       dispatchResult,
     };
   });
-  const runPreparedChannelTurnMock = createGenericMock<Inbound["runPreparedReply"]>(
-    async (params: Parameters<Inbound["runPreparedReply"]>[0]) => {
-      try {
-        await recordSession(params, params.ctxPayload.SessionKey ?? params.routeSessionKey);
-      } catch (err) {
-        try {
-          await params.onPreDispatchFailure?.(err);
-        } catch {
-          // Preserve the original session-recording error.
-        }
-        throw err;
-      }
-      const admission = params.admission ?? { kind: "dispatch" as const };
-      let dispatchResult;
-      if (admission.kind === "observeOnly") {
-        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
-        dispatchResult = params.observeOnlyDispatchResult ?? {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      } else {
-        dispatchResult = await params.runDispatch();
-      }
-      return {
-        admission,
-        dispatched: true,
-        ctxPayload: params.ctxPayload,
-        routeSessionKey: params.routeSessionKey,
-        dispatchResult,
-      };
-    },
-  );
-  const dispatchChannelTurnPlanMock = createGenericMock<Inbound["dispatch"]>(
-    async (params: Parameters<Inbound["dispatch"]>[0]) => {
-      const mergedRuntime = getRuntime();
-      if (!mergedRuntime) {
-        throw new Error("plugin runtime mock dispatch used before initialization");
-      }
-      return await dispatchAssembledChannelTurnMock({
-        ...params,
-        agentId: params.route.agentId,
-        routeSessionKey: params.route.sessionKey,
-        storePath: mergedRuntime.channel.session.resolveStorePath(params.cfg.session?.store, {
-          agentId: params.route.agentId,
-        }),
-        recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+  const runPreparedChannelTurnMock = createGenericMock<
+    PluginRuntime["channel"]["inbound"]["runPreparedReply"]
+  >(async (params: Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]) => {
+    try {
+      await params.recordInboundSession({
+        storePath: params.storePath,
+        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        ctx: params.ctxPayload,
+        groupResolution: params.record?.groupResolution,
+        createIfMissing: params.record?.createIfMissing,
+        updateLastRoute: params.record?.updateLastRoute,
+        onRecordError: params.record?.onRecordError ?? (() => undefined),
+        trackSessionMetaTask: params.record?.trackSessionMetaTask,
       });
-    },
-  );
-  const runChannelTurnMock = createGenericMock<Inbound["run"]>(
-    async (params: Parameters<Inbound["run"]>[0]) => {
+      await params.afterRecord?.();
+    } catch (err) {
+      try {
+        await params.onPreDispatchFailure?.(err);
+      } catch {
+        // Preserve the original session-recording error.
+      }
+      throw err;
+    }
+    const admission = params.admission ?? { kind: "dispatch" as const };
+    let dispatchResult;
+    if (admission.kind === "observeOnly") {
+      await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+      dispatchResult = params.observeOnlyDispatchResult ?? {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    } else {
+      dispatchResult = await params.runDispatch();
+    }
+    return {
+      admission,
+      dispatched: true,
+      ctxPayload: params.ctxPayload,
+      routeSessionKey: params.routeSessionKey,
+      dispatchResult,
+    };
+  });
+  const dispatchChannelTurnPlanMock = createGenericMock<
+    PluginRuntime["channel"]["inbound"]["dispatch"]
+  >(async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) => {
+    const mergedRuntime = getRuntime();
+    if (!mergedRuntime) {
+      throw new Error("plugin runtime mock dispatch used before initialization");
+    }
+    return await dispatchAssembledChannelTurnMock({
+      ...params,
+      agentId: params.route.agentId,
+      routeSessionKey: params.route.sessionKey,
+      storePath: mergedRuntime.channel.session.resolveStorePath(params.cfg.session?.store, {
+        agentId: params.route.agentId,
+      }),
+      recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher:
+        mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    });
+  });
+  const runChannelTurnMock = createGenericMock<PluginRuntime["channel"]["inbound"]["run"]>(
+    async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
         return {
@@ -256,19 +274,29 @@ export function createPluginInboundRuntimeMock(
                 };
               })()
             : resolved;
-        dispatchResult = await runPreparedChannelTurnMock({ ...prepared, admission });
-      } else {
-        const turn = {
+        const preparedReply: Parameters<
+          PluginRuntime["channel"]["inbound"]["runPreparedReply"]
+        >[0] = {
+          ...prepared,
+          admission,
+        };
+        dispatchResult = await runPreparedChannelTurnMock(preparedReply);
+      } else if ("route" in resolved) {
+        dispatchResult = await dispatchChannelTurnPlanMock({
           ...resolved,
           admission,
           ...(params.turnAdoptionLifecycle
             ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
             : {}),
-        };
-        dispatchResult =
-          "route" in turn
-            ? await dispatchChannelTurnPlanMock(turn)
-            : await dispatchAssembledChannelTurnMock(turn);
+        });
+      } else {
+        dispatchResult = await dispatchAssembledChannelTurnMock({
+          ...resolved,
+          admission,
+          ...(params.turnAdoptionLifecycle
+            ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+            : {}),
+        });
       }
       const result = {
         ...dispatchResult,
@@ -278,48 +306,48 @@ export function createPluginInboundRuntimeMock(
       return result;
     },
   );
-  const buildChannelInboundEventContextMock = createGenericMock<Inbound["buildContext"]>(
-    (params: BuildContextParams) => {
-      const channelStructuredContext = resolveMockChannelStructuredContext(params);
-      const extra = { ...params.extra };
-      delete extra.UntrustedStructuredContext;
-      const structuredContextField =
-        channelStructuredContext === undefined
-          ? {}
-          : { ChannelStructuredContext: channelStructuredContext };
-      return {
-        Body: params.message.body ?? params.message.rawBody,
-        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
-        RawBody: params.message.rawBody,
-        CommandBody: params.message.commandBody ?? params.message.rawBody,
-        BodyForCommands: params.message.commandBody ?? params.message.rawBody,
-        From: params.from,
-        To: params.reply.to,
-        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-        AccountId: params.route.accountId ?? params.accountId,
-        MessageSid: params.messageId,
-        MessageSidFull: params.messageIdFull,
-        ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
-        ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
-        media: params.media,
-        ChatType: params.conversation.kind,
-        ConversationLabel: params.conversation.label,
-        SenderName: params.sender.name ?? params.sender.displayLabel,
-        SenderId: params.sender.id,
-        SenderUsername: params.sender.username,
-        Timestamp: params.timestamp,
-        WasMentioned: params.access?.mentions?.wasMentioned,
-        GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
-        Provider: params.provider ?? params.channel,
-        Surface: params.surface ?? params.provider ?? params.channel,
-        OriginatingChannel: params.channel,
-        OriginatingTo: params.reply.originatingTo,
-        CommandAuthorized: params.access?.commands?.authorized ?? false,
-        ...extra,
-        ...structuredContextField,
-      } as Awaited<BuildContextResult>;
-    },
-  );
+  const buildChannelInboundEventContextMock = createGenericMock<
+    PluginRuntime["channel"]["inbound"]["buildContext"]
+  >((params: BuildContextParams) => {
+    const channelStructuredContext = resolveMockChannelStructuredContext(params);
+    const extra = { ...params.extra };
+    delete extra.UntrustedStructuredContext;
+    const structuredContextField =
+      channelStructuredContext.kind === "present"
+        ? { ChannelStructuredContext: channelStructuredContext.entries }
+        : {};
+    return {
+      Body: params.message.body ?? params.message.rawBody,
+      BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+      RawBody: params.message.rawBody,
+      CommandBody: params.message.commandBody ?? params.message.rawBody,
+      BodyForCommands: params.message.commandBody ?? params.message.rawBody,
+      From: params.from,
+      To: params.reply.to,
+      SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+      AccountId: params.route.accountId ?? params.accountId,
+      MessageSid: params.messageId,
+      MessageSidFull: params.messageIdFull,
+      ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
+      ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
+      media: params.media,
+      ChatType: params.conversation.kind,
+      ConversationLabel: params.conversation.label,
+      SenderName: params.sender.name ?? params.sender.displayLabel,
+      SenderId: params.sender.id,
+      SenderUsername: params.sender.username,
+      Timestamp: params.timestamp,
+      WasMentioned: params.access?.mentions?.wasMentioned,
+      GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
+      Provider: params.provider ?? params.channel,
+      Surface: params.surface ?? params.provider ?? params.channel,
+      OriginatingChannel: params.channel,
+      OriginatingTo: params.reply.originatingTo,
+      CommandAuthorized: params.access?.commands?.authorized ?? false,
+      ...extra,
+      ...structuredContextField,
+    } as Awaited<BuildContextResult>;
+  });
   return {
     ingress: {
       createResolver: createChannelIngressPolicyResolver,
@@ -331,5 +359,5 @@ export function createPluginInboundRuntimeMock(
     dispatchReply: dispatchAssembledChannelTurnMock,
     buildContext: buildChannelInboundEventContextMock,
     runPreparedReply: runPreparedChannelTurnMock,
-  } satisfies Inbound;
+  } satisfies PluginRuntime["channel"]["inbound"];
 }

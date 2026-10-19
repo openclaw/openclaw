@@ -1,4 +1,5 @@
-import { vi, type Mock } from "vitest";
+// Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
+import { vi } from "vitest";
 import {
   resolveInboundDebounceMs,
   type InboundDebounceCreateParams,
@@ -29,51 +30,6 @@ import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
-
-function resolved<T extends (...args: never[]) => unknown>(
-  value: Parameters<Mock<T>["mockResolvedValue"]>[0],
-) {
-  return vi.fn<T>().mockResolvedValue(value);
-}
-
-function configWriteResult(
-  nextConfig: OpenClawConfig,
-): Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>> {
-  return {
-    path: "/tmp/openclaw.json",
-    previousHash: null,
-    persistedHash: null,
-    snapshot: TEST_CONFIG_SNAPSHOT,
-    nextConfig,
-    afterWrite: { mode: "auto" as const },
-    followUp: { mode: "auto" as const, requiresRestart: false },
-  };
-}
-
-async function settleReply({
-  dispatcher,
-  onSettled,
-}: Parameters<Reply["settleReplyDispatcher"]>[0]): Promise<undefined> {
-  dispatcher.markComplete();
-  try {
-    await dispatcher.waitForIdle();
-  } finally {
-    await onSettled?.();
-  }
-}
-
-type AgentSession = PluginRuntime["agent"]["session"];
-type Agent = PluginRuntime["agent"];
-type Reply = PluginRuntime["channel"]["reply"];
-type Pairing = PluginRuntime["channel"]["pairing"];
-type Mentions = PluginRuntime["channel"]["mentions"];
-type Commands = PluginRuntime["channel"]["commands"];
-type Debounce = PluginRuntime["channel"]["debounce"];
-type RuntimeContexts = PluginRuntime["channel"]["runtimeContexts"];
-type Text = PluginRuntime["channel"]["text"];
-type Groups = PluginRuntime["channel"]["groups"];
-type Routing = PluginRuntime["channel"]["routing"];
-type MediaUnderstanding = PluginRuntime["mediaUnderstanding"];
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
 type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
@@ -127,20 +83,28 @@ export function createPluginRuntimeMediaMock(
   return {
     readRemoteMediaBuffer,
     fetchRemoteMedia: readRemoteMediaBuffer,
-    saveRemoteMedia: resolved<PluginRuntimeMediaMock["saveRemoteMedia"]>(TEST_SAVED_MEDIA),
-    saveResponseMedia: resolved<PluginRuntimeMediaMock["saveResponseMedia"]>(TEST_SAVED_MEDIA),
-    saveMediaBuffer: resolved<PluginRuntimeMediaMock["saveMediaBuffer"]>(TEST_SAVED_MEDIA),
-    deleteMediaBuffer: resolved<PluginRuntimeMediaMock["deleteMediaBuffer"]>(undefined),
+    saveRemoteMedia: vi
+      .fn<PluginRuntimeMediaMock["saveRemoteMedia"]>()
+      .mockResolvedValue(TEST_SAVED_MEDIA),
+    saveResponseMedia: vi
+      .fn<PluginRuntimeMediaMock["saveResponseMedia"]>()
+      .mockResolvedValue(TEST_SAVED_MEDIA),
+    saveMediaBuffer: vi
+      .fn<PluginRuntimeMediaMock["saveMediaBuffer"]>()
+      .mockResolvedValue(TEST_SAVED_MEDIA),
+    deleteMediaBuffer: vi.fn<PluginRuntimeMediaMock["deleteMediaBuffer"]>().mockResolvedValue(),
     ...overrides,
   };
 }
 
 export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = {}): PluginRuntime {
   const runtimeContexts = createChannelRuntimeContextRegistry();
-  const runEmbeddedAgentMock = resolved<Agent["runEmbeddedAgent"]>({
-    payloads: [],
-    meta: { durationMs: 0 },
-  });
+  const runEmbeddedAgentMock = vi
+    .fn<PluginRuntime["agent"]["runEmbeddedAgent"]>()
+    .mockResolvedValue({
+      payloads: [],
+      meta: { durationMs: 0 },
+    });
   const sessionRuntime = createPluginSessionRuntimeMock();
   const inboundRuntime = createPluginInboundRuntimeMock(() => mergedRuntime);
   const base: PluginRuntime = {
@@ -150,10 +114,27 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     config: {
       current: vi.fn((): OpenClawConfig => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
-        async () => ({ ...configWriteResult({}), result: undefined }),
+        async () => ({
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          persistedHash: null,
+          snapshot: TEST_CONFIG_SNAPSHOT,
+          nextConfig: {},
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+          result: undefined,
+        }),
       ),
       replaceConfigFile: vi.fn<PluginRuntime["config"]["replaceConfigFile"]>(
-        async ({ nextConfig }) => configWriteResult(nextConfig),
+        async ({ nextConfig }) => ({
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          persistedHash: null,
+          snapshot: TEST_CONFIG_SNAPSHOT,
+          nextConfig,
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+        }),
       ),
     },
     agent: {
@@ -161,52 +142,68 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         model: DEFAULT_MODEL,
         provider: DEFAULT_PROVIDER,
       },
-      resolveAgentDir: vi.fn<Agent["resolveAgentDir"]>(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn<Agent["resolveAgentWorkspaceDir"]>(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn<Agent["resolveAgentIdentity"]>(() => ({
+      resolveAgentDir: vi.fn<PluginRuntime["agent"]["resolveAgentDir"]>(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn<PluginRuntime["agent"]["resolveAgentWorkspaceDir"]>(
+        () => "/tmp/workspace",
+      ),
+      resolveAgentIdentity: vi.fn<PluginRuntime["agent"]["resolveAgentIdentity"]>(() => ({
         name: "test-agent",
       })),
-      resolveSessionCatalogCreateTarget: vi.fn<Agent["resolveSessionCatalogCreateTarget"]>(
-        resolveAgentCatalogCreateTarget,
-      ),
-      resolveThinkingDefault: vi.fn<Agent["resolveThinkingDefault"]>(() => "off"),
-      resolveCliBackendDispatchEligibility: vi.fn<Agent["resolveCliBackendDispatchEligibility"]>(
-        () => undefined,
-      ),
+      resolveSessionCatalogCreateTarget: vi.fn<
+        PluginRuntime["agent"]["resolveSessionCatalogCreateTarget"]
+      >(resolveAgentCatalogCreateTarget),
+      resolveThinkingDefault: vi.fn<PluginRuntime["agent"]["resolveThinkingDefault"]>(() => "off"),
+      resolveCliBackendDispatchEligibility: vi.fn<
+        PluginRuntime["agent"]["resolveCliBackendDispatchEligibility"]
+      >(() => undefined),
       resolveCliBackendDispatchEligibilityAsync: vi.fn<
-        Agent["resolveCliBackendDispatchEligibilityAsync"]
+        PluginRuntime["agent"]["resolveCliBackendDispatchEligibilityAsync"]
       >(async () => undefined),
-      normalizeThinkingLevel: vi.fn<Agent["normalizeThinkingLevel"]>(normalizeThinkLevel),
-      resolveThinkingPolicy: vi.fn<Agent["resolveThinkingPolicy"]>(() => ({
-        levels: (["off", "minimal", "low", "medium", "high"] as const).map((id) => ({
-          id,
-          label: id,
-        })),
+      normalizeThinkingLevel:
+        vi.fn<PluginRuntime["agent"]["normalizeThinkingLevel"]>(normalizeThinkLevel),
+      resolveThinkingPolicy: vi.fn<PluginRuntime["agent"]["resolveThinkingPolicy"]>(() => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+        ],
       })),
-      runCommandFromIngress: vi.fn<Agent["runCommandFromIngress"]>(),
+      runCommandFromIngress: vi.fn<PluginRuntime["agent"]["runCommandFromIngress"]>(),
       runEmbeddedAgent: runEmbeddedAgentMock,
-      resolveAgentTimeoutMs: vi.fn<Agent["resolveAgentTimeoutMs"]>(() => 30_000),
-      ensureAgentWorkspace: resolved<Agent["ensureAgentWorkspace"]>({ dir: "/tmp/workspace" }),
+      resolveAgentTimeoutMs: vi.fn<PluginRuntime["agent"]["resolveAgentTimeoutMs"]>(() => 30_000),
+      ensureAgentWorkspace: vi
+        .fn<PluginRuntime["agent"]["ensureAgentWorkspace"]>()
+        .mockResolvedValue({ dir: "/tmp/workspace" }),
       session: {
-        resolveStorePath: vi.fn<AgentSession["resolveStorePath"]>(() => "/tmp/agent-sessions.json"),
+        resolveStorePath: vi.fn<PluginRuntime["agent"]["session"]["resolveStorePath"]>(
+          () => "/tmp/agent-sessions.json",
+        ),
         createSessionEntry: vi.fn(
-          async (params: Parameters<AgentSession["createSessionEntry"]>[0]) => {
+          async (
+            params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
+          ) => {
             const sessionId = "plugin-runtime-mock-session";
-            const { key, initialEntry: input } = params;
+            const key = params.key;
             const sessionInitialEntry =
-              "acpSessionBinding" in input
+              "acpSessionBinding" in params.initialEntry
                 ? {
                     acpSessionBinding: {
-                      acpBackendId: input.acpBackendId,
-                      ...input.acpSessionBinding,
+                      acpBackendId: params.initialEntry.acpBackendId,
+                      ...params.initialEntry.acpSessionBinding,
                     },
-                    ...(input.modelSelectionLocked ? { modelSelectionLocked: true as const } : {}),
-                    ...(input.pluginExtensions
-                      ? { pluginExtensions: structuredClone(input.pluginExtensions) }
+                    ...(params.initialEntry.modelSelectionLocked
+                      ? { modelSelectionLocked: true as const }
                       : {}),
-                    ...(input.pluginOwnerId ? { pluginOwnerId: input.pluginOwnerId } : {}),
+                    ...(params.initialEntry.pluginExtensions
+                      ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+                      : {}),
+                    ...(params.initialEntry.pluginOwnerId
+                      ? { pluginOwnerId: params.initialEntry.pluginOwnerId }
+                      : {}),
                   }
-                : structuredClone(input);
+                : structuredClone(params.initialEntry);
             const initialEntry = {
               sessionId,
               updatedAt: Date.now(),
@@ -244,22 +241,40 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
                     },
             };
           },
-        ) as AgentSession["createSessionEntry"],
-        getSessionEntry: vi.fn<AgentSession["getSessionEntry"]>(() => undefined),
-        getSessionEntryAsync: resolved<AgentSession["getSessionEntryAsync"]>(undefined),
-        getSessionEntryByIdAsync: resolved<AgentSession["getSessionEntryByIdAsync"]>(undefined),
-        listSessionEntries: vi.fn<AgentSession["listSessionEntries"]>(() => []),
-        listSessionEntriesAsync: resolved<AgentSession["listSessionEntriesAsync"]>([]),
-        createSessionEntryListReader: resolved<AgentSession["createSessionEntryListReader"]>(
-          async () => ({ entries: [], assertCurrent: () => {} }),
+        ) as PluginRuntime["agent"]["session"]["createSessionEntry"],
+        getSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["getSessionEntry"]>(
+          () => undefined,
         ),
-        prepareSessionEntryPatch: resolved<AgentSession["prepareSessionEntryPatch"]>(null),
-        patchSessionEntry: resolved<AgentSession["patchSessionEntry"]>(null),
-        upsertSessionEntry: resolved<AgentSession["upsertSessionEntry"]>(undefined),
+        getSessionEntryAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["getSessionEntryAsync"]>()
+          .mockResolvedValue(undefined),
+        getSessionEntryByIdAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["getSessionEntryByIdAsync"]>()
+          .mockResolvedValue(undefined),
+        listSessionEntries: vi.fn<PluginRuntime["agent"]["session"]["listSessionEntries"]>(
+          () => [],
+        ),
+        listSessionEntriesAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]>()
+          .mockResolvedValue([]),
+        createSessionEntryListReader: vi
+          .fn<PluginRuntime["agent"]["session"]["createSessionEntryListReader"]>()
+          .mockResolvedValue(async () => ({ entries: [], assertCurrent: () => {} })),
+        prepareSessionEntryPatch: vi
+          .fn<PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]>()
+          .mockResolvedValue(null),
+        patchSessionEntry: vi
+          .fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>()
+          .mockResolvedValue(null),
+        upsertSessionEntry: vi
+          .fn<PluginRuntime["agent"]["session"]["upsertSessionEntry"]>()
+          .mockResolvedValue(undefined),
         runWithWorkAdmission: vi.fn(
           async (_params, run) => await run(new AbortController().signal),
-        ) as AgentSession["runWithWorkAdmission"],
-        updateSessionStoreEntry: resolved<AgentSession["updateSessionStoreEntry"]>(null),
+        ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],
+        updateSessionStoreEntry: vi
+          .fn<PluginRuntime["agent"]["session"]["updateSessionStoreEntry"]>()
+          .mockResolvedValue(null),
       },
     },
     system: {
@@ -291,16 +306,17 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       listVoices: vi.fn<PluginRuntime["tts"]["listVoices"]>(),
     },
     mediaUnderstanding: {
-      resolveAudioInputBudget: resolved<MediaUnderstanding["resolveAudioInputBudget"]>({
-        enabled: true,
-        maxBytes: 20 * 1024 * 1024,
-      }),
-      runFile: vi.fn<MediaUnderstanding["runFile"]>(),
-      describeImageFile: vi.fn<MediaUnderstanding["describeImageFile"]>(),
-      describeImageFileWithModel: vi.fn<MediaUnderstanding["describeImageFileWithModel"]>(),
-      extractStructuredWithModel: vi.fn<MediaUnderstanding["extractStructuredWithModel"]>(),
-      describeVideoFile: vi.fn<MediaUnderstanding["describeVideoFile"]>(),
-      transcribeAudioFile: vi.fn<MediaUnderstanding["transcribeAudioFile"]>(),
+      resolveAudioInputBudget: vi
+        .fn<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>()
+        .mockResolvedValue({ enabled: true, maxBytes: 20 * 1024 * 1024 }),
+      runFile: vi.fn<PluginRuntime["mediaUnderstanding"]["runFile"]>(),
+      describeImageFile: vi.fn<PluginRuntime["mediaUnderstanding"]["describeImageFile"]>(),
+      describeImageFileWithModel:
+        vi.fn<PluginRuntime["mediaUnderstanding"]["describeImageFileWithModel"]>(),
+      extractStructuredWithModel:
+        vi.fn<PluginRuntime["mediaUnderstanding"]["extractStructuredWithModel"]>(),
+      describeVideoFile: vi.fn<PluginRuntime["mediaUnderstanding"]["describeVideoFile"]>(),
+      transcribeAudioFile: vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(),
     },
     imageGeneration: {
       generate: vi.fn<PluginRuntime["imageGeneration"]["generate"]>(),
@@ -326,47 +342,77 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         chunkMarkdownTextWithMode: vi.fn((text: string) => (text ? [text] : [])),
         chunkText: vi.fn((text: string) => (text ? [text] : [])),
         chunkTextWithMode: vi.fn((text: string) => (text ? [text] : [])),
-        resolveChunkMode: vi.fn<Text["resolveChunkMode"]>(() => "length"),
+        resolveChunkMode: vi.fn<PluginRuntime["channel"]["text"]["resolveChunkMode"]>(
+          () => "length",
+        ),
         resolveTextChunkLimit: vi.fn(() => 4000),
         hasControlCommand: vi.fn(() => false),
-        resolveMarkdownTableMode: vi.fn<Text["resolveMarkdownTableMode"]>(() => "code"),
+        resolveMarkdownTableMode: vi.fn<
+          PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"]
+        >(() => "code"),
         convertMarkdownTables: vi.fn((text: string) => text),
       },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher: vi.fn<
-          Reply["dispatchReplyWithBufferedBlockDispatcher"]
+          PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
         >(async () => ({
           queuedFinal: false,
           counts: { tool: 0, block: 0, final: 0 },
         })),
-        createReplyDispatcherWithTyping: vi.fn<Reply["createReplyDispatcherWithTyping"]>(),
-        resolveEffectiveMessagesConfig: vi.fn<Reply["resolveEffectiveMessagesConfig"]>(),
-        resolveHumanDelayConfig: vi.fn<Reply["resolveHumanDelayConfig"]>(),
-        dispatchReplyFromConfig: vi.fn<Reply["dispatchReplyFromConfig"]>(),
-        settleReplyDispatcher: vi.fn<Reply["settleReplyDispatcher"]>(settleReply),
-        withReplyDispatcher: createGenericMock<Reply["withReplyDispatcher"]>(
-          async ({ dispatcher, run, onSettled }: Parameters<Reply["withReplyDispatcher"]>[0]) => {
+        createReplyDispatcherWithTyping:
+          vi.fn<PluginRuntime["channel"]["reply"]["createReplyDispatcherWithTyping"]>(),
+        resolveEffectiveMessagesConfig:
+          vi.fn<PluginRuntime["channel"]["reply"]["resolveEffectiveMessagesConfig"]>(),
+        resolveHumanDelayConfig:
+          vi.fn<PluginRuntime["channel"]["reply"]["resolveHumanDelayConfig"]>(),
+        dispatchReplyFromConfig:
+          vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>(),
+        settleReplyDispatcher: vi.fn<PluginRuntime["channel"]["reply"]["settleReplyDispatcher"]>(
+          async ({ dispatcher, onSettled }) => {
+            dispatcher.markComplete();
             try {
-              return await run();
+              await dispatcher.waitForIdle();
             } finally {
-              await settleReply({ dispatcher, onSettled });
+              await onSettled?.();
             }
           },
         ),
-        finalizeInboundContext: createGenericMock<Reply["finalizeInboundContext"]>(
-          (ctx: Record<string, unknown>) => ctx,
+        withReplyDispatcher: createGenericMock<
+          PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
+        >(
+          async ({
+            dispatcher,
+            run,
+            onSettled,
+          }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+            try {
+              return await run();
+            } finally {
+              dispatcher.markComplete();
+              try {
+                await dispatcher.waitForIdle();
+              } finally {
+                await onSettled?.();
+              }
+            }
+          },
         ),
-        formatAgentEnvelope: vi.fn<Reply["formatAgentEnvelope"]>(
+        finalizeInboundContext: createGenericMock<
+          PluginRuntime["channel"]["reply"]["finalizeInboundContext"]
+        >((ctx: Record<string, unknown>) => ctx),
+        formatAgentEnvelope: vi.fn<PluginRuntime["channel"]["reply"]["formatAgentEnvelope"]>(
           (opts: { body: string }) => opts.body,
         ),
-        resolveEnvelopeFormatOptions: vi.fn<Reply["resolveEnvelopeFormatOptions"]>(() => ({})),
+        resolveEnvelopeFormatOptions: vi.fn<
+          PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"]
+        >(() => ({})),
       },
       routing: {
-        buildAgentSessionKey: vi.fn<Routing["buildAgentSessionKey"]>(
+        buildAgentSessionKey: vi.fn<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>(
           ({ agentId, channel, peer }) =>
             `agent:${agentId}:${channel}:${peer?.kind ?? "direct"}:${peer?.id ?? "peer"}`,
         ),
-        resolveAgentRoute: vi.fn<Routing["resolveAgentRoute"]>(() => ({
+        resolveAgentRoute: vi.fn<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>(() => ({
           agentId: "main",
           channel: "test",
           accountId: "default",
@@ -377,29 +423,40 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         })),
       },
       pairing: {
-        buildPairingReply: vi.fn<Pairing["buildPairingReply"]>(() => "Pairing code: TESTCODE"),
-        readAllowFromStore: resolved<Pairing["readAllowFromStore"]>([]),
-        removeAllowFromStoreEntry: resolved<Pairing["removeAllowFromStoreEntry"]>({
-          changed: false,
-          allowFrom: [],
-        }),
-        upsertPairingRequest: resolved<Pairing["upsertPairingRequest"]>({
-          code: "TESTCODE",
-          created: true,
-        }),
+        buildPairingReply: vi.fn<PluginRuntime["channel"]["pairing"]["buildPairingReply"]>(
+          () => "Pairing code: TESTCODE",
+        ),
+        readAllowFromStore: vi
+          .fn<PluginRuntime["channel"]["pairing"]["readAllowFromStore"]>()
+          .mockResolvedValue([]),
+        removeAllowFromStoreEntry: vi
+          .fn<PluginRuntime["channel"]["pairing"]["removeAllowFromStoreEntry"]>()
+          .mockResolvedValue({
+            changed: false,
+            allowFrom: [],
+          }),
+        upsertPairingRequest: vi
+          .fn<PluginRuntime["channel"]["pairing"]["upsertPairingRequest"]>()
+          .mockResolvedValue({
+            code: "TESTCODE",
+            created: true,
+          }),
       },
       media: createPluginRuntimeMediaMock(),
       session: sessionRuntime,
       mentions: {
-        buildMentionRegexes: vi.fn<Mentions["buildMentionRegexes"]>(() => [/\bbert\b/i]),
-        matchesMentionPatterns: vi.fn<Mentions["matchesMentionPatterns"]>(
-          (text: string, regexes: RegExp[]) => regexes.some((regex) => regex.test(text)),
+        buildMentionRegexes: vi.fn<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>(
+          () => [/\bbert\b/i],
         ),
-        matchesMentionWithExplicit: vi.fn<Mentions["matchesMentionWithExplicit"]>(
-          (params: { text: string; mentionRegexes: RegExp[]; explicitWasMentioned?: boolean }) =>
-            params.explicitWasMentioned === true
-              ? true
-              : params.mentionRegexes.some((regex) => regex.test(params.text)),
+        matchesMentionPatterns: vi.fn<
+          PluginRuntime["channel"]["mentions"]["matchesMentionPatterns"]
+        >((text: string, regexes: RegExp[]) => regexes.some((regex) => regex.test(text))),
+        matchesMentionWithExplicit: vi.fn<
+          PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"]
+        >((params: { text: string; mentionRegexes: RegExp[]; explicitWasMentioned?: boolean }) =>
+          params.explicitWasMentioned === true
+            ? true
+            : params.mentionRegexes.some((regex) => regex.test(params.text)),
         ),
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
@@ -411,45 +468,52 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         removeAckReactionHandleAfterReply,
       },
       groups: {
-        resolveGroupPolicy: vi.fn<Groups["resolveGroupPolicy"]>(() => ({
+        resolveGroupPolicy: vi.fn<PluginRuntime["channel"]["groups"]["resolveGroupPolicy"]>(() => ({
           allowlistEnabled: false,
           allowed: true,
         })),
-        resolveRequireMention: vi.fn<Groups["resolveRequireMention"]>(() => false),
+        resolveRequireMention: vi.fn<PluginRuntime["channel"]["groups"]["resolveRequireMention"]>(
+          () => false,
+        ),
       },
       debounce: {
-        createInboundDebouncer: createGenericMock<Debounce["createInboundDebouncer"]>(
-          (params: Pick<InboundDebounceCreateParams<unknown>, "onFlush">) => {
-            const activeCompletions = new Set<Promise<void>>();
-            const runFlush = async (flush: InboundDebounceFlush) => {
-              const completion = flush.completion.catch(() => undefined);
-              activeCompletions.add(completion);
-              void completion.finally(() => activeCompletions.delete(completion));
-              await Promise.race([flush.admission, completion]);
-            };
-            return {
-              shouldBuffer: vi.fn(() => false),
-              enqueue: async (item: unknown) => {
-                await runFlush(params.onFlush([item], createTestInboundDebounceFlush));
-              },
-              flushKey: vi.fn(),
-              cancelKey: vi.fn(() => false),
-              drain: async () => {
-                await Promise.all(activeCompletions);
-              },
-            };
-          },
-        ),
+        createInboundDebouncer: createGenericMock<
+          PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]
+        >((params: Pick<InboundDebounceCreateParams<unknown>, "onFlush">) => {
+          const activeCompletions = new Set<Promise<void>>();
+          const runFlush = async (flush: InboundDebounceFlush) => {
+            const completion = flush.completion.catch(() => undefined);
+            activeCompletions.add(completion);
+            void completion.finally(() => activeCompletions.delete(completion));
+            await Promise.race([flush.admission, completion]);
+          };
+          return {
+            shouldBuffer: vi.fn(() => false),
+            enqueue: async (item: unknown) => {
+              await runFlush(params.onFlush([item], createTestInboundDebounceFlush));
+            },
+            flushKey: vi.fn(),
+            cancelKey: vi.fn(() => false),
+            drain: async () => {
+              await Promise.all(activeCompletions);
+            },
+          };
+        }),
         resolveInboundDebounceMs:
-          vi.fn<Debounce["resolveInboundDebounceMs"]>(resolveInboundDebounceMs),
+          vi.fn<PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]>(
+            resolveInboundDebounceMs,
+          ),
       },
       commands: {
         resolveCommandAuthorizedFromAuthorizers: vi.fn<
-          Commands["resolveCommandAuthorizedFromAuthorizers"]
+          PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"]
         >(() => false),
-        isControlCommandMessage: vi.fn<Commands["isControlCommandMessage"]>(),
-        shouldComputeCommandAuthorized: vi.fn<Commands["shouldComputeCommandAuthorized"]>(),
-        shouldHandleTextCommands: vi.fn<Commands["shouldHandleTextCommands"]>(),
+        isControlCommandMessage:
+          vi.fn<PluginRuntime["channel"]["commands"]["isControlCommandMessage"]>(),
+        shouldComputeCommandAuthorized:
+          vi.fn<PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"]>(),
+        shouldHandleTextCommands:
+          vi.fn<PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"]>(),
       },
       outbound: {
         loadAdapter: vi.fn<PluginRuntime["channel"]["outbound"]["loadAdapter"]>(),
@@ -458,9 +522,13 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       turn: inboundRuntime,
       threadBindings: createPluginThreadBindingsRuntimeMock(),
       runtimeContexts: {
-        register: vi.fn<RuntimeContexts["register"]>(runtimeContexts.register),
-        get: createGenericMock<RuntimeContexts["get"]>(runtimeContexts.get),
-        watch: vi.fn<RuntimeContexts["watch"]>(runtimeContexts.watch),
+        register: vi.fn<PluginRuntime["channel"]["runtimeContexts"]["register"]>(
+          runtimeContexts.register,
+        ),
+        get: createGenericMock<PluginRuntime["channel"]["runtimeContexts"]["get"]>(
+          runtimeContexts.get,
+        ),
+        watch: vi.fn<PluginRuntime["channel"]["runtimeContexts"]["watch"]>(runtimeContexts.watch),
       },
       activity: {
         record: vi.fn(),
