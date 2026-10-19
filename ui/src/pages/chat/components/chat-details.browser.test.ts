@@ -110,7 +110,10 @@ describe("chat Details presentation", () => {
     await page.viewport(1700, 900);
     const { element, frame, conversation, footer, trigger, panel } = await fixture(props(), 1320);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+    // The first docked view also resolves the lazy session module.
+    await expect
+      .poll(() => panel.querySelector(".chat-details-session"), { timeout: 5_000 })
+      .not.toBeNull();
     const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     expect(panel.getAttribute("role")).toBe("complementary");
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
