@@ -9,6 +9,7 @@ import {
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails } from "./chat-details.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -66,11 +67,21 @@ suite.define(() => {
             "session.members.listEvidence",
           ],
         });
+        const activityModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/chat-subagent-activity-live.tsx",
+        );
+        const activityRequests: string[] = [];
+        page.on("request", (request) => {
+          if (activityModule.test(request.url())) {
+            activityRequests.push(request.url());
+          }
+        });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         const activePane = page.locator(".chat-pane-cache__pane--active");
         const panel = activePane.locator("openclaw-chat-subagents-panel");
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
         await activePane.getByText("Ready for delegated work.", { exact: true }).waitFor();
+        expect(activityRequests).toEqual([]);
         expect(await panel.isVisible()).toBe(false);
         expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
 
@@ -197,6 +208,7 @@ suite.define(() => {
           .locator(".chat-subagent-activity")
           .getByText("Backend review", { exact: true })
           .waitFor();
+        expect(activityRequests).toHaveLength(1);
         expect(await waitLine.count()).toBe(0);
         expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);
