@@ -216,7 +216,17 @@ slots from that shared start time; a missed slot fails the run. Use
 `--expect-session <key>` to assert the committed session and `--open-details` for
 chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
 leave it off for paired timing. Use only synthetic requests:
-parameters and stacks are retained, while auth and response payloads are omitted.
+parameters, stacks, and model rows are retained; authentication and other response
+payloads are omitted.
+
+To isolate session activity from model selection, use
+`--activity-patch-sessions <key-a>,<key-b>` with `--load-runs 1` against existing
+synthetic sessions. This alternates navigation between those conversations and
+changes their labels at `--interval-ms`, without inference or model changes.
+It excludes `--activity-session` and `--activity-cron`. Catalog observations
+retain model rows for before/after option comparisons; use only synthetic
+catalogs. Compare warm session-scoped request counts and activity blocking time,
+keeping the initial catalogs separate from the activity window.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:

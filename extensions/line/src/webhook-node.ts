@@ -17,19 +17,6 @@ import { validateLineSignature } from "./signature.js";
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
-async function readLineWebhookRequestBody(
-  req: IncomingMessage,
-  maxBytes: number,
-  timeoutMs: number,
-): Promise<string> {
-  return await readRequestBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs,
-    // Defer destruction so the caller can answer 413/408 before the connection closes.
-    destroyOnLimit: false,
-  });
-}
-
 /**
  * Answer a body-limit failure through the connection owner.
  *
@@ -66,10 +53,7 @@ type LineWebhookTarget = {
 export function createLineNodeWebhookHandler(params: {
   getTargets: () => readonly LineWebhookTarget[];
   runtime: RuntimeEnv;
-  readBody?: typeof readLineWebhookRequestBody;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const readBody = params.readBody ?? readLineWebhookRequestBody;
-
   return async (req: IncomingMessage, res: ServerResponse) => {
     const targets = params.getTargets();
     if (req.method !== "POST" && targets.length === 0) {
@@ -110,11 +94,12 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      const rawBody = await readBody(
-        req,
-        LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
-        LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-      );
+      const rawBody = await readRequestBodyWithLimit(req, {
+        maxBytes: LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
+        timeoutMs: LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+        // Defer destruction so the caller can answer 413/408 before the connection closes.
+        destroyOnLimit: false,
+      });
 
       const match = resolveSingleWebhookTarget(targets, (target) =>
         validateLineSignature(rawBody, signature, target.channelSecret),

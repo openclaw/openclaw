@@ -450,6 +450,7 @@ immediately. Catalog and account changes invalidate these copies; reconnecting
 loads current choices again. Reopening a picker after a reported cooldown expires
 checks readiness again. A catalog refresh keeps existing controls visible,
 and the Gateway still validates the model and account when starting a run.
+Native session activity reuses the same choices until its model or account binding changes.
 Repeated changes while a model lookup is pending are collected into one
 follow-up lookup for the latest choices.
 

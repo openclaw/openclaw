@@ -1097,7 +1097,6 @@ src/agents/agent-tools.read.ts	4
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/agent-tools.schema.ts	3
 src/agents/ai-transport-runtime-host.ts	9
-src/agents/anthropic-payload-log.ts	2
 src/agents/apply-patch-file-ops.ts	2
 src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
@@ -1124,7 +1123,7 @@ src/agents/cache-trace.ts	3
 src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
-src/agents/cli-runner/bundle-mcp-codex.ts	3
+src/agents/cli-runner/bundle-mcp-codex.ts	1
 src/agents/cli-runner/bundle-mcp-gemini.ts	2
 src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	5
@@ -1563,7 +1562,6 @@ src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	2
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	6
-src/cli/program/action-reparse.ts	1
 src/cli/program/command-tree.ts	1
 src/cli/program/json-mode.ts	2
 src/cli/program/preaction.ts	1
@@ -1590,7 +1588,6 @@ src/commands/agent-exec.ts	1
 src/commands/agent-via-gateway.ts	2
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
-src/commands/agents.providers.ts	4
 src/commands/audit.ts	1
 src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	1
@@ -1919,7 +1916,6 @@ src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
-src/gateway/talk/session-config.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
 src/gateway/tools-invoke-http.ts	1
@@ -2145,7 +2141,6 @@ src/node-host/invoke-agent-cli-claude-params.ts	1
 src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-payload.ts	3
 src/node-host/invoke.ts	1
-src/node-host/mcp.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2

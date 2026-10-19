@@ -368,10 +368,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
     DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-  if (!Number.isFinite(minutes) || minutes <= 0) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(minutes)) * 60_000;
+  return minutes === 0 ? undefined : minutes * 60_000;
 }
 
 /** Arms retention only after the run or its waitable collector result has completed. */
