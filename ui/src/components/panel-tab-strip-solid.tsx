@@ -1,6 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import type { Accessor } from "solid-js";
-import { For, Show, createMemo, createSignal, flush, onCleanup, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { createShadowStyles } from "../lib/reactive/shadow-styles.ts";
 import { activeElementFor, createTabFocus, createTabList, type TabFocus } from "../lib/tabs.ts";
@@ -173,9 +173,8 @@ function TabGroupView<T extends SolidPanelTabStripTab>(
     if (!restoreFocus) {
       return;
     }
-    // Commit the owning callback's projection before locating the surviving tab.
-    flush();
-    focusOwner.restoreAfterClose(tab.id);
+    // Locate the surviving tab after the owning callback's projection commits.
+    onSettled(() => focusOwner.restoreAfterClose(tab.id));
   }
 
   return (

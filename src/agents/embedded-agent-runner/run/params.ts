@@ -11,13 +11,9 @@ import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type {
-  AgentRunClientContext,
+  AgentRunExecutionContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-  AgentRunModelOptions,
-  AgentRunInputContext,
-  AgentRunTranscriptContext,
-  AgentRunLifecycle,
   AgentStreamParams,
   ClientToolDefinition,
 } from "../../command/shared-types.js";
@@ -284,13 +280,7 @@ export type RunEmbeddedAgentParams = Pick<
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersistenceInvalidated?: () => void;
-} & AgentRunClientContext &
-  AgentRunMessageContext &
-  AgentRunChannelContext &
-  AgentRunModelOptions &
-  AgentRunInputContext &
-  AgentRunTranscriptContext &
-  AgentRunLifecycle;
+} & AgentRunExecutionContext;
 
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,

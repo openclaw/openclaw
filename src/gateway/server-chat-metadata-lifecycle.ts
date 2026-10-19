@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
@@ -163,14 +163,14 @@ export async function createGatewayChatMetadataLifecycle(params: {
       context = next;
       let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
-      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+      sessionCostUsageNotifications.onUpdated = (publication) => {
         broadcastChatMetadataChanged(next, {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
           commandsChanged: false,
         });
-      });
+      };
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
           const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
@@ -190,7 +190,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       });
       publishSidecars({
         stop: async () => {
-          unregisterUsage();
+          sessionCostUsageNotifications.onUpdated = () => {};
           unregisterRolePolicy();
           unregister();
           await runtime.stop();

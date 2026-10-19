@@ -130,7 +130,7 @@ export function AssistantAttachments(
         />
         <For each={files()} keyed={false}>
           {(item) => {
-            const presentation = createMemo<"inline" | "card">(() => {
+            const presentation = (): "inline" | "card" => {
               const current = item();
               return props.inlinePlayback !== false ||
                 (current.type === "attachment" &&
@@ -138,7 +138,7 @@ export function AssistantAttachments(
                   current.attachment.isVoiceNote)
                 ? "inline"
                 : "card";
-            });
+            };
             return (
               <MessageAttachment
                 item={item()}

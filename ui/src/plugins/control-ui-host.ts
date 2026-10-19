@@ -141,15 +141,16 @@ export function createControlUiPluginHost(
           listener();
         }
       };
+      // The public SDK subscription delivers each owner publication within its activation.
       const stops = [
-        context.gateway.subscribe(notify),
-        context.sessions.subscribe(notify),
-        context.agents.subscribe(notify),
-        context.agentSelection.subscribe(notify),
-        context.theme.subscribe(notify),
-        i18n.subscribe(notify),
-        ...(dock ? [dock.subscribe(notify)] : []),
-      ];
+        context.gateway,
+        context.sessions,
+        context.agents,
+        context.agentSelection,
+        context.theme,
+        i18n,
+        ...(dock ? [dock] : []),
+      ].map((source) => source.subscribe(notify));
       return retain(() => stops.forEach((stop) => stop()));
     },
     sessions: {

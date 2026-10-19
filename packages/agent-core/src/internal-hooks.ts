@@ -85,7 +85,7 @@ export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
   drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
-  subscribe: (listener: () => void) => () => void;
+  onChange?: () => void;
 };
 const steeringQueueObserverByCallback = new WeakMap<
   InternalSteeringGetter,

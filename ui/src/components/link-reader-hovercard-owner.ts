@@ -3,7 +3,6 @@ import type {
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { i18n } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
 import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
@@ -259,7 +258,6 @@ export class HovercardOwner {
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
   private readonly hovercard = createPortaledHovercardOwner(() => this.close());
-  private stopI18n: (() => void) | null = null;
   private previewRequest: {
     controller: AbortController;
     generation: number | undefined;
@@ -339,7 +337,6 @@ export class HovercardOwner {
       attributes: true,
       attributeFilter: ["href"],
     });
-    this.stopI18n ??= i18n.subscribe(() => this.update());
     this.watchPageContext();
     // Restore focus intent after the bridge finishes adopting its caller's nodes.
     queueMicrotask(() => {
@@ -357,8 +354,6 @@ export class HovercardOwner {
     this.stopListeners?.();
     this.stopListeners = undefined;
     this.inlineObserver.disconnect();
-    this.stopI18n?.();
-    this.stopI18n = null;
     this.close();
     this.clearPreviews();
     this.stopGateway?.();
@@ -408,10 +403,7 @@ export class HovercardOwner {
         this.show(anchor, request.preview);
       }
     } else if (request?.state === "error" && (this.hovercard.card || this.hovercard.held)) {
-      this.show(
-        anchor,
-        request.preview ?? this.seedPreview(target),
-        true,
+      this.show(anchor, request.preview ?? this.seedPreview(target), true, () =>
         linkReaderErrorMessage(request.error),
       );
     }
@@ -567,7 +559,7 @@ export class HovercardOwner {
     anchor: HTMLAnchorElement,
     preview?: LinkPreview,
     seeded = false,
-    error?: string,
+    error?: () => string,
   ): void {
     const existing = this.hovercard.card;
     const card =

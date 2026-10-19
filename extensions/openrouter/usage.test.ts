@@ -1,4 +1,6 @@
+import { setImmediate } from "node:timers/promises";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchOpenRouterUsage } from "./usage.js";
 
@@ -236,6 +238,62 @@ describe("OpenRouter usage", () => {
       "Invalid OpenRouter API base URL",
     );
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("bounds native response bodies after headers and releases both usage endpoints", async () => {
+    await withServer(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"data":');
+      },
+      async (baseUrl) => {
+        const headersReady = Promise.withResolvers<void>();
+        const released: string[] = [];
+        const parent = new AbortController();
+        const actualGuard = ssrfRuntime.fetchWithSsrFGuard;
+        let receivedHeaders = 0;
+        const guardedFetch = vi
+          .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+          .mockImplementation(async (params) => {
+            const guarded = await actualGuard(params).catch((error: unknown) => {
+              headersReady.reject(error);
+              throw error;
+            });
+            if (++receivedHeaders === 2) {
+              headersReady.resolve();
+            }
+            return {
+              ...guarded,
+              release: async () => {
+                await guarded.release();
+                released.push(new URL(params.url).pathname);
+              },
+            };
+          });
+        // HTTP and body reads stay native; advance only the request deadline clock.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const operation = fetchOpenRouterUsage({
+          token: "synthetic-private-key",
+          baseUrl,
+          request: { allowPrivateNetwork: true },
+          timeoutMs: 1,
+          signal: parent.signal,
+          fetchFn: fetch,
+        });
+        try {
+          await headersReady.promise;
+          await setImmediate();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await operation).toMatchObject({ windows: [], error: "Malformed usage response" });
+          expect(released.toSorted()).toEqual(["/credits", "/key"]);
+        } finally {
+          parent.abort();
+          vi.useRealTimers();
+          await operation.catch(() => undefined);
+          guardedFetch.mockRestore();
+        }
+      },
+    );
   });
 
   it("derives recurring budget usage from remaining credits when the period counter is absent", async () => {

@@ -8,7 +8,7 @@ import {
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
 import { resolveClientCredentialStorePath } from "./client-credential-store.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
@@ -238,12 +238,7 @@ export async function inspectImmutableUpdateCoverage(params: {
             kind: resource.kind,
             present: await fs.stat(resource.path).then(
               () => true,
-              (error: unknown) => {
-                if (hasErrnoCode(error, "ENOENT")) {
-                  return false;
-                }
-                throw error;
-              },
+              (error: unknown) => ignoreMissingPath(error) ?? false,
             ),
             external: !isPathInside(stateDir, resource.path),
             coverage: "unknown" as const,

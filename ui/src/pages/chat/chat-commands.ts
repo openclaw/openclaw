@@ -8,7 +8,6 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
-  getRemoteCommandEntries,
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
@@ -176,10 +175,7 @@ async function requestRemoteSlashCommands(
       includeArgs: true,
       scope: "text",
     });
-    if (!Array.isArray(result?.commands)) {
-      return undefined;
-    }
-    return buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
+    return buildSlashCommandsFromEntries(result.commands);
   } catch {
     return undefined;
   }
@@ -193,8 +189,8 @@ function loadRemoteSlashCommands(
   const metadata = peekChatMetadata(client, { agentId, sessionKey });
   // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
   // so no TTL applies here. The cache below owns only commands.list-derived entries.
-  if (Array.isArray(metadata?.commands)) {
-    return Promise.resolve(buildSlashCommandsFromEntries(getRemoteCommandEntries(metadata)));
+  if (metadata) {
+    return Promise.resolve(buildSlashCommandsFromEntries(metadata.commands));
   }
   let cache = remoteSlashCommandCache.get(client);
   if (!cache) {
@@ -243,10 +239,10 @@ export function invalidateSessionSlashCommands(
 export function applyRemoteSlashCommandsResult(
   result: CommandsListResult | null | undefined,
 ): boolean {
-  if (!Array.isArray(result?.commands)) {
+  if (!result) {
     return false;
   }
-  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
+  const commands = buildSlashCommandsFromEntries(result.commands);
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;

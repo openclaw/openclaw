@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -51,11 +52,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (!form.eventName.trim()) {
       errors.eventName = "cron.events.eventNameRequired";
     }
-    try {
-      if (!isRecord(JSON.parse(form.eventArguments))) {
-        errors.eventArguments = "cron.events.eventArgumentsInvalid";
-      }
-    } catch {
+    if (!safeParseJsonRecord(form.eventArguments)) {
       errors.eventArguments = "cron.events.eventArgumentsInvalid";
     }
   } else if (form.scheduleKind === "at") {

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
+import { baseProps } from "./config-view.test-support.tsx";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { SessionObserverSettings } from "./session-observer-settings.tsx";
+import { SidebarPreferencesSection } from "./view-appearance-preferences.tsx";
 
 describe("session observer settings patches", () => {
   it("uses null to restore the default toggle and false to opt out", () => {
@@ -52,15 +53,16 @@ describe("session observer settings patches", () => {
     const container = document.createElement("div");
     mountSolid(
       () =>
-        SessionObserverSettings({
-          enabled: true,
-          utilityModel: undefined,
-          resolvedUtilityModel: { status: "unavailable" },
-          models: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
-          modelsUnavailable: true,
-          disabled: false,
-          onEnabledChange: () => undefined,
-          onUtilityModelChange: () => undefined,
+        SidebarPreferencesSection({
+          ...baseProps(),
+          sessionObserverEnabled: true,
+          sessionObserverUtilityModel: undefined,
+          sessionObserverResolvedModel: { status: "unavailable" },
+          sessionObserverModels: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
+          sessionObserverModelsUnavailable: true,
+          sessionObserverDisabled: false,
+          setSessionObserverEnabled: () => undefined,
+          setSessionObserverUtilityModel: () => undefined,
         }),
       { container },
     );
@@ -116,15 +118,16 @@ describe("session observer settings patches", () => {
     const container = document.createElement("div");
     mountSolid(
       () =>
-        SessionObserverSettings({
-          enabled: true,
-          utilityModel: undefined,
-          resolvedUtilityModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
-          models: [],
-          modelsUnavailable: false,
-          disabled: false,
-          onEnabledChange: () => undefined,
-          onUtilityModelChange: () => undefined,
+        SidebarPreferencesSection({
+          ...baseProps(),
+          sessionObserverEnabled: true,
+          sessionObserverUtilityModel: undefined,
+          sessionObserverResolvedModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
+          sessionObserverModels: [],
+          sessionObserverModelsUnavailable: false,
+          sessionObserverDisabled: false,
+          setSessionObserverEnabled: () => undefined,
+          setSessionObserverUtilityModel: () => undefined,
         }),
       { container },
     );

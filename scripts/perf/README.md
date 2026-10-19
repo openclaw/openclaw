@@ -216,7 +216,17 @@ slots from that shared start time; a missed slot fails the run. Use
 `--expect-session <key>` to assert the committed session and `--open-details` for
 chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
 leave it off for paired timing. Use only synthetic requests:
-parameters and stacks are retained, while auth and response payloads are omitted.
+parameters, stacks, and model rows are retained; authentication and other response
+payloads are omitted.
+
+To isolate session activity from model selection, use
+`--activity-patch-sessions <key-a>,<key-b>` with `--load-runs 1` against existing
+synthetic sessions. This alternates navigation between those conversations and
+changes their labels at `--interval-ms`, without inference or model changes.
+It excludes `--activity-session` and `--activity-cron`. Catalog observations
+retain model rows for before/after option comparisons; use only synthetic
+catalogs. Compare warm session-scoped request counts and activity blocking time,
+keeping the initial catalogs separate from the activity window.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -940,6 +950,46 @@ swapping CPU halves, separate state directories and loopback ports. The
 contention acceptance rule is at least a 60% paired RPC p99 reduction with no
 agent Git regression. Inspect command counts and queue waits to distinguish
 scheduling changes from reduced Git work.
+
+### Large-worktree revision validation
+
+Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
+exercise production-sized indexes and directory trees. Nonzero `--tracked`
+creates a real linked worktree with that many additional unchanged tracked empty
+files, arranged in directories of 1,000. The three changed tracked files and four
+untracked edge cases remain. Writes are sequential; on Linux, generation checks
+Dirty memory every 1,000 files, pauses at 1 GiB, and stops at 2 GiB. Seed one side
+at a time under the host's preparation CPU allocation. This bounds content bytes,
+but inode metadata still consumes disk space: record actual fixture size and do
+not expand the workload on a production-shared volume without checking capacity.
+
+Measure unchanged summary polls with `--tabs 3 --background 0 --maintenance 0
+--agents 0 --poll-ms 250 --duration-ms 30000`. The report separates warmed samples
+from startup and records `sessions.diff` and `checkout.diff` phase diagnostics by
+cache outcome when those are available. Stage milliseconds are overlapping owner
+observations, not additive: cache validation includes its worker queue and Git
+work. Compare cache-hit and periodic fallback-cache misses separately. Git
+operation counts and queue observations remain available on older revisions.
+
+For a revision-validator change, acceptance is at least a 50% paired cache-hit
+p50 reduction, with no material p95/p99 regression. The explicitly requested
+histogram may land with neutral timing. Run at least two simultaneous A/B pairs
+under the host's exclusive lock, swapping 16-core halves between pairs, separate
+fixtures and loopback ports, matching options and start times. Retain per-pair
+differences and outside CPU load; do not compare unrelated absolute runs. Two
+large synthetic worktrees model file/index size and concurrent polling, not the
+production fleet's full filesystem working set or cold disk behavior.
+
+For a second scenario with independent revision checks, add
+`--poll-state-dir <other seeded fixture>` on each side. Both isolated Gateways
+then poll both existing synthetic worktrees concurrently, using a separate
+session per checkout and `--tabs` peers per session. This option is repeatable,
+requires RPC mode, and rejects `--mutate`: shared checkout contents stay read-only
+with optional Git index refresh disabled through `GIT_OPTIONAL_LOCKS=0`,
+while Gateway state and temporary diff indexes remain owned by each side's
+`--state-dir`. The report includes the extra fixture inventories, checkout count,
+and each sample's checkout index. This adds multiple-root contention without
+generating another large filesystem tree; it still does not model a whole fleet.
 
 ## Sandbox measurements
 
