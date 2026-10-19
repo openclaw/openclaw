@@ -55,6 +55,13 @@ function createWakeFixture(
 }
 
 type WakeParams = Parameters<ReturnType<typeof requesterWakeDriver>["wake"]>[0];
+const delivered = (deliveredAt = 5_000) =>
+  ({ delivered: true, path: "direct", deliveredAt }) as const;
+const dispatchWake = (
+  params: WakeParams,
+  batch: Parameters<WakeParams["transitionBatch"]>[0],
+  state: Omit<Parameters<WakeParams["transitionBatch"]>[1], "status" | "attemptCount">,
+) => params.transitionBatch(batch, { ...state, status: "dispatching", attemptCount: 1 }, () => {});
 const updateRun = (
   input: ReturnType<typeof records>,
   update: (run: ReturnType<typeof records>["subagent"]) => void,
@@ -317,11 +324,7 @@ it.each([
       await run();
       expect(controller.waitingRequesterSettleWakes.size).toBe(1);
       const deadlineTimer = [...controller.waitingRequesterSettleWakes.values()][0]?.timer;
-      if (deadline === undefined) {
-        expect(deadlineTimer).toBeUndefined();
-      } else {
-        expect(deadlineTimer).toBeDefined();
-      }
+      expect(deadlineTimer !== undefined).toBe(deadline !== undefined);
       await controller.retireSubagentObligations(current(), () => {}, {
         requesterNotified: true,
       });
@@ -486,18 +489,9 @@ it.each([1, 4])(
       );
       wake.mockImplementation(async (params) => {
         const batch = () => inputs.map((input) => currentCompletionRun(input));
-        await params.transitionBatch(
-          batch(),
-          { status: "dispatching", attemptCount: 1, rearmGeneration: 1, batchRunIds },
-          () => {},
-        );
+        await dispatchWake(params, batch(), { rearmGeneration: 1, batchRunIds });
         transport();
-        await params.completeBatch(
-          batch(),
-          1,
-          { delivered: true, path: "direct", deliveredAt: 5_000 },
-          finalized,
-        );
+        await params.completeBatch(batch(), 1, delivered(), finalized);
         return true;
       });
       try {
@@ -510,8 +504,10 @@ it.each([1, 4])(
           expect(finalized).not.toHaveBeenCalled();
           for (const input of inputs) {
             const stored = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
-            expect(stored?.delivery?.status).toBe("in_progress");
-            expect(stored?.requesterSettleWake).toMatchObject({ rearmGeneration: 1, batchRunIds });
+            expect(stored).toMatchObject({
+              delivery: { status: "in_progress" },
+              requesterSettleWake: { rearmGeneration: 1, batchRunIds },
+            });
           }
           // No child changes again; the existing sweep must adopt the retained receipt.
           await sweep();
@@ -553,21 +549,13 @@ it("recovers a failed replay publication through the existing sweep", () =>
       "CREATE TRIGGER reject_wake_publication BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'pending' BEGIN SELECT RAISE(ABORT, 'wake publication unavailable'); END",
     );
     wake.mockImplementation(async (params) => {
-      await params.transitionBatch(
-        [current()],
-        { ...pending, status: "dispatching", attemptCount: 1, batchRunIds },
-        () => {},
-      );
+      await dispatchWake(params, [current()], { ...pending, batchRunIds });
       attempts();
       if (attempts.mock.calls.length === 1) {
         await params.transitionBatch([current()], pending, () => {});
         return false;
       }
-      await params.completeBatch([current()], pending.rearmGeneration, {
-        delivered: true,
-        path: "direct",
-        deliveredAt: 5_000,
-      });
+      await params.completeBatch([current()], pending.rearmGeneration, delivered());
       return true;
     });
     try {
@@ -593,21 +581,15 @@ it("does not settle a new wake generation with a retained prior outcome", () =>
     const finalized = vi.fn();
     wake.mockImplementation(async (params) => {
       const generation = params.settledEntry.requesterSettleWake?.rearmGeneration;
-      await params.transitionBatch(
-        [params.settledEntry],
-        {
-          status: "dispatching",
-          attemptCount: 1,
-          rearmGeneration: generation,
-          batchRunIds: [input.subagent.runId],
-        },
-        () => {},
-      );
+      await dispatchWake(params, [params.settledEntry], {
+        rearmGeneration: generation,
+        batchRunIds: [input.subagent.runId],
+      });
       transport(generation);
       await params.completeBatch(
         [current()],
         generation,
-        { delivered: true, path: "direct", deliveredAt: generation === 1 ? 5_000 : 6_000 },
+        delivered(generation === 1 ? 5_000 : 6_000),
         () => finalized(generation),
       );
       return true;

@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { closeSwarmScheduler } from "../swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
@@ -120,15 +121,11 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     completeSubagentRun: async () => {},
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
-  const registration: RegisterSubagentRunParams = {
+  const registration: RegisterSubagentRunParams = createSubagentRunParams({
     runId: "queued-original",
     childSessionKey: "agent:main:subagent:synthetic",
-    childAgentId: "main",
     sessionEntry: { sessionId: "synthetic-session" },
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "synthetic queued work",
-    cleanup: "keep",
     retainAttachmentsOnKeep: true,
     collect: true,
     queued: true,
@@ -139,7 +136,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
       schedulerGroupKey: "group",
       maxConcurrent: 1,
     },
-  };
+  });
   let scope: SubagentRegistrationScope | undefined;
   return {
     runs,

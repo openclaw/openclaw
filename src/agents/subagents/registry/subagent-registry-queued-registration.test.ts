@@ -52,6 +52,12 @@ vi.mock("./subagent-registry.js", () => ({
   startQueuedSubagentRun: vi.fn(),
 }));
 
+const retiredIntent = {
+  execution: { status: "terminal", suppressSessionEffects: true },
+  collectorLaunchCleanupPending: true,
+  queuedLaunch: undefined,
+};
+
 function registrationCase<Args extends unknown[]>(
   run: (fixture: QueuedRegistrationFixture, ...args: Args) => Promise<void>,
 ) {
@@ -208,11 +214,7 @@ it(
     earlierMutation.release();
     await changing;
     await expect(registration).rejects.toThrow("Queued registration lost its original run owner");
-    expect(f.current()).toMatchObject({
-      execution: { status: "terminal", suppressSessionEffects: true },
-      collectorLaunchCleanupPending: true,
-      queuedLaunch: undefined,
-    });
+    expect(f.current()).toMatchObject(retiredIntent);
     const stored = f.stored();
     expect(stored).toMatchObject({
       execution: {
@@ -532,11 +534,7 @@ it.each(["same-id", "different-id"] as const)(
     expect(f.runs.get(successor.runId)?.execution.status).toBe("queued");
     expect(f.scope.canCleanupSession()).toBe(false);
     if (replacement === "different-id") {
-      expect(f.current()).toMatchObject({
-        execution: { status: "terminal", suppressSessionEffects: true },
-        collectorLaunchCleanupPending: true,
-        queuedLaunch: undefined,
-      });
+      expect(f.current()).toMatchObject(retiredIntent);
     }
   }),
 );
