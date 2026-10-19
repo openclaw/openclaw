@@ -116,6 +116,12 @@ describe("post-install doctor result IPC", () => {
     expect(bounded).toBe("Warning detail omitted because it exceeds the display limit.");
   });
 
+  it("keeps a complete leading field when its description exceeds the warning limit", () => {
+    const field = "/state/external-agent/openclaw-agent.sqlite:";
+    const warning = `${field} ${"verify the workspace before restoring the agent ".repeat(20)}`;
+    expect(normalizeUpdatePostInstallDoctorWarnings([warning])).toEqual([`${field} …`]);
+  });
+
   it.each(
     [
       "missing-array",
