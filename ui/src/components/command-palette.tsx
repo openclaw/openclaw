@@ -1,7 +1,7 @@
 import { onCleanup, Show } from "solid-js";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type {
   CommandPaletteOpenInput,
@@ -30,24 +30,28 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
   (props, host) => {
     const context = useApplication();
     let draftStops: Array<() => void> = [];
-    const state = new CommandPaletteState(
-      host,
-      props,
-      context,
-      () => host.updateComplete,
-      () => {
-        if (!draftStops.length) {
-          // Closed palettes still own pending submissions and preference acknowledgments.
-          draftStops = [
-            context.agents,
-            context.agentIdentity,
-            context.sessions,
-            context.config,
-          ].map((source) => source.subscribe(state.changed));
-        }
-      },
+    const { owner: state, view: projection } = projectCallbackOwner(
+      (notify) =>
+        new CommandPaletteState(
+          host,
+          props,
+          context,
+          () => host.updateComplete,
+          () => {
+            if (!draftStops.length) {
+              // Closed palettes still own pending submissions and preference acknowledgments.
+              draftStops = [
+                context.agents,
+                context.agentIdentity,
+                context.sessions,
+                context.config,
+              ].map((source) => source.subscribe(state.changed));
+            }
+          },
+          notify,
+        ),
+      (owner) => owner,
     );
-    const projection = projectOwner(state, (owner) => owner);
     states.set(host, state);
     Object.defineProperty(host, "isOpen", { configurable: true, get: () => state.open });
     host.style.display = "contents";

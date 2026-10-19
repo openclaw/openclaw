@@ -411,6 +411,56 @@ describe("media store filesystem faults", () => {
   }
 
   it.each(
+    (["readdir", "rmdir"] as const).flatMap((operation) =>
+      ["EACCES", "EIO", "ENOENT"].map((code) => ({ operation, code })),
+    ),
+  )(
+    "distinguishes media cleanup $operation/$code from missing directories",
+    async ({ operation, code }) => {
+      const store = await freshStore(`cleanup-${operation}-${code}`);
+      const mediaDir = await store.ensureMediaDir();
+      const scopedDir = path.join(mediaDir, "inbound");
+      const liveFile = await fileFixture(path.join(scopedDir, "live.txt"), "live media");
+      const injectedError = errnoError(code);
+      let injected = false;
+      if (operation === "readdir") {
+        const readdir = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          if (args[0] === mediaDir) {
+            injected = true;
+            if (code !== "ENOENT") {
+              throw injectedError;
+            }
+            await fs.rm(mediaDir, { recursive: true, force: true });
+          }
+          return await readdir(...args);
+        });
+      } else {
+        const rmdir = fs.rmdir;
+        vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+          if (args[0] === scopedDir) {
+            injected = true;
+            if (code !== "ENOENT") {
+              throw injectedError;
+            }
+            await fs.rm(scopedDir, { recursive: true, force: true });
+          }
+          return await rmdir(...args);
+        });
+      }
+      const result = store.cleanOldMedia(60_000, { recursive: true, pruneEmptyDirs: true });
+      if (code === "ENOENT") {
+        await expect(result).resolves.toBeUndefined();
+        await expect(fs.stat(liveFile)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(result).rejects.toBe(injectedError);
+        await expect(fs.readFile(liveFile, "utf8")).resolves.toBe("live media");
+      }
+      expect(injected).toBe(true);
+    },
+  );
+
+  it.each(
     (["readdir", "lstat", "remove"] as const).flatMap((operation) =>
       (operation === "readdir" ? ["EACCES", "EIO"] : ["EACCES", "EIO", "ENOENT"]).map((code) => ({
         operation,

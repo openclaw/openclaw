@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
+import { mockOAuthProviderOperations } from "../agents/auth-profiles/oauth-native-provider.test-support.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
   setAuthProfileOrder,
@@ -34,6 +35,7 @@ import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
+afterEach(() => vi.restoreAllMocks());
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 
@@ -307,12 +309,10 @@ describe("durable cron inference authorization", () => {
         expires: Date.now() + 3_600_000,
         accountId: "synthetic-account",
       }));
-      const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
-        readBootstrapCredential: () => null,
-        canRefreshCredential: async () => true,
+      mockOAuthProviderOperations({
         refreshCredential,
       });
+      const manager = createOAuthManager();
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(root.agentDir);
       const credential = store.profiles[subscriptionId];
       if (credential?.type !== "oauth") {

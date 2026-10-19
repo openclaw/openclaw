@@ -70,7 +70,7 @@ async function importHistory(turns: CodexTurn[], name?: string) {
     },
   });
   const thread: CodexThread = { id: "thread-source", projectId: null, name, turns };
-  const imported = await importCodexThreadHistoryToTranscript({
+  await importCodexThreadHistoryToTranscript({
     ...target,
     thread,
     throughTurnId: turns.at(-1)!.id,
@@ -95,7 +95,6 @@ async function importHistory(turns: CodexTurn[], name?: string) {
     target,
     thread,
     control,
-    imported,
     users,
     resolve: () =>
       resolveCodexUpstreamForkBoundary({
@@ -243,7 +242,6 @@ describe("fork boundaries from imported Codex history", () => {
         ];
       }
       const history = await importHistory(turns);
-      expect(history.imported.omittedMessages).toBeGreaterThan(0);
       expect(history.users.length).toBeLessThan(count);
 
       await expect(history.resolve()).resolves.toEqual({

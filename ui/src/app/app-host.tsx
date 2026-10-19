@@ -13,7 +13,6 @@ import "../components/resizable-divider.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
@@ -451,14 +450,6 @@ export class ShellOwner
   private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
     this.shellGateway,
   );
-
-  readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    context.theme.setMode(event.detail.mode, event.detail.element);
-  };
 
   async handleSettingsSearchQueryChange(nextQuery: string): Promise<void> {
     this.settingsSearchQuery = nextQuery;

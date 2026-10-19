@@ -37,8 +37,8 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
-import "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import {
@@ -535,7 +535,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
     >
       <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
         <span>{t("nav.pages")}</span>
-        <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
+        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
       <openclaw-mcp-app-catalog surface="sidebar" />
       <For each={entries()} keyed={serializeSidebarEntry}>

@@ -251,7 +251,7 @@ it.each([
   "owner",
   "membership",
   "invalidated",
-  "replacement socket",
+  "replacement client",
   "scope",
   "throwing visibility",
   "targeted subscription",
@@ -290,7 +290,10 @@ it.each([
     owner: () => (current = false),
     membership: () => clients.delete(peer.client),
     invalidated: () => (peer.client.invalidated = true),
-    "replacement socket": () => (peer.client.socket = createPeer("replacement").client.socket),
+    "replacement client": () => {
+      clients.delete(peer.client);
+      clients.add(createPeer("replacement").client);
+    },
     scope: () => (peer.client.connect.scopes = []),
     "throwing visibility": () => (visible = false),
     "targeted subscription": () => subscribers.unsubscribe(peer.client.connId, "agent:main:stream"),

@@ -72,23 +72,17 @@ export function createGatewayRunSignals(params: {
     reopenSignalStore = undefined;
     signalStoreOpening = undefined;
   };
-  const drainRestartSignals = async () => {
+  const drainRestartSignals = async (sealStore = false) => {
     for (;;) {
       if (!signalSettlement) {
         break;
       }
       await signalSettlement;
     }
-  };
-  const settleRestartSignals = async () => {
-    for (;;) {
-      if (!signalSettlement) {
-        break;
-      }
-      await signalSettlement;
+    if (sealStore) {
+      // Captured signals wait for close to settle before reacquiring this file.
+      sealSignalStore();
     }
-    // Captured signals wait for close to settle before reacquiring this file.
-    sealSignalStore();
   };
   const enqueueSignal = (
     readIntent: boolean,
@@ -336,8 +330,8 @@ export function createGatewayRunSignals(params: {
     },
     sealStore: sealSignalStore,
     openStore: openSignalStore,
-    drain: drainRestartSignals,
-    settle: settleRestartSignals,
+    drain: () => drainRestartSignals(),
+    settle: () => drainRestartSignals(true),
     retire,
     close() {
       retire();
