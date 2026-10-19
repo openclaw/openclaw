@@ -1424,7 +1424,6 @@
 ["extensions/whatsapp/src/test-helpers.ts","./auto-reply/monitor/message-line.runtime.js","8fa9af059fafbf3cd51d8ca2d7101998172ce04d656cc3fd4b083bf0075c722c",1]
 ["extensions/whatsapp/src/test-helpers.ts","./inbound/runtime-api.js","e5e8d79e087ef8e3df35a8b74824ff6e13a070b80727a2627690dc8f942fd1e5",1]
 ["extensions/whatsapp/src/test-helpers.ts","./qr-terminal.js","52efe05b6f5ca1c1768b045fc7fdab64ccc152a8fa542a792766feb7a0f18f7b",1]
-["extensions/whatsapp/src/test-helpers.ts","./session.runtime.js","089991866ac62511d83d0029fe39cbcfb859ac9b81d4578a8ea652f1ac7b865f",1]
 ["extensions/workboard/index.test.ts","./src/store.js","b749a888c1ebe4af21829497411189cd2dfd4154aa54a231f352da87f71733b8",1]
 ["extensions/workboard/src/sessions-board.test.ts","openclaw/plugin-sdk/logging-core","0b3ec9cec3895d4840ed1c9df417931f61189b1c15512a218d1b1d1778b57d56",1]
 ["extensions/workboard/src/sqlite-store-policy.test.ts","openclaw/plugin-sdk/plugin-state-runtime","04527de3229ceacbc61b638b5eab5490dfd682583f0ed59877c107412b89e20d",1]
