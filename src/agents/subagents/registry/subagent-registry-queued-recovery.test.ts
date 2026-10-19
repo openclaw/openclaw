@@ -187,6 +187,7 @@ it.for([
   { sameRequesterAgent: true, preparing: false, closeGateway: false },
 ])(
   "recovers an independent requester session during a database open (same requester agent: $sameRequesterAgent, preparing: $preparing, close: $closeGateway)",
+  { timeout: 10_000 },
   async ({ sameRequesterAgent, preparing, closeGateway }, { signal }) => {
     const { manager } = createRegistrationFixture();
     for (const [runId, childAgentId, requester] of [
@@ -275,7 +276,6 @@ it.for([
       expect(resumeRun.mock.calls).toEqual([["healthy-child"], ["slow-child"], ["slow-peer"]]);
     }
   },
-  10_000,
 );
 
 it.each(["restartRecovery", "killIntent", "killReconciliation"] as const)(
