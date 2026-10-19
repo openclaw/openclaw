@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
+import * as gatewayModule from "./gateway.js";
 
 const gateway = vi.fn();
 const job = {
@@ -10,7 +11,7 @@ const job = {
   payload: { kind: "agentTurn", message: "work" },
 };
 function execute(args: Record<string, unknown>) {
-  return createCronTool(undefined, { callGatewayTool: gateway }).execute("cron", args);
+  return createCronTool().execute("cron", args);
 }
 function expectAdd(params: Record<string, unknown>) {
   expect(gateway).toHaveBeenCalledExactlyOnceWith(
@@ -38,6 +39,8 @@ function update(params: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gateway);
+  onTestFinished(() => gatewaySpy.mockRestore());
   setRuntimeConfigSnapshot({});
   gateway.mockReset().mockResolvedValue({ ok: true });
 });

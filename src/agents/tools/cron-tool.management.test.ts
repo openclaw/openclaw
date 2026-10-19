@@ -16,6 +16,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
+import * as gatewayModule from "./gateway.js";
 
 const jobId = "existing-job";
 const configRevision = "sha256:stored-job";
@@ -64,7 +65,8 @@ async function withAdminTool(
     await runWithCronCreatorAuthorityCapability(capability, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
         const options = { runId, agentSessionKey: sessionKey, resolveCreatorToolAuthority };
-        const tool = createCronTool(options, { callGatewayTool });
+        using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(callGatewayTool);
+        const tool = createCronTool(options);
         await run(tool, calls);
         expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
       }),
@@ -118,7 +120,7 @@ describe("cron next_check action", () => {
 
   function nextCheck(scopedJobId: string | null = JOB_ID, delay = "15m") {
     const opts = scopedJobId ? { selfRemoveOnlyJobId: scopedJobId, runId: RUN_ID } : undefined;
-    const tool = createCronTool(opts, { callGatewayTool: vi.fn() });
+    const tool = createCronTool(opts);
     return tool.execute("call-next-check", { action: "next_check", in: delay });
   }
 
