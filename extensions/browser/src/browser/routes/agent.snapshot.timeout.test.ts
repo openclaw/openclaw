@@ -79,13 +79,18 @@ vi.mock("./agent.shared.js", async (importOriginal) => ({
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-async function screenshot(body: Record<string, unknown> = {}) {
+function getScreenshotHandler() {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
     state: () => ({ resolved: { extraArgs: [] }, profiles: browserRuntime.profiles }),
   } as never);
   const handler = postHandlers.get("/screenshot");
   expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
+async function screenshot(body: Record<string, unknown> = {}) {
+  const handler = getScreenshotHandler();
   const response = createBrowserRouteResponse();
   await handler?.({ params: {}, query: {}, body: { type: "png", ...body } }, response.res);
   return response;

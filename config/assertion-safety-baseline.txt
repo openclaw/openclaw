@@ -39,7 +39,6 @@ extensions/browser/src/browser/cdp-proxy-bypass.ts	1
 extensions/browser/src/browser/cdp-websocket.ts	2
 extensions/browser/src/browser/cdp.helpers.ts	3
 extensions/browser/src/browser/cdp.ts	3
-extensions/browser/src/browser/chrome-mcp-routing.ts	1
 extensions/browser/src/browser/chrome-mcp-tabs.ts	1
 extensions/browser/src/browser/chrome.diagnostics.ts	1
 extensions/browser/src/browser/chrome.executables.ts	1
