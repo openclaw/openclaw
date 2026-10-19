@@ -10,7 +10,7 @@ import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
-import { contextWith, renderControl } from "./model-control.test-support.ts";
+import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
@@ -115,6 +115,7 @@ it("uses model-picker changes and configured defaults as the environment authori
   const { control, find } = modelControl(context);
   control.load(context, "main", true, { agent });
   await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
+  await waitForModelControl(control, context, "main", agent);
   find("model-runtime", "agentsapi")!.click();
   expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
   expect(control.selectHostEnvironment()).toBe(true);

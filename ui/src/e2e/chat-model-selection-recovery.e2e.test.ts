@@ -115,6 +115,56 @@ suite.define(() => {
     },
   );
   it.each([
+    { status: "error", message: "Models unavailable" },
+    { status: "offline", message: "Offline" },
+  ] as const)(
+    "shows the $status catalog state when the panel arrives",
+    async ({ status, message }) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/chat/components/chat-model-picker-options.tsx",
+          ),
+        );
+        try {
+          const gateway = await installMockGateway(page, {
+            models: [],
+            methodResponses: {
+              "models.list": {
+                __mockError: { code: "UNAVAILABLE", message: "Synthetic catalog unavailable" },
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const picker = page.locator(".chat-controls__model-picker").first();
+          const trigger = picker.locator("[data-chat-model-select]");
+          await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+          await trigger.click();
+          await held.request;
+          await gateway.waitForRequest("models.list");
+          await expect
+            .poll(() => picker.locator('[role="status"]').textContent())
+            .toContain("Loading models");
+          if (status === "offline") {
+            await gateway.setOnline(false);
+            await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("true");
+          }
+          held.release();
+          await picker.locator(".chat-controls__model-menu").waitFor();
+          const notice = picker.locator(`[data-chat-model-catalog-state="${status}"]`);
+          await expect.poll(() => notice.isVisible()).toBe(true);
+          expect(await notice.textContent()).toBe(message);
+          expect(await notice.getAttribute("aria-live")).toBe("polite");
+          const artifactDir = createControlUiE2eArtifactDir(`model-panel-${status}`);
+          await page.screenshot({ path: path.join(artifactDir, "loaded-catalog-state.png") });
+        } finally {
+          held.release();
+        }
+      });
+    },
+  );
+  it.each([
     ["new", "open"],
     ["new", "closed"],
     ["new", "focus moved"],
