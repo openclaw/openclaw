@@ -51,10 +51,12 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
-Recovery history stays available across attempts within the same run and is
-released when the run ends. A reused session manager binds persistence callbacks
-to the current attempt and releases them after accepted transcript writes drain,
-including writes that outlast the bounded teardown wait.
+Recovery history stays available across attempts within the same run. The run
+releases message payloads from replaced recovery envelopes and when it ends,
+including envelopes retained by copied attempt parameters. Each accepted
+transcript write keeps its original attempt's persistence callbacks until it
+finishes, even after a reused manager binds a newer attempt or the bounded
+teardown wait expires.
 
 ## Queueing and concurrency
 

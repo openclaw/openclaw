@@ -141,6 +141,29 @@ describe("embedded run session prompt state", () => {
     expect(retainedCallbacks).toHaveLength(20);
   });
 
+  it("releases replaced and completed message payloads through retained attempt parameters", async () => {
+    const retainedContinuations: Array<{ prompt: string; messages: unknown[] }> = [];
+    const payloads: WeakRef<object>[] = [];
+    for (let index = 0; index < 20; index++) {
+      await using state = await createState();
+      state.continueFromCurrentTranscript({ messages: [makeUserMessage(`first ${index}`)] });
+      retainedContinuations.push(state.continuation!);
+      payloads.push(new WeakRef(state.continuation!.messages));
+      state.continueFromCurrentTranscript({ messages: [makeUserMessage(`second ${index}`)] });
+      expect(state.continuation!.messages).toHaveLength(2);
+      retainedContinuations.push(state.continuation!);
+      payloads.push(new WeakRef(state.continuation!.messages));
+    }
+    const control = new WeakRef({ unowned: true });
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(payloads.filter((reference) => reference.deref())).toHaveLength(0);
+    expect(retainedContinuations.every(({ prompt, messages }) => !prompt && !messages.length)).toBe(
+      true,
+    );
+  });
+
   it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
     await using state = await createState({ prompt: "Task B: inspect the blue database." });
     state.continueFromCurrentTranscript({ messages: [] });
@@ -151,12 +174,20 @@ describe("embedded run session prompt state", () => {
     const completed = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "The blue database was inspected." }],
     });
-    state.continueFromCurrentTranscript({ messages: [completed] });
+    const messages = [completed];
+    state.continueFromCurrentTranscript({ messages });
+    const previous = state.continuation!;
     state.continueFromCurrentTranscript({ messages: [] });
     expect(state.continuation).toEqual({
       prompt: "Task B: inspect the blue database.",
       messages: [completed],
     });
+    expect(previous).toEqual({ prompt: "", messages: [] });
+    expect(messages).toEqual([completed]);
+    expect(state.continuation!.messages[0]).toBe(completed);
+    const active = state.continuation;
+    state.continueFromCurrentTranscript();
+    expect(state.continuation).toBe(active);
     expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
