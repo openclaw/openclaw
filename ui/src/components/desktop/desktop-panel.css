@@ -312,6 +312,19 @@ openclaw-desktop-panel {
     width: 18px;
     height: 18px;
   }
+  .desktop-rail__menu:not(.desktop-rail__menu--desktop) {
+    .oc-menu-item {
+      padding-inline: 4px;
+      gap: 5px;
+    }
+    .oc-menu-item__icon {
+      margin-inline-end: 0;
+    }
+    .oc-menu-item__icon > svg {
+      width: 18px;
+      height: 18px;
+    }
+  }
   .desktop-rail__menu--desktop {
     width: 330px;
     padding: 8px;

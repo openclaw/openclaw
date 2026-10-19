@@ -187,15 +187,25 @@ export function DesktopConnectionRail(
             disabled: props.state !== "connected" || props.launchingApp === app,
           }))
         : []),
-      ...(props.options.onOpenWindow
+      ...(mobile() && props.options.openWindowHref
         ? [
             {
-              id: "open-window",
+              id: "open-window-link",
               label: t("desktop.openWindow"),
+              href: props.options.openWindowHref,
+              attributes: { target: "_blank", rel: "noopener" },
               icon: <Icon name="externalLink" />,
             },
           ]
-        : []),
+        : props.options.onOpenWindow
+          ? [
+              {
+                id: "open-window",
+                label: t("desktop.openWindow"),
+                icon: <Icon name="externalLink" />,
+              },
+            ]
+          : []),
       {
         id: "disconnect",
         label: t("desktop.disconnect"),
@@ -360,9 +370,6 @@ export function DesktopConnectionRail(
               </div>
             }
           >
-            {props.options.openWindowHref && (
-              <DesktopOpenWindow href={props.options.openWindowHref} />
-            )}
             <div
               ref={(node) => {
                 inlineWindow = node;

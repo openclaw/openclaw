@@ -291,7 +291,7 @@ function DesktopPresentation(props: {
       return props.view.workspaceControls ? openWindow : undefined;
     },
     get openWindowHref() {
-      return desktop() ? props.presentation?.openWindowHref : undefined;
+      return props.presentation?.openWindowHref;
     },
     get takeoverText() {
       return props.view.content.takeoverText;
