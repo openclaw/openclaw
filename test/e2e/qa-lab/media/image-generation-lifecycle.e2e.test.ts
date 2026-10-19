@@ -1,5 +1,4 @@
 import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { text } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -9,12 +8,15 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { resolveRuntimePolicySessionKey } from "../../../../src/auto-reply/reply/runtime-policy-session-key.js";
 import { readMockRequests, useMediaGateway } from "./media-gateway.test-support.js";
+import { listen } from "./media-http.test-support.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const IMAGE_MODEL_REF = "openai/gpt-image-1";
 const REQUEST_TEXT =
   "Image generation check IMAGE_TASK_LIFECYCLE: generate the QA lighthouse image.";
 const CONVERSATION = { id: "image-generation-lifecycle", kind: "direct" as const };
+const waitFor = <T>(callback: () => T, timeout = 30_000) =>
+  vi.waitFor(callback, { interval: 50, timeout });
 // QA direct chats share a transcript, but each peer owns its media tasks.
 const REQUESTER_SESSION_KEY = resolveRuntimePolicySessionKey({
   sessionKey: "agent:qa:main",
@@ -66,11 +68,7 @@ async function startControlledImageProvider() {
       });
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
+  const listener = await listen(server);
   const release = () => {
     released = true;
     for (const response of pendingResponses) {
@@ -79,14 +77,12 @@ async function startControlledImageProvider() {
   };
 
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: listener.url,
     requests,
     release,
     async stop() {
       release();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await listener.stop();
     },
   };
 }
@@ -107,18 +103,15 @@ function configureImageProvider(
 }
 
 async function waitForToolOutput(baseUrl: string, needle: string) {
-  return vi.waitFor(
-    async () => {
-      const matched = (await readMockRequests(baseUrl)).find(
-        (request) =>
-          request.allInputText.includes("IMAGE_TASK_LIFECYCLE") &&
-          request.toolOutput.includes(needle),
-      );
-      expect(matched).toBeDefined();
-      return matched as MockOpenAiRequestSnapshot;
-    },
-    { interval: 50, timeout: 30_000 },
-  );
+  return waitFor(async () => {
+    const matched = (await readMockRequests(baseUrl)).find(
+      (request) =>
+        request.allInputText.includes("IMAGE_TASK_LIFECYCLE") &&
+        request.toolOutput.includes(needle),
+    );
+    expect(matched).toBeDefined();
+    return matched as MockOpenAiRequestSnapshot;
+  });
 }
 
 async function readImageTaskStatus(gateway: {
@@ -153,10 +146,7 @@ describe("image generation task lifecycle through QA-channel", () => {
       });
 
     await sendExactRequest();
-    await vi.waitFor(() => expect(imageProvider.requests).toHaveLength(1), {
-      interval: 50,
-      timeout: 30_000,
-    });
+    await waitFor(() => expect(imageProvider.requests).toHaveLength(1));
 
     await sendExactRequest();
     const runningDuplicate = await waitForToolOutput(mock.baseUrl, "is already running");
@@ -167,49 +157,41 @@ describe("image generation task lifecycle through QA-channel", () => {
     expect(imageProvider.requests).toHaveLength(1);
     expect(await readImageTaskStatus(gateway)).toContain(runningReceipt);
     imageProvider.release();
-    await vi.waitFor(
-      () => {
-        const completions = state
-          .getSnapshot()
-          .messages.filter(
-            (message) =>
-              message.direction === "outbound" &&
-              message.conversation.id === CONVERSATION.id &&
-              message.attachments?.some(
-                (attachment) =>
-                  attachment.kind === "image" &&
-                  attachment.mimeType === "image/png" &&
-                  attachment.contentBase64 === TINY_PNG_BASE64,
-              ),
-          );
-        expect(completions).toHaveLength(1);
-      },
-      { interval: 50, timeout: 90_000 },
-    );
-
-    const completionReentry = await vi.waitFor(
-      async () => {
-        const request = (await readMockRequests(mock.baseUrl)).find(
-          (snapshot) =>
-            snapshot.allInputText.includes("[Inter-session message]") &&
-            snapshot.allInputText.includes("sourceTool=image_generate"),
+    await waitFor(() => {
+      const completions = state
+        .getSnapshot()
+        .messages.filter(
+          (message) =>
+            message.direction === "outbound" &&
+            message.conversation.id === CONVERSATION.id &&
+            message.attachments?.some(
+              (attachment) =>
+                attachment.kind === "image" &&
+                attachment.mimeType === "image/png" &&
+                attachment.contentBase64 === TINY_PNG_BASE64,
+            ),
         );
-        if (!request) {
-          throw new Error("image completion did not re-enter the agent session");
-        }
-        return request;
-      },
-      { interval: 50, timeout: 30_000 },
-    );
+      expect(completions).toHaveLength(1);
+    }, 90_000);
+
+    const completionReentry = await waitFor(async () => {
+      const request = (await readMockRequests(mock.baseUrl)).find(
+        (snapshot) =>
+          snapshot.allInputText.includes("[Inter-session message]") &&
+          snapshot.allInputText.includes("sourceTool=image_generate"),
+      );
+      if (!request) {
+        throw new Error("image completion did not re-enter the agent session");
+      }
+      return request;
+    });
     expect(completionReentry.allInputText).toContain("sourceChannel=internal");
 
     // Completion delivery precedes the terminal task state; wait for it before the next duplicate.
-    await vi.waitFor(
-      async () =>
-        expect(await readImageTaskStatus(gateway)).toContain(
-          "No active image generation task is currently running",
-        ),
-      { interval: 50, timeout: 30_000 },
+    await waitFor(async () =>
+      expect(await readImageTaskStatus(gateway)).toContain(
+        "No active image generation task is currently running",
+      ),
     );
 
     await sendExactRequest();

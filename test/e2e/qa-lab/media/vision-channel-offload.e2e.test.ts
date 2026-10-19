@@ -21,33 +21,15 @@ function configureVisionOffload(config: OpenClawConfig): OpenClawConfig {
   if (!provider) {
     throw new Error("mock-openai provider is missing from QA gateway config");
   }
-  let foundActiveModel = false;
-  const models = provider.models.map((model) => {
-    if (model.id !== ACTIVE_MODEL_ID) {
-      return model;
-    }
-    foundActiveModel = true;
-    return { ...model, input: ["text" as const] };
-  });
-  if (!foundActiveModel) {
+  const activeModel = provider.models.find((model) => model.id === ACTIVE_MODEL_ID);
+  if (!activeModel) {
     throw new Error(`active QA model is missing from provider catalog: ${ACTIVE_MODEL_ID}`);
   }
 
   ((config.agents ??= {}).defaults ??= {}).imageModel = { primary: IMAGE_MODEL_REF };
-  provider.models = models;
+  activeModel.input = ["text"];
   (((config.tools ??= {}).media ??= {}).image ??= {}).prompt = IMAGE_PROMPT;
   return config;
-}
-
-function compactRequestShapes(requests: MockOpenAiRequestSnapshot[]) {
-  return requests.map((request) => ({
-    cursor: request.cursor,
-    model: request.model,
-    imageInputCount: request.imageInputCount,
-    inputRoles: readInputRoles(request),
-    instructions: request.instructions?.slice(0, 240),
-    allInputTextTail: request.allInputText.slice(-400),
-  }));
 }
 
 function readInputRoles(request: MockOpenAiRequestSnapshot) {
@@ -63,7 +45,7 @@ describe("QA-channel vision offload", () => {
   const fixture = useMediaGateway();
 
   it("summarizes an image before the text-only active model replies once", async () => {
-    const { state, transport, mock, gateway } = await fixture.start({
+    const { state, transport, mock } = await fixture.start({
       primaryModel: ACTIVE_MODEL_REF,
       alternateModel: IMAGE_MODEL_REF,
       mutateConfig: configureVisionOffload,
@@ -91,28 +73,22 @@ describe("QA-channel vision offload", () => {
       ],
     });
 
-    let finalOutbound;
-    try {
-      finalOutbound = await transport.waitForOutbound({
-        conversation: CONVERSATION,
-        textIncludes: FINAL_REPLY,
-        timeoutMs: 90_000,
-      });
-    } catch (error) {
-      throw new Error(
-        [
-          error instanceof Error ? error.message : String(error),
-          `bus=${JSON.stringify(state.getSnapshot())}`,
-          `gateway=${gateway.logs()}`,
-        ].join("\n"),
-        { cause: error },
-      );
-    }
+    const finalOutbound = await transport.waitForOutbound({
+      conversation: CONVERSATION,
+      textIncludes: FINAL_REPLY,
+      timeoutMs: 90_000,
+    });
 
     const scenarioRequests = (await readMockRequests(mock.baseUrl, requestCursor)).filter(
       (request) => request.allInputText.includes(SCENARIO_MARKER),
     );
-    const requestDiagnostics = `requests=${JSON.stringify(compactRequestShapes(scenarioRequests))}`;
+    const requestDiagnostics = JSON.stringify(
+      scenarioRequests.map(({ cursor, model, imageInputCount }) => ({
+        cursor,
+        model,
+        imageInputCount,
+      })),
+    );
     expect(scenarioRequests, requestDiagnostics).toHaveLength(2);
 
     const [imageRequest, activeModelRequest] = scenarioRequests;

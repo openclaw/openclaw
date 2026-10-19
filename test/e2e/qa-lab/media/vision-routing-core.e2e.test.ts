@@ -5,6 +5,7 @@ import { buildInboundMediaNoteProjection } from "../../../../src/auto-reply/medi
 import { resolveCurrentTurnImages } from "../../../../src/auto-reply/reply/current-turn-images.js";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
+import type { ModelProviderConfig } from "../../../../src/config/types.models.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
 import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/types.js";
 import { createSolidPngBuffer } from "../../../helpers/image-fixtures.js";
@@ -43,22 +44,13 @@ vi.mock("../../../../src/media-understanding/image-runtime.js", () => ({
 
 function createImageContext(imagePath: string, workspaceDir: string): MsgContext {
   const body = "describe the attached image";
-  return {
-    Body: body,
-    CommandBody: body,
-    RawBody: body,
-    media: [
-      {
-        path: imagePath,
-        contentType: "image/png",
-        kind: "image",
-        workspaceDir,
-      },
-    ],
-  };
+  const media = [
+    { path: imagePath, contentType: "image/png", kind: "image" as const, workspaceDir },
+  ];
+  return { Body: body, CommandBody: body, RawBody: body, media };
 }
 
-function configuredProvider(model: string) {
+function configuredProvider(model: string): ModelProviderConfig {
   return {
     apiKey: "test-key", // pragma: allowlist secret
     baseUrl: "https://example.invalid/v1",
@@ -76,10 +68,6 @@ function imageDecision(ctx: MsgContext) {
   return decision;
 }
 
-function occurrenceCount(value: string | undefined, needle: string): number {
-  return value === undefined ? 0 : value.split(needle).length - 1;
-}
-
 function providerAttempt(provider: string, model: string, outcome: string) {
   return { type: "provider", provider, model, outcome };
 }
@@ -87,47 +75,71 @@ function providerAttempt(provider: string, model: string, outcome: string) {
 describe("core vision routing product proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("bypasses summarization and sends the real image to an active vision model", async () => {
-    const workspaceDir = tempDirs.make("openclaw-vision-native-");
-    const imagePath = path.join(workspaceDir, "native.png");
+  async function routeImage(native: boolean) {
+    const workspaceDir = tempDirs.make("openclaw-vision-");
+    const imagePath = path.join(workspaceDir, "image.png");
     const imageBytes = createSolidPngBuffer(2, 2, { r: 24, g: 96, b: 208 });
     await fs.writeFile(imagePath, imageBytes);
     const ctx = createImageContext(imagePath, workspaceDir);
-    let summarizerCalls = 0;
-    const cfg = {
-      agents: {
-        defaults: {
-          imageModel: { primary: `${FALLBACK_PROVIDER}/${FALLBACK_MODEL}` },
-        },
-      },
+    const providerCalls: string[] = [];
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
-          [ACTIVE_PROVIDER]: configuredProvider(ACTIVE_VISION_MODEL),
+          [native ? ACTIVE_PROVIDER : PRIMARY_PROVIDER]: configuredProvider(
+            native ? ACTIVE_VISION_MODEL : PRIMARY_MODEL,
+          ),
           [FALLBACK_PROVIDER]: configuredProvider(FALLBACK_MODEL),
         },
       },
-    } as unknown as OpenClawConfig;
-    const providers = {
+    };
+    if (native) {
+      cfg.agents = {
+        defaults: { imageModel: { primary: `${FALLBACK_PROVIDER}/${FALLBACK_MODEL}` } },
+      };
+    } else {
+      cfg.tools = {
+        media: {
+          models: [
+            { provider: PRIMARY_PROVIDER, model: PRIMARY_MODEL, capabilities: ["image"] },
+            { provider: FALLBACK_PROVIDER, model: FALLBACK_MODEL, capabilities: ["image"] },
+          ],
+        },
+      };
+    }
+    const providers: Record<string, MediaUnderstandingProvider> = {
       [FALLBACK_PROVIDER]: {
         id: FALLBACK_PROVIDER,
         capabilities: ["image"],
-        describeImage: async () => {
-          summarizerCalls += 1;
-          return { text: SUMMARY_TEXT, model: FALLBACK_MODEL };
+        describeImage: async (request) => {
+          providerCalls.push(FALLBACK_PROVIDER);
+          return { text: SUMMARY_TEXT, model: request.model };
         },
-      } satisfies MediaUnderstandingProvider,
+      },
     };
-
+    if (!native) {
+      providers[PRIMARY_PROVIDER] = {
+        id: PRIMARY_PROVIDER,
+        capabilities: ["image"],
+        describeImage: async () => {
+          providerCalls.push(PRIMARY_PROVIDER);
+          throw new Error("primary vision unavailable");
+        },
+      };
+    }
     await applyMediaUnderstanding({
       ctx,
       cfg,
-      agentId: "qa-vision-native",
+      agentId: native ? "qa-vision-native" : "qa-vision-fallback",
       agentDir: workspaceDir,
       workspaceDir,
       providers,
-      activeModel: { provider: ACTIVE_PROVIDER, model: ACTIVE_VISION_MODEL },
+      activeModel: native ? { provider: ACTIVE_PROVIDER, model: ACTIVE_VISION_MODEL } : undefined,
     });
+    return { ctx, cfg, imageBytes, imagePath, providerCalls };
+  }
 
+  it("bypasses summarization and sends the real image to an active vision model", async () => {
+    const { ctx, cfg, imageBytes, providerCalls } = await routeImage(true);
     const decision = imageDecision(ctx);
     expect(decision.outcome).toBe("skipped");
     const skipped = {
@@ -142,7 +154,7 @@ describe("core vision routing product proof", () => {
       },
     ]);
     expect(ctx.MediaUnderstanding).toBeUndefined();
-    expect(summarizerCalls).toBe(0);
+    expect(providerCalls).toEqual([]);
     expect(ctx.Body).not.toContain(SUMMARY_TEXT);
     expect(ctx.Body).not.toContain("[Image]");
 
@@ -150,67 +162,15 @@ describe("core vision routing product proof", () => {
     expect(projection.media[0]).not.toHaveProperty("hydrationSuppressed");
 
     const currentTurnImages = await resolveCurrentTurnImages({ ctx, cfg });
+    const data = imageBytes.toString("base64");
     expect(currentTurnImages).toEqual({
-      images: [
-        {
-          type: "image",
-          data: imageBytes.toString("base64"),
-          mimeType: "image/png",
-        },
-      ],
+      images: [{ type: "image", data, mimeType: "image/png" }],
       imageOrder: ["inline"],
     });
   });
 
   it("falls back in order, inserts one summary, and suppresses the described raw image", async () => {
-    const workspaceDir = tempDirs.make("openclaw-vision-fallback-");
-    const imagePath = path.join(workspaceDir, "fallback.png");
-    await fs.writeFile(imagePath, createSolidPngBuffer(2, 2, { r: 208, g: 64, b: 24 }));
-    const ctx = createImageContext(imagePath, workspaceDir);
-    const providerCalls: string[] = [];
-    const cfg = {
-      tools: {
-        media: {
-          models: [
-            { provider: PRIMARY_PROVIDER, model: PRIMARY_MODEL, capabilities: ["image"] },
-            { provider: FALLBACK_PROVIDER, model: FALLBACK_MODEL, capabilities: ["image"] },
-          ],
-        },
-      },
-      models: {
-        providers: {
-          [PRIMARY_PROVIDER]: configuredProvider(PRIMARY_MODEL),
-          [FALLBACK_PROVIDER]: configuredProvider(FALLBACK_MODEL),
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const providers = {
-      [PRIMARY_PROVIDER]: {
-        id: PRIMARY_PROVIDER,
-        capabilities: ["image"],
-        describeImage: async () => {
-          providerCalls.push(PRIMARY_PROVIDER);
-          throw new Error("primary vision unavailable");
-        },
-      } satisfies MediaUnderstandingProvider,
-      [FALLBACK_PROVIDER]: {
-        id: FALLBACK_PROVIDER,
-        capabilities: ["image"],
-        describeImage: async (request) => {
-          providerCalls.push(FALLBACK_PROVIDER);
-          return { text: SUMMARY_TEXT, model: request.model };
-        },
-      } satisfies MediaUnderstandingProvider,
-    };
-
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      agentId: "qa-vision-fallback",
-      agentDir: workspaceDir,
-      workspaceDir,
-      providers,
-    });
+    const { ctx, cfg, imagePath, providerCalls } = await routeImage(false);
 
     const decision = imageDecision(ctx);
     expect(providerCalls).toEqual([PRIMARY_PROVIDER, FALLBACK_PROVIDER]);
@@ -234,7 +194,7 @@ describe("core vision routing product proof", () => {
         model: FALLBACK_MODEL,
       },
     ]);
-    expect(occurrenceCount(ctx.Body, SUMMARY_TEXT)).toBe(1);
+    expect((ctx.Body ?? "").split(SUMMARY_TEXT)).toHaveLength(2);
 
     const projection = buildInboundMediaNoteProjection(ctx);
     expect(projection.media).toEqual([

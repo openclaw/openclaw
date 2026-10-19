@@ -1,21 +1,16 @@
-// Product proof for audio media-understanding proxy routing and size preflight.
 import fs from "node:fs/promises";
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import net, { type AddressInfo, type Socket } from "node:net";
-import os from "node:os";
+import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "../../../../extensions/openai/api.js";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
-import type { OpenClawConfig } from "../../../../src/config/types.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { listen } from "./media-http.test-support.js";
+import { audioConfig } from "./media-understanding.test-support.js";
 
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
@@ -30,48 +25,7 @@ type RequestObservation = {
 };
 type ProxyRequest = Pick<RequestObservation, "method" | "url">;
 
-type LoopbackServer = {
-  server: Server;
-  sockets: Set<Socket>;
-  url: string;
-};
-
-let tempRoot: string | undefined;
-
-afterEach(async () => {
-  if (!tempRoot) {
-    return;
-  }
-  await fs.rm(tempRoot, { recursive: true, force: true });
-  tempRoot = undefined;
-});
-
-async function listen(server: Server): Promise<LoopbackServer> {
-  const sockets = new Set<Socket>();
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
-  return { server, sockets, url: `http://127.0.0.1:${address.port}` };
-}
-
-async function closeServer(handle: LoopbackServer): Promise<void> {
-  for (const socket of handle.sockets) {
-    socket.destroy();
-  }
-  handle.server.closeAllConnections?.();
-  await new Promise<void>((resolve, reject) => {
-    handle.server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function withRequestBody(
   request: NodeJS.ReadableStream,
@@ -85,7 +39,7 @@ function withRequestBody(
     });
 }
 
-async function startProviderServer(observations: RequestObservation[]): Promise<LoopbackServer> {
+async function startProviderServer(observations: RequestObservation[]) {
   return await listen(
     createServer((request, response) => {
       withRequestBody(request, response, (body) => {
@@ -103,10 +57,7 @@ async function startProviderServer(observations: RequestObservation[]): Promise<
   );
 }
 
-async function startForwardProxy(
-  observations: ProxyRequest[],
-  upstreamLocalPorts: Set<number>,
-): Promise<LoopbackServer> {
+async function startForwardProxy(observations: ProxyRequest[], upstreamLocalPorts: Set<number>) {
   // This proof requires CONNECT tunneling; reject accidental direct HTTP forwarding.
   const server = createServer((_request, response) => {
     response.writeHead(400, { connection: "close" });
@@ -142,49 +93,14 @@ async function startForwardProxy(
   return await listen(server);
 }
 
-function createConfig(providerBaseUrl: string, maxBytes: number): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: {
-          apiKey: "test",
-          baseUrl: providerBaseUrl,
-          request: { allowPrivateNetwork: true },
-          models: [],
-        },
-      },
-    },
-    tools: {
-      media: {
-        models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
-        audio: {
-          enabled: true,
-          maxBytes,
-        },
-      },
-    },
-  };
-}
-
-async function createAudioContext(
-  fileName: string,
-  size: number,
-): Promise<{
-  ctx: MsgContext;
-  filePath: string;
-  workspaceDir: string;
-}> {
-  tempRoot ??= await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-qa-")));
+async function createAudioContext(tempRoot: string, fileName: string, size: number) {
   const filePath = path.join(tempRoot, fileName);
   await fs.writeFile(filePath, Buffer.alloc(size, 0x52));
-  return {
-    ctx: {
-      Body: "",
-      media: [{ path: filePath, contentType: "audio/wav" }],
-    },
-    filePath,
-    workspaceDir: tempRoot,
+  const ctx: MsgContext = {
+    Body: "",
+    media: [{ path: filePath, contentType: "audio/wav" }],
   };
+  return { ctx, workspaceDir: tempRoot };
 }
 
 describe("media.audio-proxy-and-limit-handling", () => {
@@ -194,6 +110,27 @@ describe("media.audio-proxy-and-limit-handling", () => {
     const proxyUpstreamPorts = new Set<number>();
     const provider = await startProviderServer(providerRequests);
     const proxy = await startForwardProxy(proxyRequests, proxyUpstreamPorts);
+    const dir = await fs.realpath(tempDirs.make("openclaw-audio-qa-"));
+    const transcribe = async (fileName: string, size: number) => {
+      const { ctx, workspaceDir } = await createAudioContext(dir, fileName, size);
+      await applyMediaUnderstanding({
+        ctx,
+        cfg: audioConfig(
+          "openai",
+          "gpt-4o-transcribe",
+          {
+            apiKey: "test",
+            baseUrl: `${provider.url}/v1`,
+            request: { allowPrivateNetwork: true },
+            models: [],
+          },
+          { maxBytes: 4096 },
+        ),
+        workspaceDir,
+        providers: { openai: openaiMediaUnderstandingProvider },
+      });
+      return ctx;
+    };
 
     try {
       await withEnvAsync(
@@ -208,15 +145,9 @@ describe("media.audio-proxy-and-limit-handling", () => {
           no_proxy: "",
         },
         async () => {
-          const accepted = await createAudioContext("accepted.wav", 2048);
-          await applyMediaUnderstanding({
-            ctx: accepted.ctx,
-            cfg: createConfig(`${provider.url}/v1`, 4096),
-            workspaceDir: accepted.workspaceDir,
-            providers: { openai: openaiMediaUnderstandingProvider },
-          });
+          const accepted = await transcribe("accepted.wav", 2048);
 
-          expect(accepted.ctx.Transcript).toBe("proxied audio transcript");
+          expect(accepted.Transcript).toBe("proxied audio transcript");
           expect(proxyRequests).toMatchObject([
             { method: "CONNECT", url: new URL(provider.url).host },
           ]);
@@ -231,16 +162,10 @@ describe("media.audio-proxy-and-limit-handling", () => {
           providerRequests.length = 0;
           proxyUpstreamPorts.clear();
 
-          const oversized = await createAudioContext("oversized.wav", 4097);
-          await applyMediaUnderstanding({
-            ctx: oversized.ctx,
-            cfg: createConfig(`${provider.url}/v1`, 4096),
-            workspaceDir: oversized.workspaceDir,
-            providers: { openai: openaiMediaUnderstandingProvider },
-          });
+          const oversized = await transcribe("oversized.wav", 4097);
 
-          expect(oversized.ctx.MediaUnderstanding).toBeUndefined();
-          expect(JSON.stringify(oversized.ctx.MediaUnderstandingDecisions)).toContain(
+          expect(oversized.MediaUnderstanding).toBeUndefined();
+          expect(JSON.stringify(oversized.MediaUnderstandingDecisions)).toContain(
             "exceeds maxBytes 4096",
           );
           expect(proxyRequests).toHaveLength(0);
@@ -248,8 +173,8 @@ describe("media.audio-proxy-and-limit-handling", () => {
         },
       );
     } finally {
-      await closeServer(proxy);
-      await closeServer(provider);
+      await proxy.stop();
+      await provider.stop();
     }
   });
 });
