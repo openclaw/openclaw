@@ -5,8 +5,8 @@ import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts"
  * menus paint above every in-page stacking context (e.g. the sidebar resizer
  * divider that sits above the nav's z-index 10 context).
  */
-export function promoteToPopoverTopLayer(element: HTMLElement) {
-  occludeNativeBrowserSurface(element);
+export function promoteToPopoverTopLayer(element: HTMLElement, surfaces: () => Iterable<Element>) {
+  occludeNativeBrowserSurface(element, surfaces);
   element.setAttribute("popover", "manual");
   element.showPopover();
 }
@@ -18,7 +18,7 @@ export function promoteToPopoverTopLayer(element: HTMLElement) {
  */
 class MenuSurface extends HTMLElement {
   connectedCallback() {
-    promoteToPopoverTopLayer(this);
+    promoteToPopoverTopLayer(this, () => this.children);
   }
 }
 

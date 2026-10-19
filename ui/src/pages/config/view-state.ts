@@ -25,7 +25,6 @@ export function createConfigViewState(): ConfigViewState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
-    lastCustomThemeImportFocusToken: null,
     lastConfigContextKey: null,
     lastFormModeForScroll: null,
   };
@@ -37,7 +36,6 @@ export function resetConfigEphemeralState(viewState: ConfigViewState) {
   viewState.envRevealed = false;
   viewState.validityDismissed = false;
   viewState.revealedSensitivePaths.clear();
-  viewState.lastCustomThemeImportFocusToken = null;
   viewState.rawDiffCache = undefined;
 }
 

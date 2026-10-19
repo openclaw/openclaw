@@ -360,7 +360,7 @@ export function createPortaledHovercardOwner(
         viewport && listen(viewport, "scroll", schedulePosition),
       ];
       owner.append(card);
-      promoteToPopoverTopLayer(card);
+      promoteToPopoverTopLayer(card, () => [card]);
       trigger.setAttribute("aria-controls", card.id);
       trigger.setAttribute("aria-expanded", "true");
       position();
