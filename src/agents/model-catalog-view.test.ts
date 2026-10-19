@@ -52,7 +52,13 @@ const prepare = (options: Partial<ViewOptions> = {}) =>
 function trackedConfig(providers: Record<string, ModelProviderConfig>) {
   const enumerate = vi.fn(Reflect.ownKeys);
   return {
-    cfg: { models: { providers: new Proxy(providers, { ownKeys: enumerate }) } },
+    cfg: {
+      models: {
+        providers: new Proxy<Record<string, ModelProviderConfig>>(providers, {
+          ownKeys: enumerate,
+        }),
+      },
+    },
     enumerate,
   };
 }
@@ -114,7 +120,7 @@ describe("prepared model catalog view", () => {
     );
     expect(enumerate).toHaveBeenCalledOnce();
     const nextView = createModelCatalogView(params);
-    const expected = {
+    const expected: ModelCatalogEntry = {
       ...freshEntry,
       name: "Configured",
       reasoning: false,

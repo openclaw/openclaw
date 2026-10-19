@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   unregister: vi.fn(),
 }));
 
+// mock-isolation: Drive admission outcomes independently of configured access policy.
 vi.mock("./access-control.js", () => ({ checkTwitchAccessControl: mocks.checkAccess }));
 
 vi.mock("./client-manager-registry.js", () => ({
@@ -35,8 +36,10 @@ vi.mock("./client-manager-registry.js", () => ({
   }),
 }));
 
+// mock-isolation: Supply the monitor's host runtime without loading the live Gateway.
 vi.mock("./runtime.js", () => ({ getTwitchRuntime: mocks.getRuntime }));
 
+// mock-isolation: Observe monitor lifecycle wiring without starting a second ingress owner.
 vi.mock("./twitch-ingress.js", () => ({ createTwitchIngress: mocks.createIngress }));
 
 import { monitorTwitchProvider } from "./monitor.js";

@@ -141,6 +141,7 @@ it("revalidates document grants before reusing them with a startup bearer", asyn
     basePath: "",
     preferences: { profileId: "browser-profile", entries: { "ui.themeMode": "light" } },
     assistantName: "Browser identity",
+    assistantAvatar: "",
     pluginFrameGrants: [{ pluginId: "browser-only", path: "/browser", match: "prefix" }],
   });
   fetchMock.mockImplementation(async () => bootstrapResponse("bearer"));
@@ -157,7 +158,7 @@ it("revalidates document grants before reusing them with a startup bearer", asyn
 it.each(["/other", "https://other.example"])(
   "does not adopt another resource owner's document config: %s",
   (resourceBasePath) => {
-    documentConfig({ basePath: "", assistantName: "Observatory" });
+    documentConfig({ basePath: "", assistantName: "Observatory", assistantAvatar: "" });
     const config = createApplicationConfigCapability({ resourceBasePath });
     expect(config.current.assistantIdentity.name).toBe("Assistant");
   },

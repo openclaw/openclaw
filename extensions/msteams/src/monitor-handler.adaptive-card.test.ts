@@ -155,12 +155,14 @@ describe("msteams adaptive card action invoke", () => {
     const registered = createMSTeamsActivityHandler(createDeps());
     const data = { value: "/codex permissions yolo", label: "Run" };
 
-    await runAdaptiveCardInvoke(registered, {
-      action: {
-        type: "Action.Submit",
-        data,
-      },
-    });
+    await registered(
+      cardContext("invoke", {
+        action: {
+          type: "Action.Submit",
+          data,
+        },
+      }),
+    );
 
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
@@ -177,7 +179,7 @@ describe("msteams adaptive card action invoke", () => {
       },
     };
 
-    await runAdaptiveCardInvoke(registered, payload);
+    await registered(cardContext("invoke", payload));
 
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(payload));

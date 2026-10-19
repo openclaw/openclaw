@@ -4,26 +4,42 @@ import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-target
 import { vi } from "vitest";
 import type { createMSTeamsActivityHandler as CreateMSTeamsActivityHandler } from "./monitor-handler.js";
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
-import type {
-  resolveMSTeamsTeamsConfig,
-  resolveMSTeamsUserAllowlist,
-} from "./resolve-allowlist.js";
 
-type RouteHandler = (req: Request, res: Response) => void | Promise<void>;
+type MSTeamsUserResolution = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+};
 
-const { routeState, resetRouteState } = await vi.hoisted(async () => {
-  const { createDeferred } = await import("openclaw/plugin-sdk/extension-shared");
-  const initialState = () => ({
-    routes: [] as Array<Parameters<typeof registerPluginHttpRoute>[0]>,
-    ready: createDeferred<void>(),
-    unregister: vi.fn(),
-    fail: false,
-    requestStarted: createDeferred<void>(),
-    responseGate: undefined as Promise<void> | undefined,
-    responseWork: undefined as Promise<boolean | void> | undefined,
-  });
-  const state = initialState();
-  return { routeState: state, resetRouteState: () => Object.assign(state, initialState()) };
+type ResolveMSTeamsTeamsConfigMock = (params: {
+  cfg: unknown;
+  teamIdMode: "bot-framework" | "graph";
+  teams: Record<string, unknown>;
+}) => Promise<{
+  teams: Record<string, unknown>;
+  mapping: string[];
+  unresolved: string[];
+}>;
+
+type ResolveMSTeamsUserAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsUserResolution[]>;
+
+const { createDeferred, routeState } = await vi.hoisted(async () => {
+  const extensionShared = await import("openclaw/plugin-sdk/extension-shared");
+  return {
+    createDeferred: extensionShared.createDeferred,
+    routeState: {
+      routes: [] as Array<Parameters<typeof registerPluginHttpRoute>[0]>,
+      ready: extensionShared.createDeferred<void>(),
+      unregister: vi.fn(),
+      fail: false,
+      requestStarted: extensionShared.createDeferred<void>(),
+      responseGate: undefined as Promise<void> | undefined,
+      responseWork: undefined as Promise<boolean | void> | undefined,
+    },
+  };
 });
 vi.mock("openclaw/plugin-sdk/webhook-targets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-targets")>()),
@@ -40,17 +56,15 @@ vi.mock("openclaw/plugin-sdk/webhook-targets", async (importOriginal) => ({
   },
 }));
 
-export const createMSTeamsActivityHandler = vi.hoisted(() =>
+const createMSTeamsActivityHandler = vi.hoisted(() =>
   vi.fn<typeof CreateMSTeamsActivityHandler>(() => vi.fn(async () => undefined)),
 );
-export const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
-export const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
-export const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
-export const processSdkActivity = vi.hoisted(() =>
-  vi.fn<App["process"]>(async () => ({ status: 200 })),
-);
-export const nativeSdkState = vi.hoisted((): { app?: App } => ({}));
-export const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
+const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
+const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
+const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
+const processSdkActivity = vi.hoisted(() => vi.fn<App["process"]>(async () => ({ status: 200 })));
+const nativeSdkState = vi.hoisted((): { app?: App } => ({}));
+const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
   vi.fn(async (_creds?: unknown, options?: Record<string, unknown>) => {
     const app = {
       on: vi.fn(),
@@ -58,7 +72,12 @@ export const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
       process: processSdkActivity,
       initialize: vi.fn(async () => {
         const adapter = options?.httpServerAdapter as
-          | { registerRoute?: (path: string, handler: RouteHandler) => void }
+          | {
+              registerRoute?: (
+                path: string,
+                handler: (req: Request, res: Response) => void | Promise<void>,
+              ) => void;
+            }
           | undefined;
         const endpoint = options?.messagingEndpoint;
         if (adapter?.registerRoute && typeof endpoint === "string") {
@@ -85,13 +104,15 @@ export const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
   }),
 );
 
-export const ssoTokenStore = vi.hoisted(() => ({
+const ssoTokenStore = vi.hoisted(() => ({
   get: vi.fn(async () => null),
   save: vi.fn(async () => {}),
   remove: vi.fn(async () => false),
 }));
 
-vi.mock("@microsoft/teams.apps", () => ({ ExpressAdapter: vi.fn() }));
+vi.mock("@microsoft/teams.apps", () => ({
+  ExpressAdapter: vi.fn(),
+}));
 
 vi.mock("./monitor-handler.js", () => ({
   isMSTeamsInvokeAuthorized: ({ invokeKind }: { invokeKind: string }) =>
@@ -99,15 +120,17 @@ vi.mock("./monitor-handler.js", () => ({
   createMSTeamsActivityHandler,
 }));
 
-vi.mock("./file-consent-invoke.js", () => ({ runMSTeamsFileConsentInvokeHandler }));
+vi.mock("./file-consent-invoke.js", () => ({
+  runMSTeamsFileConsentInvokeHandler,
+}));
 
-export const resolveAllowlistMocks = vi.hoisted(() => ({
-  resolveMSTeamsTeamsConfig: vi.fn<typeof resolveMSTeamsTeamsConfig>(async ({ teams }) => ({
+const resolveAllowlistMocks = vi.hoisted(() => ({
+  resolveMSTeamsTeamsConfig: vi.fn<ResolveMSTeamsTeamsConfigMock>(async ({ teams }) => ({
     teams,
     mapping: [],
     unresolved: [],
   })),
-  resolveMSTeamsUserAllowlist: vi.fn<typeof resolveMSTeamsUserAllowlist>(async () => []),
+  resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
@@ -117,13 +140,17 @@ vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
 }));
 
 vi.mock("./sdk.js", () => ({
-  loadMSTeamsSdkWithAuth,
+  loadMSTeamsSdkWithAuth: (creds?: unknown, options?: Record<string, unknown>) =>
+    loadMSTeamsSdkWithAuth(creds, options),
   createMSTeamsTokenProvider: () => ({
     getAccessToken: vi.fn().mockResolvedValue("mock-token"),
   }),
   createMSTeamsExpressAdapter: vi.fn(
     async (expressApp: { post: (...args: unknown[]) => void }) => ({
-      registerRoute: (path: string, handler: RouteHandler) => expressApp.post(path, handler),
+      registerRoute: (
+        path: string,
+        handler: (req: Request, res: Response) => void | Promise<void>,
+      ) => expressApp.post(path, handler),
       start: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
     }),
@@ -134,19 +161,34 @@ vi.mock("./runtime.js", () => ({
   getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: () => ({
     logging: {
-      getChildLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
+      getChildLogger: () => ({
+        info: vi.fn(),
+        error: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      }),
     },
     channel: {
-      text: { resolveTextChunkLimit: () => 4000 },
+      text: {
+        resolveTextChunkLimit: () => 4000,
+      },
     },
   }),
 }));
 
-vi.mock("./sso-token-store.js", () => ({ createMSTeamsSsoTokenStoreFs: () => ssoTokenStore }));
+vi.mock("./sso-token-store.js", () => ({
+  createMSTeamsSsoTokenStoreFs: () => ssoTokenStore,
+}));
 
 export function resetMSTeamsMonitorMocks() {
   vi.clearAllMocks();
-  resetRouteState();
+  routeState.unregister.mockReset();
+  routeState.routes = [];
+  routeState.ready = createDeferred<void>();
+  routeState.fail = false;
+  routeState.requestStarted = createDeferred<void>();
+  routeState.responseGate = undefined;
+  routeState.responseWork = undefined;
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   resolveAllowlistMocks.resolveMSTeamsTeamsConfig
@@ -159,7 +201,20 @@ export function resetMSTeamsMonitorMocks() {
   processSdkActivity.mockReset().mockResolvedValue({ status: 200 });
   nativeSdkState.app = undefined;
   getMSTeamsIngressMockState().instances.length = 0;
+  ssoTokenStore.get.mockClear();
   ssoTokenStore.save.mockReset().mockResolvedValue(undefined);
+  ssoTokenStore.remove.mockClear();
 }
 
-export { routeState };
+export {
+  routeState,
+  createMSTeamsActivityHandler,
+  isSigninInvokeAuthorized,
+  isCardActionInvokeAuthorized,
+  runMSTeamsFileConsentInvokeHandler,
+  processSdkActivity,
+  nativeSdkState,
+  loadMSTeamsSdkWithAuth,
+  ssoTokenStore,
+  resolveAllowlistMocks,
+};

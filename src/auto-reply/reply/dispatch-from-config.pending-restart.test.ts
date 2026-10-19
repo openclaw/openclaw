@@ -27,7 +27,9 @@ async function interrupt(...recorders: (Recorder | undefined)[]) {
   for (const recorder of recorders) {
     recorder?.finishPendingInput?.("interrupted");
   }
-  await Promise.all(recorders.map((recorder) => recorder?.waitForPendingInputSettlement?.()));
+  for (const recorder of recorders) {
+    await recorder?.waitForPendingInputSettlement?.();
+  }
 }
 async function seedSource(
   target: Omit<UserTurnTranscriptTarget, "sessionEntry">,

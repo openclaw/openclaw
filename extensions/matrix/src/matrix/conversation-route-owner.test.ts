@@ -256,7 +256,7 @@ describe("inactive Matrix account scopes", () => {
     resetRuntime(true);
   });
 
-  it.each([
+  it.each<InactiveCase>([
     ["removed account", "retired", { accounts: { default: {} } }],
     ["removed default", "default", { enabled: true, accounts: { secondary: {} } }],
     ["disabled account", "default", { accounts: { default: { enabled: false } } }],

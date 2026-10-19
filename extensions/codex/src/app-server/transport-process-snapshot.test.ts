@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type PosixProcess,
   readCodexAppServerProcessCommand,
@@ -22,48 +21,27 @@ const observedProcess: PosixProcess = {
   startedAt: "00000000-0000-0000-0000-000000000001:12345",
 };
 
-const bootId = "00000000-0000-0000-0000-000000000001";
-function stat(pid = process.pid, threads = "1", state = "S") {
-  return `${pid} (worker) ${state} ${process.ppid} ${pid}${" 0".repeat(14)} ${threads} 0 12345\n`;
-}
-
-function mockProcfs(read: (file: string) => string) {
-  procfs.readFile.mockImplementation((file) =>
-    file === "/proc/sys/kernel/random/boot_id" ? bootId : read(file),
-  );
-}
-
-function runInspectorFixture(
-  name: string,
-  timeout: number,
-  args: string[] = [],
-  env = process.env,
-) {
-  const fixture = new URL(
-    `./test-support/transport-process-${name}.test-support.mjs`,
-    import.meta.url,
-  );
-  return new Promise<string>((resolve, reject) => {
-    execFile(
-      process.execPath,
-      ["--import", path.resolve("scripts/tsx.mjs"), fileURLToPath(fixture), ...args],
-      { timeout, env },
-      (error, output) => (error ? reject(error) : resolve(output)),
-    );
-  });
-}
-
-afterEach(() => {
-  procfs.readFile.mockReset();
-  procfs.readdir.mockReset();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
 it.skipIf(process.platform === "win32")(
-  "keeps timers responsive and reaps a blocked command inspector",
+  "keeps parent timers responsive and reaps the inspector when a command read blocks",
   async () => {
-    const result = JSON.parse(await runInspectorFixture("blocked-command", 10_000));
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          fileURLToPath(
+            new URL(
+              "./test-support/transport-process-blocked-command.test-support.mjs",
+              import.meta.url,
+            ),
+          ),
+        ],
+        { timeout: 10_000 },
+        (error: Error | null, output: string) => (error ? reject(error) : resolve(output)),
+      );
+    });
+    const result = JSON.parse(stdout);
     expect(result).toMatchObject({
       outcome: { status: "rejected", reason: "deadline" },
       inspectorUsed: true,
@@ -77,14 +55,26 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "inspects procfs identities, commands and trees despite filesystem worker starvation",
+  "inspects procfs identities, commands and full trees despite filesystem worker starvation",
   async () => {
-    const stdout = await runInspectorFixture(
-      "starvation",
-      15_000,
-      process.platform === "linux" ? [] : ["--fixture-procfs"],
-      { ...process.env, UV_THREADPOOL_SIZE: "1" },
-    );
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          fileURLToPath(
+            new URL(
+              "./test-support/transport-process-starvation.test-support.mjs",
+              import.meta.url,
+            ),
+          ),
+          ...(process.platform === "linux" ? [] : ["--fixture-procfs"]),
+        ],
+        { env: { ...process.env, UV_THREADPOOL_SIZE: "1" }, timeout: 15_000 },
+        (error: Error | null, output: string) => (error ? reject(error) : resolve(output)),
+      );
+    });
     expect(JSON.parse(stdout)).toMatchObject({
       startupDeadlineMs: 10_000,
       filesystemWorkerReleaseDeadlineMs: 10_500,
@@ -125,24 +115,29 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-it.for(["snapshot", "command"] as const)("normalizes inspector launch denial: %s", async (kind) => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.mocked(execFile).mockImplementationOnce(() => {
-    throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
-  });
-  const inspected =
-    kind === "snapshot"
-      ? readCodexAppServerProcessSnapshot()
-      : readCodexAppServerProcessCommand(observedProcess, performance.now() + 1_000);
-  await expect(inspected).rejects.toMatchObject({
-    name: "ProcessInspectionError",
-    reason: "permission",
-    message: expect.stringContaining("Check process inspection permissions"),
-  });
-});
+it.for(["snapshot", "command"] as const)(
+  "normalizes synchronous inspector launch denial for %s",
+  async (kind, ctx) => {
+    ctx.onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.mocked(execFile).mockImplementationOnce(() => {
+      throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
+    });
+    const inspected =
+      kind === "snapshot"
+        ? readCodexAppServerProcessSnapshot()
+        : readCodexAppServerProcessCommand(observedProcess, performance.now() + 1_000);
+    await expect(inspected).rejects.toMatchObject({
+      name: "ProcessInspectionError",
+      reason: "permission",
+      message: expect.stringContaining("Check process inspection permissions"),
+    });
+  },
+);
 
-describe("Codex procfs inspector", () => {
-  beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
+describe("Codex procfs command inspector", () => {
   it.for([
     "ready",
     "empty",
@@ -153,14 +148,27 @@ describe("Codex procfs inspector", () => {
     "regrouped",
     "read-error",
     "replaced after read",
-  ])("binds command readiness to the same live identity: %s", async (mode) => {
-    // Keep deadline advancement independent of wall-clock scheduling.
+  ])("binds empty-command startup readiness to the same live process: %s", async (mode, ctx) => {
+    ctx.onTestFinished(() => {
+      procfs.readFile.mockReset();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    // Synthetic reads and their deadline timer share one clock despite host scheduling.
+    // The inspection deadline runs on the monotonic clock (performance.now), so a
+    // wall-clock rewind cannot stretch it; advance the monotonic clock to the deadline
+    // to exercise the deadline-exceeded path.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let monotonicNowMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => monotonicNowMs);
     const deadline = performance.now() + 250;
+    const bootId = "00000000-0000-0000-0000-000000000001";
     let commandReads = 0;
-    mockProcfs((file) => {
+    procfs.readFile.mockImplementation((file) => {
+      if (file === "/proc/sys/kernel/random/boot_id") {
+        return bootId;
+      }
       if (file === `/proc/${process.pid}/cmdline`) {
         commandReads += 1;
         if (commandReads > 1 && mode === "empty") {
@@ -172,8 +180,13 @@ describe("Codex procfs inspector", () => {
         return commandReads === 1 || mode === "empty" ? "" : "/opt/codex\0app-server\0";
       }
       expect(file).toBe(`/proc/${process.pid}/stat`);
-      if (commandReads && mode === "gone") {
-        throw Object.assign(new Error("identity unavailable"), { code: "ENOENT" });
+      if (commandReads && (mode === "gone" || mode === "permission")) {
+        throw Object.assign(new Error("identity unavailable"), {
+          code: mode === "gone" ? "ENOENT" : "EACCES",
+        });
+      }
+      if (commandReads && mode === "malformed") {
+        return "";
       }
       const changed = commandReads > 0;
       const state = changed && mode === "zombie" ? "Z" : "R";
@@ -189,7 +202,8 @@ describe("Codex procfs inspector", () => {
       await expect(inspected).resolves.toBe("/opt/codex app-server");
     } else {
       await expect(inspected).rejects.toMatchObject({
-        reason: mode === "empty" ? "deadline" : "unavailable",
+        reason:
+          mode === "empty" ? "deadline" : mode === "permission" ? "permission" : "unavailable",
       });
     }
     if (["ready", "empty", "read-error", "replaced after read"].includes(mode)) {
@@ -201,40 +215,62 @@ describe("Codex procfs inspector", () => {
     { input: "\0", reason: "unavailable" },
     { code: "EACCES", reason: "permission" },
     { code: "ABORT_ERR", reason: "deadline" },
-  ])("rejects absent or unreadable command identities: %j", async (fixture) => {
-    procfs.readFile.mockImplementation((file) => {
-      expect(file).toBe(`/proc/${process.pid}/cmdline`);
-      if (fixture.code) {
-        throw Object.assign(new Error("command unavailable"), { code: fixture.code });
-      }
-      return fixture.input!;
-    });
+  ])(
+    "reads command identity without authorizing absent or unreadable processes: %j",
+    async (fixture, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      procfs.readFile.mockImplementation((file) => {
+        expect(file).toBe(`/proc/${process.pid}/cmdline`);
+        if (fixture.code) {
+          throw Object.assign(new Error("command unavailable"), { code: fixture.code });
+        }
+        return fixture.input!;
+      });
 
-    const inspected = readCodexAppServerProcessCommand(observedProcess, performance.now() + 1_000);
-    await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
-    if (fixture.reason !== "permission") {
-      await expect(inspected).rejects.not.toThrow("permissions");
-    }
-    if (fixture.reason === "deadline") {
-      await expect(inspected).rejects.toThrow("deadline");
+      const inspected = readCodexAppServerProcessCommand(
+        observedProcess,
+        performance.now() + 1_000,
+      );
+      await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
+      if (fixture.reason !== "permission") {
+        await expect(inspected).rejects.not.toThrow("permissions");
+      }
+      if (fixture.reason === "deadline") {
+        await expect(inspected).rejects.toThrow("deadline");
+      }
       procfs.readFile.mockClear();
       await expect(
         readCodexAppServerProcessCommand(observedProcess, performance.now() - 1),
       ).rejects.toMatchObject({ reason: "deadline" });
       expect(procfs.readFile).not.toHaveBeenCalled();
-    }
-  });
+    },
+  );
+});
 
+describe("Codex procfs process inspector", () => {
   it.for(["command at limit", "command overflow", "snapshot overflow"])(
-    "enforces the selected-read byte budget: %s",
-    async (mode) => {
+    "keeps selected procfs reads within the inspection byte budget: %s",
+    async (mode, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const maxBytes = 8 * 1024 * 1024;
-      mockProcfs((file) => {
+      procfs.readFile.mockImplementation((file) => {
+        if (file === "/proc/sys/kernel/random/boot_id") {
+          return "00000000-0000-0000-0000-000000000001";
+        }
         if (file.endsWith("/cmdline")) {
           return "x".repeat(maxBytes + Number(mode === "command overflow"));
         }
         const pid = file === `/proc/${process.pid}/stat` ? process.pid : process.pid + 1;
-        return pid === process.pid ? stat(pid).padEnd(maxBytes - 10, " ") : stat(pid);
+        const stat = `${pid} (worker) S ${process.ppid} ${pid}${" 0".repeat(14)} 1 0 12345\n`;
+        return pid === process.pid ? stat.padEnd(maxBytes - 10, " ") : stat;
       });
       const inspected =
         mode === "snapshot overflow"
@@ -248,25 +284,48 @@ describe("Codex procfs inspector", () => {
     },
   );
 
-  it.for(["2", "9007199254740992"])("validates zombie thread counts: %s", async (threads) => {
-    mockProcfs((file) => {
-      expect(file).toBe(`/proc/${process.pid}/stat`);
-      return stat(process.pid, threads, "Z");
-    });
-    const snapshot = readCodexAppServerProcessSnapshot(undefined, [process.pid]);
-    if (threads === "2") {
-      await expect(snapshot).resolves.toEqual([{ ...observedProcess, state: "Zl" }]);
-    } else {
-      await expect(snapshot).rejects.toMatchObject({ reason: "unavailable" });
-    }
-  });
+  it.for(["2", "9007199254740992"])(
+    "requires explicit thread evidence before classifying a zombie leader: %s",
+    async (threads, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      procfs.readFile.mockImplementation((file) => {
+        if (file === "/proc/sys/kernel/random/boot_id") {
+          return "00000000-0000-0000-0000-000000000001";
+        }
+        expect(file).toBe(`/proc/${process.pid}/stat`);
+        return `${process.pid} (worker) Z ${process.ppid} ${process.pid}${" 0".repeat(14)} ${threads} 0 12345\n`;
+      });
+      const snapshot = readCodexAppServerProcessSnapshot(undefined, [process.pid]);
+      if (threads === "1" || threads === "2") {
+        await expect(snapshot).resolves.toEqual([
+          { ...observedProcess, state: threads === "1" ? "Z" : "Zl" },
+        ]);
+      } else {
+        await expect(snapshot).rejects.toMatchObject({ reason: "unavailable" });
+      }
+    },
+  );
 
   it.for(["ESRCH", "EACCES", "exiting"] as const)(
-    "distinguishes vanished and unreadable neighbors: %s",
-    async (code) => {
+    "distinguishes vanished or exiting neighbors from unreadable state: %s",
+    async (code, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        procfs.readdir.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const bootId = "00000000-0000-0000-0000-000000000001";
       const neighborPid = process.pid + 1;
       procfs.readdir.mockReturnValue([String(process.pid), String(neighborPid)]);
-      mockProcfs((file) => {
+      procfs.readFile.mockImplementation((file) => {
+        if (file === "/proc/sys/kernel/random/boot_id") {
+          return bootId;
+        }
         if (file === `/proc/${process.pid}/stat`) {
           // Fields 3..22 follow the final ')', even when comm contains ')' and spaces.
           return `${process.pid} (codex ) worker) S ${process.ppid} ${process.pid}${" 0".repeat(14)} 1 0 12345${" 0".repeat(30)}\n`;
@@ -283,7 +342,15 @@ describe("Codex procfs inspector", () => {
       if (code === "EACCES") {
         await expect(snapshot).rejects.toMatchObject({ reason: "permission" });
       } else {
-        await expect(snapshot).resolves.toEqual([observedProcess]);
+        await expect(snapshot).resolves.toEqual([
+          {
+            pid: process.pid,
+            ppid: process.ppid,
+            pgid: process.pid,
+            state: "S",
+            startedAt: `${bootId}:12345`,
+          },
+        ]);
       }
       if (code === "exiting") {
         await expect(
@@ -310,10 +377,18 @@ describe.skipIf(process.platform !== "darwin")("Codex Darwin process inspector",
   });
 
   it("omits a reaped child while retaining the selected observer", async () => {
-    const child = execFile(process.execPath, ["-e", ""], { env: {} });
-    await once(child, "close");
-    expect(child).toMatchObject({ exitCode: 0, pid: expect.any(Number) });
-    const rows = await readCodexAppServerProcessSnapshot(undefined, [child.pid!]);
+    const pid = await new Promise<number>((resolve, reject) => {
+      const child = execFile(process.execPath, ["-e", ""], { env: {} }, (error) => {
+        if (error) {
+          reject(new Error("Could not run the process snapshot fixture", { cause: error }));
+        } else if (child.pid === undefined) {
+          reject(new Error("Child PID is unavailable"));
+        } else {
+          resolve(child.pid);
+        }
+      });
+    });
+    const rows = await readCodexAppServerProcessSnapshot(undefined, [pid]);
     expect(rows.map((row) => row.pid)).toEqual([process.pid]);
   });
 

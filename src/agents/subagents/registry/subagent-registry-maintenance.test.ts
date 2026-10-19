@@ -1,6 +1,6 @@
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
@@ -9,8 +9,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -27,12 +25,15 @@ import "./subagent-registry-maintenance.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
 
-function createRun(runId = "run", overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return createSubagentRunRecord({
-    runId,
-    childSessionKey: `agent:main:subagent:${runId}`,
+function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+  return {
+    runId: "run",
+    childSessionKey: "agent:main:subagent:child",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
     createdAt: 1,
     task: "retained-task-marker:" + "x".repeat(32_768),
+    cleanup: "keep",
     expectsCompletionMessage: true,
     execution: { status: "terminal", endedAt: 2 },
     completion: {
@@ -41,21 +42,17 @@ function createRun(runId = "run", overrides: Partial<SubagentRunRecord> = {}): S
     },
     delivery: { status: "pending" },
     ...overrides,
-  });
+  };
 }
 
-const rows = (...runs: SubagentRunRecord[]) => new Map(runs.map((run) => [run.runId, run]));
-const save = (...runs: SubagentRunRecord[]) => saveSubagentRegistryToSqlite(rows(...runs));
-const expectProtected = async (...runs: SubagentRunRecord[]) =>
-  expect(await protectedKeys()).toEqual(runs.map((run) => run.childSessionKey));
-
-const preparations: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>>[] = [];
-async function prepare(native = false) {
-  const prepared = await prepareSessionMaintenancePreservation(storePath, { native });
-  preparations.push(prepared);
-  return prepared;
+async function protectedKeys() {
+  const prepared = await prepareSessionMaintenancePreservation(storePath);
+  try {
+    return prepared.capture().providerKeys;
+  } finally {
+    prepared.dispose();
+  }
 }
-const protectedKeys = async () => (await prepare()).capture().providerKeys;
 
 beforeEach(() => {
   const stateDir = tempDirs.make("subagent-maintenance-");
@@ -67,149 +64,226 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  for (const prepared of preparations.splice(0)) {
-    prepared.dispose();
-  }
   subagentRuns.clear();
   clearSubagentRunsReadCacheForTest();
   await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
-it("loads protection once without decoding retained task and reply text", async () => {
-  const publicRun = createRun();
-  const privateRun = createRun("private", { completionTarget: "parent" });
-  save(publicRun, privateRun);
-  const childSessionKey = `  ${publicRun.childSessionKey}  `;
-  subagentRuns.set("duplicate", createRun("duplicate", { childSessionKey }));
-  subagentRuns.set("blank", { ...publicRun, runId: "blank", childSessionKey: "  " });
-  const parse = vi.spyOn(JSON, "parse");
-  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  await withRestoredMocks([parse, read], async () => {
-    await expectProtected(publicRun, privateRun);
-    await expectProtected(publicRun, privateRun);
-    expect(
-      read.mock.calls.filter(
-        ([, command]) => command.type === "subagents.runs" && command.scope.kind === "maintenance",
-      ),
-    ).toHaveLength(1);
-    expect(
-      parse.mock.calls.some(([text]) => /retained-(?:task-marker:|reply-marker)/.test(text)),
-    ).toBe(false);
-  });
-});
-
-it("preserves canonical parser and protection decisions for persisted payloads", async () => {
-  const run = createRun();
-  save(run);
-  const write = openOpenClawStateDatabase().db.prepare(
-    "UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?",
-  );
-  const payload = (patch: Record<string, unknown>) => JSON.stringify({ ...run, ...patch });
-  const active = payload({ execution: { status: "running" } });
-  const done = payload({ cleanupCompletedAt: 3, delivery: { status: "delivered" } });
-  const suspended = (suspendedAt?: unknown) => ({
-    expectsCompletionMessage: undefined,
-    delivery: { status: "suspended", suspendedAt },
-  });
-  const cleaned = { cleanupCompletedAt: 3 };
-  const killed = (killedAt: unknown) => ({ ...cleaned, killReconciliation: { killedAt } });
-  const intent = (reason: string) => ({ ...cleaned, killIntent: { requestedAt: 0, reason } });
-  const envelopes = (first: string, last: string) =>
-    `{"parentCompletion":${first.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${last.slice(0, -1)},"completionTarget":"parent"}}`;
-  const duplicate = payload({}).replace(
-    '"execution":',
-    '"execution":{"status":"invalid"},"execution":',
-  );
-  const nested = "[".repeat(1001) + "0" + "]".repeat(1001);
-  const cases: Array<[string, string | Record<string, unknown>, boolean]> = [
-    ["active", active, true],
-    ["cleaned", { cleanupCompletedAt: 3 }, false],
-    ["string cleanup", { cleanupCompletedAt: "3" }, true],
-    ["delivered", { delivery: { status: "delivered" } }, false],
-    ["in progress", { delivery: { status: "in_progress" } }, true],
-    ["no completion", { expectsCompletionMessage: false }, false],
-    ["implicit pending", { expectsCompletionMessage: undefined }, true],
-    ["suspended", suspended(0), true],
-    ["missing suspension time", suspended(), false],
-    ["string suspension time", suspended("1"), false],
-    ["kill", killed(0), true],
-    ["invalid kill", killed("0"), false],
-    ["kill intent", intent(" stop "), true],
-    ["empty kill intent", intent(" "), false],
-    ["duplicate execution", duplicate, true],
-    ["last envelope done", envelopes(active, done), false],
-    ["last envelope active", envelopes(done, active), true],
-    ["NUL", active + "\u0000invalid", false],
-    ["malformed", "{", false],
-    ["retired", { execution: undefined }, false],
-    ["overdepth", active.slice(0, -1) + ',"unused":' + nested + "}", true],
-  ];
-  for (const [name, value, keep] of cases) {
-    write.run(typeof value === "string" ? value : payload(value), run.runId);
-    clearSubagentRunsReadCacheForTest();
-    expect(await protectedKeys(), name).toEqual(keep ? [run.childSessionKey] : []);
-  }
-});
-
-it("uses committed registry writes for prepared protection without rereading SQLite", async () => {
-  const first = createRun("first", { cleanupCompletedAt: 3 });
-  const second = createRun("second");
-  save(first, second);
-  const runs = new Map<string, SubagentRunRecord>();
-  const prepared = await prepare(true);
-  expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
-  const change = (next: SubagentRunRecord | null) =>
-    mutateSubagentRuns(
-      [first.runId],
-      () => ({
-        value: undefined,
-        postimages: new Map([[first.runId, next]]),
-      }),
-      { runs },
+describe("subagent maintenance protection", () => {
+  it("loads protection once without decoding retained task and reply text", async () => {
+    const publicRun = createRun();
+    const privateRun = createRun({
+      runId: "private",
+      childSessionKey: "agent:main:subagent:private",
+      completionTarget: "parent",
+    });
+    saveSubagentRegistryToSqlite(
+      new Map([publicRun, privateRun].map((entry) => [entry.runId, entry])),
     );
-  await change({ ...first, cleanupCompletedAt: undefined });
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  try {
-    const keys = [first.childSessionKey, second.childSessionKey];
-    expect(prepared.refreshCandidates([first.childSessionKey]).providerKeys).toEqual(keys);
-    expect(observation.queries).toEqual([]);
-  } finally {
-    observation.restore();
-  }
-  await expectProtected(first, second);
-  await change(null);
-  expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
-  await expectProtected(second);
-});
-
-it("retains live overlays and acknowledged row publications", async () => {
-  const run = createRun();
-  save(run);
-  await expectProtected(run);
-  persistRegistryFixture(new Map([[run.runId, { ...run, cleanupCompletedAt: 3 }]]), [run.runId]);
-  await expectProtected();
-  subagentRuns.set(run.runId, run);
-  await expectProtected(run);
-  const completed = { ...run, cleanupCompletedAt: Number.NaN };
-  subagentRuns.set(run.runId, completed);
-  await expectProtected();
-  subagentRuns.set(run.runId, {
-    ...completed,
-    killIntent: { requestedAt: Number.NaN, reason: "live pending intent" },
+    subagentRuns.set("duplicate", {
+      ...publicRun,
+      runId: "duplicate",
+      childSessionKey: `  ${publicRun.childSessionKey}  `,
+    });
+    subagentRuns.set("blank", { ...publicRun, runId: "blank", childSessionKey: "  " });
+    const parse = vi.spyOn(JSON, "parse");
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      expect(await protectedKeys()).toEqual([
+        publicRun.childSessionKey,
+        privateRun.childSessionKey,
+      ]);
+      expect(await protectedKeys()).toEqual([
+        publicRun.childSessionKey,
+        privateRun.childSessionKey,
+      ]);
+      expect(
+        read.mock.calls.filter(
+          ([, command]) =>
+            command.type === "subagents.runs" && command.scope.kind === "maintenance",
+        ),
+      ).toHaveLength(1);
+      expect(
+        parse.mock.calls.some(
+          ([text]) =>
+            text.includes("retained-task-marker:") || text.includes("retained-reply-marker"),
+        ),
+      ).toBe(false);
+    } finally {
+      parse.mockRestore();
+      read.mockRestore();
+    }
   });
-  await expectProtected(run);
-  subagentRuns.clear();
-  const changed = createRun("run", { expectsCompletionMessage: false });
-  // The runtime owner installs live rows before publishing its acknowledged write.
-  subagentRuns.set(changed.runId, changed);
-  persistRegistryFixture(new Map([[changed.runId, changed]]), [changed.runId]);
-  await expectProtected(run);
-  const prepared = await prepare();
-  const cleaned = { ...changed, cleanupCompletedAt: 4 };
-  save(cleaned);
-  subagentRuns.set(cleaned.runId, cleaned);
-  publishSubagentRunsAfterAtomicStore(new Map([[cleaned.runId, cleaned]]), [cleaned.runId]);
-  expect(prepared.capture().providerKeys).toEqual([]);
-  await expectProtected();
+
+  it("preserves canonical parser and protection decisions for persisted payloads", async () => {
+    const run = createRun();
+    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    const write = openOpenClawStateDatabase().db.prepare(
+      "UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?",
+    );
+    const payload = (patch: Record<string, unknown>) => JSON.stringify({ ...run, ...patch });
+    const active = payload({ execution: { status: "running" } });
+    const done = payload({ cleanupCompletedAt: 3, delivery: { status: "delivered" } });
+    const cases: Array<[string, string, boolean]> = [
+      ["active", active, true],
+      ["cleanup completed", payload({ cleanupCompletedAt: 3 }), false],
+      ["string cleanup", payload({ cleanupCompletedAt: "3" }), true],
+      ["delivered", payload({ delivery: { status: "delivered" } }), false],
+      ["in progress", payload({ delivery: { status: "in_progress" } }), true],
+      ["no completion expected", payload({ expectsCompletionMessage: false }), false],
+      ["pending without expectation", payload({ expectsCompletionMessage: undefined }), true],
+      [
+        "suspended",
+        payload({
+          expectsCompletionMessage: undefined,
+          delivery: { status: "suspended", suspendedAt: 0 },
+        }),
+        true,
+      ],
+      [
+        "suspended without timestamp",
+        payload({ expectsCompletionMessage: undefined, delivery: { status: "suspended" } }),
+        false,
+      ],
+      [
+        "suspended string timestamp",
+        payload({
+          expectsCompletionMessage: undefined,
+          delivery: { status: "suspended", suspendedAt: "1" },
+        }),
+        false,
+      ],
+      [
+        "kill reconciliation after cleanup",
+        payload({ cleanupCompletedAt: 3, killReconciliation: { killedAt: 0 } }),
+        true,
+      ],
+      [
+        "invalid kill reconciliation",
+        payload({ cleanupCompletedAt: 3, killReconciliation: { killedAt: "0" } }),
+        false,
+      ],
+      [
+        "kill intent after cleanup",
+        payload({ cleanupCompletedAt: 3, killIntent: { requestedAt: 0, reason: " stop " } }),
+        true,
+      ],
+      [
+        "invalid kill intent",
+        payload({ cleanupCompletedAt: 3, killIntent: { requestedAt: 0, reason: " " } }),
+        false,
+      ],
+      [
+        "duplicate execution",
+        payload({}).replace('"execution":', '"execution":{"status":"invalid"},"execution":'),
+        true,
+      ],
+      [
+        "last private envelope completed",
+        `{"parentCompletion":${active.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${done.slice(0, -1)},"completionTarget":"parent"}}`,
+        false,
+      ],
+      [
+        "last private envelope active",
+        `{"parentCompletion":${done.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${active.slice(0, -1)},"completionTarget":"parent"}}`,
+        true,
+      ],
+      ["literal NUL", active + "\u0000invalid", false],
+      ["malformed", "{", false],
+      ["retired state", payload({ execution: undefined }), false],
+      [
+        "overdepth",
+        active.slice(0, -1) + ',"unused":' + "[".repeat(1001) + "0" + "]".repeat(1001) + "}",
+        true,
+      ],
+    ];
+    for (const [name, text, protectedRun] of cases) {
+      write.run(text, run.runId);
+      clearSubagentRunsReadCacheForTest();
+      expect(await protectedKeys(), name).toEqual(protectedRun ? [run.childSessionKey] : []);
+    }
+  });
+
+  it("uses committed registry writes for prepared protection without rereading SQLite", async () => {
+    const first = createRun({
+      runId: "first",
+      childSessionKey: "agent:main:subagent:first",
+      cleanupCompletedAt: 3,
+    });
+    const second = createRun({
+      runId: "second",
+      childSessionKey: "agent:main:subagent:second",
+    });
+    saveSubagentRegistryToSqlite(new Map([first, second].map((entry) => [entry.runId, entry])));
+    const runs = new Map<string, SubagentRunRecord>();
+    const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
+    try {
+      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map([[first.runId, { ...first, cleanupCompletedAt: undefined }]]),
+        }),
+        { runs },
+      );
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        expect(prepared.refreshCandidates([first.childSessionKey]).providerKeys).toEqual([
+          first.childSessionKey,
+          second.childSessionKey,
+        ]);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      expect(await protectedKeys()).toEqual([first.childSessionKey, second.childSessionKey]);
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({ value: undefined, postimages: new Map([[first.runId, null]]) }),
+        { runs },
+      );
+      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      expect(await protectedKeys()).toEqual([second.childSessionKey]);
+    } finally {
+      prepared.dispose();
+    }
+  });
+
+  it("retains live overlays and acknowledged row publications", async () => {
+    const run = createRun();
+    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    persistRegistryFixture(new Map([[run.runId, { ...run, cleanupCompletedAt: 3 }]]), [run.runId]);
+    expect(await protectedKeys()).toEqual([]);
+    subagentRuns.set(run.runId, run);
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    const completed = { ...run, cleanupCompletedAt: Number.NaN };
+    subagentRuns.set(run.runId, completed);
+    expect(await protectedKeys()).toEqual([]);
+    subagentRuns.set(run.runId, {
+      ...completed,
+      killIntent: { requestedAt: Number.NaN, reason: "live pending intent" },
+    });
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    subagentRuns.clear();
+    const changed = createRun({ expectsCompletionMessage: false });
+    // The runtime owner installs live rows before publishing its acknowledged write.
+    subagentRuns.set(changed.runId, changed);
+    persistRegistryFixture(new Map([[changed.runId, changed]]), [changed.runId]);
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
+    try {
+      const cleaned = { ...changed, cleanupCompletedAt: 4 };
+      saveSubagentRegistryToSqlite(new Map([[cleaned.runId, cleaned]]));
+      subagentRuns.set(cleaned.runId, cleaned);
+      publishSubagentRunsAfterAtomicStore(new Map([[cleaned.runId, cleaned]]), [cleaned.runId]);
+      expect(prepared.capture().providerKeys).toEqual([]);
+    } finally {
+      prepared.dispose();
+    }
+    expect(await protectedKeys()).toEqual([]);
+  });
 });

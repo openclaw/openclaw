@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { evaluate, platformRoute } from "./model-auth-availability.test-support.js";
@@ -84,7 +84,7 @@ it.each(["literal", "ref"] as const)(
     const accountCatalog = createPreparedAccountCatalogAccess(() => true, retirement.signal, cfg);
     const selected = () => evaluate({ cfg, env });
     const credential = expectDefined(selected().selectedCredential, "direct credential");
-    expect(credential.source).toBe("direct");
+    assert(credential.source === "direct");
     const tiers = (selectedEvaluation = selected()) => apiTiers(selectedEvaluation);
     const observation = {
       modelId: "synthetic-api-model",

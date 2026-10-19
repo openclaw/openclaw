@@ -80,7 +80,7 @@ it.each([
   expect(shouldRunPublishedDriverUpdate(paths, "pull_request")).toBe(false);
 });
 
-it.each([
+it.each<[Parameters<typeof runCiManifestFixture>[0]["eventName"], string, boolean, boolean?]>([
   ["pull_request", "src/infra/update-managed-service-handoff.ts", false],
   ["pull_request", "src/state/openclaw-state-lease.ts", false],
   ["push", "src/agents/context-window-guard.ts", true],
@@ -167,7 +167,7 @@ it("consumes only the candidate artifact produced by this run", () => {
   expect(actionStep("./.github/actions/setup-node-env").with["install-deps"]).toBe("false");
 });
 
-it.each([
+it.each<[number, number, boolean, boolean, boolean?]>([
   [124, 1, true, false],
   [137, 1, true, false],
   [42, 42, false, false],

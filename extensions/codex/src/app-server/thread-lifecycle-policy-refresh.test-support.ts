@@ -42,7 +42,7 @@ export function registerThreadPolicyRefreshTests({
   async function fixture(
     threadId: string,
     respond: (request: RpcRequest, response: ReturnType<typeof threadStartResult>) => unknown,
-    transport: Parameters<PolicyRefreshFixtures["createLeasedLifecycleWireClient"]>[2] = "stdio",
+    transport: StartParams["appServer"]["start"]["transport"] = "stdio",
   ) {
     const sessionFile = path.join(tempDir, `${threadId}.jsonl`);
     const cwd = path.join(tempDir, "workspace");

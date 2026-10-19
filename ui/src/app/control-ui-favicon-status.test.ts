@@ -47,7 +47,7 @@ function setup(mountPane = true) {
   };
   const shell = document.body.appendChild(document.createElement("div"));
   const pane = document.createElement("openclaw-chat-pane");
-  let activity: ChatPaneElement["runActivity"] = {
+  let activity: Activity = {
     client: gatewayClient,
     agentId: "main",
     working: false,

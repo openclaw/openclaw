@@ -85,7 +85,7 @@ function commandFixture(source: "text" | "native", target: boolean) {
     key,
     sourceKey,
     start,
-    async close() {
+    close: async () => {
       await Promise.all(pending);
       expect(listActiveReplyRunSessionKeys()).toEqual([]);
     },
@@ -218,7 +218,7 @@ it.each(["/login cancel", "/reset", "/new continue"])(
         "login settled before its resolver",
       );
       expect(loginEntered).toHaveBeenCalledOnce();
-      dispatch("/bash echo ready", async () => {
+      void dispatch("/bash echo ready", async () => {
         shellEntered();
         return markCommandReplyForDelivery({ text: "Shell command completed." });
       });

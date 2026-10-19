@@ -17,6 +17,7 @@ vi.mock("./config.js", () => ({
   resolveTwitchAccountContext: vi.fn(),
 }));
 
+// mock-isolation: Observe outbound payloads and receipts without a live Twitch transport.
 vi.mock("./send.js", () => ({ sendMessageTwitchInternal: vi.fn() }));
 
 function expectTarget(

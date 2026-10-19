@@ -30,7 +30,7 @@ const client = {
       roomId: string,
       _content: unknown,
       transactionId?: string,
-      beforeWireDispatch?: (dispatch: ReturnType<typeof dispatch>) => Promise<void>,
+      beforeWireDispatch?: (wire: ReturnType<typeof dispatch>) => Promise<void>,
     ) => {
       const resolvedTransactionId = transactionId ?? "missing";
       await beforeWireDispatch?.(dispatch(roomId, resolvedTransactionId));

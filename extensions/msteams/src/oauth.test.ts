@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// mock-isolation: Exercise OAuth against the supplied fetch fixture without external network access.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(
     async (params: {
@@ -28,9 +29,9 @@ function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string, RequestIn
 }
 
 const credentials = { tenantId: "t", clientId: "c", clientSecret: "s" }; // pragma: allowlist secret
-let fetchSpy: ReturnType<typeof vi.fn>;
+let fetchSpy: ReturnType<typeof vi.fn<typeof fetch>>;
 beforeEach(() => {
-  fetchSpy = vi.fn();
+  fetchSpy = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchSpy);
 });
 afterEach(() => vi.unstubAllGlobals());
