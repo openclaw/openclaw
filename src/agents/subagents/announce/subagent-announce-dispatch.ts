@@ -1,4 +1,10 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import type { SubagentCompletionDeliveryState } from "../registry/subagent-registry-read.types.js";
+import type { DeliveryContext } from "./subagent-announce-origin.js";
 
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 type SubagentAnnounceDeliveryDisposition = NonNullable<
@@ -47,6 +53,45 @@ type SubagentAnnounceDispatchPhaseResult = {
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+};
+
+export type SubagentAnnounceDirectParams = {
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  targetRequesterSessionKey: string;
+  triggerMessage: string;
+  internalEvents?: AgentInternalEvent[];
+  expectsCompletionMessage: boolean;
+  completionTarget?: "parent";
+  completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
+  requireVisibleReply?: boolean;
+  requireDirectDelivery?: boolean;
+  bestEffortDeliver?: boolean;
+  directIdempotencyKey: string;
+  completionDirectOrigin?: DeliveryContext;
+  directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
+  sourceSessionKey?: string;
+  sourceTool?: string;
+  settleWakeSourceSessionKeys?: readonly string[];
+  isSourceSessionEffectsAllowed?: () => boolean;
+  sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
+  /** Reconcile an already-admitted public settle turn; never dispatch or send. */
+  recoveryReceiptOnly?: true;
+  /** Additional source guard released by the accepting Gateway or injection owner. */
+  isSourceSessionAdmissionAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
+  requesterIsSubagent: boolean;
+  createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  onDeliveryError?: (error: unknown) => void;
+  signal?: AbortSignal;
+  onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
+  onBeforeDispatch?: () => void | Promise<void>;
+  resolveGatewayContext?: GatewayContextResolver;
+  controllerInput?: SessionControllerInput;
 };
 
 export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
