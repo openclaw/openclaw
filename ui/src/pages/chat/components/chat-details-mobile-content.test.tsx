@@ -6,7 +6,6 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   ChatDetailsMobileContent,
   type ChatDetailsMobilePage,
-  type ChatDetailsMobileRootContent,
 } from "./chat-details-mobile-content.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
@@ -19,7 +18,7 @@ function details(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-function rootContent(): ChatDetailsMobileRootContent {
+function rootContent(): Extract<ChatDetailsMobilePage, { kind: "root" }>["content"] {
   return {
     entries: {
       labels: {

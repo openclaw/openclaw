@@ -9,7 +9,6 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileBody,
-  SessionAutomationMobileHeading,
   SessionAutomationMobileList,
   SessionAutomationMobileTranscript,
   type SessionAutomationMobileBodyProps,
@@ -64,12 +63,12 @@ import type { SessionAutomationInventory } from "./chat-summary-automations.tsx"
 import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 import "../../../styles/chat/details.css";
 
-export type ChatDetailsMobileRegionProps = {
+type ChatDetailsMobileRegionProps = {
   details: ChatDetailsProps;
   presented: boolean;
 };
 
-export type ChatDetailsMobileRootContent = {
+type ChatDetailsMobileRootContent = {
   /** Labels and navigation belong to the host; native facts are projected below. */
   entries: Omit<
     ChatDetailsMobileRootProps,
@@ -101,20 +100,20 @@ export type ChatDetailsMobileRootContent = {
   automations?: { inventory: SessionAutomationInventory; summary: ChatDetailsMobileEntry };
 };
 
-export type ChatDetailsMobileProgressPreference = Pick<
+type ChatDetailsMobileProgressPreference = Pick<
   MobileTaskProgressProps,
   "showTaskProgress" | "onShowTaskProgressChange"
 >;
 
-export type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOptions"> & {
+type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOptions"> & {
   sharing?: ChatSessionSharingMobileAdapter;
 };
 
-export type ChatDetailsMobileAutomationTranscript = Parameters<
+type ChatDetailsMobileAutomationTranscript = Parameters<
   typeof SessionAutomationMobileTranscript
 >[0];
 
-export type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
+type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
 
 /** Only supplied mobile bodies belong here. Missing peer bodies stay with their owners. */
 export type ChatDetailsMobilePage =
@@ -485,13 +484,4 @@ export function ChatDetailsMobileControls(props: ChatDetailsMobileContentProps) 
 function MobileMove(props: { request: ChatDetailsMobileMoveRequest }) {
   const Picker = dynamic(() => props.request.render);
   return <Picker />;
-}
-
-/** Optional title slot; the host keeps its Back/Close/Expand controls. */
-export function ChatDetailsMobileHeading(props: ChatDetailsMobileContentProps) {
-  return (
-    <Show when={props.page.kind === "automation" && props.page}>
-      {(page) => <SessionAutomationMobileHeading job={page().content.job} />}
-    </Show>
-  );
 }
