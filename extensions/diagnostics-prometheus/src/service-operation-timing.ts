@@ -1,3 +1,4 @@
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
@@ -10,6 +11,7 @@ const RPC_DURATION_BUCKETS_SECONDS = [
 ];
 
 const RESPONSE_BYTE_BUCKETS = Array.from({ length: 17 }, (_, index) => 1024 * 2 ** index);
+const MAIN_THREAD_STALL_BUCKETS_SECONDS = [0.25, 0.5, 1, 2.5, 5, 10];
 const HEAP_DELTA_BYTE_BUCKETS = [
   ...RESPONSE_BYTE_BUCKETS.toReversed().map((bytes) => -bytes),
   0,
@@ -36,17 +38,28 @@ export function recordOperationTimingEvent(
     {
       type:
         | "gateway.rpc"
+        | "sessions.list.baseline.retired"
         | "diagnostic.phase.completed"
         | "gateway.http.cancelled"
         | "secret.egress"
         | "tool.catalog"
         | "diagnostic.gc"
-        | "gateway.event_loop.sample";
+        | "gateway.event_loop.sample"
+        | "gateway.main_thread.stall";
     }
   >,
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "sessions.list.baseline.retired":
+      if (metadata.trusted) {
+        store.counter(
+          "openclaw_sessions_list_baseline_retirements_total",
+          "Session list baseline retirement events by cause, not rows or views retired.",
+          { cause: evt.cause },
+        );
+      }
+      return;
     case "secret.egress":
       store.counter(
         "openclaw_secret_egress_requests_total",
@@ -83,6 +96,23 @@ export function recordOperationTimingEvent(
           ...(evt.workerSlot === undefined ? {} : { slot: String(evt.workerSlot) }),
         },
         seconds(evt.durationMs),
+      );
+      return;
+    case "gateway.main_thread.stall":
+      for (const stall of evt.stalls) {
+        store.histogram(
+          "openclaw_gateway_main_thread_stall_seconds",
+          "Elapsed main-thread tasks lasting at least 250 milliseconds, by work scope.",
+          { task: normalizeDiagnosticValue(stall.task) },
+          seconds(stall.durationMs),
+          MAIN_THREAD_STALL_BUCKETS_SECONDS,
+        );
+      }
+      store.counter(
+        "openclaw_gateway_main_thread_stalls_dropped_total",
+        "Main-thread stall records dropped because the attribution buffer was full.",
+        {},
+        evt.dropped,
       );
       return;
     case "gateway.event_loop.sample":
@@ -200,6 +230,17 @@ export function recordOperationTimingEvent(
         return;
       }
       if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
+        if (
+          evt.outcome === "ok" &&
+          evt.firstResponse !== false &&
+          evt.sessionsList?.baseMissReason
+        ) {
+          store.counter(
+            "openclaw_sessions_list_base_misses_total",
+            "Successful full sidebar responses with a supplied base, by miss reason.",
+            { reason: evt.sessionsList.baseMissReason },
+          );
+        }
         store.histogram(
           "openclaw_gateway_rpc_response_bytes",
           "Encoded Gateway RPC response frame size in bytes, including later frames.",
@@ -207,6 +248,47 @@ export function recordOperationTimingEvent(
           evt.responseBytes,
           RESPONSE_BYTE_BUCKETS,
         );
+        if (evt.responseBytes !== undefined && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_response_bytes_total",
+            "Encoded successful session list response bytes by request shape and row outcome.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+              rows_outcome: sessions.rowsOutcome,
+            },
+            evt.responseBytes,
+          );
+        }
+        if (evt.chatHistory) {
+          const history = evt.chatHistory;
+          const historyLabels = {
+            client_kind: history.clientKind,
+            source: history.source,
+            shape: history.shape,
+            limit_bucket: history.limitBucket,
+            outcome: history.outcome,
+          };
+          if (evt.firstResponse !== false) {
+            store.counter(
+              "openclaw_chat_history_requests_total",
+              "Successful chat history requests by request shape and response outcome.",
+              historyLabels,
+            );
+          }
+          if (evt.responseBytes !== undefined) {
+            store.counter(
+              "openclaw_chat_history_response_bytes_total",
+              "Encoded successful chat history response bytes by request shape and response outcome.",
+              historyLabels,
+              evt.responseBytes,
+            );
+          }
+        }
         if (evt.firstResponse === false) {
           return;
         }

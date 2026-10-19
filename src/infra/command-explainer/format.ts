@@ -36,7 +36,6 @@ export function isUnsupportedShellWrapperArgv(argv: readonly string[]): boolean 
   );
 }
 
-/** Converts a parsed command explanation into source spans suitable for approval UI. */
 export function formatCommandSpans(explanation: CommandExplanation): ExecApprovalCommandSpan[] {
   if (explanation.topLevelCommands.some((command) => isUnsupportedShellWrapperArgv(command.argv))) {
     return [];

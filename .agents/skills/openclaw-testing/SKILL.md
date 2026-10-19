@@ -68,8 +68,8 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   shared dependency installs.
 - Concurrent test/check commands: separate `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`
   values or run serially; checks can run Vitest too. Repository wrappers only,
-  never raw Vitest. Prepared linked worktrees: `node scripts/check-changed.mjs`
-  and `node scripts/run-vitest.mjs <file> --maxWorkers=1` avoid pnpm reconciliation.
+  never raw Vitest. Prepared linked worktrees: `node scripts/run-vitest.mjs <file>
+  --maxWorkers=1` avoids pnpm reconciliation; PR CI runs the broad checks.
 
 ## CI failures
 

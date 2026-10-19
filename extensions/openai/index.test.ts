@@ -1,4 +1,3 @@
-// Openai tests cover index plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -64,39 +63,31 @@ function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, u
   return { on, providers: captured.providers, registerHttpRoute, registerRuntimeLifecycle };
 }
 
-function expectOpenAIPromptContribution(
-  provider: ProviderPlugin,
-  sectionOverrides: Record<string, unknown>,
-  contextOverrides: Partial<
-    Parameters<NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>>[0]
-  > = {},
-) {
-  expect(
-    provider.resolveSystemPromptContribution?.({
-      config: undefined,
-      agentDir: undefined,
-      workspaceDir: undefined,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      promptMode: "full",
-      runtimeChannel: undefined,
-      runtimeCapabilities: undefined,
-      agentId: undefined,
-      ...contextOverrides,
-    }),
-  ).toEqual({
-    stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-    sectionOverrides,
+type PromptContext = Parameters<NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>>[0];
+function promptContribution(provider: ProviderPlugin, overrides: Partial<PromptContext> = {}) {
+  return provider.resolveSystemPromptContribution?.({
+    config: undefined,
+    agentDir: undefined,
+    workspaceDir: undefined,
+    provider: "openai",
+    modelId: "gpt-5.4",
+    promptMode: "full",
+    runtimeChannel: undefined,
+    runtimeCapabilities: undefined,
+    agentId: undefined,
+    ...overrides,
   });
 }
 
-function mockCalls(mocked: unknown): unknown[][] {
-  return (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
-}
-
-function expectNoBeforePromptBuildHook(on: unknown): void {
-  const hasBeforePromptBuild = mockCalls(on).some((call) => call[0] === "before_prompt_build");
-  expect(hasBeforePromptBuild).toBe(false);
+function expectOpenAIPromptContribution(
+  provider: ProviderPlugin,
+  sectionOverrides: Record<string, unknown>,
+  contextOverrides: Partial<PromptContext> = {},
+) {
+  expect(promptContribution(provider, contextOverrides)).toEqual({
+    stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+    sectionOverrides,
+  });
 }
 
 describe("openai plugin", () => {
@@ -249,217 +240,87 @@ describe("openai plugin", () => {
       execute: vi.fn(),
     } as never;
 
-    const normalizedOpenAI = openaiProvider.normalizeToolSchemas?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      model: {
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        id: "gpt-5.4",
-      } as never,
-      tools: [noParamsTool],
-    } as never);
-    const normalizedCodex = openaiProvider.normalizeToolSchemas?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-chatgpt-responses",
-      model: {
-        provider: "openai",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        id: "gpt-5.4",
-      } as never,
-      tools: [noParamsTool],
-    } as never);
-
-    expect(normalizedOpenAI?.[0]?.parameters).toEqual({
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    });
-    expect(normalizedCodex?.[0]?.parameters).toEqual({
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    });
-    expect(
-      openaiProvider.inspectToolSchemas?.({
+    for (const [modelApi, baseUrl] of [
+      ["openai-responses", "https://api.openai.com/v1"],
+      ["openai-chatgpt-responses", "https://chatgpt.com/backend-api"],
+    ]) {
+      const context = {
         provider: "openai",
         modelId: "gpt-5.4",
-        modelApi: "openai-responses",
-        model: {
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          id: "gpt-5.4",
-        } as never,
+        modelApi,
+        model: { provider: "openai", api: modelApi, baseUrl, id: "gpt-5.4" },
         tools: [noParamsTool],
-      } as never),
-    ).toStrictEqual([]);
-    expect(
-      openaiProvider.inspectToolSchemas?.({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        modelApi: "openai-chatgpt-responses",
-        model: {
-          provider: "openai",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api",
-          id: "gpt-5.4",
-        } as never,
-        tools: [noParamsTool],
-      } as never),
-    ).toStrictEqual([]);
+      } as never;
+      expect(openaiProvider.normalizeToolSchemas?.(context)?.[0]?.parameters).toEqual({
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      });
+      expect(openaiProvider.inspectToolSchemas?.(context)).toStrictEqual([]);
+    }
   });
 
   it.each([
-    {
-      name: "Platform",
-      baseUrl: "https://api.openai.com/v1",
-      supportsPromptCacheKey: undefined,
-      expected: true,
+    ["Platform", "https://api.openai.com/v1", undefined, true],
+    ["Codex OAuth", "https://chatgpt.com/backend-api/codex", undefined, true],
+    ["normalized official endpoint", " https://API.OPENAI.COM./v1/ ", undefined, true],
+    ["custom proxy", "https://openai-proxy.example/v1", undefined, false],
+    ["opted proxy", "https://openai-proxy.example/v1", true, true],
+    ["opted-out Platform", "https://api.openai.com/v1", false, false],
+    ["lookalike host", "https://api.openai.com.example/v1", undefined, false],
+    ["plaintext official endpoint", "http://api.openai.com/v1", undefined, false],
+    ["invalid official path", "https://api.openai.com/not-api", undefined, false],
+    ["unresolved route", undefined, undefined, false],
+  ] as const)(
+    "registers %s cache-TTL eligibility",
+    (_name, baseUrl, supportsPromptCacheKey, expected) => {
+      const { providers } = registerOpenAIPluginWithHook();
+      const provider = requireRegisteredProvider(providers, "openai");
+      expect(
+        provider.isCacheTtlEligible?.({
+          provider: " OPENAI ",
+          modelId: "gpt-4o",
+          modelApi: baseUrl?.includes("chatgpt.com")
+            ? "openai-chatgpt-responses"
+            : "openai-responses",
+          baseUrl,
+          supportsPromptCacheKey,
+        }),
+      ).toBe(expected);
+      expect(
+        provider.isCacheTtlEligible?.({
+          provider: "openrouter",
+          modelId: "openai/gpt-4o",
+          baseUrl,
+          supportsPromptCacheKey: true,
+        }),
+      ).toBe(false);
     },
-    {
-      name: "Codex OAuth",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      supportsPromptCacheKey: undefined,
-      expected: true,
-    },
-    {
-      name: "normalized official endpoint",
-      baseUrl: " https://API.OPENAI.COM./v1/ ",
-      supportsPromptCacheKey: undefined,
-      expected: true,
-    },
-    {
-      name: "custom proxy",
-      baseUrl: "https://openai-proxy.example/v1",
-      supportsPromptCacheKey: undefined,
-      expected: false,
-    },
-    {
-      name: "opted proxy",
-      baseUrl: "https://openai-proxy.example/v1",
-      supportsPromptCacheKey: true,
-      expected: true,
-    },
-    {
-      name: "opted-out Platform",
-      baseUrl: "https://api.openai.com/v1",
-      supportsPromptCacheKey: false,
-      expected: false,
-    },
-    {
-      name: "lookalike host",
-      baseUrl: "https://api.openai.com.example/v1",
-      supportsPromptCacheKey: undefined,
-      expected: false,
-    },
-    {
-      name: "plaintext official endpoint",
-      baseUrl: "http://api.openai.com/v1",
-      supportsPromptCacheKey: undefined,
-      expected: false,
-    },
-    {
-      name: "invalid official path",
-      baseUrl: "https://api.openai.com/not-api",
-      supportsPromptCacheKey: undefined,
-      expected: false,
-    },
-    {
-      name: "unresolved route",
-      baseUrl: undefined,
-      supportsPromptCacheKey: undefined,
-      expected: false,
-    },
-  ])("registers $name cache-TTL eligibility", ({ baseUrl, supportsPromptCacheKey, expected }) => {
-    const { providers } = registerOpenAIPluginWithHook();
-    const provider = requireRegisteredProvider(providers, "openai");
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: " OPENAI ",
-        modelId: "gpt-4o",
-        modelApi: baseUrl?.includes("chatgpt.com")
-          ? "openai-chatgpt-responses"
-          : "openai-responses",
-        baseUrl,
-        supportsPromptCacheKey,
-      }),
-    ).toBe(expected);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "openrouter",
-        modelId: "openai/gpt-4o",
-        baseUrl,
-        supportsPromptCacheKey: true,
-      }),
-    ).toBe(false);
-  });
+  );
 
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", () => {
     const { on, providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
     });
 
-    expectNoBeforePromptBuildHook(on);
+    expect(on.mock.calls.some((call) => call[0] === "before_prompt_build")).toBe(false);
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
-    const contributionContext: Parameters<
-      NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>
-    >[0] = {
-      config: undefined,
-      agentDir: undefined,
-      workspaceDir: undefined,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      promptMode: "full",
-      runtimeChannel: undefined,
-      runtimeCapabilities: undefined,
-      agentId: undefined,
-    };
-
-    expect(openaiProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-      sectionOverrides: {
-        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      },
-    });
+    const sectionOverrides = { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY };
+    expectOpenAIPromptContribution(openaiProvider, sectionOverrides);
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Live chat: short, natural, human.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "No memo voice, long preamble, wall, repetition.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Grounded emotion when fitting:");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Sparse natural emoji ok.");
-    expect(
-      openaiProvider.resolveSystemPromptContribution?.({
-        ...contributionContext,
-        trigger: "heartbeat",
-      }),
-    ).toEqual({
-      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-      sectionOverrides: {
-        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      },
-    });
+    expectOpenAIPromptContribution(openaiProvider, sectionOverrides, { trigger: "heartbeat" });
     for (const modelId of ["openai/gpt-5.4-mini", "gpt-6-astra"]) {
-      expect(
-        openaiProvider.resolveSystemPromptContribution?.({ ...contributionContext, modelId }),
-      ).toEqual({
-        stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-        sectionOverrides: {
-          interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-        },
-      });
+      expectOpenAIPromptContribution(openaiProvider, sectionOverrides, { modelId });
     }
     for (const modelId of ["gpt-image-1", "openai/gpt-7-x"]) {
-      expect(
-        openaiProvider.resolveSystemPromptContribution?.({ ...contributionContext, modelId }),
-      ).toBeUndefined();
+      expect(promptContribution(openaiProvider, { modelId })).toBeUndefined();
     }
   });
 
@@ -478,33 +339,12 @@ describe("openai plugin", () => {
     });
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
-    expect(
-      openaiProvider.resolveSystemPromptContribution?.({
-        config: {
-          plugins: {
-            entries: {
-              openai: {
-                config: {
-                  personality: "friendly",
-                },
-              },
-            },
-          },
-        },
-        agentDir: undefined,
-        workspaceDir: undefined,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        promptMode: "full",
-        runtimeChannel: undefined,
-        runtimeCapabilities: undefined,
-        agentId: undefined,
-      }),
-    ).toEqual({
-      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-      sectionOverrides: {
-        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+    expectOpenAIPromptContribution(
+      openaiProvider,
+      { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY },
+      {
+        config: { plugins: { entries: { openai: { config: { personality: "friendly" } } } } },
       },
-    });
+    );
   });
 });

@@ -90,7 +90,10 @@ export async function createRealPublicationWorkspace({
   mocks.findWorktree.mockReturnValue(worktree);
   mocks.findWorktreeById.mockReturnValue(worktree);
   const loaded = mocks.loadSession(sessionKey);
-  const entry = { ...loaded.entry, worktree: { ...loaded.entry.worktree, repoRoot: cwd } };
+  const entry = {
+    ...loaded.entry,
+    worktree: { ...loaded.entry.worktree, id: worktree.id, repoRoot: cwd },
+  };
   if (!realWorktree) {
     await deleteRegistryWorktree(process.env, worktree.id);
   }

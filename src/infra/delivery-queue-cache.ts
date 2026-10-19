@@ -29,3 +29,27 @@ export const failedDeliveryQueueHealthAdmission: SqliteDatabaseAdmissionKey<
   // SAFETY: Only the delivery queue owner publishes this typed diagnostic projection.
   read: (value) => value as FailedDeliveryQueueHealth | undefined,
 };
+
+export const oldestDeliveryQueueMediaStageAdmission: SqliteDatabaseAdmissionKey<
+  number | null | undefined
+> = {
+  name: "state.oldest-delivery-queue-media-stage",
+  read: (value) => (value === null || typeof value === "number" ? value : undefined),
+};
+
+type DeliveryQueueTombstoneExpiry = { enqueuedAt: number; maxAgeMs: number } | null;
+
+export const nextDeliveryQueueTombstoneExpiryAdmission: SqliteDatabaseAdmissionKey<
+  DeliveryQueueTombstoneExpiry | undefined
+> = {
+  name: "state.next-delivery-queue-tombstone-expiry",
+  // SAFETY: Only the delivery queue owner publishes this typed retention projection.
+  read: (value) => value as DeliveryQueueTombstoneExpiry | undefined,
+};
+
+export function isDeliveryQueueTombstonePruneDue(
+  expiry: DeliveryQueueTombstoneExpiry | undefined,
+  now: number,
+): boolean {
+  return expiry === undefined || (expiry !== null && expiry.enqueuedAt < now - expiry.maxAgeMs);
+}

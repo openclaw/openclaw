@@ -268,9 +268,7 @@ async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  const location = structuredClone(prepared.location);
-  const archiveStorePaths = [...prepared.archiveStorePaths];
-  const stores = structuredClone(prepared.stores);
+  const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
@@ -385,13 +383,14 @@ async function runPreparedUsageCostWorker(
                   );
                   break;
                 }
-                case "prune-row":
-                  requireLock("prune cache rows");
-                  pruneRows.push({
-                    key: request.input.key,
-                    valueJson: request.input.value,
-                    updatedAt: request.input.updatedAt,
-                  });
+                case "prune-rows":
+                  for (const row of request.input) {
+                    pruneRows.push({
+                      key: row.key,
+                      valueJson: row.value,
+                      updatedAt: row.updatedAt,
+                    });
+                  }
                   break;
                 case "prune":
                   await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);

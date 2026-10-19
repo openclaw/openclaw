@@ -36,7 +36,7 @@ OpenClaw host:
 
 ```bash
 (
-  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
 
   if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
     grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true

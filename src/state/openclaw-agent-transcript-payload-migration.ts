@@ -129,7 +129,6 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
         navigation = payload.navigation_json;
         if (payload.event_zstd !== null) {
           if (
-            !codec ||
             payload.event_utf8_bytes === null ||
             !codec.decompress(payload.event_zstd, payload.event_utf8_bytes).equals(bytes)
           ) {

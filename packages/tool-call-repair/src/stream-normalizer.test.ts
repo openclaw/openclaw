@@ -648,6 +648,69 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
   });
 });
 
+describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
+  const toolCall = '[tool:read]\n{"path":"a"}\n';
+  const scrub = (raw: string) =>
+    projectScrubbedPlainTextToolCallMessage({
+      forceKnownCandidates: true,
+      matcher,
+      message: assistantMessage(textContent(raw)),
+      preserveEmptyTextBlocks: true,
+      resolveProtectedRanges: resolveTestFenceRanges,
+    })?.message;
+  const chunked = (text: string, size: number) => {
+    let accumulated = "";
+    return Array.from({ length: Math.ceil(text.length / size) }, (_, index) => {
+      const chunk = text.slice(index * size, index * size + size);
+      accumulated += chunk;
+      return partialDelta(chunk, 0, accumulated);
+    });
+  };
+
+  it("reuses settled scans across a streamed reply with a leaked call (#174345)", async () => {
+    const fenced = [
+      "```toml",
+      ...Array.from({ length: 40 }, (_, index) => `[read.section.${index}]\nname = "svc"`),
+      "```",
+      "",
+    ].join("\n");
+    const source = chunked(toolCall + fenced, 4);
+    let calls = 0;
+    const events = await protectedDeltas(source, (text) => {
+      calls += 1;
+      return resolveTestFenceRanges(text);
+    });
+    expect(textDeltas(events).join("")).toBe(fenced);
+    // One scan per delta would cost a call per chunk; reuse caps this to the deltas that still
+    // carry fence or marker bytes plus the first scans.
+    expect(calls).toBeLessThanOrEqual(Math.ceil(source.length / 4));
+    let visible = "";
+    for (const event of events) {
+      const delta = event.delta;
+      if (typeof delta !== "string" || delta.length === 0) {
+        continue;
+      }
+      visible += delta;
+      expect(event.partial).toEqual(scrub(toolCall + visible));
+    }
+  });
+
+  it.each([
+    ["spaces before the next line", '[tool:read]\n{"path":"a"}   \nNext.'],
+    ["CRLF before the next line", '[tool:read]\n{"path":"a"}\r\nNext.'],
+    ["closing tag with trailing spaces", "[read]\n{}\n[/read]   \nNext."],
+  ])(
+    "keeps the last streamed scrub equal to the unstreamed scrub (#174345): %s",
+    async (_name, text) => {
+      for (const chunkSize of [2, 3, 4, 5]) {
+        const events = await protectedDeltas(chunked(text, chunkSize));
+        const last = events.findLast((event) => event.type === "text_delta");
+        expect(last?.partial).toEqual(scrub(text));
+      }
+    },
+  );
+});
+
 describe("normalizePlainTextToolCallStreamEvents calls after visible text", () => {
   const leading = '[tool:read]\n{"path":"a"}\n';
   const trailing = '[tool:read]\n{"path":"b"}\n';

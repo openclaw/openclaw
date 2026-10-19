@@ -35,6 +35,26 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it.each([
+  ["user", "EACCES"],
+  ["user", "EIO"],
+  ["system", "EACCES"],
+  ["system", "EIO"],
+])("reports %s unit inspection failure %s instead of absence", async (scope, code) => {
+  const unitPath =
+    scope === "user"
+      ? `${HOME}/.config/systemd/user/openclaw-gateway.service`
+      : systemPath("openclaw-gateway");
+  const inspectionError = Object.assign(new Error("unit inspection failed"), { code });
+  vi.spyOn(fs, "access").mockImplementation(async (file) => {
+    throw String(file) === unitPath
+      ? inspectionError
+      : Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  });
+
+  await expect(findInstalledSystemdGatewayScope({ HOME })).rejects.toBe(inspectionError);
+});
+
 it("selects marker-owned, legacy, and explicitly requested units (openclaw#119648)", async () => {
   const cases = [
     { profile: undefined, override: undefined, name: "openclaw", discovered: true },

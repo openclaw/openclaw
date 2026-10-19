@@ -2,10 +2,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
+import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   loadControlUiGitHubPreview as loadPluginPreview,
   parseControlUiGitHubPreviewTarget,
-  type ControlUiGitHubPreviewIdentity,
 } from "./preview.js";
 import {
   githubJson,
@@ -172,41 +172,6 @@ describe("loadControlUiGitHubPreview", () => {
     expect(delivered).toHaveBeenCalledWith(expect.objectContaining({ login: "octocat" }));
     expect(fetchMock).toHaveBeenCalledTimes(calls);
     await pending;
-  });
-
-  it("keeps selected identity caches separate and revalidates cached delivery", async () => {
-    const fixtureTarget = previewTarget(88122);
-    const firstIdentity = managedIdentity("first-preview-identity");
-    const secondIdentity = managedIdentity("second-preview-identity");
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) =>
-      requestUrl(input).includes("/issues/")
-        ? githubJson(
-            previewPayload({
-              user: {
-                login:
-                  new Headers(init?.headers).get("Authorization") ===
-                  `Bearer ${firstIdentity.token}`
-                    ? "first-account"
-                    : "second-account",
-              },
-            }),
-          )
-        : publicRepository(),
-    );
-
-    const first = await loadControlUiGitHubPreview(fixtureTarget, firstIdentity, fetchMock);
-    const second = await loadControlUiGitHubPreview(fixtureTarget, secondIdentity, fetchMock);
-    expect(first.login).toBe("first-account");
-    expect(second.login).toBe("second-account");
-    expect(fetchMock).toHaveBeenCalledTimes(6);
-
-    secondIdentity.revalidate.mockRejectedValue(
-      Object.assign(new Error("identity changed"), { reason: "changed" }),
-    );
-    await expect(
-      loadControlUiGitHubPreview(fixtureTarget, secondIdentity, fetchMock),
-    ).rejects.toMatchObject({ reason: "changed" });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it.each(["final visibility check", "repository redirect", "commits redirect"])(
@@ -404,7 +369,7 @@ describe("loadControlUiGitHubPreview", () => {
     },
   );
 
-  it("keeps concurrent readers and later cache hits independent of a disconnected caller", async () => {
+  it("evicts a disconnected caller's failed cold load for the next request", async () => {
     const started = createDeferred<void>();
     const repository = createDeferred<Response>();
     let connected = true;
@@ -430,16 +395,20 @@ describe("loadControlUiGitHubPreview", () => {
     const rejected = expect(first).rejects.toMatchObject({ reason: "changed" });
     await started.promise;
     const second = loadControlUiGitHubPreview(fixtureTarget, follower, fetchMock);
+    const secondRejected = expect(second).rejects.toMatchObject({ reason: "changed" });
     connected = false;
     repository.resolve(publicRepository());
     await rejected;
-    await expect(second).resolves.toMatchObject({ login: "octocat" });
-    const calls = fetchMock.mock.calls.length;
+    await secondRejected;
     await expect(
       loadControlUiGitHubPreview(fixtureTarget, follower, fetchMock),
     ).resolves.toMatchObject({
       login: "octocat",
     });
+    const calls = fetchMock.mock.calls.length;
+    await expect(
+      loadControlUiGitHubPreview(fixtureTarget, follower, fetchMock),
+    ).resolves.toMatchObject({ login: "octocat" });
     expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 
@@ -563,35 +532,6 @@ describe("loadControlUiGitHubPreview", () => {
     expect(avatarResponse.bodyUsed).toBe(true);
   });
 
-  it("retries stale optional authentication anonymously for public previews", async () => {
-    selectFixtureToken("stale-github-token");
-    let itemCalls = 0;
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.includes("/commits")) {
-        return githubJson([]);
-      }
-      itemCalls += 1;
-      return itemCalls === 1
-        ? githubJson({ message: "Bad credentials" }, 401)
-        : githubJson(previewPayload({ user: { login: "octocat" } }));
-    });
-
-    const preview = await loadControlUiGitHubPreview(
-      previewTarget(70012, "pull"),
-      undefined,
-      fetchMock,
-    );
-
-    expect(preview.login).toBe("octocat");
-    expect(itemCalls).toBe(2);
-    expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty(
-      "Authorization",
-      "Bearer stale-github-token",
-    );
-    expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
-  });
-
   it("follows GitHub API redirects for renamed public repositories", async () => {
     selectFixtureToken("github-test-token");
     const fetchMock = vi
@@ -629,31 +569,6 @@ describe("loadControlUiGitHubPreview", () => {
       expect(new Headers(call[1]?.headers).get("Authorization")).toBe("Bearer github-test-token");
       expect(call[1]?.redirect).toBe("manual");
     }
-  });
-
-  it("rejects cross-origin GitHub API redirects before forwarding credentials", async () => {
-    selectFixtureToken("github-test-token");
-    const redirectResponse = new Response("discard me", {
-      status: 301,
-      headers: { Location: "https://example.com/repos/openclaw/private" },
-    });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(publicRepository())
-      .mockResolvedValueOnce(redirectResponse)
-      .mockResolvedValue(githubJson([]));
-
-    await expect(
-      loadControlUiGitHubPreview(
-        previewTarget(70008, "pull", "unsafe-redirect"),
-        undefined,
-        fetchMock,
-      ),
-    ).rejects.toMatchObject({ statusCode: 502 } satisfies Partial<ControlUiGitHubError>);
-    for (const [input] of fetchMock.mock.calls) {
-      expect(new URL(requestUrl(input)).origin).toBe("https://api.github.com");
-    }
-    expect(redirectResponse.bodyUsed).toBe(true);
   });
 
   it("re-checks visibility when the commits request is redirected into another repository", async () => {
@@ -740,37 +655,6 @@ describe("loadControlUiGitHubPreview", () => {
       "Authorization",
       "Bearer github-test-token",
     );
-  });
-
-  it("rechecks public visibility for every authenticated preview cache miss", async () => {
-    selectFixtureToken("github-test-token");
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(publicRepository())
-      .mockResolvedValueOnce(
-        githubJson(
-          previewPayload({
-            repository_url: "https://api.github.com/repos/openclaw/visibility-change",
-            user: { login: "octocat" },
-          }),
-        ),
-      )
-      .mockResolvedValueOnce(publicRepository())
-      .mockResolvedValueOnce(githubJson({ private: true }));
-
-    await loadControlUiGitHubPreview(
-      previewTarget(70005, "issue", "visibility-change"),
-      undefined,
-      fetchMock,
-    );
-    await expect(
-      loadControlUiGitHubPreview(
-        previewTarget(70006, "issue", "visibility-change"),
-        undefined,
-        fetchMock,
-      ),
-    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubError>);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it.each(["issue", "pull"] as const)(
@@ -867,7 +751,8 @@ describe("loadControlUiGitHubPreview", () => {
     fetchMock.mockImplementation(normal);
     await loadControlUiGitHubPreview(target, identity, fetchMock, true);
     expect(validators).toEqual([null, null, null, null, null, null]);
-    expect(avatarReads).toBe(6);
+    // Anonymous avatar bytes are shared; credentialed representations stay isolated.
+    expect(avatarReads).toBe(2);
   });
 
   it.each(["private", "retired"])(

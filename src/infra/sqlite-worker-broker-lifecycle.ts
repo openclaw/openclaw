@@ -98,24 +98,29 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    const available = [...slots].filter(
+    // Agent integrity scans are synchronous; keep durable channel intake on its own carrier.
+    const pool = [...slots].filter((slot) => slot.sharedState === options.sharedState);
+    const maxWorkers = options.sharedState ? 1 : limits.maxWorkers;
+    const available = pool.filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
     );
     // A retained updater cannot borrow another generation's carrier or evict its actors.
-    // One extra slot belongs to the broker, not to each generation requesting one.
+    // Each pool can lend one extra carrier; further generations must wait for retirement.
     const borrowedGenerationSlot =
       shareWorkers &&
       options.runtimeGeneration !== undefined &&
       available.length === 0 &&
-      slots.size >= limits.maxWorkers &&
-      ![...slots].some((slot) => slot.borrowedGenerationSlot);
+      pool.length >= maxWorkers &&
+      !pool.some((slot) => slot.borrowedGenerationSlot);
     if (
       !borrowedGenerationSlot &&
-      slots.size >= (shareWorkers ? limits.maxWorkers : limits.maxStores)
+      (shareWorkers ? pool.length >= maxWorkers : slots.size >= limits.maxStores)
     ) {
       if (!available.length || !shareWorkers) {
-        const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
+        const retiring = (shareWorkers ? pool : [...slots]).filter((slot) =>
+          Boolean(slot.failed || slot.retiring),
+        );
         if (retiring.length > 0) {
           await racePromiseWithAbortSignal(
             Promise.race(retiring.map(({ exit }) => exit)),
@@ -141,7 +146,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "sharedState"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -157,7 +162,8 @@ export function createSqliteWorkerLifecycle({
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: createCpuTrackedWorker(carrierUrl, {
-        resourceLimits: { maxOldGenerationSizeMb: 512 },
+        // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
+        resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
         env: resolveNodeCompileCacheEnv(),
         execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
       }),
@@ -165,6 +171,7 @@ export function createSqliteWorkerLifecycle({
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
+      ...(options.sharedState ? { sharedState: true as const } : {}),
       custody: new SqliteWorkerSlotCustody(),
       databaseAdmissionCursor,
       runtimeGeneration: options.runtimeGeneration,
@@ -235,6 +242,47 @@ export function createSqliteWorkerLifecycle({
     throw error;
   }
 
+  async function rejectActorAdmission(
+    actor: Actor,
+    error: unknown,
+    maintenanceScope: EnqueueOptions["maintenanceScope"],
+  ): Promise<never> {
+    releaseActorReference(actor);
+    if (!actor.references) {
+      const errors = [error];
+      try {
+        if (actor.initialized) {
+          await closeActor(actor, maintenanceScope);
+        } else {
+          const nativeOpenMayHaveEntered =
+            actor.openDispatch.custody.postAttempted &&
+            !actor.openDispatch.openNotEntered &&
+            !actor.openDispatch.openRefused;
+          if (!nativeOpenMayHaveEntered && !actor.slot.failed) {
+            actor.backendClosed = true;
+            actor.markNativeStopped();
+            actor.cleanupState = "pending";
+          }
+          if (nativeOpenMayHaveEntered) {
+            // A throwing factory cannot prove that all partially opened native handles closed.
+            fail(actor.slot, error);
+            await actor.slot.exit;
+          }
+          forget(actor);
+          await retireEmpty(actor.slot);
+        }
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "SQLite worker admission and cleanup failed", {
+          cause: error,
+        });
+      }
+    }
+    throw error;
+  }
+
   function retireActor(identity: object): Promise<void> {
     const actor = [...actors.values()].find((entry) => entry === identity);
     if (!actor) {
@@ -297,7 +345,11 @@ export function createSqliteWorkerLifecycle({
             actor.markNativeStopped();
           }
         } catch (error) {
-          errors.push(error);
+          // A close refused by an already failed slot never ran. Native exit owns
+          // its retirement; the original request still reports the slot failure.
+          if (error !== actor.slot.failed) {
+            errors.push(error);
+          }
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
           await actor.slot.exit;
         }
@@ -363,10 +415,9 @@ export function createSqliteWorkerLifecycle({
     settleGeneration,
     releaseActorReference,
     rejectSlotAdmission,
+    rejectActorAdmission,
     retireActor,
     closeActor,
-    forget,
-    retireEmpty,
     retire,
   };
 }

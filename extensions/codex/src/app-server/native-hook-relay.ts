@@ -294,7 +294,10 @@ export function createCodexNativeHookRelay(params: {
                       try {
                         params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
                       } catch (error) {
-                        return `${toErrorObject(error, "Native spawn participant selection failed").message} Use sessions_spawn with the requester's requester_profile.id as user.`;
+                        return toErrorObject(
+                          error,
+                          "Native spawn execution authority is no longer current",
+                        ).message;
                       }
                     }
                     return undefined;
@@ -668,7 +671,7 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return value !== undefined && Number.isFinite(value) && value > 0
     ? Math.ceil(value)
     : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }

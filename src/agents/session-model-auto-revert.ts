@@ -1,4 +1,5 @@
 /** One-run rollback for agent-selected session models. */
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -15,10 +16,13 @@ import {
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
+
+const log = createSubsystemLogger("agents/model-patch");
 
 // Revert only when the chosen model is definitively unusable. Transient
 // provider states (rate_limit/overloaded/timeout/server_error) hit working
@@ -195,6 +199,9 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
     } catch (error) {
       rethrowIncognitoSessionError(error);
       params.assertReadCurrent?.();
+      log.warn(
+        `model rollback preparation unavailable; check session storage and model settings: ${formatErrorMessage(error)}`,
+      );
       markerTs = undefined;
     }
   }

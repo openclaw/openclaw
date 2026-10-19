@@ -91,7 +91,7 @@ function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
-  const catalog = state.chatModelCatalog ?? [];
+  const catalog = state.chatModelCatalog;
 
   const sharedOverrides = state.modelOverrides;
   if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
@@ -112,7 +112,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
   if (agentDefault) {
     return agentDefault;
@@ -120,7 +120,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
 }
 
@@ -250,7 +250,7 @@ export function chatModelUnavailableMessage(
 }
 
 export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
-  const catalog = state.chatModelCatalog ?? [];
+  const catalog = state.chatModelCatalog;
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );

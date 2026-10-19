@@ -1,59 +1,74 @@
 import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import { redactLoginFailureError } from "../../lib/connection-hints.ts";
+import type { GatewayStatus as GatewayStatusKind } from "../../lib/gateway-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { canRetryGatewayStatus, type GatewayStatusProps } from "../gateway-status.ts";
 import { Icon } from "./icon.tsx";
 import "../tooltip.ts";
 
-export function renderGatewayStatus(params: GatewayStatusProps): JSX.Element {
-  const kind = params.kind;
-  if (!kind) {
-    return null;
-  }
-  const label = t(`connection.${kind}`);
+export function gatewayStatusLabel(kind: GatewayStatusKind | "connected", queuedCount = 0): string {
+  const status = kind === "connected" ? t("nav.gateway.connected") : t(`connection.${kind}`);
+  return queuedCount
+    ? `${status} · ${t("connection.queued", { count: String(queuedCount) })}`
+    : status;
+}
+
+export function GatewayStatus(params: GatewayStatusProps & { row?: boolean }): JSX.Element {
+  const label = () => (params.kind ? gatewayStatusLabel(params.kind, params.queuedCount) : "");
   const content = () => (
     <span class="gateway-status__state">
       <span class="gateway-status__icon" aria-hidden="true">
         <Icon
           name={
-            kind === "suspending" || kind === "suspended"
-              ? "pause"
-              : kind === "offline"
-                ? "alertTriangle"
-                : "refresh"
+            params.kind === "connected"
+              ? "check"
+              : params.kind === "suspending" || params.kind === "suspended"
+                ? "pause"
+                : params.kind === "offline"
+                  ? "alertTriangle"
+                  : "refresh"
           }
         />
       </span>
-      <span class="gateway-status__label">{label}</span>
+      <span class="gateway-status__label">{label()}</span>
     </span>
   );
-  const className = `gateway-status gateway-status--${kind}`;
   return (
-    <openclaw-tooltip
-      class="gateway-status-tooltip"
-      prop:content={
-        params.lastError && canRetryGatewayStatus(kind)
-          ? redactLoginFailureError(params.lastError)
-          : ""
-      }
-    >
-      <span
-        role={params.announce === false ? undefined : "status"}
-        aria-live={params.announce === false ? undefined : "polite"}
+    <Show when={params.kind}>
+      <openclaw-tooltip
+        class="gateway-status-tooltip"
+        prop:content={params.lastError ? redactLoginFailureError(params.lastError) : ""}
       >
-        {params.onRetry && canRetryGatewayStatus(kind) ? (
-          <button
-            type="button"
-            class={className}
-            aria-label={[label, t("connection.retryNow")].filter(Boolean).join(" — ")}
-            onClick={params.onRetry}
-          >
-            {content()}
-          </button>
-        ) : (
-          <span class={className}>{content()}</span>
-        )}
-      </span>
-    </openclaw-tooltip>
+        <span
+          class={[
+            "gateway-status",
+            `gateway-status--${params.kind}`,
+            { "gateway-status--row": params.row },
+          ]}
+          role={params.announce ? "status" : undefined}
+          aria-live={params.announce ? "polite" : undefined}
+          tabindex={
+            params.lastError && !(params.onRetry && canRetryGatewayStatus(params.kind))
+              ? 0
+              : undefined
+          }
+        >
+          <Show when={params.row}>{content()}</Show>
+          {params.onRetry && canRetryGatewayStatus(params.kind) ? (
+            <button
+              type="button"
+              class="gateway-status__retry"
+              aria-label={`${label()} — ${t("connection.retryNow")}`}
+              onClick={() => params.onRetry?.()}
+            >
+              {params.row ? t("common.retry") : content()}
+            </button>
+          ) : (
+            <Show when={!params.row}>{content()}</Show>
+          )}
+        </span>
+      </openclaw-tooltip>
+    </Show>
   );
 }

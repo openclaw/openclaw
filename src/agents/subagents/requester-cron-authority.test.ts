@@ -36,11 +36,11 @@ import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./registry/subagent-run-generation.js";
 import {
   consumeRequesterCronAuthorityAdmission,
+  captureRequesterContinuationCaller,
   prepareRequesterCronAuthority,
   replaceRequesterCronAuthorityEntry,
   revokeRequesterCronAuthority,
   revokeRequesterCronAuthorityBatch,
-  withRequesterCronAuthority,
 } from "./requester-cron-authority.js";
 
 const fixture = vi.hoisted(() => {
@@ -269,18 +269,15 @@ async function capture(runId = "original", count = 1) {
 }
 
 function dispatch<T>(batch: SubagentRunRecord[], run: () => Promise<T>, runId = "continuation") {
-  return withRequesterCronAuthority(
-    {
-      requesterSessionKey: SESSION,
-      requesterSessionId: "requester-session",
-      requesterAgentId: "main",
-      batch,
-      rearmGeneration: batch[0]?.requesterSettleWake?.rearmGeneration,
-      runId,
-      isCurrent: () => true,
-    },
-    run,
-  );
+  return captureRequesterContinuationCaller({
+    requesterSessionKey: SESSION,
+    requesterSessionId: "requester-session",
+    requesterAgentId: "main",
+    batch,
+    rearmGeneration: batch[0]?.requesterSettleWake?.rearmGeneration,
+    runId,
+    isCurrent: () => true,
+  }).run(run);
 }
 
 function consume(
@@ -301,6 +298,47 @@ function consume(
 }
 
 describe("requester cron authority lifetime", () => {
+  it("captures one immutable yielded route and revalidates its management owner", async () => {
+    const batch = await capture("yield-owner");
+    const route = {
+      channel: "discord",
+      to: "channel:original",
+      deliveryIntent: { id: "intent-1", kind: "outbound_queue" as const },
+    };
+    const caller = captureRequesterContinuationCaller({
+      requesterSessionKey: SESSION,
+      requesterSessionId: "requester-session",
+      requesterAgentId: "main",
+      batch,
+      rearmGeneration: batch[0]?.requesterSettleWake?.rearmGeneration,
+      runId: "yield-continuation",
+      isCurrent: () => true,
+      deliveryRoute: route,
+    });
+
+    const currentDispatch = vi.fn(async () => {
+      expect(consume(batch, "yield-continuation")?.managementEntitlement.source).toBe(
+        "control-ui-admin",
+      );
+    });
+    await caller.run(currentDispatch);
+    expect(currentDispatch).toHaveBeenCalledOnce();
+    route.to = "channel:mutated";
+    route.deliveryIntent.id = "intent-mutated";
+    expect(caller.deliveryRoute).toEqual({
+      channel: "discord",
+      to: "channel:original",
+      deliveryIntent: { id: "intent-1", kind: "outbound_queue" },
+    });
+    fixture.session.lifecycleRevision = "replacement";
+    const replacementDispatch = vi.fn(async () => {
+      expect(consume(batch, "yield-continuation")).toBeUndefined();
+    });
+    await caller.run(replacementDispatch);
+    expect(replacementDispatch).toHaveBeenCalledOnce();
+    expect(caller.deliveryRoute?.to).toBe("channel:original");
+  });
+
   it.each(["completion", "scope ended", "reset"] as const)(
     "retains the full cohort's authority across a scoped child pause until %s",
     async (outcome) => {

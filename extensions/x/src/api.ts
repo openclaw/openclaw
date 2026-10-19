@@ -1,6 +1,7 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { fetchXService } from "./fetch.js";
+import { fetchXService, type XAssertActive } from "./fetch.js";
+import { uploadXMedia, type XMediaUploadParams } from "./media-api.js";
 import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
 import { XBudgetExceededError, type XSpend } from "./spend.js";
 
@@ -13,7 +14,6 @@ export type XPage = ReturnType<typeof parsePage>;
 export type XPostEnvelope = { post: XPost; users: XUser[]; recipientPending?: true };
 export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type XTokenState = "idle" | "refreshing" | "ready" | "error";
-export type XAssertActive = () => void | (() => void) | Promise<void | (() => void)>;
 
 export class XApiError extends Error {
   constructor(
@@ -26,7 +26,7 @@ export class XApiError extends Error {
   }
 }
 
-async function readActivityErrorDetail(
+async function readErrorDetail(
   response: Response,
   signal: AbortSignal,
   secrets: (string | undefined)[],
@@ -324,6 +324,13 @@ export function createXApiClient(options: {
             )
           : requestSignal(params.signal);
         signal.throwIfAborted();
+        const body =
+          params.body instanceof FormData
+            ? params.body
+            : params.body
+              ? JSON.stringify(params.body)
+              : undefined;
+        const multipart = body instanceof FormData;
         let response: Response;
         let authorityRejected = false;
         let authorityError: unknown;
@@ -336,9 +343,9 @@ export function createXApiClient(options: {
               redirect: "error",
               headers: {
                 Authorization: `Bearer ${token}`,
-                ...(params.body ? { "Content-Type": "application/json" } : {}),
+                ...(params.body && !multipart ? { "Content-Type": "application/json" } : {}),
               },
-              ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+              ...(body ? { body } : {}),
               signal,
             },
             options.fetch,
@@ -395,8 +402,8 @@ export function createXApiClient(options: {
         }
         if (!response.ok) {
           let detail: string | undefined;
-          if (path.startsWith("/2/activity/")) {
-            detail = await readActivityErrorDetail(response, signal, [
+          if (path.startsWith("/2/activity/") || path.startsWith("/2/media/")) {
+            detail = await readErrorDetail(response, signal, [
               token,
               accessToken,
               options.bearerToken,
@@ -406,6 +413,12 @@ export function createXApiClient(options: {
             ]);
           } else {
             await response.body?.cancel().catch(() => {});
+          }
+          if (
+            path.startsWith("/2/media/") &&
+            (response.status === 401 || response.status === 403)
+          ) {
+            detail = `${detail ? `${detail}; ` : ""}check the app permissions and reauthorize the X account with the media.write scope`;
           }
           throw new XApiError(response.status, path.split("?")[0] ?? path, detail);
         }
@@ -565,9 +578,35 @@ export function createXApiClient(options: {
       }
       return user;
     },
+    async uploadMedia(params: XMediaUploadParams): Promise<string> {
+      const signal = AbortSignal.any(
+        [options.signal, params.signal].filter((value): value is AbortSignal => Boolean(value)),
+      );
+      try {
+        signal.throwIfAborted();
+        return await uploadXMedia({ ...params, signal }, request);
+      } catch (cause) {
+        if (cause instanceof PlatformMessageNotDispatchedError) {
+          throw cause;
+        }
+        // Even an uncertain upload cannot create a Post. Never classify it as an
+        // ambiguous tweet delivery or fall back to publishing text without media.
+        throw new PlatformMessageNotDispatchedError(
+          cause instanceof Error ? cause.message : "X media upload failed before posting",
+          {
+            cause,
+            retryable:
+              !signal.aborted &&
+              !(cause instanceof XBudgetExceededError) &&
+              (!(cause instanceof XApiError) || cause.status === 429 || cause.status >= 500),
+          },
+        );
+      }
+    },
     async reply(params: {
       text: string;
       inReplyToId: string;
+      mediaIds?: string[];
       signal?: AbortSignal;
       assertActive?: XAssertActive;
     }): Promise<string> {
@@ -587,7 +626,11 @@ export function createXApiClient(options: {
             },
           },
           method: "POST",
-          body: { text: params.text, reply: { in_reply_to_tweet_id: params.inReplyToId } },
+          body: {
+            ...(params.text ? { text: params.text } : {}),
+            reply: { in_reply_to_tweet_id: params.inReplyToId },
+            ...(params.mediaIds?.length ? { media: { media_ids: params.mediaIds } } : {}),
+          },
           signal: params.signal,
           assertActive: params.assertActive,
           onDispatch: () => {

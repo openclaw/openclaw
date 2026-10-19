@@ -1688,6 +1688,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-controller",
                   "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/session-pruning",
@@ -1839,6 +1840,7 @@
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
                       "plugins/onnx",
+                      "plugins/subq",
                       "plugins/typesafe"
                     ]
                   },
@@ -2018,6 +2020,7 @@
                           "tools/code-mode/maintainers"
                         ]
                       },
+                      "tools/autoreview",
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
@@ -2319,6 +2322,7 @@
                           "providers/ollama/troubleshooting"
                         ]
                       },
+                      "providers/omlx",
                       "providers/sglang",
                       "providers/vllm"
                     ]
@@ -2480,6 +2484,7 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
+                      "gateway/postgresql",
                       "gateway/doctor",
                       {
                         "group": "Doctor",
@@ -2527,6 +2532,7 @@
                   {
                     "group": "Scaling and operations",
                     "pages": [
+                      "gateway/postgresql",
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",

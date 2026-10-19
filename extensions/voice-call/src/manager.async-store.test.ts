@@ -5,7 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -139,8 +139,10 @@ async function withDelayedStore(
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => storePath,
-      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-        const store = createPluginStateKeyedStoreForTests<T>("voice-call", options);
+      openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) => {
+        const store = createPluginStateKeyedStoreV2ForTests<T>("voice-call", options, {
+          assertCurrent() {},
+        });
         return {
           ...store,
           async register(...args: Parameters<typeof store.register>) {

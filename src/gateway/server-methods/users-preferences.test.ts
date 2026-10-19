@@ -7,7 +7,10 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -222,7 +225,10 @@ async function withPreferenceToolTurn(
       { authenticatedUserProfile: client.authenticatedUserProfile!, scopes },
       () =>
         withPersonalToolTurn(
-          { owner: { profileId: owner.id, senderId: "owner", name: "Owner" } },
+          {
+            owner: { profileId: owner.id, senderId: "owner", name: "Owner" },
+            allowCollaborativeSteering: true,
+          },
           (turn) =>
             run({
               ownerId: owner.id,
@@ -438,6 +444,7 @@ test.each(["current", "read", "scope", "source", "identity", "error-response", "
       }
     } finally {
       releaseProfiles?.();
+      clearRuntimeConfigSnapshot();
       await state.cleanup();
     }
   },
@@ -508,6 +515,7 @@ test("users.prefs.get retains its original scope across the preference read", as
     expect(await original(owner.id)).toMatchObject({ entries: { "ui.theme": "dark" } });
   } finally {
     releaseProfiles?.();
+    clearRuntimeConfigSnapshot();
     await state.cleanup();
   }
 });

@@ -1,7 +1,9 @@
 // Session creation disposition and deferred runtime cleanup.
 import { expect, test, vi } from "vitest";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 import {
   beforeResetHookMocks,
   beforeResetHookState,
@@ -48,32 +50,30 @@ async function seedParent(sessionId: string) {
     storePath,
     messages: [{ role: "user", content: "before child creation", id: "m1" }],
   });
+  return { storePath };
 }
 
-async function startDeferredSessionCleanup(sessionId: string) {
-  await seedParent(sessionId);
-  providerRuntimeMocks.cleanupSessionResources.mockClear();
-  embeddedRunMock.activeIds.add(sessionId);
-  embeddedRunMock.waitResults.set(sessionId, false);
-
-  const retirement = createDeferredCore();
-  const retirementStarted = createDeferredCore();
-  let retirements = 0;
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(
-    async ({ retainAcrossReuse }) => {
-      if (!retainAcrossReuse && ++retirements === 1) {
-        retirementStarted.resolve();
-        await retirement.promise;
-      }
-      return true;
+async function startHeldControllerTurn(params: { sessionId: string; storePath: string }) {
+  const release = createDeferredCore();
+  const started = createDeferredCore();
+  const interrupted = createDeferredCore();
+  const target = captureSessionTarget({
+    storeScope: params.storePath,
+    sessionKey: "agent:main:main",
+    aliases: ["main", params.sessionId],
+    incarnation: params.sessionId,
+    agentId: "main",
+  });
+  const work = withSessionTurn(
+    { sessionKey: target.sessionKey, sessionId: params.sessionId, target },
+    async (_operation, signal) => {
+      signal.addEventListener("abort", () => interrupted.resolve(), { once: true });
+      started.resolve();
+      await release.promise;
     },
   );
-
-  expect((await directSessionReq("sessions.reset", { key: "main", reason: "new" })).ok).toBe(false);
-  embeddedRunMock.activeIds.delete(sessionId);
-  embeddedRunMock.endWaiters.get(sessionId)?.(true);
-  await retirementStarted.promise;
-  return { release: retirement.resolve, retirements: () => retirements };
+  await started.promise;
+  return { interrupted: interrupted.promise, release: release.resolve, target, work };
 }
 
 test("sessions.create keeps the parent active for an explicit parallel child", async () => {
@@ -140,63 +140,72 @@ test("sessions.create requires command hooks for either explicit disposition", a
   expect(result.error?.message).toMatch(/emitCommandHooks/i);
 });
 
-test("sessions.reset joins cleanup deferred by a prior timeout before same-id reuse", async () => {
-  const cleanup = await startDeferredSessionCleanup("sess-provider-cleanup");
-
-  embeddedRunMock.activeIds.add("sess-provider-cleanup");
-  embeddedRunMock.waitResults.set("sess-provider-cleanup", true);
+test("sessions.reset waits for captured turn settlement before same-id cleanup", async () => {
+  const sessionId = "sess-provider-cleanup";
+  const { storePath } = await seedParent(sessionId);
+  const active = await startHeldControllerTurn({ sessionId, storePath });
   let resetSettled = false;
   const resetPromise = directSessionReq("sessions.reset", { key: "main", reason: "new" }).finally(
     () => {
       resetSettled = true;
     },
   );
-  await vi.waitFor(() => expect(cleanup.retirements()).toBe(2));
+  await active.interrupted;
   await Promise.resolve();
 
   expect(resetSettled).toBe(false);
   expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
 
-  cleanup.release();
+  active.release();
+  await active.work;
   const reset = await resetPromise;
   expect(reset.ok).toBe(true);
-  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledWith(
-    "sess-provider-cleanup",
-  );
+  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledWith(sessionId);
   const cleanupCount = providerRuntimeMocks.cleanupSessionResources.mock.calls.length;
   await Promise.resolve();
   expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledTimes(cleanupCount);
 });
 
-test("completed wait keeps cleanup armed when a same-id replacement starts during retirement", async () => {
+test("sessions.reset blocks same-id replacement until retirement completes", async () => {
   const sessionId = "sess-provider-ended-replacement";
-  await seedParent(sessionId);
+  const { storePath } = await seedParent(sessionId);
   providerRuntimeMocks.cleanupSessionResources.mockClear();
-  embeddedRunMock.activeIds.add(sessionId);
-  embeddedRunMock.waitResults.set(sessionId, true);
+  const active = await startHeldControllerTurn({ sessionId, storePath });
   const retirement = createDeferredCore();
-  let terminalRetirements = 0;
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(
-    async ({ retainAcrossReuse }) => {
-      if (!retainAcrossReuse && ++terminalRetirements <= 2) {
-        await retirement.promise;
-      }
-      return true;
-    },
-  );
+  const retirementStarted = createDeferredCore();
+  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+    retirementStarted.resolve();
+    await retirement.promise;
+    return true;
+  });
 
   const reset = directSessionReq("sessions.reset", { key: "main", reason: "new" });
-  await vi.waitFor(() => expect(terminalRetirements).toBe(2));
-  embeddedRunMock.activeIds.add(sessionId);
-  retirement.resolve();
+  await active.interrupted;
+  active.release();
+  await active.work;
+  await retirementStarted.promise;
 
-  expect((await reset).error).toMatchObject({ code: "UNAVAILABLE" });
-  expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
-  await vi.waitFor(() => expect(embeddedRunMock.endWaitCalls).toEqual([sessionId, sessionId]));
-
-  embeddedRunMock.activeIds.delete(sessionId);
-  embeddedRunMock.endWaiters.get(sessionId)?.(true);
-  await vi.waitFor(() => {
-    expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledTimes(1);
+  const replacementStarted = createDeferredCore();
+  const releaseReplacement = createDeferredCore();
+  const replacement = withSessionTurn(
+    { sessionKey: active.target.sessionKey, sessionId, target: active.target },
+    async () => {
+      replacementStarted.resolve();
+      await releaseReplacement.promise;
+    },
+  );
+  let replacementIsRunning = false;
+  void replacementStarted.promise.then(() => {
+    replacementIsRunning = true;
   });
+  await Promise.resolve();
+  expect(replacementIsRunning).toBe(false);
+  expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
+
+  retirement.resolve();
+  expect((await reset).ok).toBe(true);
+  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledOnce();
+  await replacementStarted.promise;
+  releaseReplacement.resolve();
+  await replacement;
 });

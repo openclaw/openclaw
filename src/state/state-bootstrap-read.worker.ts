@@ -23,7 +23,11 @@ export const stateBootstrapReadOperations = {
       inspectionErrors: [],
     };
     if (version !== input.supportedVersion) {
-      inspection.schemas.incompatible.push({
+      const versions =
+        version < input.supportedVersion
+          ? (inspection.schemas.pendingMigrations ??= [])
+          : inspection.schemas.incompatible;
+      versions.push({
         kind: "state",
         path: input.pathname,
         foundVersion: version,

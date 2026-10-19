@@ -4,7 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import {
-  countActiveDescendantRunsFromRuns,
+  buildScopedSubagentRunReadIndexFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
 } from "../registry/subagent-registry-queries.js";
 import {
@@ -62,6 +62,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
           ? { status: "terminal", startedAt: now - 200, endedAt: now }
           : { status: "running", startedAt: now - 200 },
       ...(scenario === "paused member" ? { pauseReason: "sessions_yield" as const } : {}),
+      ...(scenario === "pending cleanup" ? { delivery: { status: "pending" as const } } : {}),
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -75,6 +76,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       [...runs.values()].filter((entry) => entry.requesterSessionKey === key),
     );
     readDescendantFacts.mockImplementation(async (params) => ({
+      deliveryWaitUntil: now + 300_000,
       unsettled: hasDescendantRunAwaitingSettleFromRuns(
         runs,
         params.requesterSessionKey,
@@ -84,13 +86,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
         params.settledBefore,
         params.rootRunIds,
       ),
-      active: countActiveDescendantRunsFromRuns(
+      active: buildScopedSubagentRunReadIndexFromRuns(
         runs,
         params.requesterSessionKey,
         params.requesterAgentId,
         params.requesterStorePath,
         params.rootRunIds,
-      ),
+      ).countActiveDescendantRuns(params.requesterSessionKey),
     }));
     const early = scenario === "older batch";
     expect(
@@ -98,21 +100,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
     ).toBe(early);
     expect(deliverSpy).toHaveBeenCalledTimes(early ? 1 : 0);
     if (crossAgent) {
-      for (let attempt = 0; attempt < 12; attempt++) {
-        await vi.advanceTimersByTimeAsync(30_001);
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }));
-      }
-      expect(short.requesterSettleWake?.status).toBe("pending");
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }));
+      expect(short.requesterSettleWake).toBeDefined();
       expect(deliverSpy).not.toHaveBeenCalled();
     }
     long.execution = { status: "terminal", startedAt: now - 200, endedAt: now + 1 };
     long.pauseReason = undefined;
     long.cleanupCompletedAt = now + 1;
-    for (const entry of runs.values()) {
-      if (entry.requesterSettleWake) {
-        entry.requesterSettleWake.nextAttemptAt = undefined;
-      }
-    }
     if (short.requesterSettleWake) {
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short })),

@@ -7,6 +7,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OutboundMessageProgressInput } from "../../audit/audit-event-types.js";
 import { recordOutboundMessageProgressInDatabase } from "../../audit/message-delivery-progress-store.js";
+import {
+  configHealthReadOperations,
+  patchConfigHealthEntryInDatabase,
+} from "../../config/io.health-state.kernel.js";
 import { isMissingPluginStateTableError } from "../../plugin-state/plugin-state-store.database.js";
 import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
 import { recordSessionStateEventInDatabase } from "../../sessions/session-state-events.kernel.js";
@@ -20,7 +24,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
-import { rewritePostgresPlaceholders } from "../postgres-sync/protocol.js";
+import { preparePostgresQuery } from "../postgres-sync/protocol.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 
@@ -118,7 +122,7 @@ it.skipIf(!connection)(
             // PREPARE the actual owner statement, then execute it normally with its bound values.
             // This adds parser/type-inference proof without maintaining a second SQL implementation.
             if (/^(?:insert|select)\b/i.test(sql) && !prepared.has(sql)) {
-              query(`PREPARE feature_statement AS ${rewritePostgresPlaceholders(sql)}`);
+              query(`PREPARE feature_statement AS ${preparePostgresQuery(sql).sql}`);
               query("DEALLOCATE feature_statement");
               prepared.add(sql);
             }
@@ -133,6 +137,84 @@ it.skipIf(!connection)(
         expect(
           remote.query("SELECT count(*) AS count FROM outbound_message_progress").rows,
         ).toEqual([{ count: 1 }]);
+
+        const configPath = "/synthetic/openclaw.json";
+        const observedJson = '{ "hash": "observed" }';
+        const promotedJson = '{"hash":"promoted"}';
+        const readHealthBasis = () =>
+          configHealthReadOperations["config.health.read"](undefined, remote).snapshot.basis[
+            configPath
+          ];
+        expect(
+          patchConfigHealthEntryInDatabase(
+            remote,
+            configPath,
+            { last_known_good_json: observedJson },
+            null,
+            100,
+          ),
+        ).toBe(true);
+        const observed = readHealthBasis();
+        expect(observed).toEqual({
+          lastKnownGoodJson: observedJson,
+          lastPromotedGoodJson: null,
+          suspiciousSignature: null,
+          updatedAtMs: 100,
+        });
+        expect(
+          patchConfigHealthEntryInDatabase(
+            remote,
+            configPath,
+            {
+              last_promoted_good_json: promotedJson,
+              last_observed_suspicious_signature: "observed-signature",
+            },
+            observed,
+            100,
+          ),
+        ).toBe(true);
+        const promoted = readHealthBasis();
+        assert(promoted);
+        expect(promoted).toEqual({
+          lastKnownGoodJson: observedJson,
+          lastPromotedGoodJson: promotedJson,
+          suspiciousSignature: "observed-signature",
+          updatedAtMs: 100,
+        });
+        const clearHealth = {
+          last_known_good_json: null,
+          last_promoted_good_json: null,
+          last_observed_suspicious_signature: null,
+        };
+        for (const stale of [
+          { ...promoted, lastKnownGoodJson: '{"hash":"observed"}' },
+          { ...promoted, lastPromotedGoodJson: null },
+          { ...promoted, suspiciousSignature: null },
+        ]) {
+          expect(
+            patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, stale, 200),
+          ).toBe(false);
+        }
+        expect(readHealthBasis()).toEqual(promoted);
+        expect(
+          patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, promoted, 200),
+        ).toBe(true);
+        const cleared = readHealthBasis();
+        expect(cleared).toEqual({
+          lastKnownGoodJson: null,
+          lastPromotedGoodJson: null,
+          suspiciousSignature: null,
+          updatedAtMs: 200,
+        });
+        expect(
+          patchConfigHealthEntryInDatabase(
+            remote,
+            configPath,
+            { last_known_good_json: observedJson },
+            cleared,
+            300,
+          ),
+        ).toBe(true);
 
         const input = {
           sessionKey: "agent:main:conformance",

@@ -100,6 +100,8 @@ const enDreaming = {
       resetDiaryComplete: "Removed {count} backfilled dream diary entries.",
       clearReplayedComplete: "Cleared {count} replayed short-term entries.",
       complete: "Dream diary action complete.",
+      actionInterrupted:
+        "Connection lost before the memory action was confirmed. It may have completed. Refresh and inspect the results before trying again.",
       confirmRepairDescription:
         "This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
       confirmDedupeDescription:

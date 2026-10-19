@@ -1,37 +1,15 @@
 import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type { ProviderNormalizeToolSchemasContext } from "openclaw/plugin-sdk/plugin-entry";
-import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import {
+  buildProviderToolCompatFamilyHooks,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
+} from "openclaw/plugin-sdk/provider-tools";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeOpenRouterApiModelId } from "./models.js";
 
 const openAiTools = buildProviderToolCompatFamilyHooks("openai");
 const schemaTypes = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);
-const schemaMapKeys = new Set([
-  "properties",
-  "patternProperties",
-  "dependentSchemas",
-  "dependencies",
-  "$defs",
-  "definitions",
-]);
-const schemaValueKeys = new Set([
-  "items",
-  "additionalItems",
-  "prefixItems",
-  "additionalProperties",
-  "anyOf",
-  "oneOf",
-  "allOf",
-  "then",
-  "else",
-  "if",
-  "not",
-  "contains",
-  "propertyNames",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-  "contentSchema",
-]);
 
 function readSchemaTypes(type: unknown): string[] | undefined {
   const types = Array.isArray(type) ? type : [type];
@@ -79,7 +57,7 @@ function normalizeMoonshotSchemaObject(record: Record<string, unknown>): Record<
   // fromEntries preserves own __proto__ keys without invoking Object.prototype setters.
   const next = Object.fromEntries(
     Object.entries(record).map(([key, value]) => {
-      const entries = schemaMapKeys.has(key) ? readRecord(value) : undefined;
+      const entries = SCHEMA_MAP_KEYS.has(key) ? readRecord(value) : undefined;
       if (entries) {
         return [
           key,
@@ -88,7 +66,7 @@ function normalizeMoonshotSchemaObject(record: Record<string, unknown>): Record<
           ),
         ];
       }
-      return [key, schemaValueKeys.has(key) ? normalizeMoonshotSchema(value) : value];
+      return [key, SCHEMA_NESTED_KEYS.has(key) ? normalizeMoonshotSchema(value) : value];
     }),
   );
   const parentTypes = readSchemaTypes(next.type);

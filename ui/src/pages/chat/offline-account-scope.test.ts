@@ -85,10 +85,6 @@ it("restores account text and attachment drafts before any connection", async ()
     recoveryScope: "",
     recoveryScopeReady: false,
   };
-  let restored!: () => void;
-  const applied = new Promise<void>((resolve) => {
-    restored = resolve;
-  });
   const host = {
     ...state(),
     client,
@@ -96,7 +92,6 @@ it("restores account text and attachment drafts before any connection", async ()
     chatMessage: "",
     chatAttachments: [],
     selectedChatSessionIncognito: false,
-    requestUpdate: () => restored(),
   };
   expect(loadChatComposerState(host, host.sessionKey).snapshot?.draft).toBe("private draft");
   vi.spyOn(durableStore, "prepareDurableComposerRecovery").mockResolvedValue({
@@ -116,7 +111,7 @@ it("restores account text and attachment drafts before any connection", async ()
   persistence.restore();
   persistence.start();
   await vi.dynamicImportSettled();
-  await applied;
+  await vi.waitFor(() => expect(host.chatMessage).toBe("attachment draft"));
   expect(read).toHaveBeenCalledWith(expect.objectContaining({ recoveryScope: "account-a" }));
   expect(host.chatMessage).toBe("attachment draft");
   expect(host.chatAttachments).toHaveLength(1);

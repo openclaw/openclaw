@@ -112,7 +112,8 @@ export function publishAgentDatabaseCloseCheckpoint(
   closed: ReturnType<typeof readAgentDatabaseClosedReceipt>,
   assertCleanupOwned: () => void,
 ): void {
-  if (!closed) {
+  const checkpoint = closed?.receipt.checkpoint;
+  if (!closed || !checkpoint) {
     return;
   }
   const { receipt, identity, lease } = closed;
@@ -122,7 +123,7 @@ export function publishAgentDatabaseCloseCheckpoint(
     assertExistingDatabaseIdentity(pathname, receipt.identity.key);
     assertExistingDatabaseIdentity(identity.nativeLocation, receipt.identity.key);
     assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
-    publishSqliteWalCheckpointObservation(pathname, receipt.checkpoint);
+    publishSqliteWalCheckpointObservation(pathname, checkpoint);
   } catch {
     // A stale diagnostic must not clear another generation's budget or fail native cleanup.
   }

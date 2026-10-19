@@ -11,6 +11,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -123,6 +124,94 @@ beforeEach(() => {
 });
 
 describe("PortalsPage", () => {
+  it("waits for a confirmed portal list before showing the empty state", async () => {
+    const source = createContext(["portal.list"], async () => ({ portals: [] }));
+    source.updateSnapshot({ phase: "reconnecting", hello: null });
+    const page = await mountPage(source.context);
+    expect(page.textContent).not.toContain("Ask the agent to start a portal:");
+    expect(source.request).not.toHaveBeenCalled();
+
+    source.updateSnapshot({ phase: "connected", hello: gatewayHelloForMethods(["portal.list"]) });
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Ask the agent to start a portal:"),
+    );
+    expect(source.request).toHaveBeenCalledOnce();
+  });
+
+  it("retains the selected portal document across reconnect and retires it for another client", async () => {
+    const selected = { ...portal, id: "p4000", title: "Selected app", port: 4000 };
+    const refreshed = createDeferred<PortalListResult>();
+    const replacement = createDeferred<PortalListResult>();
+    const methods = ["portal.list", "portal.close"];
+    let reads = 0;
+    const source = createContext(methods, async () =>
+      ++reads === 1 ? { portals: [portal, selected] } : refreshed.promise,
+    );
+    const page = await mountPage(source.context);
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+    const selectedButton = [
+      ...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item"),
+    ].find((button) => button.textContent?.includes("Selected app"))!;
+    selectedButton.click();
+    await waitForSolid(() =>
+      expect(page.querySelector("iframe")?.title).toBe("Selected app portal preview"),
+    );
+    const frame = page.querySelector("iframe")!;
+    source.updateSnapshot({ phase: "reconnecting", hello: null });
+    await page.updateComplete;
+    expect(page.querySelector("iframe")).toBe(frame);
+    expect(selectedButton.getAttribute("aria-current")).toBe("true");
+    expect(page.querySelector<HTMLButtonElement>(".portals-preview__close")?.disabled).toBe(true);
+    expect(source.request).toHaveBeenCalledOnce();
+
+    source.updateSnapshot({ phase: "connected", hello: gatewayHelloForMethods(methods) });
+    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
+    expect(page.querySelector("iframe")).toBe(frame);
+    refreshed.resolve({ portals: [portal, { ...selected, title: "Refreshed selection" }] });
+    await waitForSolid(() => expect(frame.title).toBe("Refreshed selection portal preview"));
+    expect(page.querySelector("iframe")).toBe(frame);
+
+    const nextClient = createTestGatewayClient(() => replacement.promise);
+    source.updateSnapshot({ client: nextClient });
+    await page.updateComplete;
+    expect(page.querySelector("iframe")).toBeNull();
+    replacement.resolve({ portals: [portal, selected] });
+    await waitForSolid(() =>
+      expect(page.querySelector("iframe")?.title).toBe("Seeded app portal preview"),
+    );
+    expect(page.querySelector("iframe")).not.toBe(frame);
+  });
+
+  it.each(["account", "recovery"] as const)(
+    "retires the portal document when the same client's %s identity changes",
+    async (identity) => {
+      const replacement = createDeferred<PortalListResult>();
+      const hello = gatewayHelloForMethods(["portal.list"]);
+      hello.auth = { ...hello.auth, recoveryScope: "first-scope" };
+      let reads = 0;
+      const source = createContext(["portal.list"], async () =>
+        ++reads === 1 ? { portals: [portal] } : replacement.promise,
+      );
+      source.updateSnapshot({ hello, selfUser: { id: "first-user", name: "First user" } });
+      const page = await mountPage(source.context);
+      await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+      const frame = page.querySelector("iframe")!;
+
+      source.updateSnapshot(
+        identity === "account"
+          ? { selfUser: { id: "second-user", name: "Second user" } }
+          : { hello: { ...hello, auth: { ...hello.auth, recoveryScope: "second-scope" } } },
+      );
+      await page.updateComplete;
+      expect(page.querySelector("iframe")).toBeNull();
+      replacement.resolve({ portals: [{ ...portal, title: "Replacement app" }] });
+      await waitForSolid(() =>
+        expect(page.querySelector("iframe")?.title).toBe("Replacement app portal preview"),
+      );
+      expect(page.querySelector("iframe")).not.toBe(frame);
+    },
+  );
+
   it.each([undefined])(
     "retains read access without a method catalog (environment: %s)",
     async () => {
@@ -197,6 +286,36 @@ describe("PortalsPage", () => {
       expect(page.querySelector("iframe")?.getAttribute("title")).toBe("Seeded app portal preview"),
     );
     expect(page.requestedEnvironmentId).toBeNull();
+  });
+
+  it("loads only the final environment when native target writes share one turn", async () => {
+    const environment: EnvironmentSummary = {
+      id: "final-machine",
+      type: "worker",
+      status: "available",
+    };
+    const source = createContext(["portal.list", "environments.status"], async (method) =>
+      method === "portal.list" ? { portals: [portal] } : environment,
+    );
+    const page = await mountPage(source.context, portal.id);
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+    source.request.mockClear();
+
+    for (const environmentId of ["intermediate-machine", environment.id]) {
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { open: true, environmentId },
+        }),
+      );
+    }
+
+    await waitForSolid(() => {
+      expect(source.request.mock.calls).toEqual([
+        ["environments.status", { environmentId: environment.id }],
+      ]);
+      expect(page.textContent).toContain("Waiting for your application");
+      expect(page.querySelector("iframe")).toBeNull();
+    });
   });
 
   it("ignores retired startup targets and stops reading while hidden or disposed", async () => {
@@ -498,6 +617,9 @@ describe("portal presentation receipts", () => {
           presentation: { portalId: portal.id, status, reason },
         }),
       );
+      expect(
+        source.request.mock.calls.filter(([method]) => method === "ui.command.result"),
+      ).toHaveLength(1);
     },
   );
 });

@@ -38,7 +38,9 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { omitSecretEgressProxyEnvironment } from "../secrets/egress-proxy/environment.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -562,12 +564,20 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
+  const env = omitSecretEgressProxyEnvironment(params.env, platform);
+  const existingEnvironment = omitSecretEgressProxyEnvironment(
+    params.existingEnvironment ?? {},
+    platform,
+  );
+  env.NODE_EXTRA_CA_CERTS =
+    resolveEnvironmentValue(env, "NODE_EXTRA_CA_CERTS", platform) ??
+    resolveEnvironmentValue(existingEnvironment, "NODE_EXTRA_CA_CERTS", platform);
+  const wrapperInput = params.wrapperPath ?? env[OPENCLAW_WRAPPER_ENV_KEY];
   const generatedWrapperPath =
     platform === "win32"
-      ? resolveGatewayTaskScriptPath(params.env)
+      ? resolveGatewayTaskScriptPath(env)
       : platform === "darwin"
-        ? resolveLaunchAgentEnvWrapperPath(params.env, resolveLaunchAgentLabel(params.env))
+        ? resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env))
         : undefined;
   const wrapperPointsAtGeneratedScript =
     generatedWrapperPath !== undefined &&
@@ -584,7 +594,7 @@ export async function buildGatewayInstallPlan(params: {
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env: params.env,
+    env,
     runtime: params.runtime,
     runtimeExplicit: params.runtimeExplicit,
     devMode: params.serviceCli ? false : params.devMode,
@@ -593,7 +603,7 @@ export async function buildGatewayInstallPlan(params: {
     wrapperPath,
     warn: params.warn,
   });
-  const serviceInputEnv = { ...params.env };
+  const serviceInputEnv = { ...env };
   if (wrapperPath) {
     serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
   } else if (wrapperPointsAtGeneratedScript) {
@@ -615,7 +625,7 @@ export async function buildGatewayInstallPlan(params: {
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
-    env: params.env,
+    env,
     runtime,
     nodeProgram: programArguments[0],
     warn: params.warn,
@@ -647,7 +657,7 @@ export async function buildGatewayInstallPlan(params: {
     authStore: params.authStore,
     warn: params.warn,
     serviceEnvironment,
-    existingEnvironment: params.existingEnvironment,
+    existingEnvironment,
     existingEnvironmentValueSources: params.existingEnvironmentValueSources,
     platform,
   });

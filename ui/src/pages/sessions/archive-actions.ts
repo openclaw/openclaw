@@ -25,26 +25,24 @@ type SessionPageArchiveHost = {
 };
 
 /** Page lifetime adapts to the same archive owner used by sidebar and chat. */
-export class SessionsPageArchive {
-  constructor(private readonly host: SessionPageArchiveHost) {}
-
-  private async loadOperations(scope: SessionsPageRequestScope) {
+export function createSessionsArchive(host: SessionPageArchiveHost) {
+  async function loadOperations(scope: SessionsPageRequestScope) {
     try {
       return await import("../../components/session-organizer-archive.runtime.ts");
     } catch (error) {
-      if (this.host.isCurrent(scope)) {
-        this.host.publishError(scope, error);
+      if (host.isCurrent(scope)) {
+        host.publishError(scope, error);
       }
       return null;
     }
   }
-  async archive(row: GatewaySessionRow, hasDescendants = false) {
-    const scope = this.host.captureScope();
+  async function archive(row: GatewaySessionRow, hasDescendants = false) {
+    const scope = host.captureScope();
     if (!scope) {
       return;
     }
-    const operations = await this.loadOperations(scope);
-    if (!operations || !this.host.isCurrent(scope)) {
+    const operations = await loadOperations(scope);
+    if (!operations || !host.isCurrent(scope)) {
       return;
     }
     const session = {
@@ -68,11 +66,11 @@ export class SessionsPageArchive {
     let choice: Awaited<ReturnType<typeof operations.confirmSessionArchive>>;
     try {
       choice = await operations.confirmSessionArchive(session, mutationScope, () =>
-        this.host.isCurrent(scope),
+        host.isCurrent(scope),
       );
     } catch (error) {
-      if (this.host.isCurrent(scope)) {
-        this.host.publishError(scope, error);
+      if (host.isCurrent(scope)) {
+        host.publishError(scope, error);
       }
       return;
     }
@@ -83,12 +81,12 @@ export class SessionsPageArchive {
       await operations.archiveConfirmedSessionsWithUndo(
         {
           sessionData: {
-            isSessionMutationScopeCurrent: () => this.host.isCurrent(scope),
+            isSessionMutationScopeCurrent: () => host.isCurrent(scope),
             publishSessionMutationError: (_candidate, error) => {
-              this.host.publishError(scope, error);
+              host.publishError(scope, error);
             },
             refreshSidebarSessions: async () => {
-              await this.host.refresh(scope);
+              await host.refresh(scope);
             },
           },
           pruneSidebarSessionEntry: (key) => {
@@ -103,7 +101,7 @@ export class SessionsPageArchive {
               selection: scope.context.agentSelection,
               gateway: scope.gateway,
               sessionKey: key,
-              agentId: this.host.agentId(key, scope.context),
+              agentId: host.agentId(key, scope.context),
             });
           },
           sidebarSessionStatusFilter: () => "all",
@@ -116,7 +114,7 @@ export class SessionsPageArchive {
     const onConfirmed = prepareArchiveOutcome(
       scope.sessions,
       row,
-      this.host.agentId(row.key, scope.context),
+      host.agentId(row.key, scope.context),
     );
     if (!onConfirmed) {
       return;
@@ -126,7 +124,7 @@ export class SessionsPageArchive {
       return;
     }
     try {
-      await this.host.patch(row.key, { archived: true }, scope, row.sessionId, {
+      await host.patch(row.key, { archived: true }, scope, row.sessionId, {
         onConfirmed,
         sessionScope: true,
       });
@@ -134,4 +132,5 @@ export class SessionsPageArchive {
       finishArchive();
     }
   }
+  return { archive };
 }

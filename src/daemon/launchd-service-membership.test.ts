@@ -50,23 +50,34 @@ describe("LaunchAgent service membership", () => {
     expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
   });
 
-  it("surfaces detached handoff failures", async () => {
-    const env = createDefaultLaunchdEnv();
-    nativeServiceMembership.mockReturnValue("inside");
-    launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
-      ok: false,
-      error: "spawn failed",
-    });
+  it.each(["synchronous", "asynchronous"] as const)(
+    "surfaces %s detached handoff failures",
+    async (failure) => {
+      const env = createDefaultLaunchdEnv();
+      const stdout = new PassThrough();
+      const onMutation = vi.fn();
+      nativeServiceMembership.mockReturnValue("inside");
+      launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue(
+        failure === "synchronous"
+          ? { ok: false, error: "spawn failed" }
+          : { ok: true, value: Promise.resolve(false) },
+      );
 
-    await expect(
-      withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
-        restartLaunchAgent({
-          env,
-          stdout: new PassThrough(),
-        }),
-      ),
-    ).rejects.toThrow("launchd restart handoff failed: spawn failed");
-  });
+      await expect(
+        withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+          restartLaunchAgent({
+            env,
+            stdout,
+            onMutation,
+          }),
+        ),
+      ).rejects.toThrow(
+        `launchd restart handoff failed: ${failure === "synchronous" ? "spawn failed" : "helper failed to spawn"}`,
+      );
+      expect(onMutation).not.toHaveBeenCalled();
+      expect(stdout.read()?.toString() ?? "").not.toContain("Scheduled LaunchAgent restart");
+    },
+  );
 
   it.each([
     { action: "install", membership: "inside" },

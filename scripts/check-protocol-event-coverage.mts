@@ -3,7 +3,7 @@
 // Guards gateway -> mobile-client event coverage drift.
 //
 // Source of truth for server->client event names is GATEWAY_EVENTS in
-// src/gateway/server-methods-list.ts (the catalog advertised to clients in
+// src/gateway/events.ts (the catalog advertised to clients in
 // hello-ok `features.events`). packages/gateway-protocol only types the event
 // frame envelope (`event: NonEmptyString`), so the gateway catalog is the most
 // canonical single list of wire event names.
@@ -25,8 +25,7 @@ import { upperCamel } from "./lib/protocol-codegen-names.mts";
 // canonical @openclaw/normalization-core import cannot resolve here.
 import { isRecord } from "./lib/record-shared.mjs";
 
-const GATEWAY_EVENTS_FILE = "src/gateway/server-methods-list.ts";
-const GATEWAY_EVENT_CONSTANTS_FILE = "src/gateway/events.ts";
+const GATEWAY_EVENTS_FILE = "src/gateway/events.ts";
 const ALLOWLIST_FILE = "scripts/protocol-event-coverage.allowlist.json";
 
 // Scan roots per client. The sentinel files are the primary event dispatch
@@ -104,12 +103,12 @@ function isMainModule(): boolean {
 }
 
 /**
- * Extracts the gateway event name list from server-methods-list.ts source.
+ * Extracts the gateway event name list from events.ts source.
  * Bare identifiers in the array (e.g. GATEWAY_EVENT_UPDATE_AVAILABLE) are
- * resolved against constantsSource (src/gateway/events.ts).
+ * resolved against constants in the same source.
  */
-export function extractGatewayEventNames(listSource: string, constantsSource: string): string[] {
-  const block = GATEWAY_EVENTS_BLOCK_RE.exec(listSource);
+export function extractGatewayEventNames(source: string): string[] {
+  const block = GATEWAY_EVENTS_BLOCK_RE.exec(source);
   if (!block) {
     throw new Error(
       `Could not find the GATEWAY_EVENTS array in ${GATEWAY_EVENTS_FILE}. ` +
@@ -126,12 +125,10 @@ export function extractGatewayEventNames(listSource: string, constantsSource: st
       continue;
     }
     const identifier = requiredCapture(token, 2);
-    const constant = new RegExp(`export const ${identifier} = "([^"]+)"`, "u").exec(
-      constantsSource,
-    );
+    const constant = new RegExp(`export const ${identifier} = "([^"]+)"`, "u").exec(source);
     if (!constant) {
       throw new Error(
-        `Could not resolve GATEWAY_EVENTS identifier "${identifier}" from ${GATEWAY_EVENT_CONSTANTS_FILE}.`,
+        `Could not resolve GATEWAY_EVENTS identifier "${identifier}" from ${GATEWAY_EVENTS_FILE}.`,
       );
     }
     names.push(requiredCapture(constant, 1));
@@ -698,10 +695,7 @@ function collectStringConstants(sources: Iterable<string>, language: "Swift" | "
 function collectProtocolEventCoverageErrors() {
   const rootDir = process.cwd();
 
-  const serverEvents = extractGatewayEventNames(
-    readRequiredFile(rootDir, GATEWAY_EVENTS_FILE),
-    readRequiredFile(rootDir, GATEWAY_EVENT_CONSTANTS_FILE),
-  );
+  const serverEvents = extractGatewayEventNames(readRequiredFile(rootDir, GATEWAY_EVENTS_FILE));
   const allowlist = loadAllowlist(rootDir);
   const clients = [
     {

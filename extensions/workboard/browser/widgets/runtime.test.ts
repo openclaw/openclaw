@@ -1,4 +1,5 @@
 import "../test/dom.setup.ts";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ControlUiHost, ControlUiWidget } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { flush } from "solid-js";
@@ -108,6 +109,39 @@ function changeStatus(container: HTMLElement, status = "running") {
   select.value = status;
   select.dispatchEvent(new Event("change"));
 }
+
+it("discloses incomplete widget data and loads an absent card on demand for read-only viewers", async () => {
+  const first = expectDefined(cards[0], "first card");
+  const cursor = { id: first.id, position: first.position, createdAt: first.createdAt };
+  const request = vi.fn(async (_method: string, params?: unknown) => {
+    // SAFETY: this fixture receives the cards-list request contract.
+    const input = params as { after?: unknown };
+    return input.after
+      ? snapshot(cards.slice(1))
+      : { ...snapshot(cards.slice(0, 1)), nextCursor: cursor };
+  });
+  const { mount } = setup(request);
+  const mini = mount("mini", {}, false);
+  const card = mount("card", { cardId: "running" }, false);
+  const widgets = [mini, card, mount("board", {}, false)];
+  await afterWorkboardUpdate(() => {
+    for (const widget of widgets) {
+      expect(widget.container.textContent).toContain(
+        "Counts and results include loaded cards only",
+      );
+    }
+    expect(card.container.textContent).toContain("This card is not loaded yet");
+    expect(card.container.textContent).not.toContain("no longer available");
+  });
+  card.container.querySelector<HTMLButtonElement>("button")!.click();
+  await afterWorkboardUpdate(() => {
+    expect(card.container.textContent).toContain("Running card");
+    for (const widget of widgets) {
+      expect(widget.container.textContent).not.toContain("Load more cards");
+    }
+  });
+  expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { after: cursor });
+});
 
 it.each([false, true])(
   "shows connection loss without claiming cards disappeared (previously loaded: %s)",

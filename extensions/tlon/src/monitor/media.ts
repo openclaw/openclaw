@@ -6,11 +6,7 @@ const MAX_IMAGES_PER_MESSAGE = 8;
 type TlonInboundMedia = { path: string; contentType: string };
 
 /** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
-export function buildTlonInboundMediaPrompt(
-  messageText: string,
-  attachments: readonly TlonInboundMedia[],
-) {
-  const media = attachments.map((attachment) => ({ ...attachment }));
+export function buildTlonInboundMediaPrompt(messageText: string, media: TlonInboundMedia[]) {
   if (media.length === 0) {
     return { body: messageText, media };
   }

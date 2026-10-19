@@ -1,23 +1,30 @@
+import type { Buffer } from "node:buffer";
 import type {
   SessionCatalog,
   SessionsCatalogHostEvent,
 } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
-import type {
-  AgentsListResult,
-  GatewaySessionRow,
-  PresenceEntry,
-  SessionsListResult,
-} from "../api/types.ts";
+import type { AgentsListResult, PresenceEntry } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
+import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
-import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import {
+  createTeamScaleSessionEvents,
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
+import {
+  createTeamScaleCronInventory,
+  createTeamScaleSessionInventory,
+} from "./control-ui-team-scale-inventory.ts";
+import {
+  createTeamScalePeople,
+  TEAM_SCALE_SELF_INSTANCE_ID,
+} from "./control-ui-team-scale-people.ts";
+
+export { TEAM_SCALE_SELF_INSTANCE_ID };
 
 const TEAM_SCALE_COUNTS = {
   sessions: 300,
@@ -26,7 +33,11 @@ const TEAM_SCALE_COUNTS = {
   owners: 34,
   people: 120,
   agents: 6,
-  plugins: 6,
+  plugins: 7,
+  cronJobs: 120,
+  childSessions: 54,
+  cronSessions: 24,
+  systemSessions: 12,
   transcriptMessages: 240,
   inlineWidgets: 12,
   catalogHosts: 6,
@@ -36,13 +47,16 @@ const TEAM_SCALE_COUNTS = {
 
 const TEAM_SCALE_CATALOG_PROGRESS_ID = "team-scale-progress";
 const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
-export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
 
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-type FixtureAsset = { body: string; contentType: string; status?: number; delayMs?: number };
-type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
+type FixtureAsset = {
+  body: string | Buffer;
+  contentType: string;
+  status?: number;
+  delayMs?: number;
+};
 type FixtureOptions = {
   baseUrl?: string;
   now?: number;
@@ -52,11 +66,11 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  sessionEventChurn?: boolean;
+  duplicateBootReads?: boolean;
+  closedMenuMembers?: boolean;
+  largeSnapshot?: boolean;
 };
-
-function personId(index: number) {
-  return `team-person-${String(index + 1).padStart(3, "0")}`;
-}
 
 function widgetHtml(index: number) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Team metric ${index + 1}</title>
@@ -67,10 +81,12 @@ function widgetHtml(index: number) {
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
-  const counts = TEAM_SCALE_COUNTS;
+  const counts = {
+    ...TEAM_SCALE_COUNTS,
+    transcriptMessages: options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages,
+  };
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
-  const assets = new Map<string, FixtureAsset>();
   const agentNames = ["Harbor", "Forge", "Scout", "Atlas", "Cedar", "Beacon"];
   const agents: AgentsListResult = {
     defaultId: "main",
@@ -82,94 +98,31 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       identity: { name, emoji: ["⚓", "🔧", "🔭", "🗺️", "🌲", "💡"][index] },
     })),
   };
-  const people: ControlUiMockPresenceUser[] = Array.from({ length: counts.people }, (_, index) => ({
-    id: personId(index),
-    identity: { type: "profile", id: personId(index) },
-    self: index === 0,
-    name: `Fixture person ${String(index + 1).padStart(3, "0")}`,
-    email: `person-${index + 1}@example.test`,
-    ...(options.sidebarLiveChurn
-      ? { avatarUrl: `/api/users/${personId(index)}/avatar?v=${now}` }
-      : {}),
-    instanceId: index === 0 ? TEAM_SCALE_SELF_INSTANCE_ID : `team-client-${index + 1}`,
-    mode: "webchat",
-    platform: "MacIntel",
-    deviceFamily: "Mac",
-    timeZone: "America/Los_Angeles",
-    ts: now,
-    onlineSince: now - 3_600_000 - index * 60_000,
-    lastActivityAt: now - index * 1_000,
-    lastInputSeconds: index,
-  }));
-  const profiles: UserProfile[] = people.map((person) => ({
-    id: person.id,
-    displayName: person.name ?? null,
-    emails: person.email ? [person.email] : [],
-    avatarMime: options.sidebarLiveChurn ? "image/png" : null,
-    hasAvatar: Boolean(options.sidebarLiveChurn),
-    githubIdentity: null,
-    mergedInto: null,
-    createdAt: now - 86_400_000,
-    updatedAt: now,
-  }));
-  // The selected agent owns a full 300-row roster; extra agent identities model
-  // the switcher without silently reducing the selected agent's page pressure.
-  const sessions: TeamScaleSession[] = Array.from({ length: counts.sessions }, (_, index) => {
-    const pinned = index >= counts.sessions - counts.pinned;
-    const owner = people[index % counts.owners]!;
-    const running = index < 24;
-    return {
-      key: `agent:main:${pinned ? "dashboard" : "chat"}:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
-      sessionId: `team-session-${index + 1}`,
-      agentId: "main",
-      kind: "direct",
-      label: pinned ? `Project dashboard ${index - 269}` : `Project discussion ${index + 1}`,
-      displayName: pinned ? `Project dashboard ${index - 269}` : `Project discussion ${index + 1}`,
-      updatedAt: now - index * 1_000,
-      createdAt: now - 86_400_000 - index * 1_000,
-      snapshotAt: now,
-      owner: { actor: { type: "human", id: owner.id, label: owner.name } },
-      participants: [{ identity: { type: "profile", id: owner.id }, label: owner.name }],
-      hasActiveRun: running,
-      status: running ? "running" : "done",
-      model: "gpt-5-mini",
-      modelProvider: "openai",
-      contextTokens: 200_000,
-      totalTokens: 4_000 + index * 31,
-      pinned,
-      ...(pinned
-        ? {
-            pinnedAt: now - index,
-            hasBoard: true,
-            boardFace: "dashboard" as const,
-          }
-        : {}),
-      lastMessagePreview: `Synthetic project ${index + 1}: reviewed the implementation and recorded the next concrete step.`,
-    };
+  const { people, profiles, avatarAssets, sharingMembers } = createTeamScalePeople(
+    counts.people,
+    now,
+    {
+      avatars: options.sidebarLiveChurn,
+      sharing: options.closedMenuMembers,
+    },
+  );
+  const assets = new Map<string, FixtureAsset>(avatarAssets);
+  const { sessions, pinnedRows, pinnedKeys, selectedSessionKey } = createTeamScaleSessionInventory({
+    now,
+    people,
+    counts,
   });
-  if (options.sidebarListChurn || options.sidebarLiveChurn) {
-    for (const [index, row] of sessions.entries()) {
-      const owner = people[index % counts.owners]!;
-      row.owner = {
-        actor: {
-          type: "human",
-          id: owner.id,
-          identity: { type: "profile", id: owner.id },
-          label: owner.name,
-        },
-      };
-      row.hiddenFromInvolvingMe = false;
-      if (index < 230 && owner.id !== people[0]!.id) {
-        row.participants = [
-          ...row.participants!,
-          { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
-        ];
-      }
-    }
+  const duplicateReads = options.duplicateBootReads
+    ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
+    : undefined;
+  if (duplicateReads) {
+    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
   }
-  const pinnedRows = sessions.slice(-counts.pinned);
-  const pinnedKeys = pinnedRows.map((row) => row.key);
-  const selectedSessionKey = pinnedKeys[0]!;
+  pinnedRows[0]!.sharingRole = "admin";
+  pinnedRows[0]!.visibility = "shared";
+  if (duplicateReads) {
+    pinnedRows[0]!.worktree = duplicateReads.worktree;
+  }
   if (options.liveRun) {
     Object.assign(pinnedRows[0]!, {
       hasActiveRun: true,
@@ -199,54 +152,40 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       });
     }
   }
-  const ownerSessionCounts = people.slice(0, counts.owners).map((person) => ({
-    profileId: person.id,
-    open: sessions.filter((row) => row.owner?.actor.id === person.id).length,
-    running: sessions.filter((row) => row.owner?.actor.id === person.id && row.hasActiveRun).length,
-  }));
-  const list = (
-    rows: GatewaySessionRow[],
-    totalCount = rows.length,
-    offset = 0,
-  ): SessionsListResult => ({
-    ts: now,
-    path: "",
-    count: rows.length,
-    totalCount,
-    offset,
-    hasMore: offset + rows.length < totalCount,
-    nextOffset: offset + rows.length < totalCount ? offset + rows.length : null,
+  const sidebarListInput = {
+    rows: sessions,
+    viewerProfileId: people[0]!.id,
+    now,
     defaults: { model: "gpt-5-mini", modelProvider: "openai", contextTokens: 200_000 },
-    sessions: rows,
-    ownerSessionCounts,
     owners: people.slice(0, counts.owners).map((person) => ({
-      type: "human",
+      type: "human" as const,
       id: person.id,
       identity: person.identity,
       label: person.name,
     })),
+  };
+  const { cronJobs, listCronJobs } = createTeamScaleCronInventory(
+    counts.cronJobs,
+    now,
+    selectedSessionKey,
+  );
+  const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
+    messageCount: counts.transcriptMessages,
+    inlineWidgets: counts.inlineWidgets,
+    now,
+    largeSnapshot: options.largeSnapshot,
+    attachments: duplicateReads?.attachments,
   });
-  const historyMessages = Array.from({ length: counts.transcriptMessages }, (_, index) => ({
-    role: index % 2 ? "assistant" : "user",
-    timestamp: now - (counts.transcriptMessages - index) * 60_000,
-    content: [
-      {
-        type: "text",
-        text: [
-          `### Project checkpoint ${index + 1}`,
-          "Review the synthetic work queue, confirm the dependency order, and record the owner of the next action. The fixture contains no real conversations or account data.",
-          index % 2
-            ? "The current implementation is ready for verification. Coverage includes the normal path, a recoverable failure, and the final user-visible result."
-            : "Please check the current progress and keep the existing layout stable while the remaining results arrive.",
-          ...(index % 20 === 19
-            ? [
-                `[embed ref="team-scale-chart-${Math.floor(index / 20) + 1}" title="Team metric ${Math.floor(index / 20) + 1}" height="220" /]`,
-              ]
-            : []),
-        ].join("\n\n"),
-      },
-    ],
-  }));
+  const largeHistory = options.largeSnapshot
+    ? {
+        messages: historyMessages,
+        sessionId: pinnedRows[0]!.sessionId,
+        sessionInfo: pinnedRows[0]!,
+        hasMore: false,
+        totalMessages: counts.transcriptMessages,
+        metadata: { models: [] },
+      }
+    : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -376,6 +315,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sessions,
     presenceUsers: people,
     historyMessages,
+    sessionReactions: {
+      [selectedSessionKey]: Object.fromEntries(
+        messageIds.map((id) => [
+          id,
+          [{ emoji: "👍", count: 1, identities: [{ id: people[1]!.id, label: people[1]!.name! }] }],
+        ]),
+      ),
+    },
     ...(options.liveRun
       ? {
           inFlightRun: {
@@ -401,9 +348,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "board.get",
       "canvas.document.view",
       "progressCard.get",
+      "cron.list",
+      "cron.status",
+      ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
+      ...(sharingMembers
+        ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
+        : {}),
       "question.list": { questions: [] },
+      ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
+      ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
         cases: agents.agents.map((agent) => ({
@@ -424,16 +379,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         },
       },
       "users.prefs.set": { status: "ok" },
-      "sessions.list": {
-        cases: [
-          { match: { pinned: true }, response: list(pinnedRows) },
-          { match: { hasBoard: true }, response: list(pinnedRows) },
-          {
-            match: { offset: counts.firstPage },
-            response: list(sessions.slice(counts.firstPage), counts.sessions, counts.firstPage),
-          },
-          { match: {}, response: list(sessions.slice(0, counts.firstPage), counts.sessions) },
-        ],
+      "cron.status": {
+        enabled: true,
+        triggersEnabled: true,
+        jobs: cronJobs.length,
+        nextWakeAtMs: now + 60_000,
       },
       "sessions.catalog.list": {
         catalogs: catalogs.map((catalog) =>
@@ -640,6 +590,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       }
     }
   }
+  if (options.sessionEventChurn) {
+    liveEvents.splice(0, liveEvents.length, ...createTeamScaleSessionEvents(sessions, now));
+  }
   return {
     scenario,
     selectedSessionKey,
@@ -647,17 +600,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sidebarEntries,
     events,
     liveEvents,
+    sidebarListInput,
+    cronJobs,
+    listCronJobs,
     sidebarLiveChurn: options.sidebarLiveChurn
       ? { equivalentAfterMs: 14_000, quietAfterMs: 15_000, durationMs: 20_000 }
-      : undefined,
-    sidebarListChurn: options.sidebarListChurn
-      ? {
-          rows: sessions,
-          viewerProfileId: people[0]!.id,
-          now,
-          defaults: list([]).defaults,
-          owners: list([]).owners,
-        }
       : undefined,
     liveHistory: options.liveRun
       ? {
@@ -672,7 +619,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           },
         }
       : undefined,
-    counts,
+    counts: { ...counts, sessions: sessions.length },
     assets,
   };
 }

@@ -128,7 +128,9 @@ const HERMES_RETIRED_QWEN_PROVIDER_IDS = new Set(["qwen-cli", "qwen-oauth", "qwe
 
 export function normalizeHermesProviderId(provider: string): string {
   const normalized = normalizeHermesCustomProviderId(provider);
-  return HERMES_PROVIDER_ALIASES[normalized] ?? normalized;
+  return Object.hasOwn(HERMES_PROVIDER_ALIASES, normalized)
+    ? (HERMES_PROVIDER_ALIASES[normalized] ?? normalized)
+    : normalized;
 }
 
 export function normalizeHermesCustomProviderId(provider: string): string {

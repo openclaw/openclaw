@@ -401,6 +401,10 @@ async function readClawHubClawContents(
             .map(([name, declaration]) => ({ name, source: declaration!.source })),
           ...manifest.workspace.files.map((file) => ({ name: file.path, source: file.source })),
         ];
+        // Native first-run instructions are seeded outside the managed workspace declarations.
+        if (verified.packageBootstrap) {
+          instructions.push({ name: "BOOTSTRAP.md", source: verified.packageBootstrap.sourcePath });
+        }
         if (verified.clawMarkdownBody && !instructions.some((file) => file.name === "SOUL.md")) {
           instructions.push({ name: "SOUL.md", source: "CLAW.md#body" });
         }

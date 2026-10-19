@@ -12,6 +12,7 @@ import {
   createModelVisibilityPolicyWithFallbacks,
   type ModelVisibilityPolicy,
 } from "./model-selection-shared.js";
+import { readUtilityModelSetting } from "./utility-model-setting.js";
 
 export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
   allowManifestNormalization: true,
@@ -25,6 +26,7 @@ export function resolveAdditionalConfiguredModelRefs(params: {
 }): string[] {
   const defaults = params.cfg.agents?.defaults;
   const agent = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+  const utility = readUtilityModelSetting(params.cfg, params.agentId);
   return [
     resolveAgentModelPrimaryValue(defaults?.model),
     ...resolveAgentModelFallbackValues(defaults?.model),
@@ -32,7 +34,8 @@ export function resolveAdditionalConfiguredModelRefs(params: {
     ...resolveAgentModelFallbackValues(agent?.model),
     ...Object.keys(defaults?.models ?? {}),
     ...Object.keys(agent?.models ?? {}),
-    agent?.utilityModel ?? defaults?.utilityModel,
+    ...(utility.kind === "explicit" ? [utility.modelRef] : []),
+    ...(utility.kind !== "disabled" ? utility.fallbacks : []),
     resolveAgentModelPrimaryValue(defaults?.imageModel),
     ...resolveAgentModelFallbackValues(defaults?.imageModel),
     resolveAgentModelPrimaryValue(defaults?.pdfModel),

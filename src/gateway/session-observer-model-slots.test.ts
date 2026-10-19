@@ -24,6 +24,33 @@ function modelState(index: number, terminalHealth?: "done" | "failed"): SessionO
 }
 
 describe("session observer model slots", () => {
+  it("retains physical reservations after logical owners leave the state map", () => {
+    const states = new Map<string, SessionObserverState>();
+    const slots = createSessionObserverModelSlots({
+      states,
+      resolve: () => "openai/gpt-test",
+      demote: (state) => {
+        state.utilityModelRef = undefined;
+      },
+    });
+    const running = Array.from({ length: 6 }, (_, index) => modelState(index));
+    for (const state of running) {
+      states.set(state.sessionKey, state);
+      expect(slots.reserve(state)).toBe(true);
+    }
+    expect(slots.reserve(running[0]!)).toBe(false);
+
+    const waiting = modelState(6);
+    expect(slots.claim(waiting.agentId)).toBe(waiting.utilityModelRef);
+    expect(running[0]?.utilityModelRef).toBeUndefined();
+    states.clear();
+    expect(slots.reserve(waiting)).toBe(false);
+
+    slots.release(running[0]!);
+    expect(slots.reserve(waiting)).toBe(true);
+    expect(slots.reserve(modelState(7))).toBe(false);
+  });
+
   it.each(["activity", "session-key"] as const)(
     "demotes the oldest nonterminal model state by %s",
     (order) => {
@@ -40,7 +67,6 @@ describe("session observer model slots", () => {
       const demote = vi.fn();
       const slots = createSessionObserverModelSlots({
         states,
-        maxSessions: 6,
         resolve: () => "openai/gpt-test",
         demote,
       });
@@ -63,7 +89,6 @@ describe("session observer model slots", () => {
       const demote = vi.fn();
       const slots = createSessionObserverModelSlots({
         states,
-        maxSessions: 6,
         resolve: () => "openai/gpt-test",
         demote,
       });

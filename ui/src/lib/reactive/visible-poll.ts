@@ -1,18 +1,21 @@
-import { onCleanup } from "solid-js";
+import { createEffect, createMemo, onCleanup } from "solid-js";
+import { listen } from "./listener.ts";
 
 /** A page-owned timer that pauses while hidden and catches up once on return. */
-export function useVisiblePoll(intervalMs: number, tick: () => void) {
-  let timer: ReturnType<typeof globalThis.setInterval> | null = null;
-  let running = false;
+export function useVisiblePoll(
+  intervalMs: number,
+  tick: () => void,
+  options?: { enabled: () => boolean; immediate?: boolean },
+) {
+  let timer: ReturnType<typeof globalThis.setInterval> | undefined;
+  let stopVisibility: (() => void) | undefined;
 
   const clearTimer = () => {
-    if (timer !== null) {
-      globalThis.clearInterval(timer);
-      timer = null;
-    }
+    globalThis.clearInterval(timer);
+    timer = undefined;
   };
   const startTimer = () => {
-    if (timer !== null || document.visibilityState === "hidden") {
+    if (timer !== undefined || document.visibilityState === "hidden") {
       return false;
     }
     timer = globalThis.setInterval(() => {
@@ -23,7 +26,7 @@ export function useVisiblePoll(intervalMs: number, tick: () => void) {
     return true;
   };
   const onVisibilityChange = () => {
-    if (!running) {
+    if (!stopVisibility) {
       return;
     }
     if (document.visibilityState === "hidden") {
@@ -33,20 +36,30 @@ export function useVisiblePoll(intervalMs: number, tick: () => void) {
     }
   };
   const stop = () => {
-    running = false;
-    document.removeEventListener("visibilitychange", onVisibilityChange);
+    stopVisibility?.();
+    stopVisibility = undefined;
     clearTimer();
   };
   onCleanup(stop);
 
   const start = () => {
-    if (running) {
+    if (stopVisibility) {
       return false;
     }
-    running = true;
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
     startTimer();
     return true;
   };
+  if (options) {
+    createEffect(createMemo(options.enabled), (enabled) => {
+      if (enabled) {
+        if (start() && options.immediate && document.visibilityState !== "hidden") {
+          tick();
+        }
+      } else {
+        stop();
+      }
+    });
+  }
   return { start, stop };
 }

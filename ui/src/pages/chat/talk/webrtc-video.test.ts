@@ -44,6 +44,8 @@ function cameraFixture(deviceId?: string) {
   const track = Object.assign(new EventTarget(), {
     stop: vi.fn(),
     readyState: "live",
+    enabled: true,
+    muted: false,
     ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
   });
   const stream = {
@@ -75,6 +77,8 @@ function dispatchDescribeViewToolCall(
     },
   });
 }
+
+const CAPTURE_CHANGES = ["unchanged", "disabled", "switched", "muted", "ended", "stopped"] as const;
 
 describe("OpenAI Realtime media lifecycle", () => {
   beforeEach(() => {
@@ -111,12 +115,16 @@ describe("OpenAI Realtime media lifecycle", () => {
     }
   });
 
-  it("starts audio-only, toggles local camera, and reports camera-off tool calls", async () => {
+  it.each(CAPTURE_CHANGES)("keeps camera consent through capture readiness: %s", async (change) => {
     const { track: audioTrack, stream: audio } = audioFixture();
     const { track: videoTrack, stream: camera } = cameraFixture();
     const audioStop = audioTrack.stop;
     const videoStop = videoTrack.stop;
-    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(audio)
+      .mockResolvedValueOnce(camera)
+      .mockResolvedValueOnce(cameraFixture("back").stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
     const originalCreateElement = document.createElement.bind(document);
@@ -160,6 +168,47 @@ describe("OpenAI Realtime media lifecycle", () => {
         item: expect.objectContaining({ content: expect.any(Array) }),
       }),
     );
+    if (change !== "unchanged") {
+      const pendingVideo = captureVideo;
+      try {
+        if (change === "disabled") {
+          await transport.setVideoEnabled(false);
+        } else if (change === "switched") {
+          await transport.switchCamera("back");
+        } else if (change === "muted") {
+          videoTrack.muted = true;
+        } else if (change === "ended") {
+          videoTrack.dispatchEvent(new Event("ended"));
+        } else {
+          transport.stop();
+        }
+        const sentBeforeRelease = sentRealtimeEvents(peer);
+        const noticesBeforeRelease = onTalkEvent.mock.calls.length;
+        // A detached preview may retain its decoded frame while the current camera changes.
+        videoReadyState = HTMLMediaElement.HAVE_CURRENT_DATA;
+        pendingVideo?.dispatchEvent(new Event("loadeddata"));
+        await vi.waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+        await Promise.resolve();
+        const events = sentRealtimeEvents(peer);
+        expect(events.filter(({ item }) => item?.type === "message")).toEqual([]);
+        if (change === "stopped") {
+          expect(events).toEqual(sentBeforeRelease);
+          expect(onTalkEvent).toHaveBeenCalledTimes(noticesBeforeRelease);
+        } else {
+          expect(events).toContainEqual({
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: "call-camera",
+              output: JSON.stringify({ ok: false, error: "camera is off" }),
+            },
+          });
+        }
+      } finally {
+        transport.stop();
+      }
+      return;
+    }
     videoReadyState = HTMLMediaElement.HAVE_CURRENT_DATA;
     captureVideo?.dispatchEvent(new Event("loadeddata"));
 

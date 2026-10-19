@@ -22,7 +22,10 @@ type ThinkingLevel = NonNullable<ProviderWrapStreamFnContext["thinkingLevel"]>;
 afterEach(() => vi.unstubAllGlobals());
 
 function mockOllama(modelId: string, thinking: unknown) {
-  const metadata = { digest: "first", thinking };
+  const metadata: { digest: string; thinking: unknown; parameterCount?: number } = {
+    digest: "first",
+    thinking,
+  };
   const requests: string[] = [];
   const chatBodies: Record<string, unknown>[] = [];
   vi.stubGlobal(
@@ -35,7 +38,10 @@ function mockOllama(modelId: string, thinking: unknown) {
       }
       if (pathname === "/api/show") {
         return jsonResponse({
-          model_info: { "test.context_length": 32768 },
+          model_info: {
+            "test.context_length": 32768,
+            "general.parameter_count": metadata.parameterCount,
+          },
           capabilities: ["completion", "thinking"],
           ...(metadata.thinking === undefined ? {} : { thinking: metadata.thinking }),
         });
@@ -125,6 +131,7 @@ describe("Ollama discovered thinking contracts", () => {
       values: [true],
       default: true,
     });
+    fixture.metadata.parameterCount = 70_000_000_000;
     const model = await fixture.discover("ollama", {
       id: "manual-mandatory-thinking:latest",
       name: "Manual thinking model",
@@ -137,6 +144,7 @@ describe("Ollama discovered thinking contracts", () => {
     });
     expect(model).toMatchObject({
       name: "Manual thinking model",
+      parameterCount: 70_000_000_000,
       contextWindow: 8192,
       maxTokens: 2048,
       compat: { supportsTools: false },

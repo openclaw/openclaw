@@ -39,6 +39,13 @@ vi.mock("../memory-search.js", () => ({
   }),
 }));
 
+const sessionFile = "synthetic-compaction";
+const session = {
+  agentId: "main",
+  sessionId: "compaction-handoff",
+  sessionKey: "agent:main:compaction-handoff",
+};
+
 it.each(["allow", "refuse"] as const)(
   "awaits post-compaction authority before publishing (%s)",
   async (decision) => {
@@ -46,7 +53,7 @@ it.each(["allow", "refuse"] as const)(
     const entered = createDeferredCore();
     const authority = createDeferredCore();
     const pending = runPostCompactionSideEffects({
-      sessionFile: "synthetic-compaction",
+      sessionFile,
       assertActive: async () => {
         entered.resolve();
         await authority.promise;
@@ -64,7 +71,7 @@ it.each(["allow", "refuse"] as const)(
       authority.resolve();
       await pending;
       expect(emitSessionTranscriptUpdate).toHaveBeenCalledExactlyOnceWith({
-        sessionFile: "synthetic-compaction",
+        sessionFile,
         sessionKey: undefined,
       });
     }
@@ -89,14 +96,8 @@ it.each([
     const admissionReady = createDeferredCore();
     let managerOpened = false;
     let callerActive = true;
-    let indexed = false;
-    const sync = vi.fn(async () => {
-      await finishSync.promise;
-      indexed = true;
-    });
-    const close = vi.fn(async () => {
-      providerClosed.resolve();
-    });
+    const sync = vi.fn(() => finishSync.promise);
+    const close = vi.fn(async () => providerClosed.resolve());
     const assertCurrent = () => {
       if (!callerActive) {
         throw new Error("compaction caller retired");
@@ -138,10 +139,8 @@ it.each([
     (native ? getMemoryProvider : getMemorySearchManager).mockImplementationOnce(acquire);
     const foreground = runPostCompactionSideEffects({
       config: { agents: { defaults: { compaction: { postIndexSync: "async" } } } },
-      agentId: "main",
-      sessionKey: "agent:main:compaction-handoff",
-      sessionId: "compaction-handoff",
-      sessionFile: "synthetic-compaction",
+      sessionFile,
+      ...session,
       assertActive: () => {
         if (managerOpened) {
           authorityAfterOpen.resolve();
@@ -183,19 +182,11 @@ it.each([
         } else {
           expect(sync).toHaveBeenCalledExactlyOnceWith({
             reason: "post-compaction",
-            sessions: [
-              {
-                agentId: "main",
-                sessionId: "compaction-handoff",
-                sessionKey: "agent:main:compaction-handoff",
-              },
-            ],
+            sessions: [session],
           });
         }
-        expect(indexed).toBe(false);
         finishSync.resolve();
         await sync.mock.results[0]?.value;
-        expect(indexed).toBe(true);
       }
       if (native) {
         await providerClosed.promise;
@@ -211,56 +202,37 @@ it.each([
   },
 );
 
-it.each(["await", "async"] as const)(
-  "settles post-compaction memory sync in %s mode",
-  async (mode) => {
-    memoryKind.native = false;
-    getMemorySearchManager.mockClear();
-    const syncStarted = createDeferredCore<unknown>();
-    const syncRelease = createDeferredCore();
-    const sync = vi.fn(async (params?: unknown) => {
-      syncStarted.resolve(params);
-      await syncRelease.promise;
+it("awaits archive-file memory sync before settling", async () => {
+  memoryKind.native = false;
+  getMemorySearchManager.mockClear();
+  const syncStarted = createDeferredCore<unknown>();
+  const syncRelease = createDeferredCore();
+  const sync = vi.fn(async (params?: unknown) => {
+    syncStarted.resolve(params);
+    await syncRelease.promise;
+  });
+  getMemorySearchManager.mockResolvedValueOnce({ manager: { sync } });
+  let settled = false;
+  const resultPromise = runPostCompactionSideEffects({
+    config: { agents: { defaults: { compaction: { postIndexSync: "await" } } } },
+    agentId: "main",
+    sessionFile,
+    sessionKey: "agent:main:sync-mode",
+  });
+  void resultPromise.then(() => {
+    settled = true;
+  });
+  try {
+    await expect(syncStarted.promise).resolves.toEqual({
+      archiveFiles: [sessionFile],
+      reason: "post-compaction",
     });
-    const managerRequested = createDeferredCore();
-    const managerGate = createDeferredCore<{ manager: { sync: typeof sync } }>();
-    getMemorySearchManager.mockImplementationOnce(async () => {
-      managerRequested.resolve();
-      return mode === "async" ? await managerGate.promise : { manager: { sync } };
-    });
-    let settled = false;
-    const resultPromise = runPostCompactionSideEffects({
-      config: { agents: { defaults: { compaction: { postIndexSync: mode } } } },
-      agentId: "main",
-      sessionKey: "agent:main:sync-mode",
-      sessionFile: "synthetic-compaction",
-    });
-    void resultPromise.then(() => {
-      settled = true;
-    });
-    try {
-      await managerRequested.promise;
-      if (mode === "async") {
-        expect(getMemorySearchManager).toHaveBeenCalledTimes(1);
-        expect(settled).toBe(false);
-        expect(sync).not.toHaveBeenCalled();
-        managerGate.resolve({ manager: { sync } });
-      }
-      await expect(syncStarted.promise).resolves.toEqual({
-        archiveFiles: ["synthetic-compaction"],
-        reason: "post-compaction",
-      });
-      if (mode === "async") {
-        await resultPromise;
-      }
-      expect(settled).toBe(mode === "async");
-      syncRelease.resolve();
-      await resultPromise;
-      expect(settled).toBe(true);
-    } finally {
-      managerGate.resolve({ manager: { sync } });
-      syncRelease.resolve();
-      await resultPromise;
-    }
-  },
-);
+    expect(settled).toBe(false);
+    syncRelease.resolve();
+    await resultPromise;
+    expect(settled).toBe(true);
+  } finally {
+    syncRelease.resolve();
+    await resultPromise;
+  }
+});

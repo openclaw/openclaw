@@ -25,5 +25,5 @@ export type NewSessionPlaceControlsOptions = {
   onConnectMachine: () => void;
   onNavigate: ApplicationContext["navigate"];
   onFocusComposer: () => void;
-  requestUpdate: () => void;
+  onChange: () => void;
 };

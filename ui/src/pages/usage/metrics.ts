@@ -23,16 +23,22 @@ function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
+/** A turn that ended before final usage leaves a known subtotal: show it as a lower bound. */
+function atLeast(value: string, report?: UsageTotals["usageReport"]): string {
+  return report?.state === "unavailable" ? t("usage.common.atLeast", { value }) : value;
+}
+
 function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): string {
-  return report?.state === "unavailable"
-    ? t("usage.common.unknown")
-    : formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
+  return atLeast(
+    formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false }),
+    report,
+  );
 }
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
 function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
-  return report?.state === "unavailable" ? t("usage.common.unknown") : `$${n.toFixed(decimals)}`;
+  return atLeast(`$${n.toFixed(decimals)}`, report);
 }
 
 export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {

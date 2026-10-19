@@ -117,6 +117,10 @@ type StreamingMarkdownState = {
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();
 
+export function streamingMarkdownStableHtml(streamKey?: string): string {
+  return streamKey ? (streamingCache.get(streamKey)?.rendered?.html ?? "") : "";
+}
+
 export function streamingMarkdownState(streamKey?: string): StreamingMarkdownState | undefined {
   if (!streamKey) {
     return undefined;

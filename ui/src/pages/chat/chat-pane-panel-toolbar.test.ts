@@ -2,8 +2,6 @@
 
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -11,7 +9,10 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./components/chat-pane-header.test-support.ts";
+import {
+  mountChatPaneHeader,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
@@ -22,6 +23,10 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   });
   const slot = "plugin:fixture/notes";
   const refresh = vi.fn();
+  const refreshButton = document.createElement("button");
+  refreshButton.setAttribute("aria-label", "Refresh notes");
+  refreshButton.textContent = "Refresh notes";
+  refreshButton.addEventListener("click", refresh);
   const definitions: SidebarPanelDefinition[] = [
     ...sidebarPanelDefinitions(),
     {
@@ -29,23 +34,17 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
       label: "Fixture notes",
       icon: sidebarPanelDefinitions()[0]!.icon,
       available: true,
-      content: solidContent(() => document.createTextNode("Notes"), {}),
-      loading: solidContent(() => document.createTextNode("Loading notes"), {}),
+      content: "Notes",
+      loading: { variant: "files", label: "Loading notes" },
       empty: { description: "No notes" },
-      headerAction: solidContent(() => {
-        const button = document.createElement("button");
-        button.setAttribute("aria-label", "Refresh notes");
-        button.textContent = "Refresh notes";
-        button.addEventListener("click", refresh);
-        return button;
-      }, {}),
+      headerAction: refreshButton,
     },
   ];
   state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());
   const paint = () => {
-    renderPaneLegacyContent(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         { key: state.sessionKey, kind: "direct", updatedAt: 0 },

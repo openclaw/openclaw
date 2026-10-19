@@ -1,4 +1,5 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -21,9 +22,10 @@ import {
 } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import {
-  isSessionTranscriptIndexStatusClean,
-  maintainSessionTranscriptIndexStatus,
-} from "./session-transcript-index-status.worker.js";
+  isSessionTranscriptIndexReady,
+  publishSessionTranscriptIndexReady,
+} from "./session-transcript-index-readiness.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -80,7 +82,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
     backend.assertOpen();
     if (command.type === "preflight" || command.type === "sweep") {
-      if (isSessionTranscriptIndexStatusClean(db)) {
+      if (isSessionTranscriptIndexReady(context.databasePath)) {
         return { sessionIds: [], hasMore: false, traversalComplete: true };
       }
       // Derived maintenance has no prepared row or publication facts. Admit the whole
@@ -89,7 +91,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
       context.admit("commit");
       let entered = false;
       try {
-        return runWithSqliteBusyTimeout(db, 0, () =>
+        const run = () =>
           runSqliteImmediateTransactionSync(
             db,
             () => {
@@ -100,8 +102,12 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
               operationLabel: `sessions.transcript-index.${command.type}`,
               beginLockFailureReporting: "suppress",
             },
-          ),
-        );
+          );
+        const status = isPostgresSqlConnection(db) ? run() : runWithSqliteBusyTimeout(db, 0, run);
+        if (!status.hasMore && status.sessionIds.length === 0) {
+          publishSessionTranscriptIndexReady(db, context.databasePath);
+        }
+        return status;
       } catch (error) {
         if (entered || !isSqliteLockError(error)) {
           throw error;

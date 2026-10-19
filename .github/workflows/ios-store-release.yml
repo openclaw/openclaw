@@ -1,10 +1,12 @@
 name: iOS Store Release
 
-run-name: iOS ${{ (github.event_name == 'schedule' || inputs.operation == 'testflight') && 'TestFlight distribution' || format('Store {0}', inputs.operation) }}
+run-name: iOS ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1' && 'Store release (weekly)' || (((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'TestFlight distribution' || format('Store {0}', inputs.operation)) }}
 
 on:
   schedule:
     - cron: "0 7 * * *"
+      timezone: America/Los_Angeles
+    - cron: "0 11 * * 1"
       timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
@@ -55,7 +57,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4.11"
           bundler: "4.0.22"
@@ -106,7 +108,8 @@ jobs:
   qualify:
     if: >-
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
-      github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
+      ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))
     permissions:
       actions: read
       contents: read
@@ -123,14 +126,16 @@ jobs:
     if: >-
       !cancelled() &&
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
-      ((github.event_name == 'schedule' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'testflight' || (inputs.operation == 'release' && needs.qualify.result == 'success'))))
+      ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'testflight') ||
+      (needs.qualify.result == 'success' &&
+      ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
     permissions:
       contents: write
     runs-on: xcode-27-xlarge
     timeout-minutes: 360
-    environment: ${{ (github.event_name == 'schedule' || inputs.operation == 'testflight') && 'ios-testflight' || 'ios-store-release' }}
+    environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'ios-testflight' || 'ios-store-release' }}
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,7 +158,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4.11"
           bundler: "4.0.22"
@@ -194,7 +199,7 @@ jobs:
 
       - name: Create apps-signing read token
         id: apps-signing-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -238,7 +243,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          IOS_RELEASE_DESTINATION: ${{ (github.event_name == 'schedule' || inputs.operation == 'testflight') && 'testflight' || 'app-store' }}
+          IOS_RELEASE_DESTINATION: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'testflight' || 'app-store' }}
           OPENCLAW_TESTFLIGHT_GROUP_ID: ${{ vars.OPENCLAW_TESTFLIGHT_GROUP_ID }}
           SCAN_APP_NAME: OpenClaw
           SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"

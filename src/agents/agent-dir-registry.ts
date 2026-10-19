@@ -51,19 +51,15 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
-      observeOwnedDirectory(
-        path.dirname(child),
-        (filename) => {
-          if (filename === undefined || filename === basename) {
-            if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
-              return;
-            }
-            preparedPaths.delete(pathname);
-            prepared.close();
+      observeOwnedDirectory(path.dirname(child), (filename) => {
+        if (filename === undefined || filename === basename) {
+          if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
+            return;
           }
-        },
-        { recoveryIntervalMs: 30_000 },
-      ),
+          preparedPaths.delete(pathname);
+          prepared.close();
+        }
+      }),
     );
   }
   // Fit the registered fleet plus this registration while bounding extra aliases.

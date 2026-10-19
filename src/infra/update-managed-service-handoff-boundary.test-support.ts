@@ -152,6 +152,7 @@ export function createManagedServiceManagerBoundary({
       ledger: Boolean(run),
       options,
     });
+    await options?.prepareState?.({ env, recoveryModulePath, sourceRuntimeImport });
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
@@ -662,7 +663,9 @@ export function createManagedServiceManagerBoundary({
         parentSignal: parent.signalCode,
         parkAdmitted: stdout.includes("park-admitted\n"),
         state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")),
-        sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
+        sentinel: options?.readSentinel
+          ? await options.readSentinel(env)
+          : readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
         ...(await spawnFixture.readCommandDeadlines()),
         savedFailure: await readSavedFailure(String(generated.triageContextPath)),

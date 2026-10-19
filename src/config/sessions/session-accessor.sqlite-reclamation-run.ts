@@ -68,6 +68,13 @@ function hasNativeReclamationOwner(): boolean {
   );
 }
 
+export function runSessionDeletionPlanning<Planning extends SessionDeletionPlanningOperation>(
+  resolved: ReturnType<typeof resolveSqliteStoreScope>,
+  params: DeleteSessionEntryLifecycleParams,
+  planning: Planning,
+  assertCurrent: () => void,
+  diagnostics?: SqliteSessionReclamationDiagnostics,
+): Promise<Extract<SessionDeletionPlanningResult, { operation: Planning["operation"] }>>;
 export async function runSessionDeletionPlanning(
   resolved: ReturnType<typeof resolveSqliteStoreScope>,
   params: DeleteSessionEntryLifecycleParams,
@@ -95,23 +102,25 @@ export async function runSessionDeletionPlanning(
       diagnostics,
     );
   }
-  const result = await runSqliteSessionReclamation({
-    diagnostics,
-    assertCommitAllowed: assertCurrent,
-    plan: {
-      kind: "deletion-plan",
-      databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
-      materializedPlans: [],
-      planning,
+  return withSessionEntryWorker(
+    resolveSessionReclamationDatabaseOptions(databaseOptions),
+    undefined,
+    assertCurrent,
+    async (execution, source) => {
+      await execution.prepare(source);
+      const result = await execution.runExisting(source, (worker) =>
+        worker.execute({ type: "session.lifecycle.deletePlan", input: planning }),
+      );
+      assertCurrent();
+      if (!result) {
+        throw new Error("Session deletion planning lost its admitted database");
+      }
+      return result;
     },
-  });
-  if (result.kind !== "deletion-plan") {
-    throw new Error(`SQLite session deletion planning returned ${result.kind}`);
-  }
-  return result.value;
+  );
 }
 
-export async function runSqliteSessionReclamation(params: {
+type SqliteSessionReclamationParams = {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
@@ -122,7 +131,23 @@ export async function runSqliteSessionReclamation(params: {
     databaseIdentity: string | symbol,
   ) => void;
   plan: SqliteSessionReclamationPlan;
-}): Promise<SqliteSessionReclamationResult> {
+};
+
+type SqliteSessionReclamationReply<Kind extends SqliteSessionReclamationPlan["kind"]> = Extract<
+  SqliteSessionReclamationResult,
+  {
+    kind:
+      | Kind
+      | (Kind extends "maintenance-plan" | "maintenance-age" ? "maintenance-plan-stale" : never);
+  }
+>;
+
+export function runSqliteSessionReclamation<Plan extends SqliteSessionReclamationPlan>(
+  params: Omit<SqliteSessionReclamationParams, "plan"> & { plan: Plan },
+): Promise<SqliteSessionReclamationReply<Plan["kind"]>>;
+export async function runSqliteSessionReclamation(
+  params: SqliteSessionReclamationParams,
+): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }

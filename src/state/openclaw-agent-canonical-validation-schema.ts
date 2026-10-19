@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -6,8 +8,11 @@ import {
 } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+
+export { canonicalSessionValidationSchemaSql } from "./openclaw-agent-schema-history.js";
 
 const validationTables = new Set([
   "session_nodes",
@@ -62,7 +67,14 @@ function readDefinitions(
 }
 
 /** Require the canonical admission schema before consuming its pending work. */
-export function assertCanonicalSessionValidationSchema(database: DatabaseSync): void {
+export function assertCanonicalSessionValidationSchema(database: EngineConnection): void {
+  if (isPostgresSqlConnection(database)) {
+    const facts = getPostgresPhysicalFacts(database);
+    if (facts?.store !== "agent" || facts.version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+      throw new Error("Session canonical validation requires current PostgreSQL agent admission");
+    }
+    return;
+  }
   const schema = getAdmittedSqliteSchemaFacts(database);
   const cookie = schema?.schemaVersion ?? readSqliteSchemaCookie(database);
   if (typeof cookie !== "number") {
@@ -91,26 +103,14 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
 }
 
 /** Writable admission may carry this assertion from its validated physical sibling. */
-export function adoptCanonicalSessionValidationSchema(database: DatabaseSync): void {
+export function adoptCanonicalSessionValidationSchema(database: EngineConnection): void {
+  if (isPostgresSqlConnection(database)) {
+    assertCanonicalSessionValidationSchema(database);
+    return;
+  }
   const schema = getAdmittedSqliteSchemaFacts(database);
   if (!schema) {
     throw new Error("Canonical schema handoff requires admitted schema facts");
   }
   validatedSchemas.set(database, { cookie: schema.schemaVersion, schema });
-}
-
-/** The schema owner installs the pending queue before seeding imported keys. */
-export function canonicalSessionValidationSchemaSql(schema = OPENCLAW_AGENT_SCHEMA_SQL): string {
-  return extractSqliteTableSchema(schema, "session_canonical_validation_pending", {
-    endMarker: "CREATE TABLE IF NOT EXISTS conversations (",
-    includeEndMarker: false,
-  });
-}
-
-/** Historical migration preflights cannot require the schema-21 validation projection. */
-export function withoutCanonicalSessionValidationSchema(schema: string): string {
-  if (!schema.includes("CREATE TABLE IF NOT EXISTS session_canonical_validation_pending (")) {
-    return schema;
-  }
-  return schema.replace(canonicalSessionValidationSchemaSql(schema), "");
 }

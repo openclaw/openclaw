@@ -22,12 +22,6 @@ export function readOriginalUpdateRecovery(
     : verifyPackageUpdateRecovery(params.root);
 }
 
-/** Refuse retained recovery before any package-only effects or diagnostic writes. */
-export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
-  opts.run?.executorFence?.assertCurrent();
-  assertUpdateCommandRecoveryState(opts);
-}
-
 export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): void {
   if (opts.recovery) {
     throw new UpdateCommandRecoveryPendingError(

@@ -8,6 +8,8 @@ import {
   createDeepSeekCompletionsModel,
   makeCompletionsChunk,
   makeCompletionsModel,
+  openRouterAnthropicModel,
+  openRouterModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
 
@@ -278,4 +280,143 @@ describe("openai completions DSML", () => {
     expect(output.content).toEqual([]);
     expect(events.filter((event) => event.type?.startsWith("toolcall_"))).toEqual([]);
   });
+
+  it.each([
+    openRouterModel,
+    makeCompletionsModel({
+      id: "deepseek-ai/DeepSeek-V4",
+      provider: "aggregator",
+      baseUrl: "https://llm.example/v1",
+    }),
+  ])("recovers DeepSeek DSML through $provider without leaking markup", async (model) => {
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const content =
+      '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/routed.md"}</|DSML|invoke></|DSML|tool_calls>';
+    await processCompletionsStream(
+      streamChunks([
+        ...Array.from(content, (char) => makeCompletionsChunk({ content: char })),
+        makeCompletionsChunk({}, "stop"),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+        name: "read",
+        arguments: { path: "/tmp/routed.md" },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "text_delta")).toEqual([]);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+  });
+
+  it("hides truncated OpenRouter DSML without authorizing a tool call", async () => {
+    const output = createAssistantOutput(openRouterModel);
+    const events: CapturedStreamEvent[] = [];
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk(
+          { content: '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/trunc' },
+          "length",
+        ),
+      ]),
+      output,
+      openRouterModel,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+    expect(output.stopReason).toBe("length");
+    expect(output.content).toEqual([]);
+    expect(
+      events.filter((event) => event.type === "text_delta" || event.type === "toolcall_end"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    { model: openRouterAnthropicModel, contentVisible: true },
+    { model: openRouterModel, contentVisible: false },
+  ])("keeps direct $model.id DSML non-executing", async ({ model, contentVisible }) => {
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const content =
+      '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/direct.md"}</|DSML|invoke></|DSML|tool_calls>';
+    await processCompletionsStream(
+      streamChunks([makeCompletionsChunk({ content }, "stop")]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      { mode: "direct", beforeContentBlock() {} },
+    );
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual(contentVisible ? [{ type: "text", text: content }] : []);
+    expect(events.filter((event) => event.type?.startsWith("toolcall_"))).toEqual([]);
+  });
+
+  it("leaves non-DeepSeek OpenRouter markup as text", async () => {
+    const output = createAssistantOutput(openRouterAnthropicModel);
+    const content =
+      '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/not-deepseek.md"}</|DSML|invoke></|DSML|tool_calls>';
+    await processCompletionsStream(
+      streamChunks([makeCompletionsChunk({ content }, "stop")]),
+      output,
+      openRouterAnthropicModel,
+      { push() {} },
+    );
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([{ type: "text", text: content }]);
+  });
+
+  it.each(["before", "same chunk", "after", "inside"])(
+    "confirms only the native call when it arrives %s DSML",
+    async (arrival) => {
+      const output = createAssistantOutput(openRouterModel);
+      const events: CapturedStreamEvent[] = [];
+      const content =
+        '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/duplicate.md"}</|DSML|invoke></|DSML|tool_calls>';
+      const native = {
+        tool_calls: [
+          {
+            index: 0,
+            id: "call_native",
+            type: "function",
+            function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+          },
+        ],
+      };
+      const deltas =
+        arrival === "same chunk"
+          ? [{ content, ...native }]
+          : arrival === "before"
+            ? [native, { content }]
+            : arrival === "after"
+              ? [{ content }, native]
+              : [{ content: content.slice(0, 60) }, native, { content: content.slice(60) }];
+      await processCompletionsStream(
+        streamChunks([
+          ...deltas.map((delta) => makeCompletionsChunk(delta)),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        openRouterModel,
+        { push: (event) => events.push(event as CapturedStreamEvent) },
+      );
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_native",
+          name: "read",
+          arguments: { path: "/tmp/native.md" },
+        },
+      ]);
+      expect(events.filter((event) => event.type === "text_delta")).toEqual([]);
+      expect(events.filter((event) => event.type === "toolcall_end")).toMatchObject([
+        { toolCall: { id: "call_native" } },
+      ]);
+    },
+  );
 });

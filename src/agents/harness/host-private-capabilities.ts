@@ -1,15 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
-  ReplyToolAuthorityOverlay,
-  ReplyToolAuthorityPreparation,
-  ReplyToolAuthorityRoute,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
+  ReplyToolAuthorityPreparation,
+  ReplyToolAuthorityRoute,
+} from "../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -138,7 +139,7 @@ export function prepareQuestionGatewayDispatch(
 }
 
 type CallerReadPreparer = (
-  caller: ReplyToolAuthorityOverlay | undefined,
+  caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined,
   fingerprint: string,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
@@ -212,7 +213,7 @@ export function bindReplyToolAuthorityCallerRead(
 
 export async function prepareReplyToolAuthorityCallerRead(
   projector: object | undefined,
-  caller: ReplyToolAuthorityOverlay | undefined,
+  caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined,
   fingerprint: string | undefined,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
@@ -496,10 +497,10 @@ export function registerAgentHarnessScheduledToolProjectionCapability(params: {
   ownerPluginId: string;
   create: AgentHarnessScheduledToolProjectionFactory;
 }): void {
-  scheduledToolProjectionCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, create: params.create }),
-  );
+  scheduledToolProjectionCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    create: params.create,
+  });
 }
 
 /** Resolves a private issuer only for the exact authoritative plugin owner. */
@@ -516,10 +517,10 @@ export function registerAgentHarnessTtsProvenanceTransferCapability(params: {
   ownerPluginId: string;
   transfer: AgentHarnessTtsProvenanceTransfer;
 }): void {
-  ttsProvenanceTransferCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, transfer: params.transfer }),
-  );
+  ttsProvenanceTransferCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    transfer: params.transfer,
+  });
 }
 
 /** Resolves private TTS delivery transfer only for the exact authoritative plugin owner. */

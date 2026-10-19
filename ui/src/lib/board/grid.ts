@@ -279,7 +279,7 @@ type BoardWidgetSizingInput = {
 
 export function boardWidgetGridItems(
   widgets: readonly (BoardWidgetSizingInput & { name: string; sizeW: number; position: number })[],
-  contentHeights: ReadonlyMap<string, number>,
+  contentHeights: Pick<ReadonlyMap<string, number>, "get">,
   fitAutoContent = false,
   pageWidgetName = "",
 ): BoardGridItem[] {

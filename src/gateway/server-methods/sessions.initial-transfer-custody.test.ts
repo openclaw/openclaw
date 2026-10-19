@@ -395,6 +395,21 @@ it.each([false, true])(
   },
 );
 
+it("releases cohort custody after a failed transfer so its caller can retry", async () => {
+  const { entry, settle } = await createYieldedChild();
+  const worker = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockRejectedValueOnce(new Error("requester transfer worker unavailable"));
+  try {
+    await expect(settle()).rejects.toThrow("requester transfer worker unavailable");
+    expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("staged-cohort-parent");
+  } finally {
+    worker.mockRestore();
+  }
+  await expect(settle()).resolves.toBe(true);
+  expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
+});
+
 it("rejects an overlapping claim without releasing the first authority preparation", async () => {
   const requesterTurnRunId = "joined-authority-parent";
   const runId = "joined-authority-child";

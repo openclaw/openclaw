@@ -2,6 +2,7 @@ import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import {
@@ -375,6 +376,7 @@ function isBlockingOutcome(outcome: LegacyMainSessionMigrationOutcome): boolean 
 async function migrateLegacyMainSessionKeysInternal(
   params: Parameters<typeof migrateLegacyMainSessionKeys>[0],
 ): Promise<LegacyMainSessionMigrationResult> {
+  const { cfg, mode } = params;
   const env = params.env ?? process.env;
   const legacyAgentId = normalizeAgentId(params.legacyAgentId ?? "main");
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
@@ -391,12 +393,9 @@ async function migrateLegacyMainSessionKeysInternal(
       // candidates fail open because they cannot prove the fleet is clean.
       let rowsMayExist: boolean;
       try {
-        const resolved = resolvePhysicalStores({
-          cfg: params.cfg,
-          env,
-          legacyAgentId,
-          mode: params.mode,
-        });
+        const resolved = withEngineStoreAdmission(() =>
+          resolvePhysicalStores({ cfg, env, legacyAgentId, mode }),
+        );
         base.warnings.push(...resolved.warnings);
         rowsMayExist =
           resolved.unreadable.length > 0 ||
@@ -431,13 +430,9 @@ async function migrateLegacyMainSessionKeysInternal(
     };
   }
   const ownerAgentId = arming.ownerAgentId;
-  const resolved = resolvePhysicalStores({
-    cfg: params.cfg,
-    env,
-    legacyAgentId,
-    mode: params.mode,
-    ownerAgentId,
-  });
+  const resolved = withEngineStoreAdmission(() =>
+    resolvePhysicalStores({ cfg, env, legacyAgentId, mode, ownerAgentId }),
+  );
   const outcomes: LegacyMainSessionMigrationOutcome[] = [
     ...resolved.jsonPaths.map((pathname) => ({
       kind: "legacy-json-store" as const,

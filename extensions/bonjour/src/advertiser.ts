@@ -265,12 +265,6 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
-    logger.debug(
-      `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
-        safeServiceName(instanceName),
-      )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
-    );
-
     const gateway = responder.createService({
       name: safeServiceName(instanceName),
       type: "openclaw-gw",

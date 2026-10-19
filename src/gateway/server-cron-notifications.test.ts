@@ -224,6 +224,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         });
       } else {
         await expect(delivery).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+        await expect(delivery).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
         expect(resolveCronAgent).not.toHaveBeenCalled();
         expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
         expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();

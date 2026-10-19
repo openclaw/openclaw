@@ -308,6 +308,39 @@ describe("compileMemoryWikiVault", () => {
     expect(sourcePage).not.toContain("### Referenced By");
   });
 
+  it("records backlinks from shortest-path, heading, and block wikilinks", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { vault: { renderMode: "obsidian" } },
+    });
+
+    await writePage(path.join(rootDir, "entities", "brad-groux.md"), {
+      frontmatter: { pageType: "entity", id: "entity.brad-groux", title: "Brad Groux" },
+      body: "# Brad Groux\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "teams-rollout.md"), {
+      frontmatter: { pageType: "concept", id: "concept.teams-rollout", title: "Teams Rollout" },
+      body: "# Teams Rollout\n\nOwned by [[brad-groux]].\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "release-train.md"), {
+      frontmatter: { pageType: "concept", id: "concept.release-train", title: "Release Train" },
+      body: "# Release Train\n\nSee [[entities/brad-groux#Responsibilities|Brad]].\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "block-reference.md"), {
+      frontmatter: { pageType: "concept", id: "concept.block-reference", title: "Block Reference" },
+      body: "# Block Reference\n\nSee [[brad-groux#^block]].\n",
+    });
+
+    await compileMemoryWikiVault(config);
+
+    const brad = await fs.readFile(path.join(rootDir, "entities", "brad-groux.md"), "utf8");
+    expect(brad).toContain("### Referenced By");
+    expect(brad).toContain("- [[concepts/block-reference|Block Reference]]");
+    expect(brad).toContain("- [[concepts/release-train|Release Train]]");
+    expect(brad).toContain("- [[concepts/teams-rollout|Teams Rollout]]");
+  });
+
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

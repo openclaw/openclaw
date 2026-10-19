@@ -49,6 +49,12 @@ process tree; a replacement instance is preserved. Transient SQLite sharing erro
 after confirmed process exit are retried; if inspection remains unavailable, the
 command warns and checks that the Gateway port is free before continuing with restart.
 
+Port confirmation shares the five-second settlement budget across the configured
+addresses, allowing slow Windows LAN connection refusals to confirm shutdown. If
+confirmation times out, the command reports an inconclusive result rather than a
+busy listener. Run `openclaw gateway status --deep` before retrying maintenance;
+a timeout does not prove that the port is free.
+
 If task settlement inspection remains unavailable
 within the stop budget, restart still attempts the captured task after confirming
 the Gateway exited, then reports that restart is unverified. An observed replacement

@@ -4,13 +4,16 @@ import { parseArgs } from "node:util";
 const statuses = new Set(["complete", "partial", "failed", "missing", "incompatible"]);
 const classifications = new Set(["runtime", "type", "mixed", "declarative"]);
 const help = `Query current public ClawHub plugin SDK usage (read-only; no credentials).
-Usage: node query.mjs <canonical-key> [--months <count> | --since <UTC-ISO-instant>] [--base-url https://clawhub.ai] [--max-pages 1000]
+Usage: node query.mjs <canonical-key> [--months <count> | --since <UTC-ISO-instant>] [--base-url https://clawhub.ai] [--max-pages 1000] [--full]
 Examples:
   node query.mjs 'api-member:api.registerTool'
   node query.mjs 'api-member:api.registerTool' --months 3
   node query.mjs 'api-member:api.registerTool' --since 2026-07-16T12:00:00Z
   node query.mjs 'sdk-export:openclaw/plugin-sdk/core#OpenClawPluginApi'
-Outputs JSON. Exit 1 means unavailable/incomplete traversal, never zero usage.
+Outputs JSON totals over all pages with at most 5 consumer, gap and warning examples.
+output.omitted counts examples excluded from the display, not from the analysis.
+Use --full > sdk-usage.json for every detail; read that file in sections.
+Exit 1 means unavailable/incomplete traversal, never zero usage.
 Exit 0 can still report incomplete coverage; inspect assessment and coverage.`;
 
 function requireShape(condition, message) {
@@ -79,7 +82,7 @@ function validateReleaseWindow(page, releasedSince) {
   }
 }
 
-async function query(key, baseUrl, maxPages, releasedSince) {
+async function query(key, baseUrl, maxPages, releasedSince, full) {
   const filter = releasedSince === undefined ? {} : { releasedSince: String(releasedSince) };
   const items = await pages(baseUrl, "/api/v1/sdk-usage", { key, ...filter }, maxPages, (page) => {
     validateReleaseWindow(page, releasedSince);
@@ -162,6 +165,13 @@ async function query(key, baseUrl, maxPages, releasedSince) {
     coverage.eligible === coverage.complete &&
     coverage.unresolvedReferences === 0 &&
     warnings.length === 0;
+  const sortedConsumers = [...consumers.values()].toSorted((a, b) =>
+    a.packageName.localeCompare(b.packageName),
+  );
+  const gaps = [...current.values()].filter(
+    (item) => item.status !== "complete" || item.unknownCount > 0,
+  );
+  const exampleLimit = full ? Infinity : 5;
   return {
     key,
     source: new URL(baseUrl).origin,
@@ -185,11 +195,18 @@ async function query(key, baseUrl, maxPages, releasedSince) {
     distinctPlugins: consumers.size,
     referenceCounts,
     coverage,
-    items: [...consumers.values()].toSorted((a, b) => a.packageName.localeCompare(b.packageName)),
-    gaps: [...current.values()].filter(
-      (item) => item.status !== "complete" || item.unknownCount > 0,
-    ),
-    warnings,
+    items: sortedConsumers.slice(0, exampleLimit),
+    gaps: gaps.slice(0, exampleLimit),
+    warnings: warnings.slice(0, exampleLimit),
+    output: {
+      detail: full ? "full" : "summary",
+      exampleLimit: full ? null : exampleLimit,
+      omitted: {
+        items: Math.max(0, sortedConsumers.length - exampleLimit),
+        gaps: Math.max(0, gaps.length - exampleLimit),
+        warnings: Math.max(0, warnings.length - exampleLimit),
+      },
+    },
     scope:
       "Observed static references in latest eligible public plugin artifacts. Pages are live reads, not an atomic snapshot. Private, unpublished and separately installed dependency code is outside this corpus.",
   };
@@ -204,6 +221,7 @@ try {
       since: { type: "string" },
       months: { type: "string" },
       help: { type: "boolean" },
+      full: { type: "boolean", default: false },
     },
   });
   if (values.help) {
@@ -255,7 +273,11 @@ try {
       }
     }
     console.log(
-      JSON.stringify(await query(key, values["base-url"], maxPages, releasedSince), null, 2),
+      JSON.stringify(
+        await query(key, values["base-url"], maxPages, releasedSince, values.full),
+        null,
+        2,
+      ),
     );
   }
 } catch (error) {

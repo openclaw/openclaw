@@ -1,11 +1,14 @@
 import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { evaluateDecisionInRegistry } from "../../../decisions/runtime.js";
+import {
+  evaluateDecisionV2Operation,
+  completeDecisionEvaluation,
+} from "../../../decisions/runtime.js";
+import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
 import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { log } from "../logger.js";
 import { prepareDecisionContext, type DecisionContextFacts } from "./attempt-decision-context.js";
 
 // UTF-16 code units of conversation text plus verbatim ordinary hook fields.
@@ -36,12 +39,19 @@ type EvaluateAttemptDecisionToolPrefilterParams = {
 export type DecisionPrefilterResult = {
   shouldPruneTools: boolean;
   restrictionApplied?: boolean;
-  isCurrent?: () => boolean;
   status: "proposed" | "retained" | "skipped" | "unavailable";
   reason: string;
   context?: DecisionContextFacts;
-  latencyMs?: number;
 };
+
+function isStrongNo(answer: DecisionAnswerV2 | undefined): boolean {
+  return (
+    answer?.type === "boolean" &&
+    typeof answer.probabilityTrue === "number" &&
+    answer.probabilityTrue < 0.35 &&
+    (answer.answer === undefined || answer.answer === false)
+  );
+}
 
 /** Ordinary unavailability preserves tools; cancellation and contract errors remain terminal. */
 export async function evaluateAttemptDecisionToolPrefilter(
@@ -87,7 +97,6 @@ export async function evaluateAttemptDecisionToolPrefilter(
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
     return skip("prompt-build-context-too-large", context.facts);
   }
-  const started = log.isEnabled("debug") ? performance.now() : undefined;
   const selection = resolveDecisionModelSetting(config, params.agentId);
   const isCurrent = () => {
     params.signal.throwIfAborted();
@@ -99,16 +108,19 @@ export async function evaluateAttemptDecisionToolPrefilter(
       currentSelection?.model === selection?.model
     );
   };
-  const outcome = await evaluateDecisionInRegistry(
+  const evaluation = await evaluateDecisionV2Operation(
     {
       state: {
-        latestRequest: context.latestRequest,
-        recentConversation: context.recentConversation,
-        omittedContext: {
-          olderConversation: context.facts.olderContextOmitted,
-          toolPayloads: context.facts.toolPayloadsOmitted,
+        type: "json",
+        value: {
+          latestRequest: context.latestRequest,
+          recentConversation: context.recentConversation,
+          omittedContext: {
+            olderConversation: context.facts.olderContextOmitted,
+            toolPayloads: context.facts.toolPayloadsOmitted,
+          },
+          ...(promptBuildFields ? { beforePromptBuild: promptBuildFields } : {}),
         },
-        ...(promptBuildFields ? { beforePromptBuild: promptBuildFields } : {}),
       },
       questions: {
         missing_request_context: {
@@ -136,6 +148,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     {
       agentId: params.agentId,
       purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
       rubricVersion: "9",
       timeoutMs: 500,
       signal: params.signal,
@@ -146,13 +159,20 @@ export async function evaluateAttemptDecisionToolPrefilter(
     isCurrent,
     () => isDecisionAssistanceEligible(readConfig(), params.agentId),
   );
+  params.signal.throwIfAborted();
+  params.assertActive();
+  const result = projectPrefilterResult(evaluation.outcome, context.facts);
+  completeDecisionEvaluation(evaluation);
+  return result;
+}
+
+function projectPrefilterResult(
+  outcome: DecisionOutcomeV2,
+  context: DecisionContextFacts,
+): DecisionPrefilterResult {
   const facts = {
-    context: context.facts,
-    ...(started === undefined ? {} : { latencyMs: Math.max(0, performance.now() - started) }),
+    context,
   };
-  if (!isCurrent()) {
-    return { shouldPruneTools: false, status: "retained", reason: "selection-changed", ...facts };
-  }
   if (outcome.status === "unavailable") {
     return { shouldPruneTools: false, status: "unavailable", reason: outcome.reason, ...facts };
   }
@@ -161,7 +181,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
   const needsTools = answers?.next_response_needs_tools;
   // Independent yes/no probabilities, not degrees or an extra confidence score.
   // A strong no to both is required; absent, uncertain, or affirmative answers retain tools.
-  if (missingContext?.type !== "boolean" || !(missingContext.probabilityTrue < 0.35)) {
+  if (!isStrongNo(missingContext)) {
     return {
       shouldPruneTools: false,
       status: "retained",
@@ -169,7 +189,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
       ...facts,
     };
   }
-  return needsTools?.type === "boolean" && needsTools.probabilityTrue < 0.35
-    ? { shouldPruneTools: true, isCurrent, status: "proposed", reason: "conversational", ...facts }
+  return isStrongNo(needsTools)
+    ? { shouldPruneTools: true, status: "proposed", reason: "conversational", ...facts }
     : { shouldPruneTools: false, status: "retained", reason: "action-or-uncertain", ...facts };
 }

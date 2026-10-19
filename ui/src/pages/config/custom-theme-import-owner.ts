@@ -9,15 +9,6 @@ type CustomThemeImportViewState = {
   busy: boolean;
   message: { kind: "success" | "error"; text: string } | null;
   expanded: boolean;
-  focusToken: number;
-};
-
-export const INITIAL_CUSTOM_THEME_IMPORT_STATE: CustomThemeImportViewState = {
-  url: "",
-  busy: false,
-  message: null,
-  expanded: false,
-  focusToken: 0,
 };
 
 type ImportMessages = {
@@ -29,7 +20,12 @@ type ImportMessages = {
 export class CustomThemeImportOwner {
   private currentImport: object | null = null;
   private gatewayScope = "";
-  private state = INITIAL_CUSTOM_THEME_IMPORT_STATE;
+  private state: CustomThemeImportViewState = {
+    url: "",
+    busy: false,
+    message: null,
+    expanded: false,
+  };
 
   constructor(private readonly publish: (state: CustomThemeImportViewState) => void) {}
 
@@ -56,7 +52,7 @@ export class CustomThemeImportOwner {
   }
 
   open(): void {
-    this.update({ expanded: true, focusToken: this.state.focusToken + 1 });
+    this.update({ expanded: true });
   }
 
   setUrl(url: string): void {

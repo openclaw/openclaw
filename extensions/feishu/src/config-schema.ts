@@ -5,6 +5,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   ReplyToModeSchema,
+  TtsConfigSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
@@ -74,7 +75,7 @@ const FeishuWebhookPathSchema = z
   });
 const TtsOverrideSchema = z
   .object({
-    auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
+    auto: TtsConfigSchema.unwrap().shape.auto,
     enabled: z.boolean().optional(),
     mode: z.enum(["final", "all"]).optional(),
     provider: z.string().optional(),

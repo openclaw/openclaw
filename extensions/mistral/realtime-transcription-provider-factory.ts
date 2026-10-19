@@ -1,9 +1,10 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription-session";
+import {
+  measureTranscriptDeltaBytes,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-provider";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
@@ -130,19 +131,6 @@ function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
     return `Mistral realtime transcription error (${event.error.code})`;
   }
   return "Mistral realtime transcription error";
-}
-
-function measureTranscriptDeltaBytes(partialText: string, delta: string): number {
-  const previousCodeUnit = partialText.charCodeAt(partialText.length - 1);
-  const nextCodeUnit = delta.charCodeAt(0);
-  const completesSplitSurrogatePair =
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    nextCodeUnit >= 0xdc00 &&
-    nextCodeUnit <= 0xdfff;
-  // Separate UTF-8 measurements encode split surrogates as two replacement
-  // characters (six bytes); the combined transcript encodes one four-byte code point.
-  return Buffer.byteLength(delta, "utf8") - (completesSplitSurrogatePair ? 2 : 0);
 }
 
 export function buildMistralRealtimeTranscriptionProvider({

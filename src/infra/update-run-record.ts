@@ -104,6 +104,7 @@ export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
   const origin = { ...record.origin };
   delete origin.updateRecoveryCapture;
+  delete origin.windowsUserSid;
   const verification = { ...record.verification };
   if (verification.recovery?.serviceRestartSafe === false) {
     verification.recovery = { ...verification.recovery };

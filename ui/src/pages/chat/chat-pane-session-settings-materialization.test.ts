@@ -9,8 +9,8 @@ import type {
   SessionsPatchResult,
 } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   readChatPaneMutationAccess,
@@ -304,7 +304,7 @@ it.each(["unbound", "materialized"] as const)(
         onModelSetup: vi.fn(),
       });
       const container = document.createElement("div");
-      renderPaneLegacyContent(controls.composerControls, container);
+      renderPaneModelControl(controls.composerControls, container);
       expect
         .soft(
           container.querySelector<HTMLElement>("[data-chat-thinking-select]")?.dataset
@@ -312,8 +312,8 @@ it.each(["unbound", "materialized"] as const)(
         )
         .toBe("medium");
       expect
-        .soft(container.querySelector("[data-chat-thinking-preview-committed]")?.textContent)
-        .toBe("Medium");
+        .soft(container.querySelector(".chat-controls__effort-picker summary")?.textContent)
+        .toContain("Medium");
       middleReply.reject(new Error("Synthetic rejection of the middle settings choice"));
       await expect(Promise.all([first, middle, last])).resolves.toEqual([true, false, true]);
       await expect(middleReady).resolves.toBe(false);

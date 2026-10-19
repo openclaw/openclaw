@@ -286,54 +286,41 @@ async function requestGoogleVideoJson(params: {
     provider: "google",
     stage: params.stage,
     operation: async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(
-        () => {
-          const error = new Error("request timed out");
-          error.name = "TimeoutError";
-          controller.abort(error);
+      const { response, release } = await fetchWithSsrFGuard({
+        url: params.url,
+        init: {
+          method: params.method,
+          headers: params.headers,
+          ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
         },
-        resolveProviderOperationTimeoutMs({
+        timeoutMs: resolveProviderOperationTimeoutMs({
           deadline: params.deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
-      );
+      });
       try {
-        const { response, release } = await fetchWithSsrFGuard({
-          url: params.url,
-          init: {
-            method: params.method,
-            headers: params.headers,
-            ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
-          },
-          signal: controller.signal,
-        });
-        try {
-          if (!response.ok) {
-            const text = new TextDecoder().decode(
-              await readResponseWithLimit(response, GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES, {
-                onOverflow: ({ maxBytes }) =>
-                  new Error(`Google video operation response exceeds ${maxBytes} bytes`),
-              }),
-            );
-            let detail: unknown = text;
-            if (text) {
-              try {
-                detail = JSON.parse(text) as unknown;
-              } catch {
-                detail = text;
-              }
+        if (!response.ok) {
+          const text = new TextDecoder().decode(
+            await readResponseWithLimit(response, GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES, {
+              onOverflow: ({ maxBytes }) =>
+                new Error(`Google video operation response exceeds ${maxBytes} bytes`),
+            }),
+          );
+          let detail: unknown = text;
+          if (text) {
+            try {
+              detail = JSON.parse(text) as unknown;
+            } catch {
+              detail = text;
             }
-            throw createHttpError(response, detail);
           }
-          return await readProviderJsonResponse(response, "Google video operation response", {
-            maxBytes: GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
-          });
-        } finally {
-          await release();
+          throw createHttpError(response, detail);
         }
+        return await readProviderJsonResponse(response, "Google video operation response", {
+          maxBytes: GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
+        });
       } finally {
-        clearTimeout(timeout);
+        await release();
       }
     },
   });
@@ -469,7 +456,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       let operation;
       try {
         operation = await client.models.generateVideos({
-          model,
+          model: stripGoogleProviderPrefix(model),
           prompt: req.prompt,
           image: resolveInputImage(req),
           video: resolveInputVideo(req),
@@ -508,11 +495,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         }
         operation = sdkOperation;
       }
-      let generatedVideos = extractGeneratedVideos(operation);
-      if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
-        operation = await generateViaRest();
-        generatedVideos = extractGeneratedVideos(operation);
-      }
+      const generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0) {
         throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
       }

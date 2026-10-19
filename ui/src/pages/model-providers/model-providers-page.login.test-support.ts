@@ -102,7 +102,7 @@ export function loginHarness(
 }
 
 export async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForSolid(() => expect(page.state.data?.updatedAt).toEqual(expect.any(Number)));
+  await waitForSolid(() => expect(page.view.props.updatedAt).toEqual(expect.any(Number)));
   await waitForSolid(() =>
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false),
   );
@@ -120,14 +120,14 @@ export async function selectProvider(page: ModelProvidersPageTestElement, provid
   await page.updateComplete;
 }
 
-export async function chooseLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
+export async function chooseLogin(page: ModelProvidersPageTestElement, label = "Example API key") {
   await openPicker(page);
   await selectProvider(page, "example");
-  clickLoginChoice(page, choice);
+  clickLoginChoice(page, label);
 }
 
-export async function openLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
+export async function openLogin(page: ModelProvidersPageTestElement, label = "Example API key") {
   await openPicker(page);
   await selectProvider(page, "example");
-  await startSelectedLogin(page, choice);
+  await startSelectedLogin(page, label);
 }

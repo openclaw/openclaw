@@ -1,4 +1,4 @@
-import { createMemo, untrack } from "solid-js";
+import { createMemo } from "solid-js";
 import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
@@ -14,7 +14,7 @@ export type { DreamingProps, DreamingViewState } from "./view-types.ts";
 registerSettingsEnglish();
 registerDreamingEnglish();
 
-const DREAM_PHRASE_KEYS = [
+export const DREAM_PHRASE_KEYS = [
   "dreaming.phrases.consolidatingMemories",
   "dreaming.phrases.tidyingKnowledgeGraph",
   "dreaming.phrases.replayingConversations",
@@ -34,8 +34,6 @@ const DREAM_PHRASE_KEYS = [
   "dreaming.phrases.whisperingVectorStore",
 ] as const;
 
-const DREAM_SWAP_MS = 6_000;
-
 export function createDreamingViewState(): DreamingViewState {
   return {
     dreamIndex: Math.floor(Math.random() * DREAM_PHRASE_KEYS.length),
@@ -43,26 +41,16 @@ export function createDreamingViewState(): DreamingViewState {
     activeSubTab: "scene",
     activeDiarySubTab: "dreams",
     advancedWaitingSort: "recent",
-    expandedInsightCards: new Set(),
-    expandedWikiCards: new Set(),
+    expandedInsightCards: {},
+    expandedWikiCards: {},
     diaryPage: 0,
-    wikiPreview: null,
   };
 }
 
-function currentDreamPhrase(state: DreamingViewState): string {
-  const now = Date.now();
-  if (now - state.dreamLastSwap > DREAM_SWAP_MS) {
-    state.dreamLastSwap = now;
-    state.dreamIndex = (state.dreamIndex + 1) % DREAM_PHRASE_KEYS.length;
-  }
-  return t(DREAM_PHRASE_KEYS[state.dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
-}
-
 export function renderDreaming(props: DreamingProps) {
-  const state = untrack(() => props.viewState);
-  const dreamText = createMemo(() => currentDreamPhrase(state));
-  const activeSubTab = createMemo(() => state.activeSubTab);
+  const state = () => props.viewState;
+  const dreamText = () => t(DREAM_PHRASE_KEYS[state().dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
+  const activeSubTab = createMemo(() => state().activeSubTab);
 
   return (
     <div class="dreams-page">
@@ -70,7 +58,7 @@ export function renderDreaming(props: DreamingProps) {
         <HubTabs<DreamingViewState["activeSubTab"]>
           {...{
             id: "dreams",
-            active: state.activeSubTab,
+            active: state().activeSubTab,
             tabs: [
               { value: "scene", label: t("dreaming.tabs.scene") },
               { value: "diary", label: t("dreaming.tabs.diary") },
@@ -80,8 +68,9 @@ export function renderDreaming(props: DreamingProps) {
             panelId: "dreams-panel",
             variant: "sub",
             onSelect: (tab) => {
-              state.activeSubTab = tab;
-              props.onViewStateChange();
+              props.onViewStateChange((draft) => {
+                draft.activeSubTab = tab;
+              });
             },
           }}
         />

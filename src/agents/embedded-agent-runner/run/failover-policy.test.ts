@@ -1,7 +1,7 @@
 // Failover policy tests cover the embedded run decision table for retry,
 // profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
-import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 

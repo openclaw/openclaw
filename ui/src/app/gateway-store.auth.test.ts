@@ -17,7 +17,6 @@ import {
   GATEWAY_STORE_TEST_HELLO as HELLO,
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
-import type { ApplicationGatewayConnectOptions } from "./gateway.ts";
 import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
@@ -212,9 +211,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
       await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
       const destination = new URL(replace.mock.calls[0]![0]);
       const resumed = resolveApplicationStartupSettings(loadSettings(), destination);
-      expect(resumed.pendingBootstrapToken).toBe(
-        handoff === "replacement" ? "replacement-bootstrap" : bootstrapToken,
-      );
+      expect(resumed.pendingBootstrapToken).toBe("replacement-bootstrap");
       expect(resumed.pendingBootstrapProfile).toBe("owner");
       expect(resumed.location.pathname).toBe("/settings/appearance");
       expect(new URLSearchParams(resumed.location.search).get("keep")).toBe("yes");
@@ -260,16 +257,14 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(gateway.snapshot.phase).toBe("reload-required");
   });
 
-  it.each([
-    { authReason: "trusted_proxy_user_not_allowed", expected: "trusted_proxy_user_not_allowed" },
-  ])("projects only a current recognized auth reason: $authReason", ({ authReason, expected }) => {
+  it("projects only a current recognized auth reason", () => {
     gateway.start();
     const rejected = rejection({
       code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
-      authReason,
+      authReason: "trusted_proxy_user_not_allowed",
     });
     current().opts.onClose?.(rejected);
-    expect(gateway.snapshot.lastErrorAuthReason).toBe(expected);
+    expect(gateway.snapshot.lastErrorAuthReason).toBe("trusted_proxy_user_not_allowed");
 
     const stale = current();
     gateway.connect();
@@ -331,14 +326,12 @@ describe("createApplicationGateway authentication diagnostics", () => {
       stopReopened();
     });
 
-    it.each([["shared token", { token: "synthetic-replacement-token" }]] satisfies Array<
-      [string, ApplicationGatewayConnectOptions]
-    >)("retires old payloads before connecting with a changed %s", (_name, overrides) => {
+    it("retires old payloads before connecting with a changed shared token", () => {
       const oldClient = current();
       const observed = vi.fn<(events: readonly EventLogEntry[]) => void>();
       gateway.subscribeEventLog(observed);
 
-      gateway.connect(overrides);
+      gateway.connect({ token: "synthetic-replacement-token" });
 
       expect(gateway.eventLog).toEqual([]);
       expect(observed).toHaveBeenLastCalledWith([]);
@@ -528,74 +521,68 @@ describe("canvas capability renewal", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([{ scopes: ["operator.sessions.write"] }])(
-    "does not renew a canvas capability without operator read access: $scopes",
-    async ({ scopes }) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      current().request.mockRejectedValue(
-        new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
-      );
-      const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
-      current().opts.onHello?.({
-        ...HELLO,
-        auth: { role: "operator", scopes },
-        pluginSurfaceUrls: { canvas: helloUrl },
-      });
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(57 * 60_000);
+  it("does not renew a canvas capability without operator read access", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().request.mockRejectedValue(
+      new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
+    );
+    const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
+    current().opts.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.sessions.write"] },
+      pluginSurfaceUrls: { canvas: helloUrl },
+    });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(57 * 60_000);
 
-      const refreshes = current().request.mock.calls.filter(
-        ([method]) => method === "plugin.surface.refresh",
-      );
-      expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(helloUrl);
-      gateway.stop();
-      expect(refreshes).toHaveLength(0);
-    },
-  );
+    const refreshes = current().request.mock.calls.filter(
+      ([method]) => method === "plugin.surface.refresh",
+    );
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(helloUrl);
+    gateway.stop();
+    expect(refreshes).toHaveLength(0);
+  });
 
-  it.each(["operator.read"])(
-    "renews with %s and stops after a reconnect without read access",
-    async (scope) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
-      const refreshedUrl = "https://canvas.test/__openclaw__/cap/refreshed";
-      current().request.mockImplementation(async (method) => {
-        if (method === "users.self") {
-          return { profile: { id: "reader", emails: [] } };
-        }
-        return {
-          surface: "canvas",
-          pluginSurfaceUrls: { canvas: refreshedUrl },
-          expiresAtMs: Date.now() + 60_000,
-        };
-      });
-      current().opts.onHello?.({
-        ...HELLO,
-        auth: { role: "operator", scopes: [scope] },
-        pluginSurfaceUrls: { canvas: helloUrl },
-      });
-      await vi.dynamicImportSettled();
-      expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(refreshedUrl);
-      await vi.advanceTimersByTimeAsync(45_000);
-      expect(
-        current().request.mock.calls.filter(([method]) => method === "plugin.surface.refresh"),
-      ).toHaveLength(2);
+  it("renews with operator.read and stops after a reconnect without read access", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
+    const refreshedUrl = "https://canvas.test/__openclaw__/cap/refreshed";
+    current().request.mockImplementation(async (method) => {
+      if (method === "users.self") {
+        return { profile: { id: "reader", emails: [] } };
+      }
+      return {
+        surface: "canvas",
+        pluginSurfaceUrls: { canvas: refreshedUrl },
+        expiresAtMs: Date.now() + 60_000,
+      };
+    });
+    current().opts.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      pluginSurfaceUrls: { canvas: helloUrl },
+    });
+    await vi.dynamicImportSettled();
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(refreshedUrl);
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(
+      current().request.mock.calls.filter(([method]) => method === "plugin.surface.refresh"),
+    ).toHaveLength(2);
 
-      current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
-      current().request.mockClear();
-      current().opts.onHello?.({
-        ...HELLO,
-        pluginSurfaceUrls: { canvas: helloUrl },
-      });
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(57 * 60_000);
-      const refreshes = current().request.mock.calls.filter(
-        ([method]) => method === "plugin.surface.refresh",
-      );
-      gateway.stop();
-      expect(refreshes).toHaveLength(0);
-    },
-  );
+    current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    current().request.mockClear();
+    current().opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: { canvas: helloUrl },
+    });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(57 * 60_000);
+    const refreshes = current().request.mock.calls.filter(
+      ([method]) => method === "plugin.surface.refresh",
+    );
+    gateway.stop();
+    expect(refreshes).toHaveLength(0);
+  });
 });

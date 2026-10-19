@@ -3,7 +3,10 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../src/gateway/control-ui-contract.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -367,47 +370,135 @@ describe("session hovercard", () => {
     },
   );
 
-  it("renders one titled PR row with compact diff facts and an overflow count", () => {
+  it("shows task publications without claiming unknown GitHub state or hiding branch actions", () => {
+    const branch = {
+      owner: "example",
+      repo: "project",
+      branch: "coordination",
+      createUrl: "https://github.com/example/project/pull/new/coordination",
+    };
+    const task = {
+      owner: "example",
+      repo: "project",
+      branch: "fix/child",
+      url: "https://github.com/example/project/pull/417",
+      number: 417,
+      title: "Child publication",
+      sourceSessionKey: "agent:main:child",
+      sourceAgentId: "main",
+    };
+    const container = renderCard({
+      pullRequests: snapshot({ branch, taskPullRequests: [task], taskPullRequestCount: 1 }),
+    });
+    const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__pr-row");
+    expect(link?.href).toBe(task.url);
+    expect(link?.dataset.state).toBeUndefined();
+    expect(link?.textContent).toContain("Status unavailable");
+    expect(link?.textContent).toContain("Task branch: fix/child");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".session-hovercard__branch-action")?.href,
+    ).toBe(branch.createUrl);
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 31,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("31");
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("29 more");
+    // The branch PR can also belong to receipts outside the bounded task preview.
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 30,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("30");
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(2);
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("28 more");
+    const known = { ...task, state: "merged" as const };
+    renderCard(
+      {
+        pullRequests: snapshot({
+          pullRequests: [known],
+          taskPullRequests: [{ ...task, pullRequest: known }],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(1);
+    expect(container.querySelector(".session-hovercard__pr-row")?.getAttribute("data-state")).toBe(
+      "merged",
+    );
+  });
+
+  it("shows all supplied PRs with active work first, identities, and checks", () => {
     const container = renderCard({
       pullRequests: snapshot({
-        pullRequests: [
-          {
-            number: 101,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            title: "First",
-            url: "https://github.com/openclaw/openclaw/pull/101",
-            state: "open",
-            changedFiles: 2,
-            additions: 7,
-            deletions: 3,
-            checks: { state: "passing", passed: 2, failed: 0, skipped: 0, running: 0 },
-          },
-          {
-            number: 102,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            title: "Second",
-            url: "https://github.com/openclaw/openclaw/pull/102",
-            state: "draft",
-          },
-          {
-            number: 103,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            title: "Third",
-            url: "https://github.com/openclaw/openclaw/pull/103",
-            state: "merged",
-          },
-        ],
+        pullRequests: (
+          [
+            {
+              number: 101,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "First",
+              url: "https://github.com/openclaw/openclaw/pull/101",
+              state: "open",
+              changedFiles: 2,
+              additions: 7,
+              deletions: 3,
+              checks: { state: "passing", passed: 2, failed: 0, skipped: 0, running: 0 },
+            },
+            {
+              number: 102,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Second",
+              url: "https://github.com/openclaw/openclaw/pull/102",
+              state: "draft",
+            },
+            {
+              number: 103,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Third",
+              url: "https://github.com/openclaw/openclaw/pull/103",
+              state: "merged",
+            },
+          ] satisfies ControlUiSessionPullRequest[]
+        ).toReversed(),
       }),
     });
 
     const links = [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")];
-    expect(links).toHaveLength(1);
+    expect(links).toHaveLength(3);
     expect(links[0]?.href).toBe("https://github.com/openclaw/openclaw/pull/101");
     expect(links[0]?.target).toBe("_blank");
     expect(links[0]?.rel).toContain("noopener");
@@ -415,7 +506,9 @@ describe("session hovercard", () => {
     expect(
       links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title"),
     ).toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__pr-number")).toBeNull();
+    expect(links[0]?.querySelector(".session-hovercard__pr-number")?.textContent).toBe(
+      "openclaw/openclaw#101",
+    );
     expect(links[0]?.querySelector(".session-hovercard__pr-author")).toBeNull();
     expect(
       links[0]?.querySelector(".session-hovercard__pr-state-icon")?.getAttribute("title"),
@@ -427,7 +520,11 @@ describe("session hovercard", () => {
     expect(links[0]?.getAttribute("aria-label")).toContain("First");
     expect(links[0]?.getAttribute("aria-label")).not.toContain("Opened by");
     expect(links[0]?.getAttribute("aria-label")).not.toContain("files");
-    expect(container.querySelector(".session-hovercard__more")?.textContent).toBe("+2 more");
+    expect(links.map((link) => link.dataset.state)).toEqual(["open", "draft", "merged"]);
+    expect(links[0]?.querySelector(".session-hovercard__pr-checks")?.textContent).toBe(
+      "CI checks passing",
+    );
+    expect(container.querySelector("details")).toBeNull();
     expect(container.querySelector(".session-hovercard__section--header")).toBeNull();
   });
 

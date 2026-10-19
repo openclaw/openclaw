@@ -7,7 +7,7 @@ import {
 } from "../infra/windows-port-pids.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { spawnCommandWithInvocation } from "./exec-spawn.js";
-import { spawnProcess, spawnWithFallback } from "./spawn-utils.js";
+import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
 vi.mock("node:module", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:module")>();
@@ -49,7 +49,7 @@ describe("AppContainer spawn boundaries", () => {
   it("refuses custom supervisor transports before their launch callback", async () => {
     const spawnImpl = vi.fn();
     await expect(
-      spawnWithFallback({ argv: ["guard-must-refuse"], options: { stdio: "pipe" }, spawnImpl }),
+      spawnAndWait({ argv: ["guard-must-refuse"], options: { stdio: "pipe" }, spawnImpl }),
     ).rejects.toThrow(AppContainerSpawnUnsupportedError);
     expect(spawnImpl).not.toHaveBeenCalled();
   });

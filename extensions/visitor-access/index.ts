@@ -70,10 +70,9 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
 
   let interval: ReturnType<typeof setInterval> | undefined;
   let sweeping: Promise<void> | undefined;
-  let startupSweep: Promise<void> | undefined;
+  let starting: Promise<void> | undefined;
   const sweep = () => {
-    sweeping ??= service
-      .sweep()
+    sweeping ??= (api.lifecycle.runInBackgroundContext?.(() => service.sweep()) ?? service.sweep())
       .catch((error: unknown) => {
         if (!lifetime.signal.aborted) {
           api.logger.error(
@@ -92,7 +91,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     if (active && active !== runtime) {
       throw new Error("A visitor-access Gateway service is already running.");
     }
-    return (startupSweep ??= (async () => {
+    return (starting ??= (async () => {
       await service.initialize();
       lifetime.signal.throwIfAborted();
       const current = visitorRuntimeStore.tryGetRuntime();
@@ -105,7 +104,8 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
         void sweep();
       }, 3_600_000);
       interval.unref();
-      await sweep();
+      // Admission checks the loaded grant's expiry; provider cleanup need not delay connects.
+      void sweep();
     })());
   };
   api.on("gateway_start", start);
@@ -119,6 +119,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
       service.close();
       lifetime.abort();
       await service.waitForIdle();
+      await sweeping;
       if (visitorRuntimeStore.tryGetRuntime() === runtime) {
         visitorRuntimeStore.clearRuntime();
       }

@@ -89,17 +89,17 @@ export function registerMcpRelayGatewayMethods(
               }
               if (operation === "authorize.describe") {
                 result = {
-                  ...(await active.consent.describe(params.requestId, assertCurrent)),
+                  ...(await active.describeConsent(params.requestId, assertCurrent)),
                   caller,
                 };
               } else if (operation === "authorize.approve") {
-                result = await active.consent.approve(
+                result = await active.approveConsent(
                   params.requestId,
                   consentAuthority(caller, params.ceiling),
                   assertCurrent,
                 );
               } else {
-                result = await active.consent.deny(params.requestId, assertCurrent);
+                result = await active.denyConsent(params.requestId, assertCurrent);
               }
             }
           }

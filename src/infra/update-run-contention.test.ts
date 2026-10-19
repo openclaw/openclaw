@@ -5,9 +5,15 @@ import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-com
 import * as existingWrites from "../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 import { captureUpdateRunRedactionFacts } from "./update-run-codec.js";
+import { executeUpdateRunCommand } from "./update-run-dispatch.worker.js";
 import { persistInterruptedUpdateObservation } from "./update-run-interruption-store.js";
 import {
   createUpdateRun,
@@ -80,6 +86,60 @@ function retentionCommand(
     },
   };
 }
+
+it.each(["progress", "required", "transient"] as const)(
+  "settles %s update receipts when the host policy check exceeds commit admission",
+  (kind) => {
+    const command = retentionCommand(false);
+    command.input.step = {
+      step: kind === "required" ? "finalize:checkpoint" : "candidate-state-snapshot",
+      status: "in_progress",
+    };
+    let now = process.hrtime.bigint();
+    let commits = 0;
+    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+      if (request.stage === "commit") {
+        commits++;
+        // Bound the broken implementation without letting an infinite retry hang the suite.
+        if (commits > 3) {
+          throw new Error("update receipt retried beyond its bound");
+        }
+        if (kind !== "transient" || commits === 1) {
+          now += 1_000_000_000n;
+        }
+      }
+      grant();
+    });
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+    vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      admission.service();
+      return "ok";
+    });
+    try {
+      const write = () =>
+        withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+          executeUpdateRunCommand(command, options, () => writer),
+        );
+      if (kind === "required") {
+        expect(write).toThrow("Update history could not obtain commit admission after 3 attempts");
+      } else {
+        expect(write()).toMatchObject({
+          kind: kind === "progress" ? "bookkeeping-skipped" : "recorded",
+        });
+      }
+      expect(commits).toBe(kind === "transient" ? 2 : 3);
+    } finally {
+      admission.finish();
+    }
+    const saved = getUpdateRun(runId, options);
+    expect(saved?.steps.some((step) => step.step === command.input.step.step)).toBe(
+      kind === "transient",
+    );
+    // Every expired attempt rolled back and released the writer, including the last one.
+    using competitor = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
+    competitor.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK;");
+  },
+);
 
 it("warns on contended bookkeeping and still records the required outcome", () => {
   const write = vi
@@ -194,9 +254,13 @@ it("restores the ordinary transaction wait after driver admission", () => {
   let connection: DatabaseSync | undefined;
   vi.spyOn(writer, "run").mockImplementation((operation, current) =>
     run((database) => {
+      const { db } = database;
+      if (isPostgresSqlConnection(db)) {
+        throw new Error("The busy-timeout fixture requires SQLite");
+      }
       const result = operation(database);
-      connection = database.db;
-      timeout = readSqliteBusyTimeout(database.db);
+      connection = db;
+      timeout = readSqliteBusyTimeout(db);
       return result;
     }, current),
   );

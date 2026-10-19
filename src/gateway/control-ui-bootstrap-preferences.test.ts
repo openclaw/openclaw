@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import { getCanonicalUserPreferences } from "../state/user-preferences.js";
 import { prepareControlUiBootstrapPreferences } from "./control-ui-bootstrap-preferences.js";
 
@@ -9,6 +10,7 @@ vi.mock("../state/user-preferences.js", () => ({
 }));
 
 it("includes only the viewer's presentation data and redacts MCP credentials", async () => {
+  using jsonSchema = vi.spyOn(OpenClawSchema, "toJSONSchema");
   const config: OpenClawConfig = {
     ui: { prefs: { locale: "de" } },
     models: {
@@ -50,6 +52,7 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
     expect.arrayContaining(["ui.themeMode", "ui.railShortcuts"]),
   );
   expect(JSON.stringify(bootstrap)).not.toMatch(/synthetic-(provider|mcp|header|env)-secret/);
+  expect(jsonSchema).not.toHaveBeenCalled();
   const reader = await prepareControlUiBootstrapPreferences(config, {
     operatorScopes: ["operator.approvals"],
   });

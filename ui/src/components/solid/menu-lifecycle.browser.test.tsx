@@ -12,11 +12,13 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import type { MenuItem } from "./menu.tsx";
+import type { MenuItem, MenuItemBindings } from "./menu.tsx";
 
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 async function finishHover() {
@@ -25,6 +27,169 @@ async function finishHover() {
 }
 
 describe("Solid menu branch lifetime", () => {
+  it("opens a clicked submenu without waiting for its pending hover delay", async () => {
+    mountMenu();
+    await openMenu();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await userEvent.hover(trigger("people-assign"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(surface("people-assign").matches(":popover-open")).toBe(false);
+    trigger("people-assign").click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(surface("people-assign").matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
+  });
+
+  it("prepares closed branches in idle slices after readiness and finishes synchronously on open", async () => {
+    const frames: FrameRequestCallback[] = [];
+    const idle = new Map<number, IdleRequestCallback>();
+    let nextIdle = 0;
+    const animation = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+      idle.set(++nextIdle, callback);
+      return nextIdle;
+    });
+    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
+    const runFrames = () => {
+      for (const callback of frames.splice(0)) {
+        callback(0);
+      }
+    };
+    const runIdle = () => {
+      const entry = idle.entries().next().value;
+      if (!entry) {
+        throw new Error("Expected pending idle work");
+      }
+      idle.delete(entry[0]);
+      entry[1]({ didTimeout: false, timeRemaining: () => 10 });
+      flush();
+    };
+    const [ready, setReady] = createSignal(false);
+    const avatar = vi.fn(() => <span>Avatar</span>);
+    const unopened = vi.fn(() => <button>Other content</button>);
+    const view = mountMenu({
+      lazy: true,
+      get prewarm() {
+        return ready();
+      },
+      items: [
+        {
+          id: "assign",
+          label: "Assign to",
+          prewarm: true,
+          children: () =>
+            Array.from({ length: 40 }, (_, id) => ({
+              id: String(id),
+              label: `Person ${id}`,
+              render: (attributes) => (
+                <button {...attributes}>
+                  {avatar()}Person {id}
+                </button>
+              ),
+            })),
+        },
+        {
+          id: "other",
+          label: "Other",
+          children: [{ id: "other-content", label: "Other content", render: unopened }],
+        },
+      ],
+    });
+    expect(idle.size).toBe(0);
+    setReady(true);
+    flush();
+    runFrames();
+    runFrames();
+    runIdle();
+    expect(avatar).not.toHaveBeenCalled();
+    runFrames();
+    runFrames();
+    runIdle();
+    expect(avatar.mock.calls.length).toBeGreaterThan(0);
+    expect(avatar.mock.calls.length).toBeLessThan(40);
+    const retained = item("Person 0", "people-assign");
+    expect(surface("people-assign").matches(":popover-open")).toBe(false);
+    animation.mockRestore();
+    expect(view.handle.open()).toBe(true);
+    await openMenu("people-assign");
+    expect(idle.size).toBe(0);
+    expect(avatar).toHaveBeenCalledTimes(40);
+    expect(unopened).not.toHaveBeenCalled();
+    expect(item("Person 0", "people-assign")).toBe(retained);
+    await userEvent.keyboard("{Escape}");
+    await phase(surface("people-assign"), "hidden");
+    await openMenu("people-assign");
+    expect(item("Person 0", "people-assign")).toBe(retained);
+    expect(avatar).toHaveBeenCalledTimes(40);
+  });
+
+  it("uses the timer fallback and cancels unfinished preparation on unmount", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"],
+    });
+    vi.stubGlobal("requestIdleCallback", undefined);
+    const avatar = vi.fn(() => <span>Avatar</span>);
+    const view = mountMenu({
+      lazy: true,
+      prewarm: true,
+      items: Array.from({ length: 40 }, (_, id) => ({
+        id: String(id),
+        label: `Person ${id}`,
+        render: (attributes) => (
+          <button {...attributes}>
+            {avatar()}Person {id}
+          </button>
+        ),
+      })),
+    });
+    vi.advanceTimersToNextFrame();
+    vi.advanceTimersToNextFrame();
+    await vi.advanceTimersByTimeAsync(50);
+    flush();
+    expect(avatar.mock.calls.length).toBeGreaterThan(0);
+    expect(avatar.mock.calls.length).toBeLessThan(40);
+    const constructed = avatar.mock.calls.length;
+    view.unmount();
+    await vi.runAllTimersAsync();
+    expect(avatar).toHaveBeenCalledTimes(constructed);
+  });
+
+  it.each(["array", "factory"] as const)(
+    "materializes %s submenus on open and retains their controls across closes",
+    async (kind) => {
+      const renderAda = vi.fn((attributes: MenuItemBindings) => (
+        <button {...attributes}>Ada Rivera</button>
+      ));
+      const entries = [{ id: "ada", label: "Ada Rivera", render: renderAda }];
+      mountMenu({
+        lazy: true,
+        items: [
+          {
+            id: "assign",
+            label: "Assign to",
+            children: kind === "array" ? entries : () => entries,
+          },
+        ],
+      });
+      expect(renderAda).not.toHaveBeenCalled();
+      await openMenu();
+      expect(renderAda).not.toHaveBeenCalled();
+      expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
+      await openMenu("people-assign");
+      const ada = item("Ada Rivera", "people-assign");
+      expect(renderAda).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("{Escape}");
+      await phase(surface("people-assign"), "hidden");
+      await openMenu("people-assign");
+      expect(item("Ada Rivera", "people-assign")).toBe(ada);
+      expect(renderAda).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("opens custom form content and retains it when generated items become empty", async () => {
     const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
     let input!: HTMLInputElement;

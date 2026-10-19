@@ -49,8 +49,11 @@ vi.mock("./update-command-schema.js", () => ({
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
   captureUpdateActivationSchemas: async () => ({}),
 }));
-vi.mock("./update-command-database-context.js", () => ({
-  inspectUpdateDatabaseContexts: async () => ({ services: new Map() }),
+vi.mock("./update-command-database-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-database-context.js")>()),
+  inspectUpdateDatabaseContexts: async (): ReturnType<
+    typeof import("./update-command-database-context.js").inspectUpdateDatabaseContexts
+  > => ({ services: new Map(), contexts: [], service: undefined, managedEnv: undefined }),
   revalidateUpdateDatabaseContexts: async (_params: unknown, context: unknown) => context,
 }));
 vi.mock("./update-command-managed-context.js", async (original) => ({

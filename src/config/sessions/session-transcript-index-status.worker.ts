@@ -10,6 +10,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import {
   readSqliteDatabaseSiblingWriteRevision,
   sqliteSessionIdWriteScope,
@@ -21,7 +22,11 @@ import {
   installSqliteTempTrackingSchema,
 } from "../../infra/sqlite-schema-facts.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  listSessionsNeedingTranscriptIndexReconcile,
+  selectSessionTranscriptIndexStatus,
+} from "./session-transcript-index.js";
 
 const projectionTables = [
   "session_transcript_active_events",
@@ -135,41 +140,8 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
   });
 }
 
-/** Consume the writer's clean receipt without taking a write lock or host write grants. */
-export function isSessionTranscriptIndexStatusClean(db: DatabaseSync): boolean {
-  const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  if (
-    siblingWriteRevision === undefined ||
-    !schema ||
-    installations.get(db)?.schemaVersion !== schema.schemaVersion
-  ) {
-    return false;
-  }
-  const temporary = getNodeSqliteKysely<StatusDatabase>(db).withSchema("temp");
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      temporary
-        .selectFrom("openclaw_transcript_index_status")
-        .select("id")
-        .where("id", "=", 1)
-        .where("sibling_write_revision", "=", siblingWriteRevision)
-        .where("schema_version", "=", schema.schemaVersion)
-        .where("complete", "=", 1)
-        .where((eb) =>
-          eb.not(
-            eb.exists(
-              temporary.selectFrom("openclaw_transcript_index_pending").select("session_id"),
-            ),
-          ),
-        ),
-    ) !== undefined
-  );
-}
-
 /** Advance bounded maintenance inside the canonical writer's transaction. */
-export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
+export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   sessionIds: string[];
   hasMore: boolean;
   traversalComplete: boolean;
@@ -178,6 +150,15 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
 } {
   if (!db.isTransaction) {
     throw new Error("Transcript projection status requires its writer transaction");
+  }
+  if (isPostgresSqlConnection(db)) {
+    deleteOrphanedTranscriptIndexRowsInTransaction(db);
+    const sessionIds = listSessionsNeedingTranscriptIndexReconcile(db, MAX_SESSIONS + 1);
+    return {
+      sessionIds: sessionIds.slice(0, MAX_SESSIONS),
+      hasMore: sessionIds.length > MAX_SESSIONS,
+      traversalComplete: true,
+    };
   }
   const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
   const schema = getAdmittedSqliteSchemaFacts(db);

@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
-import { prepareAssistantTranscriptText } from "./openclaw-runtime-session-visibility.js";
 import type { SessionResetRecallCutoff } from "./session-reset-recall.js";
 import type { MemoryEntryProvenance } from "./types.js";
 
@@ -48,7 +47,10 @@ export function collectRawSessionText(content: unknown): string | null {
 }
 
 /** Retain memory's input facts, not tool results, attachments, or provider replay payloads. */
-export function projectSessionEntryRecord(value: unknown): unknown {
+export function projectSessionEntryRecord(
+  value: unknown,
+  prepareTranscriptText: (message: unknown, text: string | undefined) => string | undefined,
+): unknown {
   const record = asOptionalRecord(value);
   if (!record) {
     return null;
@@ -83,7 +85,7 @@ export function projectSessionEntryRecord(value: unknown): unknown {
           timestamp: timestamp(message.timestamp),
           content:
             message.role === "user" || message.role === "assistant"
-              ? (prepareAssistantTranscriptText(
+              ? (prepareTranscriptText(
                   message,
                   collectRawSessionText(message.content) ?? undefined,
                 ) ?? null)

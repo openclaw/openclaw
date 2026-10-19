@@ -1,4 +1,3 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   createMissingReplyNotice,
   resolveReplyCompletion,
@@ -17,14 +16,15 @@ import {
   isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   retainSilentFinalPayloads,
+  markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
+  COLLABORATIVE_STEERING_DISABLED_TEXT,
   createFinalDispatchPayloadDedupeKey,
-  formatSuppressedReplyPayloadForLog,
   QUEUE_CAP_REJECTION_TEXT,
   shouldDeliverDespiteSourceReplySuppression,
 } from "./dispatch-from-config.payloads.js";
@@ -44,7 +44,6 @@ export const needsTtsFallback = (clean: boolean, visible: string, fallback?: str
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     cfg,
-    chatType,
     ctx,
     deferFinalTtsText,
     deliveryChannel,
@@ -77,6 +76,33 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const finalReplies = Array.isArray(finalResult) ? finalResult : finalResult ? [finalResult] : [];
   const replies =
     explicitSilence && !heartbeatReply ? retainSilentFinalPayloads(finalReplies) : finalReplies;
+  const queueAdmission = state.replyOperationRunState.admission;
+  const collaborativeSteeringRefused =
+    queueAdmission?.status === "skipped" &&
+    queueAdmission.reason === "collaborative-steering-disabled";
+  if (collaborativeSteeringRefused) {
+    const refusalNotice = markReplyPayloadForSourceSuppressionDelivery({
+      text: COLLABORATIVE_STEERING_DISABLED_TEXT,
+      isStatusNotice: true,
+    });
+    setReplyPayloadMetadata(refusalNotice, { queueAdmissionNotice: true });
+    replies.push(refusalNotice);
+  }
+  let queuedRequesterNotice: ReplyPayload | undefined;
+  if (
+    queueAdmission?.status === "accepted" &&
+    queueAdmission.mode === "followup" &&
+    (queueAdmission.reason === "requester-mismatch" ||
+      queueAdmission.reason === "explicit-followup" ||
+      queueAdmission.reason === "steering-unavailable")
+  ) {
+    queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
+      text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+      isStatusNotice: true,
+    });
+    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: true });
+    replies.push(queuedRequesterNotice);
+  }
   const pendingFinalDeliveryIdentity = replies
     .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
     .find((completion) => completion !== undefined);
@@ -124,6 +150,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
+      // Progress and earlier final deliveries can wait while a later input evicts this followup.
+      if (
+        reply === queuedRequesterNotice &&
+        state.replyOperationRunState.followupQueueDisposition === "queue-cap-old"
+      ) {
+        reply.text =
+          "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
+      }
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
       const laneSuppressed =
@@ -133,20 +167,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         !laneSuppressed &&
         suppressDelivery &&
         !shouldDeliverDespiteSourceReplySuppression(reply, state);
-      if (sourceSuppressed && hasOutboundReplyContent(reply, { trimText: true })) {
-        logVerbose(
-          [
-            `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
-            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
-            `provider=${ctx.Provider ?? "unknown"}`,
-            `surface=${ctx.Surface ?? "unknown"}`,
-            `chatType=${chatType ?? "unknown"}`,
-            `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
-            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
-            `${formatSuppressedReplyPayloadForLog(reply)})`,
-          ].join(" "),
-        );
-      }
       const finalPayloadDedupeKey =
         laneSuppressed || sourceSuppressed ? undefined : createFinalDispatchPayloadDedupeKey(reply);
       if (
@@ -171,6 +191,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             }
           : {}),
       });
+      if (finalReply.dispatcherOutcome) {
+        const operation = state.getDispatchReplyOperation();
+        void finalReply.dispatcherOutcome.then(
+          (outcome) => {
+            if (outcome === "delivered") {
+              operation?.watchdog.progress("finalization", "reply:final_delivered");
+            }
+          },
+          () => {},
+        );
+      }
       if (heartbeatReply?.settle) {
         const settle = heartbeatReply.settle;
         const outcome =
@@ -387,7 +418,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     const owned = state.replyOperationRunState.replyCompletion;
     return resolveReplyCompletion(
       owned?.expectation ?? "required",
-      beforeAgentRunBlocked || sendPolicyDenied || owned?.outcome === "blocked"
+      collaborativeSteeringRefused ||
+        beforeAgentRunBlocked ||
+        sendPolicyDenied ||
+        owned?.outcome === "blocked"
         ? "blocked"
         : owned?.outcome === "silent"
           ? "silent"
@@ -528,11 +562,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const dispatchOutcome =
     agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
-      : queueCapRejected || messageInjectionAborted || preRunRejection
+      : queueCapRejected ||
+          collaborativeSteeringRefused ||
+          messageInjectionAborted ||
+          preRunRejection
         ? "skipped"
         : "completed";
   const dispatchReason =
     questionFailure ??
+    (collaborativeSteeringRefused ? "collaborative-steering-disabled" : undefined) ??
     (queueCapRejected
       ? "queue-cap"
       : messageInjectionAborted
@@ -567,6 +605,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const result = state.attachSourceReplyDeliveryMode({
     queuedFinal,
     counts,
+    ...(collaborativeSteeringRefused ? { collaborativeSteeringRefused: true as const } : {}),
     ...(state.routeState.sessionMetadataChangesForResult
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
       : {}),

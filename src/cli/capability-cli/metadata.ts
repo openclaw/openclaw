@@ -263,10 +263,10 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   },
   {
     id: "web.fetch",
-    description: "Fetch URL content through configured web fetch providers.",
+    description: "Fetch URL content directly or through a selected web fetch provider.",
     transports: ["local"],
     flags: ["--url", "--provider", "--format", "--json"],
-    resultShape: "fetch provider result",
+    resultShape: "page content with fetch metadata",
   },
   {
     id: "web.providers",

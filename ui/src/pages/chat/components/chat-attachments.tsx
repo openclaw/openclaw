@@ -1,10 +1,8 @@
-import { createEffect, createMemo, For, Show, useContext } from "solid-js";
-import { observeScrollState } from "../../../components/scroll-state-observer.ts";
+import { createMemo, For, Show, onSettled } from "solid-js";
+import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
@@ -13,13 +11,14 @@ import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
-import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
+import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 
 function AttachmentImage(props: {
   attachment: ChatAttachment;
   alt: string;
   title: string;
   controls: ChatAttachmentControlsProps;
+  buttonRef?: (element: HTMLButtonElement) => void;
 }) {
   const src = () => getChatAttachmentPreviewUrl(props.attachment);
   return (
@@ -27,6 +26,7 @@ function AttachmentImage(props: {
       {(source) => (
         <Show when={props.controls.onOpenImage} fallback={<img src={source()} alt={props.alt} />}>
           <button
+            ref={[props.buttonRef]}
             type="button"
             class="chat-message-image-button chat-attachment-image-button"
             aria-label={t("chat.imageLightbox.open", { title: props.title })}
@@ -45,6 +45,14 @@ function BrowserAnnotationPreview(props: {
   annotation: BrowserAnnotationAttachment;
   controls: ChatAttachmentControlsProps;
 }) {
+  let previewButton: HTMLButtonElement | undefined;
+  let removeButton: HTMLButtonElement | undefined;
+  onSettled(() => {
+    const button = previewButton ?? removeButton;
+    return button
+      ? props.controls.registerBrowserAnnotationFocus?.(props.attachment.id, button)
+      : undefined;
+  });
   const identity = () =>
     props.annotation.title.trim() ||
     props.annotation.displayUrl.trim() ||
@@ -59,6 +67,9 @@ function BrowserAnnotationPreview(props: {
     >
       <div class="chat-browser-annotation-card__preview">
         <AttachmentImage
+          buttonRef={(element) => {
+            previewButton = element;
+          }}
           attachment={props.attachment}
           alt={t("chat.composer.browserAnnotationPreview")}
           title={identity()}
@@ -84,6 +95,9 @@ function BrowserAnnotationPreview(props: {
         </span>
       </div>
       <AttachmentRemove
+        buttonRef={(element) => {
+          removeButton = element;
+        }}
         label={t("chat.composer.removeBrowserAnnotation", { name: identity() })}
         disabled={props.controls.disabled}
         class="chat-attachment-remove chat-browser-annotation-card__remove"
@@ -305,31 +319,9 @@ function AttachmentPreviewStrip(props: {
   entries: readonly AttachmentPreviewEntry[];
   controls: ChatAttachmentControlsProps;
 }) {
-  const presented = useContext(ContentPresentation);
-  let host!: HTMLDivElement;
-  createEffect(presented, (active) => {
-    if (!active) {
-      return undefined;
-    }
-    const observation = observeScrollState(
-      host,
-      (state) => {
-        for (const key of ["scrollable", "atStart", "atEnd"] as const) {
-          host.dataset[key] = String(state[key]);
-        }
-      },
-      true,
-    );
-    return () => observation.disconnect();
-  });
   return (
-    <div
-      class="chat-attachments-preview"
-      ref={(element) => {
-        host = element;
-      }}
-    >
-      <LitContent value={renderChatSelectionAnnotations(props.controls)} />
+    <div class="chat-attachments-preview" ref={useScrollState(true)}>
+      <ChatSelectionAnnotations {...props.controls} />
       <For
         each={props.entries.filter(({ attachment }) => !attachment.selectionAnnotation)}
         keyed={(entry) => entry.attachment.id}

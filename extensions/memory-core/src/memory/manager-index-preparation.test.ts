@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { serialize } from "node:v8";
 import { describe, expect, it } from "vitest";
 import { prepareMemoryIndexChunks } from "./manager-index-preparation.js";
 
@@ -56,7 +57,6 @@ describe("heading chunks at the indexing boundary", () => {
         startLine: 1,
         endLine: 2,
         text: content,
-        embeddingInput: { text: content },
         hash: createHash("sha256").update(content).digest("hex"),
       }),
     ]);
@@ -85,4 +85,25 @@ describe("heading chunks at the indexing boundary", () => {
     });
     expect(chunks.map((chunk) => chunk.text)).toEqual(["## Unfinished"]);
   });
+});
+
+describe("plain-text indexing worker payload", () => {
+  it.each([undefined, { id: "test", maxInputTokens: 4096 }])(
+    "transfers source text once, including provider-limited fragments (%j)",
+    (provider) => {
+      const content = "a".repeat(64 * 1024);
+      const prepared = prepareMemoryIndexChunks({
+        entry: { path: "sessions/large.jsonl", mtimeMs: 1 },
+        source: "sessions",
+        content,
+        pathClassification: { curatedRoot: false, originClass: "agent" },
+        chunking: { tokens: 20_000, overlap: 0 },
+        provider,
+        hardMaxInputTokens: 8192,
+      });
+
+      expect(prepared.chunks.map((chunk) => chunk.text).join("")).toBe(content);
+      expect(serialize(prepared).byteLength).toBeLessThan(80 * 1024);
+    },
+  );
 });

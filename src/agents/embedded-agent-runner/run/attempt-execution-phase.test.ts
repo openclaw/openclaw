@@ -94,7 +94,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             changedSystem && index === 1 ? "changed instructions" : "stable instructions",
           messages: [],
         };
-        guards.onModelRequest(testModel, context);
+        await guards.onModelRequest(testModel, context);
         const stream = await runtime.agentSession.activeSession.agent.streamFn(testModel, context);
         await stream.result();
         guards.onModelUsage({ input: 8_000, cacheRead });
@@ -152,13 +152,18 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           prompt: "reply",
           timeoutMs: 30_000,
         });
-        fixture.input.attempt.sessionTarget = { ...target, ...writer };
+        const selected = {
+          ...target,
+          expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+          expectedWriterRunId: writer?.expectedWriterRunId,
+        };
+        fixture.input.attempt.sessionTarget = selected;
         const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: fixture.input.attempt,
           externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
         });
         fixture.input.sessionLock = transcript;
-        const manager = SessionManager.open({ ...target, ...writer });
+        const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
           const requestAuthority = captureGuardedFetchRequestAuthority();
@@ -242,7 +247,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         prompt: "reply",
         timeoutMs: 30_000,
       });
-      const selected = { ...target, ...writer };
+      const selected = {
+        ...target,
+        expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+        expectedWriterRunId: writer?.expectedWriterRunId,
+      };
       fixture.input.attempt.sessionTarget = selected;
       const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: fixture.input.attempt,
@@ -404,7 +413,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           },
         ],
       };
-      guards.onModelRequest?.(testModel, context);
+      await guards.onModelRequest?.(testModel, context);
       await runAgentLoop(
         [{ role: "user", content: "Read once", timestamp: 0 }],
         context,

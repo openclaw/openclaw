@@ -1,4 +1,5 @@
 import {
+  AgentHarnessPreflightError,
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
@@ -25,11 +26,7 @@ import {
 } from "openclaw/plugin-sdk/time-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
-import {
-  isCodexRemoteExecPlacementSandbox,
-  readCodexPluginConfig,
-  type CodexPluginConfig,
-} from "./config.js";
+import { isCodexRemoteExecPlacementSandbox, type CodexPluginConfig } from "./config.js";
 import {
   createCodexHostToolSurface,
   resolveCodexToolConstructionPlan,
@@ -366,33 +363,46 @@ export async function buildDynamicTools(
       !webSearchPresent &&
       persistentCodexWebSearchSurface
     ) {
-      const webSearchPolicy = (
-        await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
-        config: params.config,
-        modelProvider: params.model.provider,
-        modelId: params.modelId,
-        agentId: input.policyAgentId,
-        sessionKey: input.sandboxSessionKey,
-        sessionId: params.sessionId,
-        ...(persistentHostedWebSearchEligible
-          ? { runtimeToolAllowlist: toolRunContext.runtimeToolAllowlist }
-          : {}),
-        sandboxToolPolicy: input.sandbox?.tools,
-        messageProvider: messageToolProvider,
-        agentAccountId: params.agentAccountId,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: params.trustedInternalHandoff,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-      });
+      const preparedPolicy = params.preparedWebSearchPolicy;
+      if (
+        preparedPolicy?.modelRef &&
+        (preparedPolicy.modelRef.provider !== params.model.provider ||
+          preparedPolicy.modelRef.model !== params.modelId)
+      ) {
+        throw new AgentHarnessPreflightError(
+          "Native model changed after web search policy preparation. Retry the turn to prepare policy for the current model.",
+        );
+      }
+      const webSearchPolicy =
+        preparedPolicy ??
+        // Recovery can precede a warm Gateway projection when no policy was prepared.
+        (await (
+          await import("openclaw/plugin-sdk/agent-harness")
+        ).resolveWebSearchToolPolicyAsync({
+          config: params.config,
+          modelProvider: params.model.provider,
+          modelId: params.modelId,
+          agentId: input.policyAgentId,
+          sessionKey: input.sandboxSessionKey,
+          sessionId: params.sessionId,
+          ...(persistentHostedWebSearchEligible
+            ? { runtimeToolAllowlist: toolRunContext.runtimeToolAllowlist }
+            : {}),
+          sandboxToolPolicy: input.sandbox?.tools,
+          messageProvider: messageToolProvider,
+          agentAccountId: params.agentAccountId,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          inputProvenance: params.inputProvenance,
+          trustedInternalHandoff: params.trustedInternalHandoff,
+          scheduledToolPolicy: params.scheduledToolPolicy,
+        }));
       persistentWebSearchAllowed =
         webSearchPolicy.persistentAllowed &&
         (persistentHostedWebSearchEligible ||
@@ -401,6 +411,10 @@ export async function buildDynamicTools(
       nativeWebSearchAllowed =
         webSearchPlan.kind === "native-hosted" &&
         webSearchPolicy.allowed &&
+        applyEmbeddedAttemptToolsAllow(
+          [{ name: "web_search" }],
+          toolRunContext.runtimeToolAllowlist,
+        ).length > 0 &&
         !isCodexMemoryFlushRun(params);
     }
     input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
@@ -606,8 +620,7 @@ export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
     networkAccess: !dockerNetwork || (network && network !== "none") ? "enabled" : "restricted",
   };
 }
-export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
-  const config = readCodexPluginConfig(pluginConfig);
+export function disableCodexPluginThreadConfig(config: CodexPluginConfig = {}): CodexPluginConfig {
   return {
     ...config,
     codexPlugins: {

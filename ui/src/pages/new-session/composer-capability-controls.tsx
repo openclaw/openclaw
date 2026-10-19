@@ -21,11 +21,11 @@ type NewSessionComposerCapabilityOptions = {
   draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
-  textareaController: {
+  composerTextarea: {
     capabilityMenuOpen: boolean;
     capabilityMenuView: ChatComposerPlusMenuView;
   };
-  requestUpdate: () => void;
+  onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
 
@@ -56,17 +56,19 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
 export function NewSessionPlusMenu(props: {
   options: NewSessionComposerCapabilityOptions;
   attachments: ChatComposerPlusMenuProps["attachments"];
+  inputHandle: ChatComposerPlusMenuProps["inputHandle"];
 }) {
   const menu = createMemo((): ChatComposerPlusMenuProps => {
     const options = props.options;
     const disabled = options.submitting || options.messageLocked === true;
-    const controller = options.textareaController;
+    const textarea = options.composerTextarea;
     return {
       attachments: props.attachments,
+      inputHandle: props.inputHandle,
       capabilityMenu: options.capabilityMenu,
       disabled,
-      open: controller.capabilityMenuOpen,
-      view: controller.capabilityMenuView,
+      open: textarea.capabilityMenuOpen,
+      view: textarea.capabilityMenuView,
       toolOverrides: options.toolOverrides,
       rootToggles: options.draftAvailable
         ? [
@@ -82,15 +84,15 @@ export function NewSessionPlusMenu(props: {
           ]
         : undefined,
       onOpenChange: (open) => {
-        controller.capabilityMenuOpen = open;
+        textarea.capabilityMenuOpen = open;
         if (!open) {
-          controller.capabilityMenuView = "root";
+          textarea.capabilityMenuView = "root";
         }
-        options.requestUpdate();
+        options.onChange();
       },
       onViewChange: (view) => {
-        controller.capabilityMenuView = view;
-        options.requestUpdate();
+        textarea.capabilityMenuView = view;
+        options.onChange();
       },
     };
   });
@@ -106,9 +108,9 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         class="new-session-page__selection-status"
         disabled={props.options.submitting || props.options.messageLocked === true}
         onClick={() => {
-          props.options.textareaController.capabilityMenuView = "root";
-          props.options.textareaController.capabilityMenuOpen = true;
-          props.options.requestUpdate();
+          props.options.composerTextarea.capabilityMenuView = "root";
+          props.options.composerTextarea.capabilityMenuOpen = true;
+          props.options.onChange();
         }}
       >
         {t(count() === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count", {

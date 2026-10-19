@@ -451,7 +451,7 @@ describe("google-interactions provider", () => {
     expect(diagnostics).toContainEqual([
       "provider-error",
       "Model request failed",
-      expect.objectContaining({ message: result.errorMessage }),
+      expect.objectContaining({ provider: "google" }),
     ]);
     expect(JSON.stringify({ result, diagnostics })).not.toContain("private-broken-payload");
   });

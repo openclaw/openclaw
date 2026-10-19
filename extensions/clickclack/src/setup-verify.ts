@@ -29,10 +29,6 @@ function isHttpStatus(error: unknown, status: number): boolean {
   );
 }
 
-function isWorkspaceNotFound(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("ClickClack workspace not found:");
-}
-
 function usesUnavailableImplicitEnvToken(
   account: ResolvedClickClackAccount,
   tokenOverride: string,
@@ -52,13 +48,11 @@ export async function checkClickClackSetupConnection(params: {
   accountId?: string;
   token?: string;
 }): Promise<ClickClackSetupConnectionResult> {
-  let workspaceInput = "";
   try {
     const account = resolveClickClackAccount({
       cfg: params.cfg,
       accountId: params.accountId,
     });
-    workspaceInput = account.workspace;
     const token = params.token?.trim() || account.token;
     if (usesUnavailableImplicitEnvToken(account, token)) {
       return { status: "skipped-env-token" };
@@ -77,7 +71,7 @@ export async function checkClickClackSetupConnection(params: {
       ? workspaces.find((candidate) => candidate.id === account.workspace)
       : findClickClackWorkspace(workspaces, account.workspace);
     if (!workspace) {
-      throw new Error(`ClickClack workspace not found: ${account.workspace}`);
+      return { status: "workspace-not-found", workspace: account.workspace };
     }
     return {
       status: "connected",
@@ -88,12 +82,6 @@ export async function checkClickClackSetupConnection(params: {
     if (isHttpStatus(error, 401)) {
       return { status: "invalid-token" };
     }
-    if (isWorkspaceNotFound(error)) {
-      return {
-        status: "workspace-not-found",
-        workspace: workspaceInput,
-      };
-    }
     return {
       status: "failed",
       error: formatErrorMessage(error),
@@ -101,33 +89,25 @@ export async function checkClickClackSetupConnection(params: {
   }
 }
 
-function isGatewayNotRunningError(error: unknown): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    "kind" in error &&
-    "code" in error &&
-    (error as { name?: unknown }).name === "GatewayTransportError" &&
-    (error as { kind?: unknown }).kind === "closed" &&
-    (error as { code?: unknown }).code === 1006
-  ) {
-    return true;
-  }
-  const message = formatErrorMessage(error).toLowerCase();
-  return message.includes("econnrefused") || message.includes("connection refused");
-}
-
 async function probeClickClackGatewayStatus(): Promise<string> {
+  let gateway: typeof import("openclaw/plugin-sdk/gateway-runtime") | undefined;
   try {
-    const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
-    await callGatewayFromCli("health", { timeout: "1000", json: true }, undefined, {
+    gateway = await import("openclaw/plugin-sdk/gateway-runtime");
+    await gateway.callGatewayFromCli("health", { timeout: "1000", json: true }, undefined, {
       expectFinal: false,
       progress: false,
     });
     return GATEWAY_RUNNING_MESSAGE;
   } catch (error) {
-    return isGatewayNotRunningError(error) ? GATEWAY_NOT_RUNNING_MESSAGE : GATEWAY_UNKNOWN_MESSAGE;
+    const message = formatErrorMessage(error).toLowerCase();
+    const unavailable =
+      (gateway &&
+        gateway.isGatewayTransportError(error) &&
+        error.kind === "closed" &&
+        error.code === 1006) ||
+      message.includes("econnrefused") ||
+      message.includes("connection refused");
+    return unavailable ? GATEWAY_NOT_RUNNING_MESSAGE : GATEWAY_UNKNOWN_MESSAGE;
   }
 }
 

@@ -6,13 +6,13 @@ import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 async function openPanelMenu(container: HTMLElement) {
@@ -58,7 +58,7 @@ function createTerminalPane(client: GatewayBrowserClient) {
     row: GatewaySessionRow | undefined,
     workspace = createPaneHeaderWorkspaceFixture(state),
   ) => {
-    renderPaneLegacyContent(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(workspace, row, false, undefined, false, null),
       container,
     );

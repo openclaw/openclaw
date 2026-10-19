@@ -8,6 +8,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -56,10 +57,8 @@ import {
   scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
-  type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
-  WIKI_PAGE_GROUPS,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
@@ -69,6 +68,7 @@ import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
@@ -677,13 +677,20 @@ function buildRelatedBlockBody(
   );
   const sourcePages = uniquePages(page.sourceIds.flatMap((id) => pagesById.get(id) ?? []));
   const backlinkKeys = new Set(
-    [page.relativePath, page.title, ...(page.id ? [page.id] : [])].map(normalizeComparableTarget),
+    [
+      page.relativePath,
+      path.posix.basename(page.relativePath),
+      page.title,
+      ...(page.id ? [page.id] : []),
+    ].map(normalizeComparableTarget),
   );
   const backlinks = uniquePages(
     otherPages.filter(
       (candidate) =>
         candidate.sourceIds.includes(page.id ?? "") ||
-        candidate.linkTargets.some((target) => backlinkKeys.has(normalizeComparableTarget(target))),
+        candidate.linkTargets.some((target) =>
+          backlinkKeys.has(normalizeComparableTarget(target.split("#")[0] ?? "")),
+        ),
     ),
   );
   const backlinkPages =
@@ -844,11 +851,7 @@ function buildRootIndexBody(params: {
     `- Render mode: \`${params.config.vault.renderMode}\``,
     `- Total pages: ${params.pages.length}`,
     `- Claims: ${claimCount}`,
-    `- Sources: ${params.counts.source}`,
-    `- Entities: ${params.counts.entity}`,
-    `- Concepts: ${params.counts.concept}`,
-    `- Syntheses: ${params.counts.synthesis}`,
-    `- Reports: ${params.counts.report}`,
+    ...WIKI_PAGE_GROUPS.map(({ kind, heading }) => `- ${heading}: ${params.counts[kind]}`),
   ];
 
   for (const group of WIKI_PAGE_GROUPS) {
@@ -1137,11 +1140,7 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
     ...WIKI_PAGE_GROUPS.map((group) => path.join(rootDir, group.dir, "index.md")),
   ];
   for (const filePath of required) {
-    const exists = await fs
-      .access(filePath)
-      .then(() => true)
-      .catch(() => false);
-    if (!exists) {
+    if (!(await canAccess(filePath))) {
       return true;
     }
   }

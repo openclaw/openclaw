@@ -236,9 +236,16 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       case "turn/completed":
         await this.handleTurnCompleted(notification.completedTurn);
         break;
-      case "rawResponse/completed":
-        this.usageProjection.record(params, this.params.hostCapabilities.reportOutputTokens);
+      case "rawResponse/completed": {
+        const response = this.usageProjection.record(
+          params,
+          this.params.hostCapabilities.reportOutputTokens,
+        );
+        if (response) {
+          this.options.onResponseObserved?.(response);
+        }
         break;
+      }
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
         break;

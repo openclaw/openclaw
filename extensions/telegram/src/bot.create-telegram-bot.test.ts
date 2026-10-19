@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  buildPluginBindingApprovalCustomId,
-  resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
+import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined as requireValue } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -71,7 +68,7 @@ const {
 type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
-const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
+const providerAuth = await import("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const {
@@ -346,7 +343,6 @@ describe("createTelegramBot", () => {
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   });
@@ -1130,7 +1126,7 @@ describe("createTelegramBot", () => {
         { kind: "completed" },
       ]);
       expect(commitSpy).toHaveBeenCalledTimes(2);
-      queuedLifecycle?.onSettled?.();
+      await queuedLifecycle?.onSettled?.();
     } finally {
       commitSpy.mockRestore();
       setTimeoutSpy.mockRestore();
@@ -1165,7 +1161,7 @@ describe("createTelegramBot", () => {
           throw queuedAbortSignal.reason;
         }
         modelTurnRan = true;
-        queuedLifecycle?.onSettled?.();
+        await queuedLifecycle?.onSettled?.();
       };
       queuedTurnReady.resolve();
       return undefined;
@@ -1812,7 +1808,7 @@ describe("createTelegramBot", () => {
 
   it("lets an owner start Codex login from a pairing-policy DM callback", async () => {
     const runModelsAuthLoginFlow = vi
-      .spyOn(defaultTelegramNativeCommandDeps, "runModelsAuthLoginFlow")
+      .fn<typeof providerAuth.runModelsAuthLoginFlow>()
       .mockImplementation(async (params) => {
         await params.prompter.deviceCode?.({
           title: "OpenAI Codex device code",
@@ -1826,6 +1822,12 @@ describe("createTelegramBot", () => {
           profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
         };
       });
+    const runProviderChannelLoginFlow = providerAuth.runProviderChannelLoginFlow;
+    const providerLogin = vi
+      .spyOn(providerAuth, "runProviderChannelLoginFlow")
+      .mockImplementation((params) =>
+        runProviderChannelLoginFlow({ ...params, runLoginFlow: runModelsAuthLoginFlow }),
+      );
     loadConfig.mockReturnValue({
       messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["9"] },
@@ -1855,7 +1857,7 @@ describe("createTelegramBot", () => {
         expect.objectContaining({ parse_mode: "HTML" }),
       );
     } finally {
-      runModelsAuthLoginFlow.mockRestore();
+      providerLogin.mockRestore();
     }
   });
 
@@ -2202,7 +2204,7 @@ describe("createTelegramBot", () => {
     });
     const queuedLifecycle = await queuedLifecycleReady.promise;
     expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
-    queuedLifecycle?.onAbandoned?.();
+    await queuedLifecycle?.onAbandoned?.();
     const firstReplay = await firstReplayPromise;
     const firstDeferredWork = requireValue(firstReplay.deferredWork, "first deferred spooled work");
     await expect(firstDeferredWork.task).resolves.toMatchObject({ kind: "failed-retryable" });
@@ -2640,7 +2642,10 @@ describe("createTelegramBot", () => {
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
-    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
+    const resolvePluginBindingApprovalSpy = vi.spyOn(
+      conversationRuntime,
+      "resolvePluginConversationBindingApproval",
+    );
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = makeCallbackRetryContext({

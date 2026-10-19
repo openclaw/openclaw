@@ -13,7 +13,6 @@ type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
   focusComposer(): void;
   updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
 };
 
 function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
@@ -65,18 +64,18 @@ afterEach(() => {
 describe("new session draft route ownership", () => {
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const updated = vi.spyOn(NewSessionPageOwner.prototype, "updated");
+    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
     const renderModels = vi.spyOn(NewSessionModelControl.prototype, "renderProps");
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>("textarea")!;
     await enterMessage(page, "warmup");
     for (const text of ["h", "he", "hello"]) {
       prepare.mockClear();
-      updated.mockClear();
+      projectRecents.mockClear();
       renderModels.mockClear();
       await enterMessage(page, text);
-      expect(updated).toHaveBeenCalled();
-      expect(prepare).toHaveBeenCalledTimes(updated.mock.calls.length);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
       expect(renderModels).not.toHaveBeenCalled();
       expect(page.querySelector("textarea")).toBe(textarea);
       expect(textarea.value).toBe(text);
@@ -97,24 +96,9 @@ describe("new session draft route ownership", () => {
     await enterMessage(page, "later draft");
     expect(retained?.getDraft?.()).toBe("later draft");
     dictating = true;
-    page.requestUpdate();
+    document.dispatchEvent(new Event("visibilitychange"));
     await settle(page);
     expect(retained?.disabled).toBe(true);
-  });
-
-  it("prepares composer options once per draft revision rather than per prop read", async () => {
-    const page = await mount(routeData("research"));
-    const textarea = page.querySelector("textarea");
-    const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
-
-    await enterMessage(page, "Keep typing without rebuilding options");
-
-    expect(message(page)).toBe("Keep typing without rebuilding options");
-    expect(page.querySelector("textarea")).toBe(textarea);
-    expect(prepare.mock.calls.length).toBeGreaterThan(0);
-    expect(prepare.mock.calls.length).toBeLessThanOrEqual(2);
-    expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it.each([false, true])(
@@ -152,7 +136,6 @@ describe("new session draft route ownership", () => {
       await flushFrames(0);
       await flushFrames(206);
       expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
-      page.requestUpdate();
       page.remove();
       await settle(page);
       expect(frames.size).toBe(0);
@@ -224,7 +207,7 @@ describe("new session draft route ownership", () => {
         .not.toBeNull();
       if (transition === "finish dictation") {
         dictating = true;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await settle(page);
         expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
       }
@@ -256,7 +239,7 @@ describe("new session draft route ownership", () => {
         expect(actionButtons()).toHaveLength(2);
         expect(actionButtons().every((button) => button.disabled)).toBe(true);
         dictating = false;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await expect.poll(() => actionButtons().every((button) => !button.disabled)).toBe(true);
       }
       if (transition === "show in composer" || transition === "finish dictation") {

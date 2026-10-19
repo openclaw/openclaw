@@ -19,10 +19,6 @@
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="bottom"] {
-  transform-origin: top;
-}
-
 .chat-picker-overlay {
   /* Try the full panel before shrinking it to the preferred side's remaining space. */
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
@@ -588,7 +584,6 @@
     );
     background-size: 200% 100%;
     background-repeat: repeat-x;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
@@ -1251,7 +1246,6 @@
   .agent-chat__input:has(.chat-controls__inline-select[open]),
   .agent-chat__input:has(.context-usage details[open]) {
     backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }
 
@@ -1934,14 +1928,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__effort-picker--reserved {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-/* Collapse the empty effort slot while loading unless the open model menu
-   needs its anchor. */
-.chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
-  .chat-controls__effort-picker--reserved {
+  /* The model menu follows its CSS anchor without an empty effort slot. */
   display: none;
 }
 
@@ -2796,7 +2783,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__reasoning-range {
-  -webkit-appearance: none;
   appearance: none;
   position: relative;
   z-index: 1;

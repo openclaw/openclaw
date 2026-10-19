@@ -294,6 +294,8 @@ setPhase("preparation");
     let attempt = 1;
     let retries = 0;
     let noProgressFailures = 0;
+    // A fresh no-progress streak waits about 24-40 seconds through edge reconnects.
+    const maxNoProgressFailures = 9;
     let offset = 0;
     let retainedAnyBytes = false;
     const partial = archive + ".partial";
@@ -301,7 +303,7 @@ setPhase("preparation");
       origin = new URL(artifact.url).origin;
       for (;;) {
         try {
-          if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
+          if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 5) * (0.75 + Math.random() * 0.5)), undefined, { signal: downloadAbort.signal });
           downloadAbort.signal.throwIfAborted();
           await downloadAttempt(artifact, token, partial, offset, progress);
           fs.renameSync(partial, archive);
@@ -309,7 +311,7 @@ setPhase("preparation");
         } catch (error) {
           if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
           const busy = error.code === "TRANSFER_IN_PROGRESS";
-          const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
+          const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504, 520, 521, 522, 523, 524, 530].includes(error.statusCode);
           if (transient && !busy) {
             let retainedBytes = 0;
             try { retainedBytes = (await fsp.stat(partial)).size; }
@@ -319,15 +321,15 @@ setPhase("preparation");
             offset = retainedBytes;
             retainedAnyBytes ||= retainedBytes > 0;
           }
-          if (!transient || noProgressFailures === 3) {
+          if (!transient || noProgressFailures === maxNoProgressFailures) {
             const hint = !retainedAnyBytes && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(error.code)
               ? " The worker could not reach the Gateway public origin <" + origin + ">; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname."
               : "";
-            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === maxNoProgressFailures ? "; " + maxNoProgressFailures + " consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
           }
           if (!busy) attempt++;
           retries++;
-          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
+          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/" + maxNoProgressFailures + " consecutive no-progress failures)");
         }
       }
     } catch (error) {

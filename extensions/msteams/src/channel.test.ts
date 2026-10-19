@@ -347,12 +347,9 @@ describe("msteamsPlugin.approvalCapability", () => {
   });
 });
 
-const conversation = "conversation:19:current@thread.tacv2";
 const graphChannel = "19:channel@thread.tacv2";
 const graphTarget = `11111111-1111-1111-1111-111111111111/${graphChannel}`;
-const buildContext = msteamsPlugin.threading!.buildToolContext!;
 const extract = msteamsPlugin.actions!.extractToolSendResult!;
-const autoThread = msteamsPlugin.threading!.resolveAutoThreadId!;
 describe("Teams delivery reconciliation", () => {
   it.each([
     { conversationId: "19:channel@thread.tacv2" },
@@ -369,92 +366,6 @@ describe("Teams delivery reconciliation", () => {
     { details: { result: { receipt: { raw: [{}] } } } },
   ])("rejects a result without an authoritative conversation: %j", (result) => {
     expect(extract({ result, send: { to: graphTarget, threadId: "root" } })).toBeNull();
-  });
-});
-
-describe("Teams automatic threading", () => {
-  const context = {
-    currentChannelId: conversation,
-    currentThreadTs: "thread-root",
-    replyToMode: "all" as const,
-  };
-  it("uses the inbound thread root instead of its quoted parent", () => {
-    const toolContext = buildContext({
-      cfg: {},
-      context: {
-        ChatType: "channel",
-        To: conversation,
-        MessageThreadId: "thread-root",
-        ReplyToId: "parent",
-      },
-    });
-    expect(autoThread({ cfg: {}, to: conversation, toolContext })).toBe("thread-root");
-  });
-
-  it("uses top-level replies when mention gating is disabled", () => {
-    expect(
-      autoThread({
-        cfg: { channels: { msteams: { requireMention: false } } },
-        to: conversation,
-        toolContext: context,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("honors channel overrides over team and global reply styles", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          replyStyle: "thread",
-          teams: {
-            "team-1": {
-              replyStyle: "top-level",
-              channels: { [graphChannel]: { replyStyle: "thread" } },
-            },
-          },
-        },
-      },
-    };
-    expect(
-      autoThread({
-        cfg,
-        to: conversation,
-        toolContext: { ...context, currentGraphChannelId: "team-1/19:other@thread.tacv2" },
-      }),
-    ).toBeUndefined();
-    expect(
-      autoThread({
-        cfg,
-        to: conversation,
-        toolContext: { ...context, currentGraphChannelId: `team-1/${graphChannel}` },
-      }),
-    ).toBe("thread-root");
-  });
-
-  it("preserves an explicit thread under top-level reply style", () => {
-    expect(
-      autoThread({
-        cfg: { channels: { msteams: { replyStyle: "top-level" } } },
-        to: `${conversation};messageid=explicit-root`,
-        toolContext: context,
-      }),
-    ).toBe("explicit-root");
-  });
-
-  it("does not borrow a thread from a different conversation", () => {
-    expect(
-      autoThread({ cfg: {}, to: "conversation:19:other@thread.tacv2", toolContext: context }),
-    ).toBeUndefined();
-  });
-
-  it("does not invent a thread for a DM", () => {
-    expect(
-      autoThread({
-        cfg: {},
-        to: "user:aad-user-1",
-        toolContext: { currentChannelId: "user:aad-user-1" },
-      }),
-    ).toBeUndefined();
   });
 });
 

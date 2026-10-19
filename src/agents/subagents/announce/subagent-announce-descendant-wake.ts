@@ -9,7 +9,6 @@ import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.j
 import { SourceOwnerChangedError } from "./subagent-announce-delivery-retry.js";
 import {
   loadSessionEntryByKey,
-  runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
 } from "./subagent-announce-delivery.js";
 import { hasUsableSessionEntry } from "./subagent-announce-delivery.runtime.js";
@@ -83,42 +82,41 @@ export async function runDescendantWake(params: {
 
   let wakeRunId;
   try {
-    const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
-      operation: "descendant wake agent call",
-      signal: params.signal,
-      prepareAttempt: params.prepareCurrent,
-      isAttemptAllowed: params.isChildSessionEffectsAllowed,
-      run: async () => {
-        return await params.deps.dispatchGatewayMethodInProcess(
-          "agent",
-          {
-            sessionKey: params.childSessionKey,
-            message: wakeMessage,
-            deliver: false,
-            timeout: params.runTimeoutSeconds ?? 0,
-            inputProvenance: {
-              kind: "inter_session",
-              sourceSessionKey: params.childSessionKey,
-              sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-              sourceTool: "subagent_announce",
-            },
-            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
-          },
-          {
-            cancelOnDeadline: true,
-            operatorRoleActor: { kind: "system" },
-            signal: params.signal,
-            timeoutMs: announceTimeoutMs,
-            resolveGatewayContext: params.resolveGatewayContext,
-            prepareDispatchCurrent: async () => {
-              if (!(await params.prepareCurrent()) || !params.isChildSessionEffectsAllowed()) {
-                throw new SourceOwnerChangedError();
-              }
-            },
-          },
-        );
+    if (
+      params.signal?.aborted ||
+      !(await params.prepareCurrent()) ||
+      !params.isChildSessionEffectsAllowed()
+    ) {
+      return false;
+    }
+    const wakeResponse = await params.deps.dispatchGatewayMethodInProcess<{ runId?: string }>(
+      "agent",
+      {
+        sessionKey: params.childSessionKey,
+        message: wakeMessage,
+        deliver: false,
+        timeout: params.runTimeoutSeconds ?? 0,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: params.childSessionKey,
+          sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+          sourceTool: "subagent_announce",
+        },
+        idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
       },
-    });
+      {
+        cancelOnDeadline: true,
+        operatorRoleActor: { kind: "system" },
+        signal: params.signal,
+        timeoutMs: announceTimeoutMs,
+        resolveGatewayContext: params.resolveGatewayContext,
+        prepareDispatchCurrent: async () => {
+          if (!(await params.prepareCurrent()) || !params.isChildSessionEffectsAllowed()) {
+            throw new SourceOwnerChangedError();
+          }
+        },
+      },
+    );
     wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
     return false;

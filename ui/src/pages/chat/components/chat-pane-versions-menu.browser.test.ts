@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
@@ -59,8 +60,10 @@ it("opens help on its own retained header and retires native overlays when prese
   presented = false;
   second.container.inert = true;
   owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-  expect(menuSurface.getClientRects()).toHaveLength(0);
-  expect(help.getClientRects()).toHaveLength(0);
+  await waitForSolid(() => {
+    expect(menuSurface.getClientRects()).toHaveLength(0);
+    expect(help.getClientRects()).toHaveLength(0);
+  });
   expect(second.container.isConnected).toBe(true);
   expect(second.props.onBranchSelect).not.toHaveBeenCalled();
 });

@@ -48,6 +48,7 @@ function chunkedResponse(
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await Promise.all(created.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -195,6 +196,77 @@ function createStore(
 }
 
 describe("geolocation database publication", () => {
+  it("releases an idle disk-backed reader and reopens it without downloading", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stateDir = await tempStateDir();
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(cityDatabase("Vienna")));
+    const store = createStore(stateDir, fetchImpl);
+    const readFile = vi.spyOn(fs, "readFile");
+
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    await vi.advanceTimersByTimeAsync(45_000);
+    const active = await store.load();
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    expect(readFile).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const reopened = await Promise.all([store.load(), store.load()]);
+    expect(reopened.map((database) => database.lookup("8.8.8.8")?.city?.names.en)).toEqual([
+      "Vienna",
+      "Vienna",
+    ]);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    // An in-progress request may still own the old reader after idle eviction.
+    expect(active.lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+  });
+
+  it("retains an unpublished download when idle so a cache failure cannot lose it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stateDir = await tempStateDir();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(cityDatabase("Vienna")))
+      .mockRejectedValue(new Error("source unavailable"));
+    const store = createStore(stateDir, fetchImpl);
+    vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("disk full"));
+
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("preserves failed-refresh backoff across idle reopens without extending it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stateDir = await tempStateDir();
+    let currentTime = now;
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("source unavailable"));
+    const settings = resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb" });
+    const store = createGeolocationDatabaseStore({
+      stateDir,
+      settings,
+      now: () => currentTime,
+      fetchImpl,
+    });
+    await fs.mkdir(path.dirname(store.databaseFile));
+    await fs.writeFile(store.databaseFile, cityDatabase("Vienna"));
+    await fs.utimes(store.databaseFile, 0, 0);
+
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    currentTime = new Date(now.getTime() + 60_000);
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(settings.refreshMs);
+    currentTime = new Date(now.getTime() + settings.refreshMs + 1);
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("serves its own reader after another process replaces its publication", async () => {
     const stateDir = await tempStateDir();
     const body = cityDatabase("Vienna");

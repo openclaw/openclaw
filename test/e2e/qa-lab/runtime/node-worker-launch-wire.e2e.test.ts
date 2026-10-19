@@ -46,7 +46,9 @@ const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 60_000;
 const CONTROL_PROBE_MAX_MS = 4_000;
 const CONTROL_PROBE_P95_MS = 1_000;
 const FINALIZATION_LOAD_CONCURRENCY = 12;
-const FINALIZATION_LOAD_WAVES = 3;
+// One full-capacity wave covers readiness sampling and a fresh connection during
+// finalization; repeated waves add no distinct assertion before the restart audit.
+const FINALIZATION_LOAD_WAVES = 1;
 const MIN_CONTROL_PROBE_SAMPLES = 12;
 const WORKSPACE_INVENTORY_FILES = 4_096;
 

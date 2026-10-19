@@ -151,28 +151,20 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     const task = queueTask();
     task.result.resolve(emptyReply);
     scope.run("accepted reader", () => {
-      const unregister = retainedSource.own(
-        () => {
-          expect(scope.getStore()).toBe("accepted reader");
-          events.push("reader serviced");
-          retainedSource.service();
-        },
-        async () => {
-          expect(scope.getStore()).toBe("accepted reader");
-          events.push("domain closing");
-          ownerCloseStarted.resolve();
-          await ownerMayClose.promise;
-          await transport.startRead(
-            { context, location: options.path, checkFreshAdmission: false },
-            { signal: new AbortController().signal, assertCurrent: () => {} },
-          ).result;
-          await transport.startClose().result;
-          unregister();
-          events.push("domain closed");
-        },
-      );
+      const unregister = retainedSource.own(async () => {
+        expect(scope.getStore()).toBe("accepted reader");
+        events.push("domain closing");
+        ownerCloseStarted.resolve();
+        await ownerMayClose.promise;
+        await transport.startRead(
+          { context, location: options.path, checkFreshAdmission: false },
+          { signal: new AbortController().signal, assertCurrent: () => {} },
+        ).result;
+        await transport.startClose().result;
+        unregister();
+        events.push("domain closed");
+      });
     });
-    scope.run("later reader", () => retainedSource.service());
   }, releaseGeneration);
   try {
     await Promise.race([
@@ -181,22 +173,16 @@ it("joins captured domain cleanup before retiring its pool and execution generat
         throw new Error("Generation completed before domain cleanup");
       }),
     ]);
-    expect(events).toEqual(["reader serviced", "domain closing"]);
+    expect(events).toEqual(["domain closing"]);
     expect(mock.create).not.toHaveBeenCalled();
     expect(mock.closePool).not.toHaveBeenCalled();
     expect(releaseGeneration).not.toHaveBeenCalled();
-    expect(() =>
-      captured?.own(
-        () => {},
-        async () => {},
-      ),
-    ).toThrow(/closing/);
+    expect(() => captured?.own(async () => {})).toThrow(/closing/);
   } finally {
     ownerMayClose.resolve();
     await generation;
   }
   expect(events).toEqual([
-    "reader serviced",
     "domain closing",
     "domain closed",
     "resources closed",

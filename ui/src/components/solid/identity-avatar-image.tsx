@@ -1,63 +1,68 @@
-import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 type IdentityAvatarImageProps = {
   view: { imageUrl: string | Promise<string | null> | null };
-  fallbackSelector: string;
+  onStateChange: (outcome: ImageOutcome) => void;
   class?: string;
   alt?: string;
   ariaHidden?: boolean;
   onImageError?: () => void;
 };
 
-function setIdentityAvatarState(element: Element, state: "none" | "pending" | "loaded" | "failed") {
-  if (element.getAttribute("data-avatar-state") === state) {
-    return;
-  }
-  element.setAttribute("data-avatar-state", state);
-  element.classList.toggle("is-pending", state === "pending");
-  element.classList.toggle("is-fallback", state === "none" || state === "failed");
-}
+type ImageOutcome = {
+  source: IdentityAvatarImageProps["view"]["imageUrl"];
+  url: string | null;
+  state: "pending" | "loaded" | "failed";
+};
 
-/** An image owns loaded/failed; frames without an image still need their fallback. */
-export function identityAvatarState(
+/** Frames derive fallback presentation; the current image reports its own decoding outcome. */
+export function createIdentityAvatarPresentation(
   view: Accessor<IdentityAvatarImageProps["view"] & { pending: boolean }>,
 ) {
-  let frame: HTMLElement;
-  const fallback = createMemo(() => {
+  const [outcome, setOutcome] = createSignal<ImageOutcome>();
+  const state = createMemo(() => {
     const value = view();
-    return value.imageUrl ? undefined : value.pending ? "pending" : "none";
-  });
-  createEffect(fallback, (state) => {
-    if (state) {
-      setIdentityAvatarState(frame, state);
+    if (!value.imageUrl) {
+      return value.pending ? "pending" : "none";
     }
+    const current = outcome();
+    return current &&
+      (current.source === value.imageUrl ||
+        (typeof value.imageUrl === "string" && current.url === value.imageUrl))
+      ? current.state
+      : "pending";
   });
-  return (element: HTMLElement) => {
-    frame = element;
+  return {
+    state,
+    classes: () => ({
+      "is-pending": state() === "pending",
+      "is-fallback": state() === "none" || state() === "failed",
+    }),
+    onStateChange: (value: ImageOutcome) => setOutcome(value),
   };
 }
 
 /** The existing loader owns image resources; this binding owns DOM state and events. */
-function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
+export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
   let image: HTMLImageElement;
   let release: (() => void) | undefined;
-  const state = (value: "pending" | "loaded" | "failed") => {
-    const frame = image.closest(untrack(() => input().fallbackSelector));
-    if (frame) {
-      setIdentityAvatarState(frame, value);
-    }
+  let activeSource: IdentityAvatarImageProps["view"]["imageUrl"] = null;
+  const state = (value: ImageOutcome["state"], url = image.getAttribute("src")) => {
+    props.onStateChange({ source: activeSource, url, state: value });
   };
   const load = () => state("loaded");
   const error = () => {
     state("failed");
-    input().onImageError?.();
+    props.onImageError?.();
   };
   // Keep the pending resource opaque: returning its Promise would make this an async memo.
-  const source = createMemo(() => ({ result: input().view.imageUrl }), {
+  const source = createMemo(() => ({ result: props.view.imageUrl }), {
     equals: (previous, next) => previous.result === next.result,
   });
   createEffect(source, ({ result }) => {
+    activeSource = result;
     const nextRelease = retainAvatarImageUrl(result);
     release?.();
     release = nextRelease;
@@ -67,7 +72,7 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
         return;
       }
       if (!url || image.getAttribute("src") !== url) {
-        state(url ? "pending" : "failed");
+        state(url ? "pending" : "failed", url);
         if (url) {
           image.setAttribute("src", url);
         } else {
@@ -75,47 +80,38 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
         }
       }
       // Refs run before their wrapper is inserted; cached decodes emit no event.
-      queueMicrotask(() =>
-        untrack(() => {
-          if (
-            active &&
-            url &&
-            image.getAttribute("src") === url &&
-            image.complete &&
-            image.naturalWidth > 0
-          ) {
-            load();
-          }
-        }),
-      );
+      queueMicrotask(() => {
+        if (
+          active &&
+          url &&
+          image.getAttribute("src") === url &&
+          image.complete &&
+          image.naturalWidth > 0
+        ) {
+          load();
+        }
+      });
     };
     if (typeof result === "string" || result === null) {
       apply(result);
     } else {
       image.removeAttribute("src");
       state("pending");
-      void result.then((url) => untrack(() => apply(url)));
+      void result.then(apply);
     }
     return () => {
       active = false;
     };
   });
-  onCleanup(() => {
-    image.removeEventListener("load", load);
-    image.removeEventListener("error", error);
-    release?.();
-  });
-  return (element: HTMLImageElement) => {
-    image = element;
-    image.addEventListener("load", load);
-    image.addEventListener("error", error);
-  };
-}
-
-export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
+  // Retired image nodes can still emit errors after a replacement owns the avatar.
+  const cleanup = [() => release?.()];
+  onCleanup(() => cleanup.forEach((stop) => stop()));
   return (
     <img
-      ref={bindIdentityAvatarImage(() => props)}
+      ref={(element) => {
+        image = element;
+        cleanup.push(listen(image, "load", load), listen(image, "error", error));
+      }}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}

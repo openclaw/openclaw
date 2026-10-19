@@ -1,6 +1,6 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { isContextOverflowError } from "../../agents/failover/context-overflow.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
@@ -60,7 +60,7 @@ export async function settleAgentFallbackCycle(params: {
     model: attempt.model,
     error: attempt.error,
     reason: attempt.reason ?? "unknown",
-    status: typeof attempt.status === "number" ? attempt.status : undefined,
+    status: attempt.status,
     code: attempt.code || undefined,
   }));
   if (!fallbackExhausted) {
@@ -69,7 +69,7 @@ export async function settleAgentFallbackCycle(params: {
   const embeddedError = runResult.meta?.error;
   const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
   const userFacingErrorPayload = runResult.payloads?.find(
-    (payload) => payload.isError === true && typeof payload.text === "string",
+    (payload) => payload.isError === true && payload.text !== undefined,
   )?.text;
   // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
@@ -171,7 +171,6 @@ export async function settleAgentFallbackCycle(params: {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
     emitSettledLifecycleError(terminalError, terminalMetadata);
-    turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {

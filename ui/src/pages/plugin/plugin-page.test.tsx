@@ -1,4 +1,4 @@
-import { createEffect, createSignal } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import {
@@ -14,7 +14,6 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
 import { BUNDLED_TAB_VIEWS } from "./plugin-page-lifecycle.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
 import { page as pluginRoute } from "./route.ts";
@@ -434,10 +433,9 @@ describe("PluginPage", () => {
 });
 
 type BundledView = (typeof import("./logbook-view.tsx"))["Logbook"];
-function setBundledLoad(load: Promise<BundledView>, stop = stopLogbookPolling) {
+function setBundledLoad(load: Promise<BundledView>) {
   vi.spyOn(BUNDLED_TAB_VIEWS, "logbook/logbook").mockImplementationOnce(async () => ({
     render: await load,
-    stop,
   }));
 }
 
@@ -511,28 +509,23 @@ function logbookResponse(method: string) {
 describe("bundled plugin views", () => {
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const loaded = createDeferred<BundledView>();
-    let renderedHost: object | undefined;
-    const stop = vi.fn();
-    setBundledLoad(loaded.promise, stop);
+    const disposed = vi.fn();
+    setBundledLoad(loaded.promise);
     const fixture = createBundledPage();
-    loaded.resolve((props) => {
-      createEffect(
-        () => props.host,
-        (host) => {
-          renderedHost = host;
-        },
-      );
+    loaded.resolve(() => {
+      onCleanup(disposed);
       return "Logbook view";
     });
     await waitForSolid(() => expect(fixture.page.textContent).toContain("Logbook view"));
     fixture.hello.controlUiTabs = [];
     fixture.notify();
-    expect(stop).toHaveBeenCalledWith(renderedHost);
+    expect(disposed).toHaveBeenCalledOnce();
     expect(fixture.page.textContent).not.toContain("Logbook view");
   });
 
   it("isolates an in-flight bundled load across a same-client reconnect", async () => {
     await import("./logbook-view.tsx");
+    vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 5, 12));
     const staleStatus = createDeferred<unknown>();
     const staleDays = createDeferred<unknown>();
@@ -545,15 +538,10 @@ describe("bundled plugin views", () => {
     const request = vi.fn(
       (method: string) => pending.get(method)?.promise ?? Promise.resolve(logbookResponse(method)),
     );
-    const controller = await import("./logbook-controller.ts");
-    const stop = vi.spyOn(controller, "stopLogbookPolling");
     const fixture = createBundledPage({ request } as unknown as GatewayBrowserClient);
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     fixture.snapshot.phase = "stopped";
     fixture.notify();
-    const oldHost = stop.mock.calls.at(-1)?.[0];
-    expect(oldHost).toBeDefined();
-    expect(getLogbookState(oldHost!).pollTimer).toBeNull();
     pending.clear();
     staleStatus.resolve(logbookResponse("logbook.status"));
     staleDays.resolve(logbookResponse("logbook.days"));
@@ -561,6 +549,8 @@ describe("bundled plugin views", () => {
     await Promise.all([staleStatus.promise, staleDays.promise, staleTimeline.promise]);
     flush();
     expect(fixture.page.querySelector(".logbook__chips")).toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledTimes(3);
     fixture.snapshot.phase = "connected";
     fixture.notify();
     await waitForSolid(() => expect(fixture.page.querySelector(".logbook__chips")).not.toBeNull());

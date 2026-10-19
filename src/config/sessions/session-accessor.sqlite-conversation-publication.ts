@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
@@ -20,6 +20,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -87,7 +88,7 @@ export const conversationPublication = {
 };
 
 function stageConversationRows(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   rows: {
     catalogues?: readonly ConversationCatalogRow[];
     associations?: readonly ConversationAssociationRow[];
@@ -135,7 +136,7 @@ function stageConversationRows(
 
 /** Large JSON postimages may outgrow a valid input; retain the commit and retire coverage. */
 export function deferConversationWorkerReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   receipt: ConversationPublication,
 ): void {
   deferSqliteWorkerCommitReceipt(
@@ -182,25 +183,20 @@ export function withConversationPublication(
       }
     });
     let finished = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          notifyListeners(listeners.facts, {
-            kind: "settled",
-            operation,
-            outcome:
-              published && !unknown && owner.admission.settlement?.kind === "completed"
-                ? "published"
-                : "unknown",
-          });
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (!finished) {
+        finished = true;
+        unsubscribe();
+        notifyListeners(listeners.facts, {
+          kind: "settled",
+          operation,
+          outcome:
+            published && !unknown && owner.admission.settlement?.kind === "completed"
+              ? "published"
+              : "unknown",
+        });
       }
-    };
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       assertCurrent();
       const expected = expectedSource();

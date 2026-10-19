@@ -5,10 +5,12 @@ import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/sr
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { collectSourceCheckoutPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { prepareControlUiSettings } from "../../scripts/lib/prepare-control-ui-settings.mts";
 import {
   pluginControlUiGenerationHash,
   pluginControlUiRevision,
   readPluginControlUiAssets,
+  type PluginControlUiAsset,
 } from "../../src/plugins/control-ui-assets.js";
 import {
   controlUiSource,
@@ -22,20 +24,55 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
     path.join(repoRoot, "ui/src/plugins/control-ui-distribution.ts"),
   );
   let source = "";
+  let serving = false;
+  let base = "/";
+  const servedAssets = new Map<string, PluginControlUiAsset>();
   return {
     name: "control-ui-plugin-distributions",
-    apply: "build",
+    configResolved(config) {
+      serving = config.command === "serve";
+      base = config.base === "./" ? "/" : config.base;
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const asset = servedAssets.get((req.url ?? "").split("?")[0]!);
+        if (!asset || (req.method !== "GET" && req.method !== "HEAD")) {
+          next();
+          return;
+        }
+        res.setHeader("Content-Type", asset.contentType);
+        res.setHeader("Content-Length", asset.body.length);
+        res.setHeader("Cache-Control", "no-cache");
+        res.end(req.method === "HEAD" ? undefined : asset.body);
+      });
+    },
     async buildStart() {
+      await prepareControlUiSettings(repoRoot);
       const directory = path.join(repoRoot, "dist/extensions");
       const required = process.env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1";
       const promised = required
         ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
-            .filter(
-              (entry) =>
-                !entry.isolated &&
-                isRecord(entry.packageJson) &&
-                controlUiSource(entry.packageJson),
-            )
+            .filter((entry) => {
+              if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+                return false;
+              }
+              if (!entry.isolated) {
+                return true;
+              }
+              const manifest = JSON.parse(
+                fs.readFileSync(
+                  path.join(repoRoot, "extensions", entry.id, "openclaw.plugin.json"),
+                  "utf8",
+                ),
+              );
+              const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+              if (!declaration.ok) {
+                throw new Error(
+                  `Invalid Control UI declaration for ${entry.id}: ${declaration.error}`,
+                );
+              }
+              return Boolean(declaration.value?.settingsViews?.length);
+            })
             .map((entry) => entry.id)
         : [];
       const entries = fs.existsSync(directory)
@@ -61,7 +98,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (!isRecord(manifest) || !pluginId) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: missing plugin id`);
         }
-        const result = normalizeManifestControlUi(manifest.controlUi);
+        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
         if (!result.ok) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: ${result.error}`);
         }
@@ -97,12 +134,15 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         const urls = new Map<string, string>();
         for (const [name, asset] of build.assets) {
           consume(path.join(rootDir, build.directory, name));
-          const ref = this.emitFile({
-            type: "asset",
-            fileName: `assets/plugins/${encodeURIComponent(pluginId)}/${revision}/${name}`,
-            source: asset.body,
-          });
-          urls.set(name, `import.meta.ROLLUP_FILE_URL_${ref}`);
+          const fileName = `assets/plugins/${encodeURIComponent(pluginId)}/${revision}/${name}`;
+          if (serving) {
+            const url = `${base}${fileName}`;
+            servedAssets.set(url, asset);
+            urls.set(name, JSON.stringify(url));
+          } else {
+            const ref = this.emitFile({ type: "asset", fileName, source: asset.body });
+            urls.set(name, `import.meta.ROLLUP_FILE_URL_${ref}`);
+          }
         }
         const metadata: Pick<
           ControlUiPluginDistribution,
@@ -113,7 +153,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
           bundledDistribution: { packageName: pkg.name, packageVersion: pkg.version },
         };
         modules.push(
-          `{...${JSON.stringify(metadata)},entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}],imports:[]}`,
+          `{...${JSON.stringify({ ...metadata, activation: controlUi.activation, settingsViews: controlUi.settingsViews })},entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}],imports:[]}`,
         );
         captured.add(id);
       }

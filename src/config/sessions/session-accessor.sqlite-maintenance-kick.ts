@@ -9,7 +9,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
 } from "../../process/gateway-work-admission.js";
-import { observeSessionWorkAdmissionReleases } from "../../sessions/session-lifecycle-admission.js";
+import { observeSessionControllerProtectionReleases } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { captureAgentDatabaseAdmission } from "../../state/agent-database-admission.js";
@@ -196,7 +196,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
   created.unregisterClose = () => unregister.forEach((release) => release());
   try {
     unregister.push(
-      observeSessionWorkAdmissionReleases(created.storePath, () => {
+      observeSessionControllerProtectionReleases(created.storePath, () => {
         if (
           created.noCandidates ||
           (!created.running &&
@@ -589,9 +589,6 @@ async function runPendingMaintenance(
         throw new SqliteReclamationInputsChangedError(
           "SQLite maintenance snapshot changed before commit",
         );
-      }
-      if (result.kind !== "maintenance-plan") {
-        throw new Error("SQLite automatic maintenance returned another operation's result");
       }
       const plan = result.value;
       const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;

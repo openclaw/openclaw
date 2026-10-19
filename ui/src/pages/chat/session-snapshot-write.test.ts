@@ -55,6 +55,88 @@ describe("snapshot write serialization and scheduling", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    { hasMore: false as const, completeSnapshot: true as const, totalMessages: 1_100 },
+    { hasMore: true as const, nextOffset: 1_100, totalMessages: 1_500 },
+  ])("persists a resumable first-screen tail from %j", async (pagination) => {
+    const firstSeq = pagination.totalMessages - 1_100 + 1;
+    const messages = Array.from({ length: 1_100 }, (_, index) => ({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Synthetic tool output. ".repeat(100) },
+        {
+          type: "toolCall",
+          name: "example",
+          arguments: { openclawResponsesInputReplay: "user-supplied argument" },
+        },
+      ],
+      __openclaw: { id: `message-${index}`, seq: firstSeq + index },
+      idempotencyKey: `turn-${index}`,
+      toolCallId: `tool-${index}`,
+      activity: [{ kind: "tool", status: "completed" }],
+      usage: { input: 1_200, output: 400 },
+      openclawResponsesInputReplay: { text: "Server replay only" },
+    }));
+    const value = { ...snapshot(), messages, pagination, deltaCursor: "latest-cursor" };
+    store.write(sessionKey, value);
+    await store.flush();
+    const restored = await store.read(sessionKey);
+    expect(restored?.messages).toEqual(
+      messages.slice(-80).map(({ openclawResponsesInputReplay: _replay, ...message }) => message),
+    );
+    expect(restored?.pagination).toEqual({
+      hasMore: true,
+      nextOffset: 0,
+      totalMessages: pagination.totalMessages,
+    });
+    expect(restored?.deltaCursor).toBe("latest-cursor");
+    expect(value.messages).toHaveLength(1_100);
+    expect(JSON.stringify(restored).length).toBeLessThan(220_000);
+  });
+
+  it("keeps projected siblings at the tail boundary together", async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      role: "assistant",
+      content: `Message ${index}`,
+      __openclaw: { id: `message-${index}`, seq: Math.floor(index / 3) + 1 },
+    }));
+    store.write(sessionKey, {
+      ...snapshot(),
+      messages,
+      pagination: { hasMore: false, totalMessages: 34 },
+    });
+    await store.flush();
+    const restored = await store.read(sessionKey);
+    expect(restored?.messages).toEqual(messages.slice(18));
+    expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 0, totalMessages: 34 });
+  });
+
+  it.each([false, true])(
+    "bounds imported history and refills its Gateway window on upward scroll (mixed=%s)",
+    async (mixed) => {
+      const messages = Array.from({ length: 120 }, (_, index) => ({
+        role: "assistant",
+        content: `Imported message ${index}`,
+        __openclaw:
+          mixed && index % 2
+            ? { id: `local-${index}`, seq: index + 1 }
+            : { id: `imported-${index}`, importedFrom: "claude-cli" },
+      }));
+      const value = {
+        ...snapshot(),
+        messages,
+        pagination: { hasMore: true as const, nextOffset: 120, totalMessages: 200 },
+      };
+      store.write(sessionKey, value);
+      await store.flush();
+      expect(await store.read(sessionKey)).toEqual({
+        ...value,
+        messages: messages.slice(-80),
+        pagination: { hasMore: true, nextOffset: 0, totalMessages: 200 },
+      });
+    },
+  );
+
   it("keeps pairing QR credentials in memory without writing them to the browser cache", async () => {
     const content = [
       { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
@@ -165,7 +247,7 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 2,
+        projectionVersion: 3,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
@@ -246,7 +328,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 2,
+        projectionVersion: 3,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,

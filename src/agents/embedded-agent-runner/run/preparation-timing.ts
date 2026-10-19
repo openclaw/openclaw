@@ -1,10 +1,5 @@
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { DiagnosticsTimelineOptions as EmbeddedAgentPreparationTimingOptions } from "../../../infra/diagnostics-timeline.js";
 import { measureDiagnosticsTimelineSpan } from "../../../infra/diagnostics-timeline.js";
-
-type EmbeddedAgentPreparationTimingOptions = {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-};
 
 /** Measures async pre-provider work under the canonical agent preparation span. */
 export function measureEmbeddedAgentPreparation<T>(

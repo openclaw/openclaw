@@ -32,6 +32,7 @@ vi.mock("./ws-connection/message-handler.js", () => ({
 
 describe("live person presence timing", () => {
   it("qualifies presence sender provenance only from an authenticated profile", () => {
+    const validUser = (user: unknown) => Value.Check(PresenceEntrySchema, { ts: 1, user });
     const authenticatedUserId = "same-id";
     const fallback = buildAuthenticatedPresenceUser({ authenticatedUserId });
     expect(fallback).toEqual({ id: authenticatedUserId, email: authenticatedUserId });
@@ -48,19 +49,16 @@ describe("live person presence timing", () => {
       id: authenticatedUserId,
       identity: { type: "profile", id: authenticatedUserId },
     });
-    expect(Value.Check(PresenceEntrySchema, { ts: 1, user: profile })).toBe(true);
+    expect(validUser(profile)).toBe(true);
     expect(
-      Value.Check(PresenceEntrySchema, {
-        ts: 1,
-        user: {
-          ...fallback,
-          identity: {
-            type: "observation",
-            id: authenticatedUserId,
-            pluginId: null,
-            accountId: null,
-            senderKind: "unknown",
-          },
+      validUser({
+        ...fallback,
+        identity: {
+          type: "observation",
+          id: authenticatedUserId,
+          pluginId: null,
+          accountId: null,
+          senderKind: "unknown",
         },
       }),
     ).toBe(false);
@@ -78,8 +76,7 @@ describe("live person presence timing", () => {
   });
   afterEach(() => {
     for (const socket of sockets.splice(0)) {
-      socket.readyState = 3;
-      socket.emit("close", 1000, Buffer.alloc(0));
+      close(socket);
     }
     clients.clear();
     vi.setSystemTime(Date.now() + 300_001);
@@ -87,7 +84,16 @@ describe("live person presence timing", () => {
     vi.useRealTimers();
   });
 
-  async function connect(email: string | undefined, profileId = "timing-person") {
+  async function connect(
+    email: string | undefined,
+    profileId = "timing-person",
+    options: {
+      raw?: boolean;
+      scope?: string;
+      nativeClient?: "openclaw-tui" | "openclaw-macos";
+      deferAdmission?: boolean;
+    } = {},
+  ) {
     const { socket } = attachGatewayWsForTest({
       attach: attachGatewayWsConnectionHandler,
       clients,
@@ -113,22 +119,57 @@ describe("live person presence timing", () => {
         minProtocol: 1,
         maxProtocol: 1,
         role: "operator",
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        scopes: options.scope ? [options.scope] : undefined,
+        client: {
+          id: options.nativeClient ?? "openclaw-control-ui",
+          version: "test",
+          platform: "test",
+          mode: options.nativeClient ? "ui" : "webchat",
+        },
       },
+      internal: options.scope ? { authenticatedControlUi: true } : undefined,
       authenticatedUserId: email,
-      authenticatedUserProfile: {
-        profileId,
-        displayName: "Timing Person",
-        avatarRevision: "1",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: options.raw
+        ? undefined
+        : {
+            profileId,
+            displayName: "Timing Person",
+            avatarRevision: "1",
+            hasAvatar: false,
+            updatedAt: 1,
+          },
     };
-    return { client, handler, socket };
+    if (!options.deferAdmission) {
+      expect(handler.setClient(client)).toBe(true);
+    }
+    return { client, handler, socket, email };
   }
 
-  function row(email: string) {
-    return listSystemPresence().find((entry) => entry.user?.email === email);
+  function personTimes(entry: ReturnType<typeof listSystemPresence>[number] | undefined) {
+    return [entry?.onlineSince, entry?.lastActivityAt];
+  }
+
+  type Connection = Awaited<ReturnType<typeof connect>>;
+
+  function close(socket: (typeof sockets)[number]) {
+    socket.readyState = 3;
+    socket.emit("close", 1000, Buffer.alloc(0));
+  }
+
+  function setClient(connection: Connection) {
+    return connection.handler.setClient(connection.client);
+  }
+
+  function activity(connection: Connection, at = Date.now()) {
+    vi.setSystemTime(at);
+    return recordClientPresenceActivity(clients, connection.client);
+  }
+
+  function row(connection: Connection) {
+    return listSystemPresence().find((entry) => entry.user?.email === connection.email);
+  }
+  function expectRow(connection: Connection, expected: object) {
+    expect(row(connection)).toMatchObject(expected);
   }
 
   it("projects only authenticated Control UI connections as human pool demand", async () => {
@@ -144,145 +185,75 @@ describe("live person presence timing", () => {
     expect(sidecars).toHaveLength(1);
     changes.mockClear();
     const browser = await connect("person@presence.test", "presence-person");
-    expect(browser.handler.setClient(browser.client)).toBe(true);
     expect(changes).not.toHaveBeenCalled();
 
     browser.client.internal = { authenticatedControlUi: true };
-    browser.socket.readyState = 3;
-    browser.socket.emit("close", 1000, Buffer.alloc(0));
+    close(browser.socket);
 
-    const readOnly = await connect("person@presence.test", "presence-person");
-    readOnly.client.internal = { authenticatedControlUi: true };
-    readOnly.client.connect.scopes = ["operator.read"];
-    expect(readOnly.handler.setClient(readOnly.client)).toBe(true);
+    await connect("person@presence.test", "presence-person", { scope: "operator.read" });
     expect(changes).not.toHaveBeenCalled();
 
-    const verified = await connect("person@presence.test", "presence-person");
-    verified.client.internal = { authenticatedControlUi: true };
-    verified.client.connect.scopes = ["operator.sessions.write"];
-    expect(verified.handler.setClient(verified.client)).toBe(true);
+    const writer = { scope: "operator.sessions.write" };
+    const verified = await connect("person@presence.test", "presence-person", writer);
     expect(changes).toHaveBeenLastCalledWith(true);
-    const overlapping = await connect("other@presence.test", "other-person");
-    overlapping.client.internal = { authenticatedControlUi: true };
-    overlapping.client.connect.scopes = ["operator.sessions.write"];
-    expect(overlapping.handler.setClient(overlapping.client)).toBe(true);
+    const overlapping = await connect("other@presence.test", "other-person", writer);
     const response = registerGatewayPolicyResponse("config.patch", verified.client, vi.fn())!;
     response.hold();
-    invalidateGatewayPolicyClient(verified.client, {
-      reason: "test",
-      code: 1008,
-      message: "revoked",
-    });
+    const revocation = { reason: "test", code: 1008, message: "revoked" };
+    invalidateGatewayPolicyClient(verified.client, revocation);
     expect(changes).toHaveBeenLastCalledWith(true);
     expect(clients.has(verified.client)).toBe(true);
-    invalidateGatewayPolicyClient(overlapping.client, {
-      reason: "test",
-      code: 1008,
-      message: "revoked",
-    });
+    invalidateGatewayPolicyClient(overlapping.client, revocation);
     expect(changes).toHaveBeenLastCalledWith(false);
     response.finish();
-    verified.socket.readyState = 3;
-    verified.socket.emit("close", 1000, Buffer.alloc(0));
+    close(verified.socket);
     expect(changes).toHaveBeenLastCalledWith(false);
     sidecars[0]!.stop();
-  });
-
-  it("retains the oldest online interval across overlapping sockets but not a full reconnect", async () => {
-    const first = await connect("first@timing.test");
-    const started = Date.now();
-    expect(first.handler.setClient(first.client)).toBe(true);
-    expect(row("first@timing.test")).toMatchObject({ onlineSince: started });
-    expect(row("first@timing.test")?.lastActivityAt).toBeUndefined();
-
-    vi.setSystemTime(started + 1_000);
-    const second = await connect("second@timing.test");
-    expect(second.handler.setClient(second.client)).toBe(true);
-    expect(recordClientPresenceActivity(clients, second.client)).toBe(true);
-    expect(row("first@timing.test")?.connectionLastActivityAt).toBeUndefined();
-    expect(row("second@timing.test")).toMatchObject({
-      connectionId: second.client.connId,
-      connectionLastActivityAt: started + 1_000,
-    });
-    first.socket.readyState = 3;
-    first.socket.emit("close", 1000, Buffer.alloc(0));
-
-    vi.setSystemTime(started + 2_000);
-    const third = await connect("third@timing.test");
-    expect(third.handler.setClient(third.client)).toBe(true);
-    expect(row("third@timing.test")).toMatchObject({
-      onlineSince: started,
-      lastActivityAt: started + 1_000,
-    });
-    expect(row("third@timing.test")?.connectionLastActivityAt).toBeUndefined();
-    vi.setSystemTime(started + 2_500);
-    expect(recordClientPresenceActivity(clients, third.client)).toBe(false);
-    expect(row("third@timing.test")?.connectionLastActivityAt).toBe(started + 2_500);
-    expect(row("second@timing.test")).toMatchObject({
-      lastActivityAt: started + 2_500,
-      connectionLastActivityAt: started + 1_000,
-    });
-    for (const connection of [second, third]) {
-      connection.socket.readyState = 3;
-      connection.socket.emit("close", 1000, Buffer.alloc(0));
-    }
-    vi.setSystemTime(started + 3_000);
-    const fresh = await connect("fresh@timing.test");
-    expect(fresh.handler.setClient(fresh.client)).toBe(true);
-    expect(row("fresh@timing.test")).toMatchObject({ onlineSince: started + 3_000 });
-    expect(row("fresh@timing.test")?.lastActivityAt).toBeUndefined();
-    expect(row("fresh@timing.test")?.connectionLastActivityAt).toBeUndefined();
   });
 
   it.each(["profile", "raw"] as const)(
     "separates colliding presence namespaces when %s connects first",
     async (firstNamespace) => {
       const id = "synthetic-shared-id";
-      const profile = await connect("profile@namespace.test", id);
-      const raw = await connect(id);
-      delete raw.client.authenticatedUserProfile;
+      const profile = await connect("profile@namespace.test", id, { deferAdmission: true });
+      const raw = await connect(id, undefined, { raw: true, deferAdmission: true });
       const [first, second] =
         firstNamespace === "profile" ? ([profile, raw] as const) : ([raw, profile] as const);
-      const started = Date.now();
-      first.handler.setClient(first.client);
-      vi.setSystemTime(started + 1_000);
-      second.handler.setClient(second.client);
-      const profileStarted = started + (firstNamespace === "profile" ? 0 : 1_000);
-      const rawStarted = started + (firstNamespace === "raw" ? 0 : 1_000);
-      expect.soft(row("profile@namespace.test")?.onlineSince).toBe(profileStarted);
-      expect.soft(row(id)?.onlineSince).toBe(rawStarted);
+      const t = Date.now();
+      setClient(first);
+      vi.setSystemTime(t + 1_000);
+      setClient(second);
+      const profileStarted = t + (firstNamespace === "profile" ? 0 : 1_000);
+      const rawStarted = t + (firstNamespace === "raw" ? 0 : 1_000);
+      expect.soft(row(profile)?.onlineSince).toBe(profileStarted);
+      expect.soft(row(raw)?.onlineSince).toBe(rawStarted);
 
-      vi.setSystemTime(started + 2_000);
-      expect(recordClientPresenceActivity(clients, raw.client)).toBe(true);
-      expect.soft(row("profile@namespace.test")?.lastActivityAt).toBeUndefined();
-      vi.setSystemTime(started + 3_000);
-      expect(recordClientPresenceActivity(clients, profile.client)).toBe(true);
-      expect.soft(row(id)).toMatchObject({
-        onlineSince: rawStarted,
-        lastActivityAt: started + 2_000,
-      });
+      expect(activity(raw, t + 2_000)).toBe(true);
+      expect.soft(row(profile)?.lastActivityAt).toBeUndefined();
+      expect(row(profile)?.connectionLastActivityAt).toBeUndefined();
+      expect(activity(profile, t + 3_000)).toBe(true);
+      expect.soft(personTimes(row(raw))).toEqual([rawStarted, t + 2_000]);
 
-      vi.setSystemTime(started + 4_000);
+      vi.setSystemTime(t + 4_000);
       const overlap = await connect("overlap@namespace.test", id);
-      overlap.handler.setClient(overlap.client);
-      profile.socket.readyState = 3;
-      profile.socket.emit("close", 1000, Buffer.alloc(0));
-      expect.soft(row("overlap@namespace.test")).toMatchObject({
-        onlineSince: profileStarted,
-        lastActivityAt: started + 3_000,
+      expect.soft(personTimes(row(overlap))).toEqual([profileStarted, t + 3_000]);
+      expect(row(overlap)?.connectionLastActivityAt).toBeUndefined();
+      expect(activity(overlap, t + 4_500)).toBe(false);
+      expectRow(profile, { lastActivityAt: t + 4_500, connectionLastActivityAt: t + 3_000 });
+      expectRow(overlap, {
+        connectionId: overlap.client.connId,
+        connectionLastActivityAt: t + 4_500,
       });
-      overlap.socket.readyState = 3;
-      overlap.socket.emit("close", 1000, Buffer.alloc(0));
+      close(profile.socket);
+      expect(activity(overlap, t + 4_750)).toBe(false);
+      expect.soft(personTimes(row(overlap))).toEqual([profileStarted, t + 4_750]);
+      close(overlap.socket);
 
-      vi.setSystemTime(started + 5_000);
+      vi.setSystemTime(t + 5_000);
       const reconnected = await connect("reconnected@namespace.test", id);
-      reconnected.handler.setClient(reconnected.client);
-      expect.soft(row("reconnected@namespace.test")?.onlineSince).toBe(started + 5_000);
-      expect.soft(row("reconnected@namespace.test")?.lastActivityAt).toBeUndefined();
-      expect.soft(row(id)).toMatchObject({
-        onlineSince: rawStarted,
-        lastActivityAt: started + 2_000,
-      });
+      expect.soft(personTimes(row(reconnected))).toEqual([t + 5_000, undefined]);
+      expect(row(reconnected)?.connectionLastActivityAt).toBeUndefined();
+      expect.soft(personTimes(row(raw))).toEqual([rawStarted, t + 2_000]);
     },
   );
 
@@ -290,17 +261,14 @@ describe("live person presence timing", () => {
     "keeps later activity separate after raw tabs qualify (%s acts first)",
     async (firstNamespace) => {
       const id = "qualification-shared-id";
-      const raw = await connect(id, id);
-      const qualified = await connect(id, id);
+      const raw = await connect(id, id, { raw: true });
+      const qualified = await connect(id, id, { deferAdmission: true });
       const profile = qualified.client.authenticatedUserProfile;
-      delete raw.client.authenticatedUserProfile;
       delete qualified.client.authenticatedUserProfile;
-      const started = Date.now();
-      raw.handler.setClient(raw.client);
-      vi.setSystemTime(started + 1_000);
-      qualified.handler.setClient(qualified.client);
-      vi.setSystemTime(started + 2_000);
-      recordClientPresenceActivity(clients, raw.client);
+      const t = Date.now();
+      vi.setSystemTime(t + 1_000);
+      setClient(qualified);
+      activity(raw, t + 2_000);
       const liveRows = (isProfile: boolean) =>
         listSystemPresence().filter(
           (entry) =>
@@ -310,149 +278,129 @@ describe("live person presence timing", () => {
         );
       expect(liveRows(false)).toHaveLength(2);
       for (const entry of liveRows(false)) {
-        expect(entry).toMatchObject({ onlineSince: started, lastActivityAt: started + 2_000 });
+        expect(personTimes(entry)).toEqual([t, t + 2_000]);
       }
 
       qualified.client.authenticatedUserProfile = profile;
       const [first, second] =
         firstNamespace === "profile" ? ([qualified, raw] as const) : ([raw, qualified] as const);
-      vi.setSystemTime(started + 3_000);
       // Activity can be the first presence operation after the profile snapshot changes.
-      expect(recordClientPresenceActivity(clients, first.client)).toBe(
-        firstNamespace === "profile",
-      );
+      expect(activity(first, t + 3_000)).toBe(firstNamespace === "profile");
       refreshClientPresence(clients, second.client);
-      expect.soft(liveRows(firstNamespace !== "profile")[0]).toMatchObject({
-        onlineSince: started,
-        lastActivityAt: started + 2_000,
-      });
-      vi.setSystemTime(started + 4_000);
-      expect(recordClientPresenceActivity(clients, second.client)).toBe(false);
+      expect.soft(personTimes(liveRows(firstNamespace !== "profile")[0])).toEqual([t, t + 2_000]);
+      expect(activity(second, t + 4_000)).toBe(false);
       refreshClientPresence(clients, first.client);
-      expect.soft(liveRows(firstNamespace === "profile")[0]).toMatchObject({
-        onlineSince: started,
-        lastActivityAt: started + 3_000,
-      });
-      expect.soft(liveRows(firstNamespace !== "profile")[0]).toMatchObject({
-        onlineSince: started,
-        lastActivityAt: started + 4_000,
-      });
+      expect.soft(personTimes(liveRows(firstNamespace === "profile")[0])).toEqual([t, t + 3_000]);
+      expect.soft(personTimes(liveRows(firstNamespace !== "profile")[0])).toEqual([t, t + 4_000]);
     },
   );
 
   it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
-    const first = await connect("heartbeat@timing.test", "heartbeat-person");
-    first.client.connect.client.id = "openclaw-tui";
-    first.client.connect.client.mode = "ui";
-    const started = Date.now();
-    first.handler.setClient(first.client);
-    recordClientPresenceActivity(clients, first.client);
-    vi.setSystemTime(started + 10_000);
+    const tui = { clientId: "openclaw-tui", mode: "ui" };
+    const mac = { clientId: "openclaw-macos", mode: "ui" };
+    const first = await connect("heartbeat@timing.test", "heartbeat-person", {
+      nativeClient: "openclaw-tui",
+    });
+    const t = Date.now();
+    activity(first);
+    vi.setSystemTime(t + 10_000);
     first.socket.emit("pong");
     updateSystemPresence({
       instanceId: first.client.presenceKey,
       text: "heartbeat",
       lastInputSeconds: 0,
     });
-    expect(row("heartbeat@timing.test")).toMatchObject({
-      clientId: "openclaw-tui",
-      mode: "ui",
-      ts: started + 10_000,
-      onlineSince: started,
-      lastActivityAt: started,
-      connectionLastActivityAt: started,
+    expectRow(first, {
+      ...tui,
+      ts: t + 10_000,
+      onlineSince: t,
+      lastActivityAt: t,
+      connectionLastActivityAt: t,
     });
 
-    vi.setSystemTime(started + 20_000);
+    vi.setSystemTime(t + 20_000);
     for (let index = 0; index < 201; index++) {
       upsertPresence(`timing-eviction-${index}`, { text: "cache pressure" });
     }
-    expect(row("heartbeat@timing.test")).toBeUndefined();
+    expect(row(first)).toBeUndefined();
     expect(snapshotClientPresence(clients)).toMatchObject([
       {
         connectionId: first.client.connId,
         host: "openclaw-tui",
         user: { id: "heartbeat-person" },
-        connectionLastActivityAt: started,
+        connectionLastActivityAt: t,
       },
     ]);
-    const overlap = await connect("eviction@timing.test", "heartbeat-person");
-    overlap.client.connect.client.id = "openclaw-macos";
-    overlap.client.connect.client.mode = "ui";
-    overlap.handler.setClient(overlap.client);
-    expect(row("heartbeat@timing.test")).toMatchObject({
-      clientId: "openclaw-tui",
-      mode: "ui",
-      connectionLastActivityAt: started,
+    const overlap = await connect("eviction@timing.test", "heartbeat-person", {
+      nativeClient: "openclaw-macos",
     });
-    expect(row("eviction@timing.test")).toMatchObject({
-      clientId: "openclaw-macos",
-      mode: "ui",
-      onlineSince: started,
-      lastActivityAt: started,
+    expectRow(first, { ...tui, connectionLastActivityAt: t });
+    expectRow(overlap, {
+      ...mac,
+      onlineSince: t,
+      lastActivityAt: t,
     });
 
-    vi.setSystemTime(started + 400_000);
-    expect(row("eviction@timing.test")).toBeUndefined();
-    expect(recordClientPresenceActivity(clients, overlap.client)).toBe(true);
-    expect(row("heartbeat@timing.test")).toMatchObject({ clientId: "openclaw-tui", mode: "ui" });
-    expect(row("eviction@timing.test")).toMatchObject({
-      clientId: "openclaw-macos",
-      mode: "ui",
-      onlineSince: started,
-      lastActivityAt: started + 400_000,
-      connectionLastActivityAt: started + 400_000,
+    vi.setSystemTime(t + 400_000);
+    expect(row(overlap)).toBeUndefined();
+    expect(activity(overlap)).toBe(true);
+    expectRow(first, tui);
+    expectRow(overlap, {
+      ...mac,
+      onlineSince: t,
+      lastActivityAt: t + 400_000,
+      connectionLastActivityAt: t + 400_000,
     });
   });
 
   it("keeps delayed identity timing on its accepted socket without reviving closed clients", async () => {
-    const delayed = await connect("pending@timing.test", "delayed-person");
+    const delayed = await connect("pending@timing.test", "delayed-person", {
+      deferAdmission: true,
+    });
     const profile = delayed.client.authenticatedUserProfile;
     delete delayed.client.authenticatedUserProfile;
     delayed.client.authenticatedGitHubIdentitySync = async () => ({
       profileId: "delayed-person",
       updatedAt: 1,
     });
-    const started = Date.now();
-    delayed.handler.setClient(delayed.client);
-    expect(row("pending@timing.test")).toBeUndefined();
-    expect(recordClientPresenceActivity(clients, delayed.client)).toBe(false);
-    vi.setSystemTime(started + 1_000);
+    const t = Date.now();
+    setClient(delayed);
+    expect(row(delayed)).toBeUndefined();
+    expect(activity(delayed)).toBe(false);
+    vi.setSystemTime(t + 1_000);
     delayed.client.authenticatedUserProfile = profile;
     refreshClientPresence(clients, delayed.client);
-    expect(row("pending@timing.test")).toMatchObject({ onlineSince: started });
-    delayed.socket.readyState = 3;
-    delayed.socket.emit("close", 1000, Buffer.alloc(0));
-    vi.setSystemTime(started + 400_000);
-    expect(row("pending@timing.test")).toBeUndefined();
+    expectRow(delayed, { onlineSince: t });
+    close(delayed.socket);
+    vi.setSystemTime(t + 400_000);
+    expect(row(delayed)).toBeUndefined();
     expect(refreshClientPresence(clients, delayed.client)).toBe(false);
-    expect(recordClientPresenceActivity(clients, delayed.client)).toBe(false);
-    expect(row("pending@timing.test")).toBeUndefined();
+    expect(activity(delayed)).toBe(false);
+    expect(row(delayed)).toBeUndefined();
   });
 
   it("rejects copied, invalidated, closing, and unregistered clients without changing activity", async () => {
     const live = await connect("exact@timing.test", "exact-person");
-    live.handler.setClient(live.client);
     expect(recordClientPresenceActivity(clients, { ...live.client })).toBe(false);
     live.client.invalidated = true;
-    expect(recordClientPresenceActivity(clients, live.client)).toBe(false);
+    expect(activity(live)).toBe(false);
     expect(snapshotClientPresence(clients)).toEqual([]);
     live.client.invalidated = false;
     live.socket.readyState = 2;
-    expect(recordClientPresenceActivity(clients, live.client)).toBe(false);
+    expect(activity(live)).toBe(false);
     expect(snapshotClientPresence(clients)).toEqual([]);
-    expect(row("exact@timing.test")?.lastActivityAt).toBeUndefined();
-    const rejected = await connect("rejected@timing.test");
+    expect(row(live)?.lastActivityAt).toBeUndefined();
+    const rejected = await connect("rejected@timing.test", undefined, { deferAdmission: true });
     rejected.socket.emit("close", 1000, Buffer.alloc(0));
-    expect(rejected.handler.setClient(rejected.client)).toBe(false);
+    expect(setClient(rejected)).toBe(false);
     expect(rejected.client.personPresence).toBeUndefined();
-    expect(row("rejected@timing.test")).toBeUndefined();
+    expect(row(rejected)).toBeUndefined();
   });
 
   it.each(["ephemeral", "unidentified", "node"])(
     "does not create person timing for %s clients",
     async (kind) => {
-      const connection = await connect(`${kind}@timing.test`);
+      const connection = await connect(`${kind}@timing.test`, undefined, { deferAdmission: true });
       if (kind === "ephemeral") {
         delete connection.client.presenceKey;
       } else if (kind === "node") {
@@ -461,9 +409,9 @@ describe("live person presence timing", () => {
         delete connection.client.authenticatedUserId;
         delete connection.client.authenticatedUserProfile;
       }
-      expect(connection.handler.setClient(connection.client)).toBe(true);
+      expect(setClient(connection)).toBe(true);
       expect(connection.client.personPresence).toBeUndefined();
-      expect(recordClientPresenceActivity(clients, connection.client)).toBe(false);
+      expect(activity(connection)).toBe(false);
     },
   );
 });

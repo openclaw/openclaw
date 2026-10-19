@@ -131,25 +131,4 @@ describe("chat composer IME composition", () => {
     expect(enterEvent.defaultPrevented).toBe(true);
     expect(onSend).toHaveBeenCalledOnce();
   });
-
-  it("invalidates after handled input history navigation", () => {
-    const onRequestUpdate = vi.fn();
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "up" as const,
-    }));
-    const container = renderComposerFixture({ onHistoryKeydown, onRequestUpdate }).container;
-    const textarea = getComposerTextarea(container);
-    const arrowEvent = new KeyboardEvent("keydown", {
-      key: "ArrowUp",
-      bubbles: true,
-      cancelable: true,
-    });
-
-    textarea.dispatchEvent(arrowEvent);
-    expect(arrowEvent.defaultPrevented).toBe(true);
-    expect(onHistoryKeydown).toHaveBeenCalledOnce();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-  });
 });

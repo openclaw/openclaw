@@ -6,7 +6,7 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatPanePlacement } from "./chat-pane-placement.ts";
+import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 
 const containers: HTMLElement[] = [];
 

@@ -66,9 +66,7 @@ export function createTaskSuggestionTools(params: {
   sessionKey: string;
   agentId?: string;
   cwd: string;
-  callGateway?: typeof callGatewayTool;
 }): AnyAgentTool[] {
-  const gatewayCall = params.callGateway ?? callGatewayTool;
   return [
     {
       label: "Suggest Task",
@@ -100,7 +98,7 @@ export function createTaskSuggestionTools(params: {
         if (!path.isAbsolute(cwd)) {
           throw new ToolInputError("cwd must be an absolute path");
         }
-        const result = await gatewayCall<TaskSuggestionsCreateResult>(
+        const result = await callGatewayTool<TaskSuggestionsCreateResult>(
           "taskSuggestions.create",
           {},
           {
@@ -129,7 +127,7 @@ export function createTaskSuggestionTools(params: {
         const input = args as Record<string, unknown>;
         const taskId = readToolStringParam(input, "task_id", { required: true });
         const reason = readToolStringParam(input, "reason");
-        const result = await gatewayCall<TaskSuggestionsDismissResult>(
+        const result = await callGatewayTool<TaskSuggestionsDismissResult>(
           "taskSuggestions.dismiss",
           {},
           {

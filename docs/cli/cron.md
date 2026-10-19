@@ -448,6 +448,10 @@ An unresolved owner does not stop the scheduler: that job is skipped with an exp
 
 `list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default. With `--json` it prints the scratch plus revision metadata. Scratch writes return the revision result as JSON by default, and accept `--json` as the explicit machine-output spelling.
 
+If a returned job has no runtime state, human-readable `show` still displays the
+available job details, using `-` for unavailable run fields and `idle` for an
+enabled job with no recorded status.
+
 `automations show` also accepts an exact job name, matched without regard to case.
 Job IDs take precedence. When multiple jobs match the name, including disabled
 jobs, the command reports ambiguity and includes the matching jobs' full IDs,

@@ -106,6 +106,18 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
+  const readiness = params.store.repairSessionPlacements().then((repaired) => {
+    if (repaired.placements) {
+      context.logger.info(`Sessions board removed ${repaired.placements} non-operator placements.`);
+    }
+    if (repaired.boards) {
+      context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
+    }
+  });
+  void readiness.catch((error: unknown) => {
+    context.serviceHealth?.reportFailure(error);
+    context.logger.error(`Sessions board initialization failed: ${String(error)}`);
+  });
   const lastKnown = new Map<string, CachedFacts>();
   const projections = new Map<string, PreparedProjection>();
   const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
@@ -272,6 +284,7 @@ function createOwner(
     caller?: CallerAuthority,
   ): Promise<WorkboardSessionsBoardRead> => {
     const assertReadCurrent = interactiveAuthority(caller);
+    await readiness;
     assertReadCurrent();
     hasRead = true;
     if (revision !== params.store.sessionsRevision) {
@@ -378,9 +391,11 @@ function createOwner(
     cancel,
     async stop() {
       cancel();
+      await readiness.catch(() => {});
     },
     async update(id, patch, caller) {
       const assertWriteCurrent = interactiveAuthority(caller);
+      await readiness;
       assertWriteCurrent();
       return await params.store.updateSessionsBoard(id, patch, assertWriteCurrent);
     },
@@ -451,15 +466,6 @@ export function createWorkboardSessionsBoardService(
       const state = activeState();
       await state.owner?.stop();
       state.owner = undefined;
-      const repaired = await params.store.repairSessionPlacements();
-      if (repaired.placements) {
-        context.logger.info(
-          `Sessions board removed ${repaired.placements} non-operator placements.`,
-        );
-      }
-      if (repaired.boards) {
-        context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
-      }
       const owner = createOwner(params, context, () => activeState().owner === owner);
       owned = state.owner = owner;
     },

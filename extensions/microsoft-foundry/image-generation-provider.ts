@@ -13,7 +13,7 @@ import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -344,7 +344,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
           {
             maxBytes: resolveInlineImageJsonResponseMaxBytes(
               MAI_IMAGE_MAX_RESULTS,
-              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+              resolveGeneratedImageDownloadMaxBytes(req.cfg),
             ),
           },
         );

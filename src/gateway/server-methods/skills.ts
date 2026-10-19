@@ -26,6 +26,7 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import { skillsFilesHandlers } from "./skills-files.js";
 import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
@@ -37,6 +38,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const skillsHandlers: GatewayRequestHandlers = {
+  ...skillsFilesHandlers,
   ...skillsLibraryHandlers,
   ...skillsUploadHandlers,
   ...skillsWorkshopHandlers,

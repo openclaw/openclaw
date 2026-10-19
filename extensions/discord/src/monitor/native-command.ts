@@ -141,11 +141,9 @@ export function createDiscordNativeCommand(
     override name = command.name;
     override description = truncateDiscordCommandDescription({
       value: command.description,
-      label: `command:${command.name}`,
     });
     override descriptionLocalizations = truncateDiscordCommandDescriptionLocalizations({
       value: command.descriptionLocalizations,
-      label: `command:${command.name}`,
     });
     override defer = false;
     override ephemeral = ephemeralDefault;

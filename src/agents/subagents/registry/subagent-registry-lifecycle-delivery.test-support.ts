@@ -1,12 +1,19 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import { createDeferredCore } from "../../../shared/deferred.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import {
-  runSubagentAnnounceDispatch,
-  type SubagentAnnounceDeliveryResult,
-} from "../announce/subagent-announce-dispatch.js";
+  beginSessionEffect,
+  captureSessionTarget,
+  closeSessionControllerAdmission,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import {
   mutateLifecycleRun,
   readLifecycleRun,
+  type createRunEntry as createLifecycleRunEntry,
   type LifecycleControllerFixtureOptions,
   type LifecycleFixtureWrite,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
@@ -186,7 +193,31 @@ export function registerLifecycleDeliveryReceiptCases({
 
   it.each([
     {
-      name: "persists steer_dropped when announce mapping preserves a live-queue refusal",
+      name: "persists phase-only completion failure and steer-drop diagnostics",
+      delivery: {
+        delivered: false as const,
+        path: "none" as const,
+        phases: [
+          {
+            phase: "direct-primary" as const,
+            delivered: false,
+            path: "direct" as const,
+            error: "primary refused",
+          },
+          {
+            phase: "steer-fallback" as const,
+            delivered: false,
+            path: "none" as const,
+            reason: "steer_dropped" as const,
+            error: "steer refused",
+          },
+        ],
+      },
+      lastDropReason: "steer_dropped",
+      lastError: "direct-primary: primary refused; steer-fallback: steer refused",
+    },
+    {
+      name: "persists a direct steer-drop reason without rewriting it as sink_unavailable",
       delivery: {
         delivered: false as const,
         path: "none" as const,
@@ -228,34 +259,24 @@ export function registerLifecycleDeliveryReceiptCases({
   it.each([
     {
       name: "persists a newly failed completion",
-      previousDropReason: undefined,
       reusePreviousError: false,
       previousDisposition: undefined,
       persistCalls: 1,
     },
     {
-      name: "persists a changed drop reason when the direct error is unchanged",
-      previousDropReason: "sink_unavailable" as const,
-      reusePreviousError: true,
-      previousDisposition: "retryable" as const,
-      persistCalls: 1,
-    },
-    {
       name: "persists a changed disposition when completion diagnostics are otherwise unchanged",
-      previousDropReason: "steer_dropped" as const,
       reusePreviousError: true,
       previousDisposition: undefined,
       persistCalls: 1,
     },
     {
       name: "does not persist unchanged completion diagnostics",
-      previousDropReason: "steer_dropped" as const,
       reusePreviousError: true,
       previousDisposition: "retryable" as const,
       persistCalls: 0,
     },
   ])("$name before stalled announce bookkeeping settles", async (scenario) => {
-    const lastError = "failed; visible_reply_missing; direct-primary: failed";
+    const lastError = "failed; visible_reply_missing";
     const persist = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -265,23 +286,18 @@ export function registerLifecycleDeliveryReceiptCases({
         status: "pending",
         disposition: scenario.previousDisposition,
         ...(scenario.reusePreviousError ? { lastError } : {}),
-        ...(scenario.previousDropReason ? { lastDropReason: scenario.previousDropReason } : {}),
       },
     });
     const receiptObserved = createDeferredCore();
     const announcePending = createDeferredCore();
     const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
       async (announceParams) => {
-        const delivery = await runSubagentAnnounceDispatch({
-          expectsCompletionMessage: true,
-          steer: async () => ({ status: "dropped" }),
-          direct: async () => ({
-            delivered: false,
-            path: "direct",
-            error: "failed",
-            reason: "visible_reply_missing",
-          }),
-        });
+        const delivery: SubagentAnnounceDeliveryResult = {
+          delivered: false,
+          path: "direct",
+          error: "failed",
+          reason: "visible_reply_missing",
+        };
         persist.mockClear();
         try {
           await announceParams.onDeliveryResult?.(delivery);
@@ -305,7 +321,7 @@ export function registerLifecycleDeliveryReceiptCases({
       await expect(completeRun(controller, entry, visibleCompletion)).resolves.toBeUndefined();
       await receiptObserved.promise;
       expect(readLifecycleRun(entry).delivery?.disposition).toBe("retryable");
-      expect(readLifecycleRun(entry).delivery?.lastDropReason).toBe("steer_dropped");
+      expect(readLifecycleRun(entry).delivery?.lastDropReason).toBeUndefined();
       expect(readLifecycleRun(entry).delivery?.lastError).toBe(lastError);
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
       expect(persist).toHaveBeenCalledTimes(scenario.persistCalls);
@@ -474,4 +490,148 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(readLifecycleRun(entry).delivery?.suspendedReason).toBeUndefined();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
+}
+
+export function registerRequesterAdmissionRetryTests({
+  createRunEntry,
+  createLifecycleController,
+  useRetryTimers,
+}: {
+  createRunEntry: typeof createLifecycleRunEntry;
+  createLifecycleController: (
+    options: LifecycleControllerFixtureOptions,
+  ) => SubagentLifecycleController;
+  useRetryTimers: () => Promise<void>;
+}) {
+  it.each(["after cleanup", "during finalization"] as const)(
+    "delivers the retained result without descendants when requester admission releases %s",
+    async (releaseAt) => {
+      await useRetryTimers();
+      vi.setSystemTime(10_000);
+      const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
+        "./subagent-registry-cleanup.js",
+      );
+      const decision = vi
+        .spyOn(cleanupPolicy, "resolveDeferredCleanupDecision")
+        .mockImplementation(actualPolicy.resolveDeferredCleanupDecision);
+      const terminalReply = { disposition: "visible", text: "Retained child result" } as const;
+      const entry = createRunEntry({
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        expectsCompletionMessage: true,
+        retainAttachmentsOnKeep: true,
+        completion: { required: true, terminalReply },
+      });
+      const delivered = vi.fn();
+      const admissionFailures: unknown[] = [];
+      const runSubagentAnnounceFlow = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
+        async (params) => {
+          const input = params.controllerInput;
+          if (!input?.target) {
+            throw new Error("Completion has no requester controller input");
+          }
+          // Exercise the real requester gate; only the final transport is synthetic.
+          const effect = await beginSessionEffect({
+            target: input.target,
+            sourceInput: input,
+          }).catch((error: unknown) => {
+            admissionFailures.push(error);
+            throw error;
+          });
+          try {
+            return await effect.run(() =>
+              withSessionTurn(
+                {
+                  sessionKey: input.mailbox.key,
+                  sessionId: input.target?.incarnation,
+                  target: input.target,
+                  controllerInput: input,
+                },
+                async () => {
+                  delivered(params.terminalReply);
+                  await params.onDeliveryResult?.({
+                    delivered: true,
+                    path: "direct",
+                    disposition: "delivered",
+                  });
+                  return "delivered" as const;
+                },
+              ),
+            );
+          } finally {
+            effect.release();
+          }
+        },
+      );
+      let releaseAdmission = () => {};
+      const countPendingDescendantRuns = vi.fn(async () => {
+        if (releaseAt === "during finalization") {
+          releaseAdmission();
+        }
+        return 0;
+      });
+      const resumeSubagentRun = vi.fn(() =>
+        controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry)),
+      );
+      const controller = createLifecycleController({
+        entry,
+        runSubagentAnnounceFlow,
+        countPendingDescendantRuns,
+        resumeSubagentRun,
+      });
+      const requester = await sessionEntryRuntime.loadRequesterSessionEntry(
+        entry.requesterSessionKey,
+        entry.requesterAgentId,
+      );
+      if (!requester.entry?.sessionId || !requester.storePath) {
+        throw new Error("Requester fixture has no stored session");
+      }
+      const unavailable = new Error("Requester session admission is temporarily closed");
+      releaseAdmission = closeSessionControllerAdmission({
+        target: captureSessionTarget({
+          storeScope: requester.storePath,
+          sessionKey: requester.canonicalKey,
+          agentId: requester.agentId,
+          incarnation: requester.entry.sessionId,
+        }),
+        reason: unavailable,
+      });
+      const join = observeRootWork();
+      try {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+        await join(true);
+
+        expect(admissionFailures).toEqual([unavailable]);
+        expect(delivered).not.toHaveBeenCalled();
+        expect(countPendingDescendantRuns).toHaveBeenCalledOnce();
+        expect(readLifecycleRun(entry).completion?.terminalReply).toEqual(terminalReply);
+        expect(readLifecycleRun(entry).delivery).toMatchObject({
+          status: "pending",
+          payload: { childRunId: entry.runId, terminalReply },
+          nextAttemptAt: 11_000,
+        });
+        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
+        expect(readLifecycleRun(entry).wakeOnDescendantSettle).not.toBe(true);
+        expect(controller.scheduledResumeTimers.size).toBe(1);
+
+        releaseAdmission();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await join(true);
+
+        expect(resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(entry.runId);
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+        expect(delivered).toHaveBeenCalledExactlyOnceWith(terminalReply);
+        expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+        expect(controller.scheduledResumeTimers.size).toBe(0);
+      } finally {
+        releaseAdmission();
+        await join();
+        controller.clearRuntimeState();
+        decision.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 }

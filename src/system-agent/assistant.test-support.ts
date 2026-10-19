@@ -2,16 +2,17 @@ import fs from "node:fs/promises";
 import { vi } from "vitest";
 import * as cliRunner from "../agents/cli-runner.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import * as config from "../config/config.js";
 import * as assistantTimeout from "./assistant-timeout.js";
 import { planSystemAgentCommand as planSystemAgentCommandImpl } from "./assistant.js";
-import type { SystemAgentVerifiedInferenceDeps } from "./verified-inference.js";
 
 // mock-isolation: Planner dispatch fixtures never initialize or launch a CLI runner.
 vi.mock("../agents/cli-runner.js", () => ({ runCliAgent: vi.fn() }));
 // mock-isolation: Planner dispatch fixtures never initialize the embedded agent runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
-type PlannerTestDeps = SystemAgentVerifiedInferenceDeps & {
+type PlannerTestDeps = {
+  readConfigFileSnapshot?: typeof config.readConfigFileSnapshot;
   runCliAgent?: typeof cliRunner.runCliAgent;
   runEmbeddedAgent?: typeof embeddedAgent.runEmbeddedAgent;
   createTempDir?: () => Promise<string>;
@@ -20,20 +21,26 @@ type PlannerTestDeps = SystemAgentVerifiedInferenceDeps & {
 };
 
 export async function planSystemAgentCommand(
-  params: Omit<Parameters<typeof planSystemAgentCommandImpl>[0], "deps"> & {
+  params: Parameters<typeof planSystemAgentCommandImpl>[0] & {
     deps?: PlannerTestDeps;
   },
 ) {
+  const { deps, ...plannerParams } = params;
   const {
+    readConfigFileSnapshot,
     runCliAgent,
     runEmbeddedAgent,
     createTempDir,
     removeTempDir,
     resolveAssistantTimeoutMs,
-    ...routeDeps
-  } = params.deps ?? {};
+  } = deps ?? {};
   const mocks: Array<{ mockRestore(): void }> = [];
   try {
+    if (readConfigFileSnapshot) {
+      mocks.push(
+        vi.spyOn(config, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot),
+      );
+    }
     if (runCliAgent) {
       mocks.push(vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent));
     }
@@ -53,7 +60,7 @@ export async function planSystemAgentCommand(
           .mockImplementation(resolveAssistantTimeoutMs),
       );
     }
-    return await planSystemAgentCommandImpl({ ...params, deps: routeDeps });
+    return await planSystemAgentCommandImpl(plannerParams);
   } finally {
     for (const mock of mocks.toReversed()) {
       mock.mockRestore();

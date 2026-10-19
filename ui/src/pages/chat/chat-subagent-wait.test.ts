@@ -1,7 +1,6 @@
 import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
@@ -9,7 +8,7 @@ import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx"
 import {
   SubagentActivity,
   type SubagentActivityProps,
-} from "./components/chat-subagent-activity.ts";
+} from "./components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
 
 type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
@@ -556,10 +555,7 @@ describe("chat waiting on subagents", () => {
       expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
       draw({
         ...options,
-        subagentActivity: solidContent(SubagentActivity, {
-          rows: projection.activity,
-          onOpenSubagent,
-        }),
+        subagentActivity: { rows: projection.activity, onOpenSubagent },
       });
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");

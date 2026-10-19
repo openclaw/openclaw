@@ -123,6 +123,33 @@ describe("terminal resolution", () => {
     },
   );
 
+  it("keeps real internal provider failures visible", async () => {
+    const assistant = emptyAssistant({
+      stopReason: "error",
+      errorMessage: "Authentication failed",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "failed", source: "prompt", error: new Error("Authentication failed") },
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        runParams: {
+          messageChannel: "internal",
+          inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+    );
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      throw new Error("Expected a terminal provider failure");
+    }
+    expect(resolved.result.meta.error).toMatchObject({ message: "Authentication failed" });
+    expect(resolved.result.meta.suppressErrorNotice).not.toBe(true);
+  });
+
   it("keeps external cancellation ahead of a failed attempt during final result construction", async () => {
     const assistant = emptyAssistant({ stopReason: "stop" });
     const attempt = makeEmbeddedRunnerAttempt({

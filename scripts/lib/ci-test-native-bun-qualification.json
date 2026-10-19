@@ -327,7 +327,6 @@
     "src/utils/safe-json.test.ts": "aecf090cf62c17dac56cf2bf1e5694109d3e34867d1136227cc743d8c51ade50",
     "src/utils/string-readers.test.ts": "6a23a8ed2cb5e2976e7a35f84cee13f9b701e7038cecfb0ca707b49f1b757e17",
     "src/utils/token-format.test.ts": "d7a3bf34360e5bb147e1191a9931970da79ee561b0b371e6cbedfa3dfa48dea4",
-    "src/utils/transcript-tools.test.ts": "8dba462027982f23719694df3df401a3ac8e2a707227c8136bbe4078c83e2012",
     "src/video-generation/capabilities.test.ts": "7d3c063fb55c19776fef89df95d67655187687566654d97df098cb748e07dd61",
     "src/video-generation/live-test-helpers.test.ts": "cca2a5f82822089fea4212a972743004b60407d3545476f9d2cd371463bb039e",
     "test/e2e/qa-lab/runtime/gateway-stability-runtime.test.ts": "8154e55414caae4edebe1d4c3f55c03c3c0f28694a56def6c5246d497a98885e",

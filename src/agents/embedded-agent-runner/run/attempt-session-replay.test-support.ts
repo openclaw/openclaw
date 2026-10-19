@@ -6,6 +6,7 @@ import {
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { persistInternalSourceReply } from "../../../gateway/internal-source-reply-persistence.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
@@ -118,6 +119,7 @@ export async function withInterruptedTurn(
     selectedOwner?: boolean;
     sharedStore?: boolean;
     admittedReceipt?: boolean;
+    sourceReply?: { final?: boolean; runId?: string };
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -197,6 +199,20 @@ export async function withInterruptedTurn(
         firstKeptEntryId,
         9_000,
       );
+    }
+    if (options.sourceReply) {
+      await persistInternalSourceReply({
+        cfg: { session: { store: target.storePath } },
+        agentId,
+        sessionKey: target.sessionKey,
+        expectedSessionId: target.sessionId,
+        runId: options.sourceReply.runId ?? runId,
+        sourceReplyFinal: options.sourceReply.final,
+        payload: { text: "Still working after restart." },
+        idempotencyKey: `${runId}:progress`,
+      });
+      // The delivery sink appended outside the manager, as a live transcript update does.
+      await original.reloadPersistedTranscriptAsync();
     }
     if (options.toolProgress) {
       await appendCompletedToolWork(original, runId);

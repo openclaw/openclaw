@@ -189,6 +189,7 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/code-mode-quickjs/assets/encoding.so",
       "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
+      "dist/extensions/logbook/src/logbook-schema.postgres.sql",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
@@ -203,6 +204,28 @@ describe("runtime postbuild static assets", () => {
     expect(payload.sources).not.toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.packageOutputs).toContain("dist/extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
+  });
+
+  it("ships the PostgreSQL schema read by the packaged Logbook port descriptor", async () => {
+    const rootDir = createTempDir("openclaw-logbook-port-assets-");
+    const pluginPath = "extensions/logbook";
+    const schemaPath = `${pluginPath}/src/logbook-schema.postgres.sql`;
+    for (const relativePath of [`${pluginPath}/package.json`, schemaPath]) {
+      const destination = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.copyFile(path.join(MODULE_ROOT, relativePath), destination);
+    }
+    await fs.mkdir(path.join(rootDir, "dist-runtime/extensions"), { recursive: true });
+
+    copyStaticExtensionAssets({ rootDir });
+    copyStaticExtensionAssetsToRuntimeOverlay({ rootDir });
+
+    const schema = await fs.readFile(path.join(MODULE_ROOT, schemaPath), "utf8");
+    for (const outputRoot of ["dist", "dist-runtime"]) {
+      await expect(fs.readFile(path.join(rootDir, outputRoot, schemaPath), "utf8")).resolves.toBe(
+        schema,
+      );
+    }
   });
 
   it("copies each package asset once with multiple Git index stages", async () => {

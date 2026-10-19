@@ -86,7 +86,6 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   slot: Slot<Input, Output>;
   options: Pick<WorkerTaskPoolOptions<Output>, "workerUrl" | "workerOptions" | "prepareWorker">;
   host: WorkerTaskHost;
-  bootstrapError: () => Error | undefined;
   runInContext: <T>(operation: () => T) => T;
   unavailableError: (message: string, cause?: unknown) => Error;
   onStarted: (worker: WorkerLifecycle) => void;
@@ -116,14 +115,6 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
       ...options.workerOptions,
       ...prepared?.options,
     };
-    // Preparation and option getters can synchronously close the task.
-    if (slot.retiring) {
-      throw params.unavailableError("worker creation closed during preparation");
-    }
-    const bootstrapError = params.bootstrapError();
-    if (bootstrapError) {
-      throw bootstrapError;
-    }
     if (params.host.requiresReady) {
       slot.ready = false;
     }

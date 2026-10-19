@@ -1,6 +1,9 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSignal } from "solid-js";
 import { vi } from "vitest";
+import type {
+  ControlUiSettingsContext,
+  ControlUiSettingsSnapshot,
+} from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type {
   ApplicationContext,
@@ -18,6 +21,8 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createConfigPage } from "./config-page-state.ts";
+import { completeConfigContext } from "./config-page.test-support.ts";
 import { MemorySettingsPage, type MemorySettingsPageProps } from "./memory-page.tsx";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
@@ -101,11 +106,16 @@ export function createMemoryPage(params: {
   basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
   selectedAgentId?: string;
-  memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
+  settingsRequest?: (method: string, payload?: unknown) => Promise<unknown>;
   processInfo?: (call: number) => Promise<{ processInstanceId?: string }>;
   scopes?: string[];
+  methods?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
+  const settingsViews: Array<{
+    context: ControlUiSettingsContext;
+    snapshot: ControlUiSettingsSnapshot;
+  }> = [];
   let listCalls = 0;
   let schemaLookups = 0;
   let systemInfoCalls = 0;
@@ -123,21 +133,10 @@ export function createMemoryPage(params: {
         mutationAllowed: catalog.mutationAllowed ?? params.mutationAllowed ?? true,
       }));
     }
-    if (method === "doctor.memory.status") {
-      const input = asOptionalRecord(payload);
-      const agentId = typeof input?.agentId === "string" ? input.agentId : "main";
-      return params.memoryStatus
-        ? params.memoryStatus(agentId, input?.probe === true)
-        : Promise.resolve({
-            agentId,
-            provider: "none",
-            embedding: { ok: false, checked: false },
-          });
-    }
     if (method === "system.info" && params.processInfo) {
       return params.processInfo(systemInfoCalls++);
     }
-    return Promise.resolve({});
+    return params.settingsRequest?.(method, payload) ?? Promise.resolve({});
   });
   vi.mocked(setPluginEnabled).mockImplementation(
     (_client, pluginId, enabled) =>
@@ -159,7 +158,10 @@ export function createMemoryPage(params: {
     lastError: null,
     lastErrorCode: null,
     hello: {
-      ...gatewayHelloForMethods(params.processInfo ? ["system.info"] : [], params.scopes),
+      ...gatewayHelloForMethods(
+        [...(params.processInfo ? ["system.info"] : []), ...(params.methods ?? [])],
+        params.scopes,
+      ),
       server: { version: "test", bootId: "memory-boot-a", connId: "memory-connection" },
     },
   });
@@ -230,6 +232,33 @@ export function createMemoryPage(params: {
     basePath: params.basePath ?? "",
     gateway,
     runtimeConfig,
+    plugins: {
+      reportError: vi.fn(),
+      async loadSettingsView(placement: { section: string; panel: string }, signal: AbortSignal) {
+        return {
+          signal,
+          dispose() {},
+          view: {
+            placement,
+            mount(container: HTMLElement, viewContext: ControlUiSettingsContext) {
+              const view = { context: viewContext, snapshot: viewContext.props };
+              settingsViews.push(view);
+              const marker = document.createElement("div");
+              marker.dataset.settingsView = `${placement.section}/${placement.panel}`;
+              container.append(marker);
+              return {
+                update(snapshot: ControlUiSettingsSnapshot) {
+                  view.snapshot = snapshot;
+                },
+                dispose() {
+                  marker.remove();
+                },
+              };
+            },
+          },
+        };
+      },
+    },
     agents: {
       state: {
         agentsList: {
@@ -237,6 +266,7 @@ export function createMemoryPage(params: {
           agents: params.agents ?? [{ id: "main" }],
         },
         agentsLoading: false,
+        agentsError: null,
       },
       subscribe: () => () => undefined,
       ensureList: () => Promise.resolve(),
@@ -260,7 +290,7 @@ export function createMemoryPage(params: {
   }
   Object.assign(context, { settingsAgentSelection });
   const [revision, setRevision] = createSignal(0);
-  const input: MemorySettingsPageProps = {
+  const input: Omit<MemorySettingsPageProps, "admittedRoute"> = {
     configObject: params.configObject,
     routeData: params.routeData ?? memoryTabRoute("settings"),
     mutationDisabled: false,
@@ -277,6 +307,10 @@ export function createMemoryPage(params: {
       get: () => input.configObject,
       set: (value: Record<string, unknown>) => {
         input.configObject = value;
+        runtimeConfig.state = { ...runtimeConfig.state, configForm: value };
+        for (const notify of runtimeListeners) {
+          notify();
+        }
         setRevision((n) => n + 1);
       },
     },
@@ -303,16 +337,24 @@ export function createMemoryPage(params: {
     element,
     () =>
       mountSolid(
-        () => (
-          <MemorySettingsPage
-            configObject={(revision(), input.configObject)}
-            routeData={(revision(), input.routeData)}
-            mutationDisabled={input.mutationDisabled}
-            pluginsHref={input.pluginsHref}
-            memoryImportHref={input.memoryImportHref}
-            buildEditor={input.buildEditor}
-          />
-        ),
+        () => {
+          const state = createConfigPage(
+            completeConfigContext(context),
+            () => ({ pageId: "memory", routeData: (revision(), input.routeData) }),
+            () => element,
+          );
+          return (
+            <MemorySettingsPage
+              configObject={(revision(), input.configObject)}
+              routeData={(revision(), input.routeData)}
+              admittedRoute={state.admittedRoute}
+              mutationDisabled={input.mutationDisabled}
+              pluginsHref={input.pluginsHref}
+              memoryImportHref={input.memoryImportHref}
+              buildEditor={input.buildEditor}
+            />
+          );
+        },
         { container: element, wrapper: provider.wrapper },
       ).unmount,
   );
@@ -358,9 +400,25 @@ export function createMemoryPage(params: {
     publishPluginGeneration,
     setBootId,
     setScopes,
+    setMethods(methods: string[]) {
+      const hello = gateway.snapshot.hello;
+      if (!hello) {
+        throw new Error("Missing Memory fixture hello");
+      }
+      publishGateway({
+        ...gateway.snapshot,
+        hello: { ...hello, features: { ...hello.features, methods } },
+      });
+    },
     refresh: runtimeConfig.refresh,
     runExternalMutation: runtimeConfig.runExternalMutation,
     lookupSchemaPath: runtimeConfig.lookupSchemaPath,
+    runtimeConfig,
+    settingsViews,
+    context,
+    replaceClient() {
+      publishGateway({ ...gateway.snapshot, client: createTestGatewayClient(request) });
+    },
   };
 }
 

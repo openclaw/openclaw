@@ -25,13 +25,7 @@ function windowRank(label: string): number {
 }
 
 function groupUsageWindows(windows: UsageWindow[]): Map<string, UsageWindow[]> {
-  const groups = new Map<string, UsageWindow[]>();
-  for (const window of windows) {
-    const label = window.groupLabel ?? "";
-    const group = groups.get(label) ?? [];
-    group.push(window);
-    groups.set(label, group);
-  }
+  const groups = Map.groupBy(windows, (window) => window.groupLabel ?? "");
   for (const group of groups.values()) {
     group.sort((left, right) => windowRank(left.label) - windowRank(right.label));
   }
@@ -212,7 +206,7 @@ function renderProviderUsageWindow(window: UsageWindow) {
         <strong>{remainingLabel()}</strong>
       </div>
       <div
-        class={`provider-usage-progress provider-usage-progress--${remainingTone}`}
+        class={["provider-usage-progress", `provider-usage-progress--${remainingTone}`]}
         role="progressbar"
         aria-label={window.label}
         aria-valuemin="0"

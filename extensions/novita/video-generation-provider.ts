@@ -116,16 +116,6 @@ const MODEL_CATALOG: Readonly<Record<string, VideoGenerationCatalogModelEntry>> 
   },
 };
 
-function nearestDuration(
-  value: number | undefined,
-  allowed: readonly [number, ...number[]],
-): number {
-  const requested = typeof value === "number" && Number.isFinite(value) ? value : allowed[0];
-  return allowed.reduce((best, current) =>
-    Math.abs(current - requested) < Math.abs(best - requested) ? current : best,
-  );
-}
-
 function resolveModel(req: VideoGenerationRequest): string {
   const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
   if (!Object.hasOwn(MODEL_CATALOG, model)) {
@@ -195,7 +185,7 @@ function buildBody(req: VideoGenerationRequest, model: string): Record<string, u
       `Novita ${model} supports ${wan ? "at most one" : "no"} audio reference input.`,
     );
   }
-  const duration = nearestDuration(req.durationSeconds, wan ? [5, 10, 15] : [6, 10]);
+  const duration = req.durationSeconds ?? (wan ? 5 : 6);
   const resolution = resolveResolution(req, wan);
   if (!wan) {
     if (duration === 10 && resolution === "1080P") {

@@ -131,7 +131,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       sock,
       sendOperationTimeoutMs,
     ).sendPresenceUpdate(presence);
-    options.logVerbose(`Sent global '${presence}' presence on connect`);
   } catch (error) {
     options.logVerbose(`Failed to send '${presence}' presence on connect: ${String(error)}`);
   }
@@ -242,9 +241,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
   const fetchReachoutTimeLock = async (
     currentSock: WASocket,
   ): Promise<ReachoutTimelockState | undefined> => {
-    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
-      return undefined;
-    }
     if (!reachoutTimeLockFetch) {
       reachoutTimeLockFetch = currentSock
         .fetchAccountReachoutTimelock()

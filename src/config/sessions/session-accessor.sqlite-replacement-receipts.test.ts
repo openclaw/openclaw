@@ -387,12 +387,15 @@ it("keeps unrelated predicates current through participant publication", async (
 });
 
 it.each([
-  { successor: "metadata", authorityChanged: false },
-  { successor: "metadata", authorityChanged: true },
-  { successor: "member", authorityChanged: true },
+  { successor: "metadata", authorityChanged: false, acquiring: false },
+  { successor: "metadata", authorityChanged: true, acquiring: false },
+  { successor: "member", authorityChanged: true, acquiring: false },
+  { successor: "metadata", authorityChanged: false, acquiring: true },
+  { successor: "metadata", authorityChanged: true, acquiring: true },
+  { successor: "member", authorityChanged: true, acquiring: true },
 ] as const)(
-  "keeps newer $successor facts when an older replacement settles (authority changed=$authorityChanged)",
-  async ({ successor, authorityChanged }) => {
+  "keeps newer $successor facts when an older replacement settles (authority changed=$authorityChanged, acquiring=$acquiring)",
+  async ({ successor, authorityChanged, acquiring }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const scope = {
@@ -419,9 +422,11 @@ it.each([
       };
       const predicate = retainPreparedSessionEntryPredicate({
         ...retained,
+        acquiring,
         matches: (before, after) =>
           before?.sessionId === after?.sessionId && before?.sandboxMode === after?.sandboxMode,
       });
+      const revision = predicate.captureRevision();
       const generation = retainPreparedSessionGenerationFacts(retained);
       const sharing = retainPreparedSessionSharingFacts({
         ...retained,
@@ -459,10 +464,13 @@ it.each([
         expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
           successor === "member" ? "older commit" : "newer commit",
         );
-        expect(predicate.isCurrent()).toBe(!authorityChanged);
         if (!authorityChanged) {
-          expect(predicate.readCurrent()?.entry?.label).toBe("newer commit");
+          expect(predicate.readRetainedEntry()?.label).toBe("newer commit");
         }
+        if (acquiring) {
+          expect(predicate.acknowledge(entry, revision)).toBe(!authorityChanged);
+        }
+        expect(predicate.isCurrent()).toBe(!authorityChanged);
         expect(generation.readCurrent()).toMatchObject({ sessionId: entry.sessionId });
         expect(sharing.readCurrent()).toMatchObject({
           entry: { sessionId: entry.sessionId, category: "shared" },

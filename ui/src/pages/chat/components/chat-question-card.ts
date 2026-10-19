@@ -1,7 +1,5 @@
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import { ChatQuestionSummary } from "./chat-question-summary.tsx";
 import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
 import "./chat-question-card-view.tsx";
 
@@ -56,10 +54,6 @@ export function createGatewayQuestionPanelProps(
     onPreviousRequest: options.onPreviousRequest,
     onNextRequest: options.onNextRequest,
   };
-}
-
-export function renderChatQuestionSummary(prompt: QuestionPrompt) {
-  return solidContent(ChatQuestionSummary, { prompt });
 }
 
 export type { ChatQuestionCard } from "./chat-question-card-view.tsx";

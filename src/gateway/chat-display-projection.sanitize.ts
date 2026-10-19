@@ -4,8 +4,8 @@ import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
+import { normalizeContextUsage } from "../agents/usage.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
@@ -332,20 +332,6 @@ const USAGE_FIELDS = [
   "total_tokens",
 ] as const;
 
-/** Counters can cover a whole multi-call turn; clients size context from an available marker. */
-function projectContextUsage(raw: unknown): Record<string, unknown> | undefined {
-  const record = readObjectRecord(raw);
-  const promptTokens = asFiniteNumber(record?.promptTokens);
-  const totalTokens = asFiniteNumber(record?.totalTokens);
-  return record?.state === "available" &&
-    promptTokens !== undefined &&
-    totalTokens !== undefined &&
-    promptTokens >= 0 &&
-    totalTokens >= promptTokens
-    ? { state: "available", promptTokens, totalTokens }
-    : undefined;
-}
-
 function sanitizeNumericMetadata(
   raw: unknown,
   fields: readonly string[],
@@ -370,9 +356,7 @@ function sanitizeNumericMetadata(
     if (cost) {
       projected.cost = cost;
     }
-  }
-  if (fields === USAGE_FIELDS) {
-    const contextUsage = projectContextUsage(record.contextUsage);
+    const contextUsage = normalizeContextUsage(record.contextUsage);
     if (contextUsage) {
       projected.contextUsage = contextUsage;
     }
@@ -434,27 +418,26 @@ export function prepareAssistantHistoryMessage(message: unknown): unknown {
   const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(entry);
   const rawText =
     typeof inlineText === "string" ? inlineText : blocks.map((block) => block.text).join("");
-  if (isSilentReplyText(rawText)) {
+  const text = prepareAgentRunReplyText(rawText);
+  if (text === undefined || text === rawText) {
     return message;
   }
-  const text = stripMixedSilentReplyTokens(rawText);
-  if (text === null) {
-    return message;
-  }
-  // History is projected more than once. The suffix is already prepared text,
+  // History is projected more than once. This is already prepared text,
   // even when it is itself NO_REPLY or starts with another control-looking line.
   if (typeof inlineText === "string") {
     return { ...entry, [field]: text, display: true };
   }
-  let remaining = rawText.length - text.length;
+  let remainingPrefix = rawText.endsWith(text) ? rawText.length - text.length : 0;
+  let remainingLength = text.length;
   const replacements = new Map<unknown, unknown>();
   for (const block of blocks) {
-    if (remaining === 0) {
-      break;
+    const removed = Math.min(remainingPrefix, block.text.length);
+    remainingPrefix -= removed;
+    const visible = block.text.slice(removed, removed + remainingLength);
+    remainingLength -= visible.length;
+    if (visible !== block.text) {
+      replacements.set(block, { ...block, text: visible });
     }
-    const consumed = Math.min(remaining, block.text.length);
-    replacements.set(block, { ...block, text: block.text.slice(consumed) });
-    remaining -= consumed;
   }
   return {
     ...entry,
@@ -487,6 +470,7 @@ export function sanitizeChatHistoryMessage(
     ("upstreamUserText" in openClawMeta ||
       "modelPromptProjection" in openClawMeta ||
       "sessionSendDelivery" in openClawMeta ||
+      "requesterOrigin" in openClawMeta ||
       "media" in openClawMeta)
   ) {
     // Codex retains the decorated upstream prompt for transcript reconstruction.
@@ -497,6 +481,8 @@ export function sanitizeChatHistoryMessage(
     delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
+    // Operational requester custody is independent of redacted display identity.
+    delete projectedMeta.requesterOrigin;
     if ("media" in projectedMeta) {
       projectedMeta.media = projectChatHistoryMediaFacts(projectedMeta.media);
       if (projectedMeta.media === undefined) {

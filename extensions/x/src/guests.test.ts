@@ -62,7 +62,7 @@ describe("X guest turns", () => {
     const done = Promise.withResolvers<void>();
     const test = fixture({
       cfg,
-      replyText: "See https://docs.openclaw.ai/",
+      replyText: "[[x_success]] See https://docs.openclaw.ai/",
       posts: [mention],
       queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
     });
@@ -89,7 +89,15 @@ describe("X guest turns", () => {
       expect(turn.ctxPayload.BodyForAgent).toContain("\n> This is from a verified user:");
       expect(turn.ctxPayload.BodyForAgent?.match(/\[triggering mention\]/g)).toHaveLength(1);
       expect(turn.ctxPayload.BodyForAgent?.match(/context \d+/g)).toHaveLength(1);
-      expect(turn.ctxPayload.ConversationToolPolicy).toEqual({
+      expect(turn.ctxPayload.ConversationToolPolicy).toBeUndefined();
+      expect(
+        xPlugin.groups!.resolveToolPolicy!({
+          cfg,
+          senderId: turn.ctxPayload.SenderId,
+          groupId: turn.ctxPayload.ChatId,
+          accountId: turn.ctxPayload.AccountId,
+        }),
+      ).toEqual({
         allow: ["read", "ls", "sessions_spawn", "sessions_yield", "subagents"],
         deny: ["skills_read"],
       });

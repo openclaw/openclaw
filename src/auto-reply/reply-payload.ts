@@ -151,8 +151,7 @@ export function stripReplyMediaFailureFallback(
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
   return Boolean(
-    readNonBlankString(payload.mediaUrl) ||
-    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+    readNonBlankString(payload.mediaUrl) || payload.mediaUrls?.some(readNonBlankString),
   );
 }
 
@@ -369,6 +368,8 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
+  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
+  queueAdmissionNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -434,12 +435,11 @@ export function readReplyPayloadSourceOccurrence(
   const sourceText = metadata?.blockSourceText;
   const sourceRange = metadata?.blockSourceRange;
   if (
-    typeof assistantMessageIndex !== "number" ||
+    assistantMessageIndex === undefined ||
     !Number.isSafeInteger(assistantMessageIndex) ||
     assistantMessageIndex < 0 ||
-    typeof sourceText !== "string" ||
-    !Array.isArray(sourceRange) ||
-    sourceRange.length !== 2
+    sourceText === undefined ||
+    !sourceRange
   ) {
     return undefined;
   }

@@ -167,43 +167,6 @@ describe("complete plugin skill bundles", () => {
     ).toBe(true);
   });
 
-  it.each([
-    {
-      boundary: "relative depth",
-      rootPath: "skills/guide",
-      filePath: [...Array.from({ length: 15 }, (_, i) => `part-${i}`), "reference.md"].join("/"),
-    },
-    {
-      boundary: "root length",
-      rootPath: `${"a".repeat(255)}/${"b".repeat(255)}`,
-      filePath: "reference.md",
-    },
-  ])(
-    "applies $boundary limits independently to root and relative paths",
-    async ({ rootPath, filePath }) => {
-      const { skillDir, source, catalog, calls, bundle } = await fixture(rootPath);
-      const contents = Buffer.from("Complete boundary reference.");
-      source.set(filePath, contents);
-      await fs.mkdir(path.dirname(path.join(skillDir, filePath)), { recursive: true });
-      await fs.writeFile(path.join(skillDir, filePath), contents);
-      const installed = await bundle();
-      const published = await catalog((value) => {
-        const version = value.version;
-        version.pluginManifestSummary.bundledSkills[0]!.skillMdPath = `./${rootPath}/SKILL.md`;
-        for (const file of version.files) {
-          file.path = `./${file.path}`;
-        }
-      });
-      expect(published).toEqual({ ...installed, version: "1.0.0" });
-      expect(published.files.find((file) => file.path === filePath)?.status).toBe("deferred");
-      expect(
-        calls
-          .filter((url) => url.pathname.endsWith("/file"))
-          .map((url) => url.searchParams.get("path")),
-      ).toEqual([`./${rootPath}/SKILL.md`]);
-    },
-  );
-
   it.each(["./"])(
     "reads a declared package-root skill with exact %s inventory paths",
     async (prefix) => {

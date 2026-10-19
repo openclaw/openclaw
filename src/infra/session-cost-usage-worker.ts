@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
@@ -56,8 +55,8 @@ import {
   scanUsageCostRollupInWorker,
 } from "./session-cost-usage-worker-refresh.js";
 import {
+  createUsageCostReportSource,
   prepareUsageCostReportEntry,
-  readUsageCostReportEntry,
 } from "./session-cost-usage-worker-report.js";
 import {
   UsageCostHostEffectError,
@@ -68,6 +67,7 @@ import {
   type UsageCostWorkerReply,
   type UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
@@ -155,11 +155,13 @@ export async function executeUsageCostWorker(
     operation.kind === "refresh" && operation.sessionFiles
       ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
       : [];
+  const committedOnly = operation.kind === "sessions" && operation.committedOnly === true;
   const sessionPaths =
     operation.kind === "sessions"
       ? await resolveUsageCostTranscriptPaths(
           operation.sessions.map((session) => session.sessionFile),
           access,
+          { materializeArchives: !committedOnly },
         )
       : undefined;
   const selectedPaths = sessionPaths
@@ -173,7 +175,7 @@ export async function executeUsageCostWorker(
   if (!cacheDatabase) {
     throw new Error("Usage cache database is not owned by this worker operation");
   }
-  const readCache = <T>(read: (db: DatabaseSync) => T, missing: T): T => {
+  const readCache = <T>(read: (db: EngineConnection) => T, missing: T): T => {
     const result = withOpenClawAgentDatabaseReadOnly(({ db }) => read(db), {
       ...cacheDatabase,
       env,
@@ -213,25 +215,18 @@ export async function executeUsageCostWorker(
       }),
     );
   };
-  const readBody = (row: SessionCostUsageRollupRow) =>
-    control.runNativeSection(() =>
-      readDatabase(cacheDatabase, () =>
-        readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row), undefined),
-      ),
-    );
   const readPartitionedBody = async (row: SessionCostUsageRollupRow) => {
     const receipt = refreshInputs?.rollupReceipt();
     const cached = refreshInputs?.readRollup(row.key, receipt);
-    if (
-      cached?.body &&
-      cached.row.updatedAt === row.updatedAt &&
-      cached.row.valueJson === row.valueJson
-    ) {
+    if (cached?.body) {
       return cached.body;
     }
     const body = await control.runNativeSection(() =>
       readDatabase(cacheDatabase, () =>
-        readCache((db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row), undefined),
+        readCache(
+          (db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row.key),
+          undefined,
+        ),
       ),
     );
     if (body) {
@@ -363,53 +358,33 @@ export async function executeUsageCostWorker(
       const filesByPath = new Map(
         reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
       );
-      const consumed = new Set<string>();
-      const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-      const source = {
+      const report = createUsageCostReportSource({
+        rows: byPath,
+        entries,
+        files: filesByPath,
+        sessions: operation.kind === "sessions" ? operation.sessions : undefined,
         deferredPaths: cacheBudget.deferredPaths,
         deferredMetadata: cacheBudget.deferredMetadata,
-        readRow(filePath: string) {
-          consumed.add(filePath);
-          return byPath.get(filePath);
+        startMs: operation.startMs,
+        endMs: operation.endMs,
+        dayBucket: operation.dayBucket,
+        throwIfCancelled: control.throwIfCancelled,
+        replayBudget,
+        cacheBudget,
+        committedOnly,
+        scan: {
+          pricingFingerprint: operation.pricingFingerprint,
+          resolveCosts,
+          readGeneration,
+          readRows,
         },
-        readBody: (row: SessionCostUsageRollupRow) => entries.get(row.key)?.blob ?? null,
-        readEntry: (row: SessionCostUsageRollupRow) =>
-          readUsageCostReportEntry({
-            prepared: entries.get(row.key)!,
-            file: filesByPath.get(row.key),
-            startMs: operation.startMs,
-            endMs: operation.endMs,
-            dayBucket: operation.dayBucket,
-            throwIfCancelled: control.throwIfCancelled,
-            replayBudget,
-            cacheBudget,
-            scan: {
-              pricingFingerprint: operation.pricingFingerprint,
-              resolveCosts,
-              readGeneration,
-              readRows,
-            },
-          }),
-        onInvalidBody(key: string) {
-          const row = byPath.get(key);
-          if (row) {
-            invalidRows.set(key, row);
-          }
-        },
-        remainingRows: (function* () {
-          for (const row of rows) {
-            if (!consumed.has(row.key)) {
-              yield row;
-            }
-          }
-        })(),
-      };
+      });
       const result =
         operation.kind === "summary"
           ? {
               kind: "summary" as const,
               summary: await projectCostUsageSummary({
-                ...source,
+                ...report.source,
                 ...operation,
                 files: reportFiles.filter((file) => file !== undefined),
               }),
@@ -417,14 +392,17 @@ export async function executeUsageCostWorker(
           : {
               kind: "sessions" as const,
               ...(await projectSessionCostSummaries({
-                ...source,
+                ...report.source,
                 ...operation,
                 files: (sessionPaths ?? []).map((filePath) => filesByPath.get(filePath ?? "")),
               })),
               remainingReportBytes: Math.max(0, cacheBudget.remainingBytes),
             };
+      if (result.kind === "sessions") {
+        result.cacheStatus.partial = report.partialStatus();
+      }
       control.throwIfCancelled();
-      return { ...result, invalidRows: [...invalidRows.values()] };
+      return { ...result, invalidRows: [...report.invalidRows.values()] };
     };
     try {
       const snapshot = await control.runNativeSection(() => {
@@ -497,18 +475,33 @@ export async function executeUsageCostWorker(
   const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
   const filesByPath = new Map(files.map((file) => [file.filePath, file]));
   let pruned = false;
-  for (const row of rows) {
-    if (filesByPath.has(row.key)) {
-      continue;
+  if (!operation.sessionFiles) {
+    let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
+    let batchBytes = 0;
+    const sendBatch = async () => {
+      const transfers = batch.map((row) => row.value.buffer);
+      await host("prune-rows", batch, transfers);
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const row of rows) {
+      if (filesByPath.has(row.key)) {
+        continue;
+      }
+      const value = new TextEncoder().encode(row.valueJson);
+      const rowBytes = value.byteLength + 2 * row.key.length;
+      // Preserve single-row delivery for oversized metadata without growing other batches.
+      if (batch.length > 0 && (batch.length >= 64 || batchBytes + rowBytes > 1024 * 1024)) {
+        await sendBatch();
+      }
+      batch.push({ key: row.key, value, updatedAt: row.updatedAt });
+      batchBytes += rowBytes;
+      pruned = true;
     }
-    pruned = true;
-    const bytes = new TextEncoder().encode(row.valueJson);
-    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
-      bytes.buffer,
-    ]);
-  }
-  if (!operation.sessionFiles && pruned) {
-    await host("prune", {});
+    if (batch.length > 0) {
+      await sendBatch();
+      await host("prune", {});
+    }
   }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
@@ -590,7 +583,11 @@ export async function executeUsageCostWorker(
         body = snapshot;
         priorPartitions = snapshot?.partitions ?? [];
       } else {
-        body = await readBody(row);
+        body = await control.runNativeSection(() =>
+          readDatabase(cacheDatabase, () =>
+            readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row.key), undefined),
+          ),
+        );
       }
       previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)

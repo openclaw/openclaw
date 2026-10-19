@@ -374,14 +374,6 @@ async function resolveUncachedSystemAgentGreeting(params: {
     await mutateGreetingState(
       params.cacheStore,
       (current) => {
-        // A slower turn for old facts must not replace a newer system-state greeting.
-        if (
-          current?.factsHash &&
-          current.factsHash !== params.factsHash &&
-          (current.at ?? Number.NEGATIVE_INFINITY) >= params.at
-        ) {
-          return current;
-        }
         return {
           ...current,
           lastSeenAuditSequence: current?.lastSeenAuditSequence ?? 0,
@@ -463,8 +455,7 @@ async function resolveSystemAgentGreetingText(
     params.cacheOwner ??
     (params.cacheStore || params.openCache ? cacheStore : defaultGreetingCacheKey);
   const at = (params.now ?? Date.now)();
-  // This timestamp orders competing model-cache writes; audit acknowledgement uses
-  // the monotonic sequence captured with the facts instead of wall-clock time.
+  // Audit acknowledgement uses the captured monotonic sequence, not this cache timestamp.
   const failure = greetingFailures.get(cacheKey);
   if (failure?.factsHash === factsHash && failure.retryAfter > at) {
     return resolveSystemAgentGreetingFallback(params.overview, params.facts);

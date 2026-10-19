@@ -55,7 +55,6 @@ describe("PaletteSessionDraft", () => {
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     policy.resolve({ sessionPlacement: { requiredProfile: profile } });
     await context.agents.refreshList();
-    host.requestUpdate();
     await host.coldOutcome.promise;
     expect(host.draft.submitting).toBe(true);
     expect(host.draft.error).toBeNull();
@@ -509,10 +508,12 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       fixture.host.querySelector<HTMLButtonElement>('[role="switch"]'),
       "palette worktree switch",
     );
-  // Cold preference imports can outlive vi.waitFor's one-second polling deadline.
+  // Wait out cold preference imports, then flush their queued presentation updates.
   await fixture.host.settingsReady.promise;
-  expect(remember().disabled).toBe(false);
-  expect(worktree().disabled).toBe(false);
+  await waitForSolid(() => {
+    expect(remember().disabled).toBe(false);
+    expect(worktree().disabled).toBe(false);
+  });
   return {
     ...fixture,
     entries,

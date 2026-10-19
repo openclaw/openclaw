@@ -216,10 +216,16 @@ function PluginSettingsFields(
   );
 }
 
-function EditorSection(props: { title: string; id?: string; children: SolidJSX.Element }) {
+function EditorSection(props: {
+  title: string;
+  id?: string;
+  children: SolidJSX.Element;
+  ref?: (element: HTMLElement) => void;
+}) {
   return (
     <section
       class="plugin-editor__section"
+      ref={(element) => props.ref?.(element)}
       id={props.id}
       tabindex={props.id === undefined ? undefined : -1}
     >
@@ -235,7 +241,7 @@ type GroupsProps = Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCred
   query: string;
 };
 function PluginSettingsGroups(props: GroupsProps) {
-  let host: HTMLDivElement;
+  const sectionElements = new Map<string, HTMLElement>();
   const object = createMemo(() =>
     schemaType(props.params.schema) !== "object" ||
     props.params.schema.anyOf ||
@@ -300,12 +306,7 @@ function PluginSettingsGroups(props: GroupsProps) {
     return result;
   });
   return (
-    <div
-      class="plugin-editor__layout"
-      ref={(element) => {
-        host = element;
-      }}
-    >
+    <div class="plugin-editor__layout">
       {groups().length ? (
         <nav class="plugin-editor__nav" aria-label={t("pluginsPage.editor.navigation")}>
           <For each={links()} keyed={(section) => section.id}>
@@ -314,9 +315,7 @@ function PluginSettingsGroups(props: GroupsProps) {
                 href={`#${sectionId(section().id)}`}
                 onClick={(event: MouseEvent) => {
                   event.preventDefault();
-                  const target = host.querySelector<HTMLElement>(
-                    `#${CSS.escape(sectionId(section().id))}`,
-                  );
+                  const target = sectionElements.get(section().id);
                   target?.scrollIntoView({ block: "start", behavior: resolveScrollBehavior() });
                   target?.focus({ preventScroll: true });
                 }}
@@ -331,7 +330,11 @@ function PluginSettingsGroups(props: GroupsProps) {
         <For each={sections()} keyed={(section) => section.id}>
           {(section) => (
             <Show when={section().fields.length}>
-              <EditorSection title={section().title} id={sectionId(section().id)}>
+              <EditorSection
+                title={section().title}
+                id={sectionId(section().id)}
+                ref={(element) => sectionElements.set(section().id, element)}
+              >
                 <PluginSettingsFields
                   fields={section().fields}
                   onAskSetting={props.onAskSetting}
@@ -350,6 +353,7 @@ function PluginSettingsGroups(props: GroupsProps) {
           <EditorSection
             title={t("pluginsPage.editor.permissions")}
             id={sectionId("__permissions")}
+            ref={(element) => sectionElements.set("__permissions", element)}
           >
             <PluginSettingsFields
               {...props.permissions!}

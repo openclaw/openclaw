@@ -1,5 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { recordGoalContinuationSettlement } from "../../auto-reply/reply/goal-continuation-return.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
@@ -19,17 +20,13 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildRestartRecoveryTerminalDeliveryEvidence,
-  constrainRestartRecoveryDeliveryPayloads,
   shouldPersistCurrentRunSessionCleanup,
 } from "../agent-command-restart-recovery.js";
-import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
-import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
@@ -151,9 +148,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
   let sessionEntry = params.sessionEntry;
   // Return the same producer-owned facts published to agent.wait. Payloads and
   // display history cannot reconstruct a yielded or intentionally empty result.
-  const terminalReply = normalizeAgentRunTerminalReplySnapshot(terminal.metadata.terminalReply);
-  const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
-  let result = {
+  const { terminalReply, terminalReceipt } = terminal.metadata;
+  const result = {
     ...params.attempt.result,
     meta: {
       ...params.attempt.result.meta,
@@ -184,16 +180,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const assistantTranscriptOwned =
       finalVisiblePayload !== undefined &&
       getReplyPayloadMetadata(finalVisiblePayload)?.assistantTranscriptOwned === true;
-    if (params.opts.internalDeliveryMediaUrls !== undefined) {
-      result = {
-        ...result,
-        payloads: constrainRestartRecoveryDeliveryPayloads(
-          result.payloads,
-          params.opts.internalDeliveryMediaUrls,
-          params.opts.internalDeliverySuppressText === true,
-        ),
-      };
-    }
     const resultErrorPayload = result.payloads?.find((payload) => payload.isError === true);
     if (resultErrorPayload) {
       const message =
@@ -255,6 +241,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           body,
           transcriptBody,
           inputProvenance: params.opts.inputProvenance,
+          privateCompletion: params.opts.privateCompletion,
           result,
           sessionId: effectiveSessionId,
           sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,
@@ -553,14 +540,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
         deliveryPayloads: ReplyPayload[],
       ) => {
         const deliveryStatus = delivered.deliveryStatus;
-        const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
-          deliveryStatus && {
+        if (deliveryStatus) {
+          terminal.metadata.terminalDelivery = {
             status: deliveryStatus.status,
             resultCount: deliveryStatus.resultCount ?? 0,
-          },
-        );
-        if (terminalDelivery) {
-          terminal.metadata.terminalDelivery = terminalDelivery;
+          };
         }
         terminalDeliveryEvidence = buildRestartRecoveryTerminalDeliveryEvidence({
           ...delivered,
@@ -694,6 +678,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
         }),
       )
     : terminal.outcome;
+  recordGoalContinuationSettlement({
+    runId,
+    sessionKey,
+    result,
+    succeeded:
+      result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
+      !hasResultError &&
+      classifyAgentRunTerminalOutcome(outcome) === "success" &&
+      (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true),
+  });
   return {
     maintenance:
       classifyAgentRunTerminalOutcome(outcome) === "success" &&

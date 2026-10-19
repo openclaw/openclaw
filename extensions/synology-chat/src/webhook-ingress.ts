@@ -1,4 +1,3 @@
-// Synology Chat plugin owns raw webhook durable admission and draining.
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,

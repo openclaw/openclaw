@@ -11,6 +11,8 @@ import type { Message } from "../internal/discord.js";
 
 const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
+const logVerboseMock = vi.hoisted(() => vi.fn());
+const mediaWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
@@ -43,7 +45,8 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   );
   return {
     ...actual,
-    logVerbose: () => {},
+    logVerbose: logVerboseMock,
+    getChildLogger: () => ({ warn: mediaWarn }),
   };
 });
 
@@ -337,17 +340,33 @@ describe("resolveMediaList", () => {
     });
   });
 
-  it("keeps type-only facts for attachments without a usable URL", async () => {
-    const { url: _url, ...attachment } = attachmentFixture("att-missing-url", "voice.ogg", {
-      content_type: "audio/ogg",
-    });
-    const message = asMessage({ attachments: [attachment] });
-    const result = await resolveMediaList(message, 512);
+  it.each([
+    { withId: true, correlation: "att-missing-url" },
+    { withId: false, correlation: "attachment" },
+  ])(
+    "keeps type-only facts without logging missing-URL filenames (withId=$withId)",
+    async ({ withId, correlation }) => {
+      const filename = "z22-private-voice-caption.ogg";
+      const {
+        url: _url,
+        id,
+        ...fields
+      } = attachmentFixture("att-missing-url", filename, {
+        content_type: "audio/ogg",
+      });
+      const attachment = { ...fields, ...(withId ? { id } : {}) };
+      const message = asMessage({ attachments: [attachment] });
+      const result = await resolveMediaList(message, 512);
 
-    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toStrictEqual([{ contentType: "audio/ogg", kind: "audio" }]);
-  });
+      expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+      expect(saveMediaBuffer).not.toHaveBeenCalled();
+      expect(result).toStrictEqual([{ contentType: "audio/ogg", kind: "audio" }]);
+      expect(logVerboseMock).toHaveBeenCalledExactlyOnceWith(
+        `discord: failed to download attachment ${correlation}: missing url`,
+      );
+      expect(logVerboseMock.mock.calls.flat().join(" ")).not.toContain(filename);
+    },
+  );
 
   it("classifies audio attachments by filename when content type is missing", async () => {
     const attachment = attachmentFixture("att-audio-fallback", "voice.ogg", {
@@ -597,12 +616,15 @@ describe("resolveMediaList", () => {
     });
 
     mockDownload("/tmp/good.png");
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("network timeout"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("private-download-response-body"));
     const message = asMessage({ attachments: [goodAttachment, badAttachment] });
 
     const result = await resolveMediaList(message, 512, { readIdleTimeoutMs: 60_000 });
 
     expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
+    expect(mediaWarn).toHaveBeenCalledExactlyOnceWith(
+      "discord: failed to download attachment att-bad",
+    );
     expect(result).toEqual([
       {
         path: "/tmp/good.png",
@@ -617,12 +639,15 @@ describe("resolveMediaList", () => {
 
   it("keeps sticker metadata when sticker download fails", async () => {
     const sticker = stickerFixture("sticker-fallback", "fallback");
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("private-sticker-response-body"));
     const message = asMessage({ stickers: [sticker] });
 
     const result = await resolveMediaList(message, 512);
 
     expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(mediaWarn).toHaveBeenCalledExactlyOnceWith(
+      "discord: failed to download sticker sticker-fallback",
+    );
     expect(result).toEqual([
       {
         contentType: "image/png",

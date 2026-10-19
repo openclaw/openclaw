@@ -11,6 +11,29 @@ function ref(path: string, value: string, kind: ConfiguredModelRef["kind"] = "se
 }
 
 describe("configured model refs", () => {
+  it("collects string Decision roles without changing profile suffixes", () => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          defaults: { decisionModel: "fixture/decision@fixture:key" },
+          entries: {
+            worker: { decisionModel: "fixture/other" },
+            disabled: { decisionModel: "" },
+            invalid: { decisionModel: { primary: "fixture/not-a-selector" } },
+          },
+        },
+        channels: { modelByChannel: { fixture: { decisionModel: "fixture/chat@profile" } } },
+      }),
+    ).toEqual([
+      {
+        ...ref("agents.defaults.decisionModel", "fixture/decision@fixture:key"),
+        capability: "decision",
+      },
+      { ...ref("agents.entries.worker.decisionModel", "fixture/other"), capability: "decision" },
+      ref("channels.modelByChannel.fixture.decisionModel", "fixture/chat@profile"),
+    ]);
+  });
+
   it("lists raw refs from one model selector without normalizing them", () => {
     expect(listModelRefsFromConfigValue("  openai/gpt-5.5  ")).toEqual(["  openai/gpt-5.5  "]);
     const selector = Object.freeze({

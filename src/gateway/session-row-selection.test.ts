@@ -26,7 +26,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { registerChatAbortController } from "./chat-abort.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -40,6 +40,7 @@ import {
   prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -500,18 +501,21 @@ it.each([false, true])(
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
         if (activeOnly) {
           const context = requestContext(cfg);
-          const registrations = [
-            ["main", "shadow-global"],
-            ["ops", "ops-global"],
-            ["main", "unknown-shadow"],
-          ].map(([agentId, sessionId]) =>
-            registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
-              runId: sessionId!,
-              agentId,
-              sessionId: sessionId!,
-              sessionKey: `agent:${agentId}:run-alias`,
-              timeoutMs: 60_000,
+          const registrations = await Promise.all(
+            [
+              ["main", "shadow-global"],
+              ["ops", "ops-global"],
+              ["main", "unknown-shadow"],
+            ].map(async ([agentId, sessionId]) => {
+              const registration = registerRpcSourceForTest({
+                storeScope: samples.find(([sampleId]) => sampleId === sessionId)![3],
+                runId: sessionId!,
+                agentId,
+                sessionId: sessionId!,
+                sessionKey: `agent:${agentId}:run-alias:${sessionId}`,
+              });
+              const release = await claimRpcSourceForTest(registration.entry!);
+              return Object.assign({}, registration, { release });
             }),
           );
           try {
@@ -529,6 +533,7 @@ it.each([false, true])(
             ).toEqual(["ops-global", "unknown-shadow"]);
           } finally {
             for (const registration of registrations) {
+              registration.release();
               registration.cleanup();
             }
           }

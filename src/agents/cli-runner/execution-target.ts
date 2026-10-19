@@ -1,4 +1,3 @@
-import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -7,6 +6,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
+import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -26,7 +26,7 @@ export function unsupportedIsolatedCompletionError(
 export function attachCliReplyBackend(
   params: RunCliAgentParams,
   cancel: () => void,
-  capabilities?: Pick<ReplyBackendHandle, "messageInjectionV2">,
+  capabilities?: Pick<ReplyBackendHandle, "messageInjectionV2" | "supportsTranscriptCommitWait">,
 ) {
   if (!params.replyOperation) {
     return undefined;

@@ -206,6 +206,11 @@ export async function agentExecCommand(
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
     const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
+    const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+      await import("../infra/embedded-state-lock.js");
+    // Admit cancellation before creating state so signals unwind temporary runs too.
+    signalBridge = createEmbeddedStateSignalBridge(process);
+    abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
@@ -289,11 +294,6 @@ export async function agentExecCommand(
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
     if (opts.stateDir) {
-      const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-        await import("../infra/embedded-state-lock.js");
-      signalBridge = createEmbeddedStateSignalBridge(process);
-      // Retained-state signals and caller cancellation both own the turn's lifetime.
-      abortSignal = AbortSignal.any([abortSignal, signalBridge.signal]);
       stateLock = await acquireEmbeddedStateLock({
         signal: abortSignal,
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,

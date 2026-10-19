@@ -148,7 +148,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
       : undefined,
     supervisorKeepsAlive: true,
-    settle: { probes: 12 },
   });
   assertCurrent();
   return { health, launchAgentRecovery };
@@ -246,7 +245,9 @@ export async function admitInstalledGatewayRecovery(
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    // Normal Doctor completion needs no settlement receipt. The candidate's
+    // schema inspection below can still admit forward recovery after migration.
+    (!settlement && !databaseRollback && !params.candidateSchemaVersions) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
@@ -536,7 +537,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       assertCurrent,
       onProgress: (stage, reason) =>
         defaultRuntime[params.jsonMode ? "error" : "log"](`Gateway recovery (${stage}): ${reason}`),
-      settle: { probes: 12 },
     });
     assertCurrent();
     if (!health.healthy || health.runtime.status !== "running") {

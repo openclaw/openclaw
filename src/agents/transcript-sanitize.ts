@@ -19,11 +19,7 @@ type TranscriptValueLocation =
   | "assistant-content-block"
   | "nested";
 
-type TranscriptAssistantRoute = {
-  api?: string;
-  model?: string;
-  provider?: string;
-};
+type TranscriptAssistantRoute = NonNullable<Parameters<typeof sanitizeCompactionReplayState>[1]>;
 
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
@@ -230,7 +226,7 @@ export function sanitizeOpenAIReasoningSignature(
   ) {
     return undefined;
   }
-  if (!hasEncryptedContent && typeof parsed.id !== "string") {
+  if (!hasEncryptedContent && parsed.id === undefined) {
     return undefined;
   }
   const replayMetadata = sanitizeOpenAIReasoningReplayMetadata(
@@ -238,7 +234,7 @@ export function sanitizeOpenAIReasoningSignature(
     route,
   );
   return JSON.stringify({
-    ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+    ...(parsed.id !== undefined ? { id: parsed.id } : {}),
     type: "reasoning",
     summary: [],
     ...(Array.isArray(parsed.content) && parsed.content.length === 0 ? { content: [] } : {}),

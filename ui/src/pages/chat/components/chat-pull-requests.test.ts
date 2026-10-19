@@ -67,6 +67,12 @@ describe("ChatPullRequests", () => {
     container.remove();
   });
 
+  it("keeps unknown diff counts absent rather than inventing zeroes", () => {
+    paint({ pullRequests: [pullRequest({ additions: undefined, deletions: 0 })] });
+    expect(container.querySelector(".chat-pr__additions")).toBeNull();
+    expect(container.querySelector(".chat-pr__deletions")?.textContent).toBe("−0");
+  });
+
   it("does not call account discovery Publishing before any publication is admitted", () => {
     paintChatPullRequests(
       {
@@ -696,6 +702,17 @@ describe("CI job details", () => {
     await h.element.updateComplete;
     expect(h.request).toHaveBeenCalledTimes(requestsBeforeRefresh + 1);
     expect(failed.open).toBe(false);
+    h.element.presented = false;
+    await settle(h.element);
+    const hiddenCount = h.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.request).toHaveBeenCalledTimes(hiddenCount);
+    h.element.presented = true;
+    await settle(h.element);
+    expect(h.request).toHaveBeenCalledTimes(hiddenCount + 1);
+    expect(h.disclosure.open).toBe(true);
+    expect(container.querySelector('.chat-ci__job[data-check-id="3"]')).toBe(failed);
+    expect(failed.open).toBe(false);
     h.disclosure.open = false;
     await settle(h.element);
     const closedCount = h.request.mock.calls.length;
@@ -786,6 +803,31 @@ describe("CI job details", () => {
     expect(container.querySelector(".chat-ci__job")).toBeNull();
     expect(h.request).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["session", "head", "gateway"] as const)(
+    "retires a pending request at native %s replacement before the next DOM commit",
+    async (change) => {
+      const h = harness();
+      const pending = createDeferred<ControlUiSessionPullRequestCheckDetails>();
+      h.request.mockReturnValueOnce(pending.promise).mockResolvedValue(details({ checks: [] }));
+      await settle(h.element);
+      h.disclosure.open = true;
+      await settle(h.element);
+      const signal = h.request.mock.calls[0]?.[2]?.signal;
+      if (change === "session") {
+        h.element.sessionKey = "agent:other:main";
+      } else if (change === "head") {
+        h.element.pullRequest = pullRequest({ headSha: "b".repeat(40) });
+      } else {
+        h.element.gateway = { ...h.props.gateway };
+      }
+      expect(signal?.aborted).toBe(true);
+      pending.resolve(details());
+      await settle(h.element);
+      expect(container.querySelector(".chat-ci__job")).toBeNull();
+      expect(h.disclosure.open).toBe(change !== "session");
+    },
+  );
 
   it("clears prior CI details and redacts the RPC error", async () => {
     const h = harness();

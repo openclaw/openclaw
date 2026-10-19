@@ -1,7 +1,8 @@
-import { createEffect, createMemo } from "solid-js";
+import { createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { attachmentAdmissionRef } from "./chat-attachment-admission-ref.ts";
 import {
   openAttachmentCardFromClick,
   prepareAttachmentCardHeader,
@@ -27,19 +28,10 @@ export function CompactAttachmentCard(
     onFocus?: () => void;
   },
 ) {
-  let element!: HTMLDivElement;
-  createEffect(
-    () => props.elementRef,
-    (ref) => {
-      ref?.(element);
-      return () => ref?.(undefined);
-    },
-  );
+  const ref = attachmentAdmissionRef(() => props.elementRef);
   return (
     <div
-      ref={(node) => {
-        element = node;
-      }}
+      ref={ref}
       onFocusIn={() => props.onFocus?.()}
       class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
       data-openable={props.onExpand ? "" : undefined}
@@ -50,14 +42,15 @@ export function CompactAttachmentCard(
   );
 }
 
-export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
+export function AttachmentCardHeader(
+  props: AttachmentCardHeaderOptions & { expandRef?: (element: HTMLButtonElement) => void },
+) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
-  const compactPreview = () => view().compactPreview;
   return (
     <div
       class={[
         "chat-assistant-attachment-card__header",
-        { "chat-assistant-attachment-card__header--preview": compactPreview() },
+        { "chat-assistant-attachment-card__header--preview": view().compactPreview },
       ]}
     >
       <div class="chat-assistant-attachment-card__identity">
@@ -70,7 +63,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
         <span
           class={[
             "chat-assistant-attachment-card__details",
-            { "chat-assistant-attachment-card__details--preview": compactPreview() },
+            { "chat-assistant-attachment-card__details--preview": view().compactPreview },
           ]}
         >
           <span
@@ -79,7 +72,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
           >
             {props.label}
           </span>
-          {compactPreview() ? (
+          {view().compactPreview ? (
             view().formattedSize ? (
               <>
                 <span class="chat-assistant-attachment-card__separator" aria-hidden="true">
@@ -96,7 +89,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
         </span>
       </div>
       <span class="chat-assistant-attachment-card__actions">
-        {props.voiceNote && !compactPreview() ? (
+        {props.voiceNote && !view().compactPreview ? (
           <span class="chat-assistant-attachment-badge">{t("chat.messages.voiceNote")}</span>
         ) : null}
         {props.onDownload ? (
@@ -134,15 +127,16 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             class={[
               "chat-assistant-attachment-card__action chat-assistant-attachment-card__expand",
               {
-                "chat-assistant-attachment-card__expand--icon": compactPreview(),
-                "chat-assistant-attachment-card__action--labeled": !compactPreview(),
+                "chat-assistant-attachment-card__expand--icon": view().compactPreview,
+                "chat-assistant-attachment-card__action--labeled": !view().compactPreview,
               },
             ]}
+            ref={props.expandRef}
             aria-label={view().expandLabel}
             title={view().expandLabel}
             onClick={() => props.onExpand?.()}
           >
-            {compactPreview() ? (
+            {view().compactPreview ? (
               <Icon name="chevronsUpDown" />
             ) : (
               <span>{t("chat.attachments.open")}</span>

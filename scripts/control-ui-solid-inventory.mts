@@ -1,4 +1,4 @@
-// Shared syntax census for the migration report and the Lit growth ratchet.
+// On-demand syntax census for the remaining Solid migration work.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -74,7 +74,6 @@ function emptyMetrics() {
     svgTemplates: 0,
     cssTemplates: 0,
     waTags: 0,
-    requestUpdate: 0,
     stateDecorators: 0,
     propertyDecorators: 0,
     tasks: 0,
@@ -348,9 +347,6 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
         if (isLitLoad(node)) {
           metrics.litImports++;
         }
-        if (nameOf(node.expression) === "requestUpdate") {
-          metrics.requestUpdate++;
-        }
         if (
           ts.isPropertyAccessExpression(expression) &&
           nameOf(expression.expression) === "customElements" &&
@@ -522,7 +518,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "litImportFiles",
       "htmlTemplates",
       "waTags",
-      "requestUpdate",
       "stateDecorators",
       "tasks",
       "reactiveControllers",

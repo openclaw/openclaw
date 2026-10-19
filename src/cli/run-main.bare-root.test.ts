@@ -15,6 +15,8 @@ import {
   runRemoteGatewayInferenceOnboardingMock,
   runTuiMock,
   runTuiCliActionMock,
+  loadConfigMock,
+  startProxyMock,
   probeGatewayConfiguredModelMock,
   inspectGatewayTlsCertificateMock,
   resolveControlUiLinksMock,
@@ -335,6 +337,8 @@ describe("runCli exit behavior", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
     expect(runTuiMock).not.toHaveBeenCalled();
+    // Onboarding probes providers from this process, as `openclaw onboard` does.
+    expect(startProxyMock).toHaveBeenCalledBefore(setupWizardCommandMock);
   });
 
   it("keeps a reachable unverified Gateway ahead of local inference fallback", async () => {
@@ -352,6 +356,8 @@ describe("runCli exit behavior", () => {
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url, configuredRemote: true, token: "unverified-remote-auth" });
+    // The Gateway owns provider egress for a bound TUI.
+    expect(startProxyMock).not.toHaveBeenCalled();
   });
 
   it("keeps a configured remote Gateway authoritative across a transient cold-restart probe", async () => {
@@ -464,7 +470,9 @@ describe("runCli exit behavior", () => {
     expect(runTuiMock).not.toHaveBeenCalled();
   });
 
-  it("keeps a completed model-only onboarding on its existing local TUI path", async () => {
+  it("keeps a completed model-only onboarding on its local TUI path behind the managed proxy", async () => {
+    const proxy = { proxyUrl: "http://proxy.invalid:3128" };
+    loadConfigMock.mockReturnValue({ proxy });
     const configPath = "/tmp/openclaw.json";
     const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
     const sourceConfig = {
@@ -477,7 +485,7 @@ describe("runCli exit behavior", () => {
       path: configPath,
       sourceConfig,
     });
-    readLocalOnboardingStateMock.mockReturnValueOnce({
+    readLocalOnboardingStateMock.mockResolvedValueOnce({
       version: 1,
       status: "completed",
       runId: "completed-onboarding",
@@ -497,5 +505,8 @@ describe("runCli exit behavior", () => {
       deliver: false,
       local: true,
     });
+    // The embedded agent runs in this process, so the managed proxy must be active first.
+    expect(startProxyMock).toHaveBeenCalledExactlyOnceWith(proxy);
+    expect(startProxyMock).toHaveBeenCalledBefore(runTuiMock);
   });
 });

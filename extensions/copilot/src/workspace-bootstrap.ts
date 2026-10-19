@@ -3,11 +3,9 @@ import type {
   AgentHarnessAttemptParamsV2,
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveBootstrapContextForRun,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveBootstrapContextForRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResolvedAttemptPath } from "./attempt-config.js";
 
 // The SDK loads AGENTS.md from its instruction directories; do not inject it twice.
 const COPILOT_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
@@ -30,7 +28,7 @@ export async function loadCopilotWorkspaceInstructions(params: {
   warn?: (message: string) => void;
 }): Promise<string | undefined> {
   const { attempt } = params;
-  const workspaceDir = readResolvedWorkspacePath(attempt.workspaceDir);
+  const workspaceDir = readResolvedAttemptPath(attempt.workspaceDir);
   if (!workspaceDir) {
     return undefined;
   }
@@ -50,7 +48,7 @@ export async function loadCopilotWorkspaceInstructions(params: {
     const contextFiles = remapCopilotBootstrapContextFiles({
       files: bootstrapContext.contextFiles,
       sourceWorkspaceDir: workspaceDir,
-      targetWorkspaceDir: readResolvedWorkspacePath(params.effectiveWorkspaceDir) ?? workspaceDir,
+      targetWorkspaceDir: readResolvedAttemptPath(params.effectiveWorkspaceDir) ?? workspaceDir,
     });
     return renderCopilotWorkspaceBootstrapInstructions(contextFiles);
   } catch (error) {
@@ -151,15 +149,4 @@ function normalizeCopilotContextFilePath(filePath: string): string {
 
 function getCopilotContextFileBasename(filePath: string): string {
   return normalizeCopilotContextFilePath(filePath).split("/").pop() ?? "";
-}
-
-function readResolvedWorkspacePath(value: unknown): string | undefined {
-  const raw = readNonBlankString(value);
-  if (!raw) {
-    return undefined;
-  }
-  if (process.platform !== "win32" && /^[A-Za-z]:[\\/]/.test(raw)) {
-    return raw.trim();
-  }
-  return resolveUserPath(raw);
 }

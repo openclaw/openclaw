@@ -4,7 +4,7 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/age
 import { countUntrackedActiveAcpRunsForOwner } from "../spawn/acp-spawn-admission.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
-  countActiveDescendantRunsFromRuns,
+  buildScopedSubagentRunReadIndexFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
@@ -164,9 +164,14 @@ describe("subagent registry scoped reads", () => {
           })
           .map((run) => run.runId),
       ).toEqual(ids);
-      expect(countActiveDescendantRunsFromRuns(mocks.liveRuns, root, "main", storePath)).toBe(
-        active,
-      );
+      expect(
+        buildScopedSubagentRunReadIndexFromRuns(
+          mocks.liveRuns,
+          root,
+          "main",
+          storePath,
+        ).countActiveDescendantRuns(root),
+      ).toBe(active);
       expect(
         hasDescendantRunAwaitingSettleFromRuns(mocks.liveRuns, root, excluded, "main", storePath),
       ).toBe(waiting);
@@ -348,8 +353,14 @@ describe("subagent registry scoped reads", () => {
     mocks.getSubagentRunsSnapshotForChildSession.mockResolvedValue(childSnapshot);
     mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(snapshot);
 
-    expect(countActiveDescendantRunsFromRuns(snapshot, root)).toBe(2);
-    expect(countActiveDescendantRunsFromRuns(snapshot, root, "main")).toBe(1);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(snapshot, root).countActiveDescendantRuns(root),
+    ).toBe(2);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(snapshot, root, "main").countActiveDescendantRuns(
+        root,
+      ),
+    ).toBe(1);
     mocks.readSnapshot = snapshot;
     expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
     expect(hasDescendantRunAwaitingSettleFromRuns(snapshot, root, pendingRun.runId)).toBe(true);

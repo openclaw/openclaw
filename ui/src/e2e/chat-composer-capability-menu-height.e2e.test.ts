@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -98,26 +99,16 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
         historyMessages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Review the release dashboard and flag anything that needs attention.",
-              },
-            ],
-            timestamp: Date.now() - 60_000,
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
-              },
-            ],
-            timestamp: Date.now() - 30_000,
-          },
+          createControlUiChatHistoryMessage(
+            "user",
+            "Review the release dashboard and flag anything that needs attention.",
+            Date.now() - 60_000,
+          ),
+          createControlUiChatHistoryMessage(
+            "assistant",
+            "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
+            Date.now() - 30_000,
+          ),
         ],
         methodResponses: {
           "config.get": configResponse(),

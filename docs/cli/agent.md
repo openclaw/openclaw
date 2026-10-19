@@ -93,6 +93,10 @@ openclaw agent exec "Inspect this repository" \
 
 The timeout defaults to 600 seconds per model attempt for `agent exec`, with a fresh budget for each configured fallback; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
+`SIGINT` and `SIGTERM` cancel the run and wait for owned cleanup before exiting with
+status `130` and `143`, respectively. Confirmed cleanup removes temporary state;
+an explicit `--state-dir` remains intact and its lock is released.
+
 If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`, but preserves the completed final text, payloads, and run metadata. The JSON envelope reports `error.kind: "cleanup"` so callers can distinguish completed work with failed cleanup from a failed task.
 
 Uncertain runtime cleanup preserves temporary state for inspection and keeps any
@@ -126,10 +130,10 @@ Run-stat fields are additive and may be absent:
 - `costUsd`: sum of recorded per-call USD costs, preserving request pricing tiers and retry-model prices, including cache reads/writes. When per-call costs are incomplete, only flat-price estimates are available; tiered estimates are omitted rather than pricing combined usage as one request. Omitted when cost is unavailable.
 - `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false` because OpenClaw code mode never owns their tools.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
-- `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
-- `toolSummary`: outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run.
+- `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are not provider requests and can overlap the nested activity in `toolSummary`; do not add the counters together.
+- `toolSummary`: observed tool-terminal count, tool names, failures, and any reported tool time. The embedded runtime includes both outer and nested tool terminals, not only model-visible calls; this is not a physical-work or provider-request total.
 
-The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the outer tool summary remains at `meta.toolSummary`.
+The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the tool summary remains at `meta.toolSummary`.
 
 ### Code Mode model matrix
 
@@ -166,7 +170,7 @@ Remove `--dry-run` only for an explicitly intended model run; provider charges m
 
 The output directory contains standard QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
 
-Each summary group retains pass rate, first-pass/eventual success, failure categories, and `p50WallMs`. Its additive `metrics` object summarizes assistant turns, outer tool calls, bridge search/describe/tool calls, and reported USD cost as `{ samples, total, p50 }`. Only present envelope values count as samples; missing telemetry is not zero (`total` and `p50` are null with no samples). Observed zeros remain zeros. Medians use the upper middle sample for even counts, matching the existing wall-time summary. All repetitions, including failed ones with telemetry, contribute.
+Each summary group retains pass rate, first-pass/eventual success, failure categories, and `p50WallMs`. Its additive `metrics` object summarizes assistant turns, aggregate tool terminals (`toolCalls`), Gateway-observed outer calls (`outerToolCalls`), bridge search/describe/tool calls, and reported USD cost as `{ samples, total, p50 }`. Aggregate and outer counts are separate observations, never substitutes; bridge activity can overlap aggregate tool terminals and must not be added to them. Only present values count as samples; missing telemetry is not zero (`total` and `p50` are null with no samples). Observed zeros remain zeros. Medians use the upper middle sample for even counts, matching the existing wall-time summary. All repetitions, including failed ones with telemetry, contribute. Older reports mislabeled aggregate tool terminals as `outerToolCalls`; inspect their per-cell source fields before comparing them with newer reports.
 
 For cells that return an agent envelope, `elapsedMs` measures the agent process and effect verification after fixture preparation. Harness-error cells instead time the attempted cell, including any setup before the exception. Neither includes the matrix build, and neither is guest-only execution time. The harness does not report unobservable phase timings, overlap, reduction ratios, or inferred speedups. Compare correctness before timing/counts, inspect missing-sample counts, and retain raw per-cell `usage`/`costUsd`/`bridgeCalls` when supplied.
 

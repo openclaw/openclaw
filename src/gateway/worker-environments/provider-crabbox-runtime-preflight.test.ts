@@ -10,7 +10,7 @@ import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
@@ -52,7 +52,8 @@ describe("Crabbox runtime preflight cleanup", () => {
         id: "crabbox",
         runtime: createPluginRuntimeMock({
           state: {
-            openKeyedStore: (options) => createPluginStateKeyedStore("crabbox", options),
+            openKeyedStoreV2: (options) =>
+              createPluginStateKeyedStoreV2("crabbox", options, { assertCurrent() {} }),
           },
         }),
         rootDir: fileURLToPath(new URL("../../../extensions/crabbox/", import.meta.url)),
@@ -211,6 +212,167 @@ describe("Crabbox runtime preflight cleanup", () => {
       }
     },
   );
+
+  it.each([
+    {
+      name: "terminal fixed lease",
+      backend: "digitalocean",
+      code: 4,
+      stderr: "DigitalOcean fixed lease is terminal",
+      attached: false,
+      outcome: "destroyed",
+    },
+    {
+      name: "absent attached resource",
+      backend: "ascii-box",
+      code: 1,
+      stderr: "ascii-box bx_0123456789ab not found (404)",
+      attached: true,
+      outcome: "destroyed",
+    },
+    {
+      name: "absent resource with unconfirmed stop",
+      backend: "ascii-box",
+      code: 1,
+      stderr: "ascii-box bx_0123456789ab not found (404)",
+      attached: true,
+      outcome: "retry-stop",
+    },
+    {
+      name: "unresolved creation attempt",
+      backend: "digitalocean",
+      code: 4,
+      stderr:
+        "lease_id_conflict: lease cbx_0123456789ab has an unresolved or unattested creation attempt",
+      attached: false,
+      outcome: "retry-inspect",
+    },
+    {
+      name: "terminal text with an unexpected exit code",
+      backend: "digitalocean",
+      code: 1,
+      stderr: "DigitalOcean fixed lease is terminal",
+      attached: false,
+      outcome: "retry-inspect",
+    },
+    {
+      name: "not-found text mixed with an auth failure",
+      backend: "ascii-box",
+      code: 1,
+      stderr: "ascii-box bx_0123456789ab not found (404)\nauthentication failed",
+      attached: false,
+      outcome: "retry-inspect",
+    },
+  ])("reconciles requested teardown after $name", async (scenario) => {
+    const environmentId = "worker-inspect-cleanup";
+    const leaseId = "cbx_0123456789ab";
+    const intent = await support.testState.store.createIntent({
+      environmentId,
+      providerId: "crabbox",
+      profileId: "development",
+      profileSnapshot: {
+        executionMode: "worker-turn",
+        settings: { ...PROFILE, provider: scenario.backend, warmImage: false },
+      },
+      provisionOperationId: `provision:${"0".repeat(64)}`,
+    });
+    await support.testState.store.transition({
+      environmentId,
+      from: intent.state,
+      to: "provisioning",
+    });
+    let record = await support.testState.store.transition({
+      environmentId,
+      from: "provisioning",
+      to: "ready",
+      patch: {
+        leaseId,
+        nodeDeviceId: "node:cleanup-fixture",
+        sharedHost: false,
+        ...support.readyPatch(environmentId),
+      },
+    });
+    if (scenario.attached) {
+      record = await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(environmentId, "session-cleanup-fixture"),
+      });
+    }
+    await support.testState.store.requestDestroy({ environmentId, state: record.state });
+    if (!scenario.attached) {
+      await support.testState.store.transition({ environmentId, from: "ready", to: "draining" });
+      record = await support.testState.store.transition({
+        environmentId,
+        from: "draining",
+        to: "destroying",
+      });
+    }
+    let stopFails = scenario.outcome === "retry-stop";
+    const calls: string[][] = [];
+    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "999.0.0" });
+      }
+      calls.push(argv);
+      if (argv[1] === "inspect") {
+        return commandResult({ code: scenario.code, stderr: scenario.stderr });
+      }
+      expect(argv[1]).toBe("stop");
+      return stopFails
+        ? commandResult({ code: 1, stderr: "synthetic provider stop unavailable" })
+        : commandResult();
+    });
+    const service = support.createService(await registerProvider());
+    const inspectCommand = [
+      PROFILE.binary,
+      "inspect",
+      "--provider",
+      scenario.backend,
+      "--network",
+      "public",
+      "--id",
+      leaseId,
+      "--json",
+    ];
+    const stopCommand = [PROFILE.binary, "stop", "--provider", scenario.backend, "--id", leaseId];
+
+    await service.reconcileOnce();
+
+    if (scenario.outcome === "retry-inspect") {
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: "destroying",
+        leaseId,
+        lastError: expect.stringContaining("Crabbox inspect failed"),
+      });
+      await service.reconcileOnce();
+      expect(calls).toEqual([inspectCommand, inspectCommand]);
+      return;
+    }
+    expect(calls).toEqual([inspectCommand, stopCommand]);
+    if (stopFails) {
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: "attached",
+        leaseId,
+        ownerEpoch: record.ownerEpoch,
+        attachedSessionIds: ["session-cleanup-fixture"],
+        lastError: expect.stringContaining("synthetic provider stop unavailable"),
+      });
+      stopFails = false;
+      await service.reconcileOnce();
+      expect(calls).toEqual([inspectCommand, stopCommand, inspectCommand, stopCommand]);
+    }
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "destroyed",
+      leaseId,
+      attachedSessionIds: [],
+      teardownTerminalState: "destroyed",
+    });
+    const settledCallCount = calls.length;
+    await service.reconcileOnce();
+    expect(calls).toHaveLength(settledCallCount);
+  });
 
   it.each(["restart reconciliation", "direct destroy"])(
     "retains unresolved legacy allocation responsibility after %s and cleanup restart",

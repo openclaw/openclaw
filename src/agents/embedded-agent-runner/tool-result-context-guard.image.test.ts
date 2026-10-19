@@ -5,11 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
-import type { AgentMessage } from "../runtime/index.js";
+import type { Agent, AgentMessage } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createImageTool } from "../tools/image-tool.js";
 import {
-  createMessageCharEstimateCache,
   estimateMessageCharsCached,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
 } from "./tool-result-char-estimator.js";
@@ -62,9 +61,7 @@ async function projectForContext(
   source: AgentMessage,
   contextWindowTokens: number,
 ): Promise<AgentMessage> {
-  const agent: {
-    transformContext?: (messages: AgentMessage[], signal: AbortSignal) => Promise<AgentMessage[]>;
-  } = {};
+  const agent: Pick<Agent, "transformContext"> = {};
   installToolResultContextGuard({ agent, contextWindowTokens });
   const transformed = await expectDefined(agent.transformContext, "installed context guard")(
     [source],
@@ -82,9 +79,9 @@ function expectWithinExistingCap(message: AgentMessage, contextWindowTokens: num
     1_024,
     Math.floor(contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * 0.5),
   );
-  expect(estimateMessageCharsCached(message, createMessageCharEstimateCache())).toBeLessThanOrEqual(
-    existingCap,
-  );
+  expect(
+    estimateMessageCharsCached(message, new WeakMap<AgentMessage, number>()),
+  ).toBeLessThanOrEqual(existingCap);
 }
 
 describe("native image tool result context projection", () => {

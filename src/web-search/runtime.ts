@@ -16,7 +16,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { logVerbose } from "../globals.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
@@ -153,7 +152,6 @@ export function resolveWebSearchProviderId(params: {
   providers?: PluginWebSearchProviderEntry[];
   authStore?: AuthProfileStore;
   resolveAuthProfileStoreSource?: () => boolean;
-  onAutoDetection?: (message: string) => void;
 }): string {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
   const search = params.search ?? resolveSearchConfig(config);
@@ -186,9 +184,6 @@ export function resolveWebSearchProviderId(params: {
       ) {
         continue;
       }
-      (params.onAutoDetection ?? logVerbose)(
-        `web_search: no provider configured, auto-detected "${provider.id}" from available credentials`,
-      );
       return provider.id;
     }
   }
@@ -332,7 +327,6 @@ async function resolveWebSearchCandidates(
     ? { ...options, authStore: preparedAuthStore }
     : options;
   let needsAuthSource = false;
-  let autoDetectionMessage: string | undefined;
   try {
     const candidates = selectWebSearchCandidates(
       preparedOptions,
@@ -343,14 +337,8 @@ async function resolveWebSearchCandidates(
         needsAuthSource = true;
         return false;
       },
-      (message) => {
-        autoDetectionMessage = message;
-      },
     );
     if (!needsAuthSource) {
-      if (autoDetectionMessage) {
-        logVerbose(autoDetectionMessage);
-      }
       return candidates;
     }
   } catch (error) {
@@ -375,7 +363,6 @@ function selectWebSearchCandidates(
   providers: PluginWebSearchProviderEntry[],
   agentDir: string,
   resolveAuthProfileStoreSource: () => boolean,
-  onAutoDetection?: (message: string) => void,
 ): PluginWebSearchProviderEntry[] {
   const { config, search, runtimeWebSearch } = context;
 
@@ -398,7 +385,6 @@ function selectWebSearchCandidates(
         search,
         providers,
         resolveAuthProfileStoreSource,
-        onAutoDetection,
       }),
     ].filter((value): value is string => Boolean(value)),
   );

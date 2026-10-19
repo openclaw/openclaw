@@ -25,23 +25,17 @@ const mocks = vi.hoisted(() => ({
   providers: [] as RealtimeVoiceProviderPlugin[],
   providerRequests: [] as Array<{ model?: string; tools?: unknown[] }>,
   createSession: vi.fn(),
+  findProvider: (id: string | undefined): RealtimeVoiceProviderPlugin | undefined =>
+    mocks.providers.find((provider) => provider.id === id || provider.aliases?.includes(id ?? "")),
 }));
 
-vi.mock("../src/talk/provider-registry.js", () => ({
+vi.mock("../src/talk/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/talk/provider-registry.js")>()),
   canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => {
     const normalized = id?.trim().toLowerCase();
-    return (
-      mocks.providers.find(
-        (provider) => provider.id === normalized || provider.aliases?.includes(normalized ?? ""),
-      )?.id ?? normalized
-    );
+    return mocks.findProvider(normalized)?.id ?? normalized;
   },
-  getRealtimeVoiceProvider: (id: string) =>
-    mocks.providers.find(
-      (provider) =>
-        provider.id === id.trim().toLowerCase() ||
-        provider.aliases?.includes(id.trim().toLowerCase()),
-    ),
+  getRealtimeVoiceProvider: (id: string) => mocks.findProvider(id.trim().toLowerCase()),
   listRealtimeVoiceProviders: () => mocks.providers,
 }));
 vi.mock("../src/tts/provider-registry.js", () => ({

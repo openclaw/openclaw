@@ -285,6 +285,9 @@ Import a ZIP privately:
 openclaw skills library import ./my-skill.zip --slug my-skill
 ```
 
+Local bundle directories are also accepted, including directory names ending in
+`.zip`. Directory imports include `SKILL.md` and supporting files.
+
 Import a ClawHub skill without publishing your library:
 
 ```bash
@@ -356,7 +359,9 @@ openclaw skills workshop restore release-notes --version <version-id>
 | `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.              |
 
 Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
-`restore` act as `user` in the change feed.
+`restore` act as `user` in the change feed. The printed archive Undo command
+includes the archived agent's `--agent <id>`, so it restores that agent even
+when your current directory selects a different agent.
 
 ## Related
 

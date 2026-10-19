@@ -163,6 +163,7 @@ describe("tencent provider plugin", () => {
       const { providers } = await registerTencentPlugin();
       const provider = requireRegisteredProvider(providers, providerId);
       const first = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
+      expect(first.models.every((model) => model.api === "openai-completions")).toBe(true);
 
       const context = { env: {}, entries: [] };
       const augmented = await provider.augmentModelCatalog?.(context);

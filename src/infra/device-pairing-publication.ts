@@ -128,10 +128,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       for (const service of captured.pending) {
         service();
       }
-      return publications.get(path) === captured &&
-        !captured.blocked &&
-        !captured.mutation &&
-        captured.complete
+      return publications.get(path) === captured && !captured.blocked && captured.complete
         ? captured.nodes
         : undefined;
     },

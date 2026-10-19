@@ -1,10 +1,9 @@
 import { vi } from "vitest";
-import { jsonResult } from "../../agents/tools/common.js";
+import { jsonResult, textResult } from "../../agents/tools/common.js";
 import type {
   ChannelDirectoryEntryKind,
   ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
@@ -20,23 +19,12 @@ type RunMessageAction = typeof import("./message-action-runner.js").runMessageAc
 const runFixtureMessageAction: RunMessageAction = async (...args) =>
   (await import("./message-action-runner.js")).runMessageAction(...args);
 
-/** Workspace-style config fixture used by message action runner tests. */
 export const workspaceConfig = {
-  channels: {
-    workspace: {
-      botToken: "workspace-test",
-      appToken: "workspace-app-test",
-    },
-  },
+  channels: { workspace: { botToken: "workspace-test", appToken: "workspace-app-test" } },
 } as OpenClawConfig;
 
-/** Direct-chat config fixture that allows any sender. */
 export const directChatConfig = {
-  channels: {
-    directchat: {
-      allowFrom: ["*"],
-    },
-  },
+  channels: { directchat: { allowFrom: ["*"] } },
 } as OpenClawConfig;
 
 export const directOutbound: ChannelOutboundAdapter = {
@@ -44,32 +32,25 @@ export const directOutbound: ChannelOutboundAdapter = {
   sendText: async () => ({ channel: "test", messageId: "test" }),
 };
 
+function registerPlugins(...plugins: ChannelPlugin[]) {
+  setActivePluginRegistry(
+    createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin }))),
+  );
+}
+
 export function createMessageActionContextFixture() {
-  const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
-    jsonResult({ ok: true }),
-  );
-  const handleForumAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
-    jsonResult({ ok: true }),
-  );
-  const readWorkspaceTestPlugin: ChannelPlugin = {
-    ...workspaceTestPlugin,
-    actions: {
-      describeMessageTool: () => ({ actions: ["read"] }),
-      handleAction: handleWorkspaceAction,
-    },
-  };
+  const handleWorkspaceAction = vi.fn(successfulAction);
+  const handleForumAction = vi.fn(successfulAction);
+  const localChatBase = createChannelTestPluginBase({
+    id: "localchat",
+    label: "Local Chat",
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+  });
   const localChatTestPlugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({
-      id: "localchat",
-      label: "Local Chat",
-      docsPath: "/channels/localchat",
-      capabilities: { chatTypes: ["direct", "group"], media: true },
-    }),
+    ...localChatBase,
     meta: {
-      id: "localchat",
-      label: "Local Chat",
+      ...localChatBase.meta,
       selectionLabel: "Local Chat (local)",
-      docsPath: "/channels/localchat",
       blurb: "Local chat test stub.",
       aliases: ["local"],
     },
@@ -92,13 +73,8 @@ export function createMessageActionContextFixture() {
     messaging: {
       normalizeTarget: (raw) => {
         const trimmed = raw.trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        const userId = trimmed.replace(/^user:/i, "");
-        return /^user:/i.test(trimmed)
-          ? `user:${userId.toLowerCase()}`
-          : `channel:${trimmed.toLowerCase()}`;
+        const prefix = /^user:/i.test(trimmed) ? "user" : "channel";
+        return trimmed ? `${prefix}:${trimmed.replace(/^user:/i, "").toLowerCase()}` : undefined;
       },
       targetResolver: {
         looksLikeId: (raw) => /^(?:user:)?[UW][A-Z0-9]+$/i.test(raw.trim()),
@@ -117,36 +93,43 @@ export function createMessageActionContextFixture() {
         toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
     },
   };
-  const forumActionTestPlugin: ChannelPlugin = {
-    ...forumTestPlugin,
-    actions: {
-      describeMessageTool: () => ({ actions: ["topic-create", "topic-edit"] }),
-      handleAction: handleForumAction,
-    },
-  };
   return {
     handleWorkspaceAction,
     handleForumAction,
     setup(): void {
-      setActivePluginRegistry(
-        createTestRegistry([
-          { pluginId: "workspace", source: "test", plugin: readWorkspaceTestPlugin },
-          { pluginId: "directchat", source: "test", plugin: directChatTestPlugin },
-          { pluginId: "forum", source: "test", plugin: forumActionTestPlugin },
-          { pluginId: "localchat", source: "test", plugin: localChatTestPlugin },
-          { pluginId: "slackdm", source: "test", plugin: resolvedDmTestPlugin },
-        ]),
+      registerPlugins(
+        withActions(workspaceTestPlugin, ["read"], handleWorkspaceAction),
+        directChatTestPlugin,
+        withActions(forumTestPlugin, ["topic-create", "topic-edit"], handleForumAction),
+        localChatTestPlugin,
+        resolvedDmTestPlugin,
       );
       handleWorkspaceAction.mockClear();
       handleForumAction.mockClear();
     },
     cleanup(): void {
-      setActivePluginRegistry(createTestRegistry([]));
+      registerPlugins();
     },
   };
 }
 
-export const runDryAction = (params: {
+async function successfulAction(_ctx: ChannelMessageActionContext) {
+  return jsonResult({ ok: true });
+}
+
+function withActions(
+  plugin: ChannelPlugin,
+  actions: ChannelMessageActionName[],
+  handleAction: ChannelActionHandler,
+): ChannelPlugin {
+  return { ...plugin, actions: { describeMessageTool: () => ({ actions }), handleAction } };
+}
+
+export const runDryAction = ({
+  actionParams,
+  toolContext,
+  ...options
+}: {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   actionParams: Record<string, unknown>;
@@ -156,50 +139,23 @@ export const runDryAction = (params: {
   agentId?: string;
 }) =>
   runFixtureMessageAction({
-    cfg: params.cfg,
-    action: params.action,
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
+    ...options,
+    params: actionParams as never,
+    toolContext: toolContext as never,
     dryRun: true,
-    abortSignal: params.abortSignal,
-    sandboxRoot: params.sandboxRoot,
-    agentId: params.agentId,
   });
 
-export const runDrySend = (params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  abortSignal?: AbortSignal;
-  sandboxRoot?: string;
-  agentId?: string;
-}) =>
-  runDryAction({
-    ...params,
-    action: "send",
-  });
+export const runDrySend = (params: Omit<Parameters<typeof runDryAction>[0], "action">) =>
+  runDryAction({ ...params, action: "send" });
 
 type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
 
 function normalizeWorkspaceTarget(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return trimmed;
+  if (/^(#|channel:|user:)/i.test(trimmed)) {
+    return trimmed.replace(/^(#|channel:|user:)/i, "").trim();
   }
-  if (trimmed.startsWith("#")) {
-    return trimmed.slice(1).trim();
-  }
-  if (/^channel:/i.test(trimmed)) {
-    return trimmed.replace(/^channel:/i, "").trim();
-  }
-  if (/^user:/i.test(trimmed)) {
-    return trimmed.replace(/^user:/i, "").trim();
-  }
-  const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-  if (mention?.[1]) {
-    return mention[1];
-  }
-  return trimmed;
+  return trimmed.match(/^<@([A-Z0-9]+)>$/i)?.[1] ?? trimmed;
 }
 
 // Test plugins model token-gated workspace sends without booting real channel runtimes.
@@ -214,33 +170,36 @@ function hasChannelBotToken(channelConfig: unknown): boolean {
 function createConfiguredTestPlugin(params: {
   id: string;
   isConfigured: (cfg: OpenClawConfig) => boolean;
-  normalizeTarget: (raw: string) => string | undefined;
+  normalizeTarget?: (raw: string) => string | undefined;
   resolveTarget: (input: string) => ResolvedTestTarget | null;
 }): ChannelPlugin {
-  const messaging: ChannelMessagingAdapter = {
-    normalizeTarget: params.normalizeTarget,
-    targetResolver: {
-      looksLikeId: (raw) => Boolean(params.resolveTarget(raw.trim())),
-      hint: "<id>",
-      resolveTarget: async (resolverParams) => {
-        const resolved = params.resolveTarget(resolverParams.input);
-        return resolved ? { ...resolved, source: "normalized" } : null;
-      },
-    },
-    inferTargetChatType: (inferParams) =>
-      params.resolveTarget(inferParams.to)?.kind === "user" ? "direct" : "group",
+  const normalizeTarget = params.normalizeTarget ?? ((raw: string) => raw.trim() || undefined);
+  const resolveTarget = (raw: string) => {
+    const normalized = normalizeTarget(raw);
+    return normalized ? params.resolveTarget(normalized) : null;
   };
   return {
     ...createChannelTestPluginBase({
       id: params.id,
       config: {
-        listAccountIds: () => ["default"],
         resolveAccount: () => ({ enabled: true }),
         isConfigured: (_account, cfg) => params.isConfigured(cfg),
       },
     }),
     outbound: directOutbound,
-    messaging,
+    messaging: {
+      normalizeTarget,
+      targetResolver: {
+        looksLikeId: (raw) => Boolean(resolveTarget(raw)),
+        hint: "<id>",
+        resolveTarget: async (resolverParams) => {
+          const resolved = resolveTarget(resolverParams.input);
+          return resolved ? { ...resolved, source: "normalized" } : null;
+        },
+      },
+      inferTargetChatType: (inferParams) =>
+        resolveTarget(inferParams.to)?.kind === "user" ? "direct" : "group",
+    },
   };
 }
 
@@ -248,105 +207,54 @@ export const workspaceTestPlugin = createConfiguredTestPlugin({
   id: "workspace",
   isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.workspace),
   normalizeTarget: (raw) => normalizeWorkspaceTarget(raw) || undefined,
-  resolveTarget: (input) => {
-    const normalized = normalizeWorkspaceTarget(input);
-    if (!normalized) {
-      return null;
-    }
-    if (/^[A-Z0-9]+$/i.test(normalized)) {
-      const kind = /^U/i.test(normalized) ? "user" : "group";
-      return { to: normalized, kind };
-    }
-    return null;
-  },
+  resolveTarget: (normalized) =>
+    /^[A-Z0-9]+$/i.test(normalized)
+      ? { to: normalized, kind: /^U/i.test(normalized) ? "user" : "group" }
+      : null,
 });
 
 export const forumTestPlugin = createConfiguredTestPlugin({
   id: "forum",
   isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.forum),
-  normalizeTarget: (raw) => raw.trim() || undefined,
-  resolveTarget: (input) => {
-    const normalized = input.trim();
-    if (!normalized) {
-      return null;
-    }
-    return {
-      to: normalized.replace(/^forum:/i, ""),
-      kind: normalized.startsWith("@") ? "user" : "group",
-    };
-  },
+  resolveTarget: (normalized) => ({
+    to: normalized.replace(/^forum:/i, ""),
+    kind: normalized.startsWith("@") ? "user" : "group",
+  }),
 });
 
 export const directChatTestPlugin = createConfiguredTestPlugin({
   id: "directchat",
   isConfigured: (cfg) => Boolean(cfg.channels?.directchat),
-  normalizeTarget: (raw) => raw.trim() || undefined,
-  resolveTarget: (input) => {
-    const normalized = input.trim();
-    if (!normalized) {
-      return null;
-    }
-    return {
-      to: normalized,
-      kind: normalized.endsWith("@g.us") ? "group" : "user",
-    };
-  },
+  resolveTarget: (normalized) => ({
+    to: normalized,
+    kind: normalized.endsWith("@g.us") ? "group" : "user",
+  }),
 });
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-const testchatConfig = {
-  channels: {
-    testchat: {
-      enabled: true,
-    },
-  },
-} as OpenClawConfig;
-
-function createReplyActionPlugin(handleAction: ChannelActionHandler): ChannelPlugin {
-  return {
+export function registerReplyPlugin() {
+  const payload = { ok: true, messageId: "m-reply-1", repliedTo: "platform-guid-1" };
+  const handleAction = vi.fn(async () => textResult(JSON.stringify(payload), payload));
+  const base = createChannelTestPluginBase({
     id: "testchat",
-    meta: {
-      id: "testchat",
-      label: "Test Chat",
-      selectionLabel: "Test Chat",
-      docsPath: "/channels/testchat",
-      blurb: "Reply action test plugin.",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({ enabled: true }),
-      isConfigured: () => true,
-    },
+    label: "Test Chat",
+    config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
+  });
+  registerPlugins({
+    ...base,
+    meta: { ...base.meta, blurb: "Reply action test plugin." },
     outbound: {
       deliveryMode: "direct",
       sendText: async () => ({ channel: "testchat", messageId: "m-send-1" }),
     },
-    messaging: {
-      targetResolver: {
-        looksLikeId: () => true,
-      },
-    },
+    messaging: { targetResolver: { looksLikeId: () => true } },
     actions: {
       describeMessageTool: () => ({ actions: ["reply", "poll"] }),
       supportsAction: ({ action }) => action === "reply" || action === "poll",
       handleAction,
     },
-  };
-}
-
-export function registerReplyPlugin() {
-  const payload = { ok: true, messageId: "m-reply-1", repliedTo: "platform-guid-1" };
-  const handleAction = vi.fn(async () => ({
-    content: [{ type: "text" as const, text: JSON.stringify(payload) }],
-    details: payload,
-  }));
-  setActivePluginRegistry(
-    createTestRegistry([
-      { pluginId: "testchat", source: "test", plugin: createReplyActionPlugin(handleAction) },
-    ]),
-  );
+  });
   return handleAction;
 }
 
@@ -354,47 +262,37 @@ export async function runReplyAction(params: {
   actionParams: Record<string, unknown>;
   currentMessageId?: string | number;
 }) {
-  const toolContext = {
-    currentChannelProvider: "testchat" as const,
-    currentChannelId: "direct:user-1",
-    ...(params.currentMessageId !== undefined ? { currentMessageId: params.currentMessageId } : {}),
-  };
-  return await runFixtureMessageAction({
-    cfg: testchatConfig,
-    action: "reply",
-    params: { channel: "testchat", ...params.actionParams },
-    toolContext,
-    messageActionAuthorization: {
-      requesterAccountId: "default",
-      toolContext,
-    },
-    sessionKey: "agent:main:testchat:direct:user-1",
-    defaultAccountId: "default",
-    sourceReplyDeliveryMode: "message_tool_only",
-    dryRun: false,
-  });
+  return runCurrentConversationAction("reply", params.actionParams, params.currentMessageId);
 }
 
 export async function runCurrentConversationPollAction(params: { to: string }) {
-  const toolContext = {
-    currentChannelProvider: "testchat" as const,
-    currentChannelId: "direct:user-1",
-    currentMessageId: "1783",
-  };
-  return await runFixtureMessageAction({
-    cfg: testchatConfig,
-    action: "poll",
-    params: {
-      channel: "testchat",
+  return runCurrentConversationAction(
+    "poll",
+    {
       to: params.to,
       pollQuestion: "Preferred default?",
       pollOption: ["Tell me right away", "Only important"],
     },
+    "1783",
+  );
+}
+
+function runCurrentConversationAction(
+  action: "reply" | "poll",
+  params: Record<string, unknown>,
+  currentMessageId?: string | number,
+) {
+  const toolContext = {
+    currentChannelProvider: "testchat" as const,
+    currentChannelId: "direct:user-1",
+    ...(currentMessageId !== undefined ? { currentMessageId } : {}),
+  };
+  return runFixtureMessageAction({
+    cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
+    action,
+    params: { channel: "testchat", ...params },
     toolContext,
-    messageActionAuthorization: {
-      requesterAccountId: "default",
-      toolContext,
-    },
+    messageActionAuthorization: { requesterAccountId: "default", toolContext },
     sessionKey: "agent:main:testchat:direct:user-1",
     defaultAccountId: "default",
     sourceReplyDeliveryMode: "message_tool_only",
@@ -402,7 +300,6 @@ export async function runCurrentConversationPollAction(params: { to: string }) {
   });
 }
 
-/** Returns a bootstrap registry mock for message-action alias tests. */
 export function createPinboardMessageActionBootstrapRegistryMock() {
   const resolveIMessageTarget = ({ args }: { args: Record<string, unknown> }) => {
     if (typeof args.chatGuid === "string") {
@@ -415,44 +312,32 @@ export function createPinboardMessageActionBootstrapRegistryMock() {
       ? `chat_identifier:${args.chatIdentifier}`
       : undefined;
   };
+  const deliveryAliases = (targetAlias: string) => ({
+    aliases: ["chatGuid", "chatIdentifier", "chatId", targetAlias],
+    deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    resolveDeliveryTarget: resolveIMessageTarget,
+  });
   return (channel: string) => {
-    if (channel === "pinboard") {
-      return {
-        actions: {
-          messageActionTargetAliases: {
+    const messageActionTargetAliases =
+      channel === "pinboard"
+        ? {
             read: { aliases: ["messageId"] },
             pin: { aliases: ["messageId"] },
             unpin: { aliases: ["messageId"] },
             "list-pins": { aliases: ["chatId"] },
             "channel-info": { aliases: ["chatId"] },
-          },
-        },
-      };
-    }
-    if (channel === "imessage") {
-      return {
-        actions: {
-          messageActionTargetAliases: {
-            react: {
-              aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
-              deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-              resolveDeliveryTarget: resolveIMessageTarget,
-            },
-            unsend: {
-              aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
-              deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-              resolveDeliveryTarget: resolveIMessageTarget,
-            },
-            "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-            "poll-vote": {
-              aliases: ["chatGuid", "chatIdentifier", "chatId", "pollId", "messageId"],
-              deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-              resolveDeliveryTarget: resolveIMessageTarget,
-            },
-          },
-        },
-      };
-    }
-    return undefined;
+          }
+        : channel === "imessage"
+          ? {
+              react: deliveryAliases("messageId"),
+              unsend: deliveryAliases("messageId"),
+              "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+              "poll-vote": {
+                ...deliveryAliases("pollId"),
+                aliases: ["chatGuid", "chatIdentifier", "chatId", "pollId", "messageId"],
+              },
+            }
+          : undefined;
+    return messageActionTargetAliases ? { actions: { messageActionTargetAliases } } : undefined;
   };
 }

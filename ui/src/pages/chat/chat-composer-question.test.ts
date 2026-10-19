@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import {
   createComposerContainer,
+  createComposerControlsFixture,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
@@ -60,15 +60,7 @@ describe("composer question takeover", () => {
         sessionKey: "queue-test",
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
-        composerControls: solidContent(
-          () =>
-            Object.assign(document.createElement("button"), {
-              type: "button",
-              textContent: "Model",
-            }),
-          {},
-        ),
-        onRequestUpdate: vi.fn(),
+        composerControls: createComposerControlsFixture(),
       });
       composerProps.onDraftChange = (next) => {
         composerProps.draft = next;

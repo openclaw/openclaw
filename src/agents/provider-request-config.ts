@@ -9,6 +9,11 @@ import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
+import { TLS_SECRET_FIELDS } from "../secrets/provider-request-secret-fields.js";
+import {
   type ProviderRequestCapabilities,
   type ProviderRequestCapability,
   type ProviderRequestTransport,
@@ -371,7 +376,7 @@ export function applyPreparedRuntimeAuthToModel<
     | undefined,
 ): T {
   if (!preparedAuth?.baseUrl && !preparedAuth?.request) {
-    return model;
+    return attachProviderAuthAuthority(model, getProviderAuthAuthority(preparedAuth));
   }
   const providerHeaders = preparedAuth.request?.auth
     ? Object.fromEntries(
@@ -380,12 +385,17 @@ export function applyPreparedRuntimeAuthToModel<
         ),
       )
     : model.headers;
+  const runtimeRequest = sanitizeRuntimeProviderRequestOverrides(preparedAuth.request);
+  const request = mergeModelProviderRequestOverrides(
+    getModelProviderRequestTransport(model),
+    runtimeRequest,
+  );
   const requestConfig = resolveProviderRequestConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: preparedAuth.baseUrl ?? model.baseUrl,
     providerHeaders,
-    request: sanitizeRuntimeProviderRequestOverrides(preparedAuth.request),
+    request: runtimeRequest,
     capability: "llm",
     transport: "stream",
   });
@@ -394,7 +404,18 @@ export function applyPreparedRuntimeAuthToModel<
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
-  return inheritModelProviderRequestRouteFacts(model, next);
+  // Private transport readers must observe the same exchanged auth/headers as the model.
+  // Keep authored network policy while replacing credential-bearing request facts.
+  return attachProviderAuthAuthority(
+    inheritModelProviderRequestRouteFacts(
+      model,
+      attachModelProviderRequestTransport(
+        next,
+        request ? { ...request, headers: requestConfig.headers } : undefined,
+      ),
+    ),
+    getProviderAuthAuthority(preparedAuth),
+  );
 }
 
 function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {
@@ -453,7 +474,7 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+  for (const key of TLS_SECRET_FIELDS) {
     if (tls[key]) {
       next[key] = tls[key];
     }

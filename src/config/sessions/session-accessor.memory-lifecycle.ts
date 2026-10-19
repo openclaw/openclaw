@@ -48,7 +48,7 @@ export function resetMemorySessionEntryLifecycle(
             type: "session.lifecycle.reset",
             input: {
               expected,
-              nextEntry: structuredClone(nextEntry),
+              nextEntry,
               resetBoundary: params.resetBoundary,
             },
           },

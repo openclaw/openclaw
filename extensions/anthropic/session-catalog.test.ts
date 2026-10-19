@@ -80,6 +80,7 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
   let provider: SessionCatalogProvider | undefined;
   const runtimeWithSession = {
     ...runtime,
+    config: runtime.config ?? { current: () => ({}) },
     agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
   } as PluginRuntime;
   registerClaudeSessionCatalog({
@@ -1214,7 +1215,7 @@ describe("Claude session catalog", () => {
       localSessionId,
     );
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
-    expect((await listClaudeSessions(home, { forceRefresh: true }))[0]?.customGroup).toBe(
+    expect((await listClaudeSessions(home, { forceRefresh: true })).records[0]?.customGroup).toBe(
       "Changed",
     );
     const armingSpies = (["lstat", "readdir"] as const).map((method) => vi.spyOn(fs, method));

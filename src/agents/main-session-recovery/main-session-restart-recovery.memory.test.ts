@@ -5,6 +5,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { createMockGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { CommandLane } from "../../process/lanes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resumeMainSession } from "./main-session-restart-dispatch.js";
 import {
@@ -142,8 +143,9 @@ describe("memory restart recovery adapters", () => {
       entry: { ...entry, restartRecoveryHarnessCompletion: completion },
       observation: { sessionId: entry.sessionId, cycleId: "cycle", revision: 1 },
       recoveryAttempt: 1,
+      lane: CommandLane.Main,
       gatewayRuntime,
-    };
+    } satisfies Parameters<typeof resumeMainSession>[0];
     expect(await resumeMainSession(params)).toBe("skipped");
     expect(memorySessionActorOwners.read(location)).toBeUndefined();
     await upsertSessionEntryCore(scope, params.entry);
@@ -151,16 +153,7 @@ describe("memory restart recovery adapters", () => {
       ...entry,
       restartRecoveryHarnessCompletion: undefined,
     });
-    expect(
-      await resumeMainSession({
-        ...params,
-        recoveryAdmission: {
-          handoffId: "synthetic-admission",
-          shouldContinue: () => true,
-          beginDispatch: () => true,
-        },
-      }),
-    ).toBe("skipped");
+    expect(await resumeMainSession(params)).toBe("skipped");
     expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
   });
 });

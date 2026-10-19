@@ -11,7 +11,7 @@ import {
 } from "../../../components/solid/menu.tsx";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 
 export type SessionDiffScope =
   | { scope: "all" | "uncommitted" }
@@ -76,7 +76,7 @@ function menuItem(
   return {
     id,
     label,
-    class: `session-menu__item${checked === undefined ? "" : " session-diff-menu__scope-item"}`,
+    class: ["session-menu__item", { "session-diff-menu__scope-item": checked !== undefined }],
     type: checked === undefined ? undefined : "radio",
     checked,
     content: <span class="session-menu__text">{content ?? label}</span>,
@@ -307,7 +307,7 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
           >
             <Menu
               id={id}
-              class={`session-menu session-diff-menu session-diff-menu--${menu.kind}`}
+              class={["session-menu session-diff-menu", `session-diff-menu--${menu.kind}`]}
               panelClass="session-diff-menu__surface"
               placement={placement}
               label={label}

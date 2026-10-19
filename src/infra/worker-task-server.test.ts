@@ -190,6 +190,52 @@ it("keeps ordinary task errors reusable", async () => {
   expect(process.exitCode).toBe(exitCode);
 });
 
+it("scopes the complete selection to each generic worker task", async () => {
+  let result = createDeferred();
+  const port = Object.assign(new EventEmitter(), {
+    postMessage: vi.fn(() => result.resolve()),
+    close: vi.fn(),
+  });
+  boundary.port = port;
+  const { serveWorkerTasks } = await import("./worker-task-server.js");
+  const { getDatabaseEngineSelection } = await import("./database-engine/context.js");
+  const selection = {
+    effectiveEngines: {
+      state: "sqlite",
+      agent: "sqlite",
+      workboard: "postgres",
+      logbook: "sqlite",
+      "team-reports": "sqlite",
+      quarantine: "sqlite",
+      "managed-update": "sqlite",
+      "package-activation": "sqlite",
+    },
+    postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
+  } as const;
+  serveWorkerTasks(() => getDatabaseEngineSelection());
+  port.emit("message", {
+    taskId: 1,
+    nativeSections: new SharedArrayBuffer(4),
+    taskContext: { ...taskContext(), databaseEngineSelection: selection },
+  });
+  await result.promise;
+  expect(port.postMessage).toHaveBeenLastCalledWith(
+    { status: "ok", value: selection, taskId: 1 },
+    [],
+  );
+  result = createDeferred();
+  port.emit("message", {
+    taskId: 2,
+    nativeSections: new SharedArrayBuffer(4),
+    taskContext: taskContext(),
+  });
+  await result.promise;
+  expect(port.postMessage).toHaveBeenLastCalledWith(
+    { status: "ok", value: undefined, taskId: 2 },
+    [],
+  );
+});
+
 it("retains admission context for asynchronous resource cleanup and successor tasks", async () => {
   let result = createDeferred();
   const cleanupEntered = createDeferred();
@@ -267,6 +313,58 @@ it("retains admission context for asynchronous resource cleanup and successor ta
   } finally {
     finishCleanup.resolve();
     unregister();
+    admissionPort.close();
+    admissionPeer.close();
+  }
+});
+
+it("expires a task's admission budget without poisoning its successor or resource cleanup", async () => {
+  let result = createDeferred();
+  const port = Object.assign(new EventEmitter(), {
+    postMessage: vi.fn(() => result.resolve()),
+    close: vi.fn(),
+  });
+  boundary.port = port;
+  const { port1: admissionPort, port2: admissionPeer } = new MessageChannel();
+  const exchanges = acknowledgeAdmissionExchanges(admissionPort);
+  const { serveOwnedWorkerTasks } = await import("./worker-task-server.js");
+  const { hasSqliteDatabaseSchemaAdmissionForPath } =
+    await import("./sqlite-database-admission.js");
+  const inspect = () => {
+    hasSqliteDatabaseSchemaAdmissionForPath(":memory:");
+  };
+  const receiptClosed = createDeferred();
+  const receipt = { postMessage: vi.fn(), close: () => receiptClosed.resolve() };
+  try {
+    serveOwnedWorkerTasks(inspect, { closeResource: inspect });
+    port.emit("message", {
+      taskId: 1,
+      nativeSections: new SharedArrayBuffer(4),
+      taskContext: { ...taskContext(admissionPort), databaseAdmissionDeadlineAtMs: Date.now() - 1 },
+    });
+    await result.promise;
+    expect(port.postMessage).toHaveBeenCalledWith({
+      status: "failed",
+      taskId: 1,
+      error: "SQLite admission facts exchange timed out; the host did not reply",
+    });
+    expect(exchanges).not.toHaveBeenCalled();
+    port.emit("message", { closeResource: true, resourcePort: receipt });
+    await receiptClosed.promise;
+    expect(receipt.postMessage).toHaveBeenCalledWith({ ok: true }, []);
+    result = createDeferred();
+    port.emit("message", {
+      taskId: 2,
+      nativeSections: new SharedArrayBuffer(4),
+      taskContext: taskContext(),
+    });
+    await result.promise;
+    expect(port.postMessage).toHaveBeenLastCalledWith(
+      { status: "ok", value: undefined, taskId: 2 },
+      [],
+    );
+    expect(exchanges).toHaveBeenCalledTimes(2);
+  } finally {
     admissionPort.close();
     admissionPeer.close();
   }

@@ -36,7 +36,11 @@ type PersonCardInput = {
   mainKey: string;
   globalScope: boolean;
   routing: PersonActivityRouting;
-  openSession: (row: GatewaySessionRow, agentId: string) => void;
+  openSession: (
+    row: GatewaySessionRow,
+    agentId: string,
+    options: ReturnType<typeof sessionNavigationTarget>["options"],
+  ) => void;
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
@@ -129,7 +133,7 @@ function Sessions(props: {
                     onClick={(event) => {
                       if (shouldHandleNavigationClick(event)) {
                         event.preventDefault();
-                        props.input.openSession(session().row, session().agentId);
+                        props.input.openSession(session().row, session().agentId, target().options);
                       }
                     }}
                   >

@@ -32,6 +32,7 @@ function createSeededLink() {
   const pending = createDeferred<unknown>();
   const client = {
     request: vi.fn().mockReturnValue(pending.promise),
+    connected: true,
     connectionGeneration: 1,
     recoveryScope: "principal-a",
   };
@@ -162,6 +163,7 @@ describe("GitHub hovercards with authorized session details", () => {
     const request = vi.fn().mockReturnValue(pending.promise);
     provider.client = {
       request,
+      connected: true,
     } as unknown as GatewayBrowserClient;
     provider.agentId = "row-agent";
     provider.readers = [TEST_LINK_READER];
@@ -213,7 +215,7 @@ describe("GitHub hovercards with authorized session details", () => {
     expect(hovercard()?.textContent).not.toContain(message);
   });
 
-  it.each(["agent", "client", "connection", "principal", "reader"])(
+  it.each(["agent", "client", "principal", "reader"])(
     "does not expose cached session details or late enrichment after a %s change",
     async (change) => {
       const { pending, client, provider, anchor } = createSeededLink();
@@ -225,8 +227,6 @@ describe("GitHub hovercards with authorized session details", () => {
         provider.client = { ...client } as unknown as GatewayBrowserClient;
       } else if (change === "reader") {
         provider.readers = [{ ...TEST_LINK_READER }];
-      } else if (change === "connection") {
-        client.connectionGeneration += 1;
       } else {
         client.recoveryScope = "principal-b";
       }

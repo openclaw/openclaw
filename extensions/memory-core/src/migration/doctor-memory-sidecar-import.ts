@@ -12,6 +12,7 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { admitMemoryVectorIndex } from "../memory/manager-search-knn.js";
 
 export type LegacyMemorySidecarSource = {
@@ -391,6 +392,9 @@ export function importLegacyMemorySidecarIndex(params: {
     params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
     try {
       copyLegacyMemoryIndexRows(params.db, params.copyVectorRows);
+      if (counts.sources > 0 || counts.chunks > 0) {
+        advanceMemoryIndexRevision(params.db);
+      }
       params.db.exec("RELEASE import_legacy_sidecar_memory_index");
       return {
         imported: true,

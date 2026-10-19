@@ -1,11 +1,18 @@
 // Nextcloud Talk tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import type { PluginRuntime } from "../runtime-api.js";
+import {
+  createAccount,
+  createAllowlistedAccount,
+  createAttachment,
+  createMessage,
+  createRuntimeEnv,
+  requireFirstMockArg,
+} from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const {
   createChannelPairingControllerMock,
@@ -60,92 +67,9 @@ vi.mock("./room-info.js", async () => {
   };
 });
 
-function installRuntime(params?: {
-  buildMentionRegexes?: () => RegExp[];
-  hasControlCommand?: (body: string) => boolean;
-  matchesMentionPatterns?: (body: string, regexes: RegExp[]) => boolean;
-  shouldHandleTextCommands?: () => boolean;
-}) {
-  const runtime = {
-    channel: {
-      inbound: {
-        dispatchReply: vi.fn(async () => undefined),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
-      },
-      commands: {
-        shouldHandleTextCommands: params?.shouldHandleTextCommands ?? vi.fn(() => false),
-      },
-      text: {
-        hasControlCommand: params?.hasControlCommand ?? vi.fn(() => false),
-      },
-      mentions: {
-        buildMentionRegexes: params?.buildMentionRegexes ?? vi.fn(() => []),
-        matchesMentionPatterns: params?.matchesMentionPatterns ?? vi.fn(() => false),
-      },
-    },
-  };
-  setNextcloudTalkRuntime(runtime as unknown as PluginRuntime);
-  return runtime;
-}
-
-function createRuntimeEnv() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
-
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call[0];
-}
-
-function createAccount(
-  overrides?: Partial<ResolvedNextcloudTalkAccount>,
-): ResolvedNextcloudTalkAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    baseUrl: "https://cloud.example.com",
-    secret: "secret",
-    secretSource: "config",
-    config: {
-      dmPolicy: "pairing",
-      allowFrom: [],
-      groupPolicy: "allowlist",
-      groupAllowFrom: [],
-    },
-    ...overrides,
-  };
-}
-
-function createMessage(
-  overrides?: Partial<NextcloudTalkInboundMessage>,
-): NextcloudTalkInboundMessage {
-  return {
-    messageId: "msg-1",
-    roomToken: "room-1",
-    roomName: "Room 1",
-    senderId: "user-1",
-    senderName: "Alice",
-    text: "hello",
-    mediaType: "text/plain",
-    timestamp: Date.now(),
-    isGroupChat: false,
-    ...overrides,
-  };
-}
-
 describe("nextcloud-talk inbound media security", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    installRuntime();
     resolveNextcloudTalkRoomKindMock.mockResolvedValue("direct");
     resolveDefaultGroupPolicyMock.mockReturnValue("allowlist");
     resolveAllowlistProviderRuntimeGroupPolicyMock.mockReturnValue({
@@ -191,14 +115,10 @@ describe("nextcloud-talk inbound media security", () => {
         messageId,
         senderId,
         text: "raw-payload-caption-secret",
-        attachment: {
-          fileId: "9014",
+        attachment: createAttachment("9014", {
           name: "private-file-secret.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
           shareUrl: "https://cloud.example.com/s/private-token",
-          hideDownload: false,
-        },
+        }),
       }),
       account: createAccount({
         accountId,
@@ -257,24 +177,9 @@ describe("nextcloud-talk inbound media security", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "inspect this receipt",
-        attachment: {
-          fileId: "9004",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl,
-          hideDownload: false,
-        },
+        attachment: createAttachment("9004", { shareUrl }),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -302,6 +207,7 @@ describe("nextcloud-talk inbound media security", () => {
 
   it.each([
     { label: "explicit sender match", mediaAllowFrom: ["user-1"] },
+    { label: "normalized sender match", mediaAllowFrom: ["NC-TALK:User-1"] },
     { label: "wildcard", mediaAllowFrom: ["*"] },
   ])(
     "stages admitted media for a $label and passes only returned local facts",
@@ -316,24 +222,9 @@ describe("nextcloud-talk inbound media security", () => {
       await handleNextcloudTalkInbound({
         message: createMessage({
           text: "inspect this receipt",
-          attachment: {
-            fileId: "9005",
-            name: "receipt.pdf",
-            mimeType: "application/pdf",
-            declaredSizeBytes: 1_024,
-            shareUrl: "https://cloud.example.com/s/redacted-share-token",
-            hideDownload: false,
-          },
+          attachment: createAttachment("9005"),
         }),
-        account: createAccount({
-          config: {
-            dmPolicy: "allowlist",
-            allowFrom: ["user-1"],
-            mediaAllowFrom,
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-          },
-        }),
+        account: createAllowlistedAccount({ mediaAllowFrom }),
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime: createRuntimeEnv(),
       });
@@ -409,14 +300,7 @@ describe("nextcloud-talk inbound media security", () => {
         roomName: "Ops",
         isGroupChat: true,
         text: "@openclaw inspect this receipt",
-        attachment: {
-          fileId: "9008",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9008"),
       }),
       account: createAccount({ config: accountConfig }),
       config,

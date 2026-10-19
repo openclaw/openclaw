@@ -227,7 +227,6 @@ export async function readCodexConfigForAppAdmission(
     };
   } catch (error) {
     const details = serializeCodexAppInventoryError(error);
-    embeddedAgentLog.warn("codex plugin app admission config read failed", { error: details });
     throw new Error(
       `Could not verify the Codex app allowlist: ${String(details.message)}. No native thread was started; resolve the native configuration error and retry.`,
       { cause: error },

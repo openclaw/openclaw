@@ -2,8 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session context meter colors" });
@@ -65,7 +65,7 @@ suite.define(() => {
           const context = details.locator(".chat-details__context");
           const meter = context.locator("meter");
           if (viewport.width <= 900) {
-            await selectChatLayoutAction(page, "Details");
+            await openChatDetails(page);
           } else {
             await trigger.click();
           }

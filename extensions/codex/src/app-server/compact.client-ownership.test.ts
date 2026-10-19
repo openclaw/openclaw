@@ -14,7 +14,7 @@ import {
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession } from "./compact.test-support.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -46,7 +46,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let directory: string;
 let agentDir: string;
 let sessionFile: string;
-const pluginConfig = {
+const pluginConfig: CodexPluginConfig = {
   appServer: { command: process.execPath, args: ["app-server"], homeScope: "user" },
 };
 let runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
@@ -370,6 +370,7 @@ it.each([
         client,
         params: {
           ...createParams(sessionFile, directory),
+          disableTools: false,
           sessionId: "session-final-owner",
           sessionKey,
           agentDir,

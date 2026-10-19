@@ -19,28 +19,47 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetAgentRunRegistryForTest);
 afterEach(() => vi.restoreAllMocks());
 
+type MediaHost = Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>;
+type TestState = Parameters<Parameters<typeof withOpenClawTestState>[1]>[0];
+
+async function withMediaHost(
+  sessionId: string,
+  run: (host: MediaHost, state: TestState) => Promise<void>,
+  overrides: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
+) {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: `run-${sessionId}`,
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      workspaceDir: state.workspaceDir,
+      cwd: state.workspaceDir,
+      config: {},
+      ...overrides,
+    });
+    try {
+      await run(host, state);
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+    }
+  });
+}
+
 describe("agent harness reply media", () => {
   it.each(["missing", "pending", "delivered"] as const)(
     "selects current-input attachments by canonical completion after an earlier final reply (%s)",
     async (sourceReplyDeliveryState) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const host = await createAdmittedHostCapabilityTestFixture({
-          runId: "run-steered-reply-media",
-          agentId: "main",
-          sessionId: "steered-reply-media",
-          sessionKey: "agent:main:steered-reply-media",
-          workspaceDir: state.workspaceDir,
-          cwd: state.workspaceDir,
-          config: {},
-          sourceReplyDeliveryMode: "automatic",
-        });
-        const currentText = "Current answer.\nMEDIA:./current.pdf";
-        const currentAssistant = buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: currentText }],
-        });
-        const bytes = Buffer.from("%PDF-1.4\nCurrent input attachment\n%%EOF\n");
-        const readWorkspaceFile = vi.fn(async () => bytes);
-        try {
+      await withMediaHost(
+        "steered-reply-media",
+        async (host) => {
+          const currentText = "Current answer.\nMEDIA:./current.pdf";
+          const currentAssistant = buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: currentText }],
+          });
+          const bytes = Buffer.from("%PDF-1.4\nCurrent input attachment\n%%EOF\n");
+          const readWorkspaceFile = vi.fn(async () => bytes);
           const result = await host.hostCapabilities.prepareReplyMedia!({
             kind: "attempt",
             attempt: {
@@ -84,37 +103,27 @@ describe("agent harness reply media", () => {
             expect(outcome.trustedLocalMedia).toBe(true);
             expect(fs.readFileSync(outcome.mediaUrl)).toEqual(bytes);
           }
-        } finally {
-          host.closeHost();
-          host.closeAdmission();
-        }
-      });
+        },
+        { sourceReplyDeliveryMode: "automatic" },
+      );
     },
   );
 
   it("rejects Gateway sibling decoys while retaining managed media and HTTP references", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const outside = state.path("gateway-generated", `${"decoy-".repeat(30)}.txt`);
-      fs.mkdirSync(path.dirname(outside));
-      fs.writeFileSync(outside, "Gateway sibling must not be sent");
-      const managed = await saveMediaBuffer(
-        Buffer.from("managed attachment"),
-        "text/plain",
-        "inbound",
-      );
-      const managedUrl = `media://inbound/${managed.id}`;
-      const httpUrl = "https://example.com/attachment.pdf";
-      const host = await createAdmittedHostCapabilityTestFixture({
-        runId: "run-remote-reply-namespace",
-        agentId: "main",
-        sessionId: "remote-reply-namespace",
-        sessionKey: "agent:main:remote-reply-namespace",
-        workspaceDir: state.workspaceDir,
-        cwd: state.workspaceDir,
-        config: { tools: { allow: ["read"], fs: { workspaceOnly: false } } },
-      });
-      const readWorkspaceFile = vi.fn(async () => Buffer.from("unexpected remote read"));
-      try {
+    await withMediaHost(
+      "remote-reply-namespace",
+      async (host, state) => {
+        const outside = state.path("gateway-generated", `${"decoy-".repeat(30)}.txt`);
+        fs.mkdirSync(path.dirname(outside));
+        fs.writeFileSync(outside, "Gateway sibling must not be sent");
+        const managed = await saveMediaBuffer(
+          Buffer.from("managed attachment"),
+          "text/plain",
+          "inbound",
+        );
+        const managedUrl = `media://inbound/${managed.id}`;
+        const httpUrl = "https://example.com/attachment.pdf";
+        const readWorkspaceFile = vi.fn(async () => Buffer.from("unexpected remote read"));
         const result = await host.hostCapabilities.prepareReplyMedia!({
           kind: "payload",
           payload: {
@@ -145,11 +154,9 @@ describe("agent harness reply media", () => {
         ]);
         expect(failures?.[0]?.label.length).toBeLessThanOrEqual(180);
         expect(failures?.[0]?.label).not.toContain(state.root);
-      } finally {
-        host.closeHost();
-        host.closeAdmission();
-      }
-    });
+      },
+      { config: { tools: { allow: ["read"], fs: { workspaceOnly: false } } } },
+    );
   });
 
   it("reads reply attachments from the remote sandbox instead of a stale Gateway sandbox", async () => {
@@ -210,18 +217,9 @@ describe("agent harness reply media", () => {
   });
 
   it("discards staged reply media when its host closes during MIME detection", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await withMediaHost("reply-media-staging", async (host, state) => {
       const mediaDir = state.statePath("media", "outbound");
       fs.mkdirSync(mediaDir, { recursive: true });
-      const host = await createAdmittedHostCapabilityTestFixture({
-        runId: "run-reply-media-staging",
-        agentId: "main",
-        sessionId: "reply-media-staging",
-        sessionKey: "agent:main:reply-media-staging",
-        workspaceDir: state.workspaceDir,
-        cwd: state.workspaceDir,
-        config: {},
-      });
       const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
       const readWorkspaceFile = vi.fn(async () => bytes);
       const detectMime = mediaMime.detectMime;
@@ -233,20 +231,15 @@ describe("agent harness reply media", () => {
         host.closeHost();
         return mime;
       });
-      try {
-        const operation = host.hostCapabilities.prepareReplyMedia!({
-          kind: "payload",
-          payload: { text: "MEDIA:./artifact.pdf" },
-          readWorkspaceFile,
-        });
-        await expect(operation).rejects.toThrow(/no longer active|aborted/i);
-        expect(fs.readdirSync(mediaDir)).toEqual([]);
-        expect(inspected).toBe(true);
-        expect(readWorkspaceFile).toHaveBeenCalledOnce();
-      } finally {
-        host.closeHost();
-        host.closeAdmission();
-      }
+      const operation = host.hostCapabilities.prepareReplyMedia!({
+        kind: "payload",
+        payload: { text: "MEDIA:./artifact.pdf" },
+        readWorkspaceFile,
+      });
+      await expect(operation).rejects.toThrow(/no longer active|aborted/i);
+      expect(fs.readdirSync(mediaDir)).toEqual([]);
+      expect(inspected).toBe(true);
+      expect(readWorkspaceFile).toHaveBeenCalledOnce();
     });
   });
 });

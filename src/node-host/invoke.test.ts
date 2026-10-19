@@ -22,8 +22,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as nodeRunCommand from "./invoke-run-command.js";
-import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

@@ -226,7 +226,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const authenticatedScheduledMode =
     params.trigger === "cron" &&
     params.scheduledToolPolicy !== undefined &&
-    Array.isArray(params.toolsAllow);
+    params.toolsAllow !== undefined;
   const scheduledConfiguredMcpSurface =
     authenticatedScheduledMode &&
     (bundleMcpThreadConfig.staticServerNames.length > 0 ||

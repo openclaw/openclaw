@@ -21,7 +21,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
-import { isSessionRunActive } from "../shared/session-run-state.js";
+import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
@@ -328,7 +328,7 @@ export function* filterSessionEntries(
           matchesSessionListSearch(
             [
               state.status,
-              isSessionRunActive(state)
+              isSessionRunStateActive(state)
                 ? "live running"
                 : state.hasActiveRun === false
                   ? "idle"

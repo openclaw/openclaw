@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 const models = ["primary", "fallback", "custom"].map((id) => ({
@@ -14,8 +15,7 @@ const models = ["primary", "fallback", "custom"].map((id) => ({
   available: true,
 }));
 
-function mountControls(catalog: ModelCatalogResult, retired = false) {
-  const container = document.createElement("div");
+async function mountControls(catalog: ModelCatalogResult, retired = false) {
   const sessions = createSessionsListResult({
     model: "forbidden-current",
     modelProvider: "fixture",
@@ -25,30 +25,33 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
   const selectedSession = { ...sessions.sessions[0]!, modelOverrideSource: "user" as const };
   const onModelSelect = vi.fn(async () => undefined);
   const before = JSON.stringify(selectedSession);
-  mountSolid(
-    () =>
-      createComponent(ChatModelControls, {
-        activeRunId: null,
-        connected: true,
-        gatewayAvailable: true,
-        loading: false,
-        modelCatalog: catalog.models,
-        modelCatalogState: {
-          hasSnapshot: !retired,
-          status: retired ? "loading" : "ready",
-          retired,
-          modelSelectionPolicy: catalog.modelSelectionPolicy,
-        },
-        modelSwitching: false,
-        sending: false,
-        sessionKey: "main",
-        selectedSession,
-        sessionsResult: sessions,
-        stream: null,
-        onModelSelect,
-        onModelSetup: vi.fn(),
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    createComponent(ChatModelControls, {
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      modelCatalog: catalog.models,
+      modelCatalogState: {
+        hasSnapshot: !retired,
+        status: retired ? "loading" : "ready",
+        retired,
+        modelSelectionPolicy: catalog.modelSelectionPolicy,
+      },
+      modelSwitching: false,
+      modelPickerOpen: true,
+      sending: false,
+      sessionKey: "main",
+      selectedSession,
+      sessionsResult: sessions,
+      stream: null,
+      onModelSelect,
+      onModelSetup: vi.fn(),
+    }),
+  );
+  flush();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
   expect(JSON.stringify(selectedSession)).toBe(before);
   return { container, onModelSelect };
@@ -57,9 +60,9 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
 describe("server-owned model selection policy", () => {
   it.each([undefined, "fixture/primary", "fixture/automatic", null])(
     "uses only catalog choices and the canonical default %s",
-    (defaultModel) => {
+    async (defaultModel) => {
       const restricted = defaultModel !== undefined;
-      const { container, onModelSelect } = mountControls({
+      const { container, onModelSelect } = await mountControls({
         models,
         ...(restricted
           ? { modelSelectionPolicy: { restricted: true as const, defaultModel } }
@@ -102,27 +105,30 @@ describe("server-owned model selection policy", () => {
     },
   );
 
-  it.each([false, true])("hides forbidden choices in an empty catalog (retired=%s)", (retired) => {
-    const { container } = mountControls(
-      {
-        models: [],
-        ...(retired
-          ? {}
-          : { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }),
-      },
-      retired,
-    );
-    expect(container.querySelector("[data-chat-model-option]")).toBeNull();
-    if (retired) {
-      expect(container.textContent).not.toContain("forbidden");
-    } else {
-      expect(container.textContent).toContain("No models are permitted by your administrator.");
-      expect(container.querySelector("[data-chat-model-setup]")).toBeNull();
-    }
-  });
+  it.each([false, true])(
+    "hides forbidden choices in an empty catalog (retired=%s)",
+    async (retired) => {
+      const { container } = await mountControls(
+        {
+          models: [],
+          ...(retired
+            ? {}
+            : { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }),
+        },
+        retired,
+      );
+      expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+      if (retired) {
+        expect(container.textContent).not.toContain("forbidden");
+      } else {
+        expect(container.textContent).toContain("No models are permitted by your administrator.");
+        expect(container.querySelector("[data-chat-model-setup]")).toBeNull();
+      }
+    },
+  );
 
-  it("retains permitted runtime alternatives without offering denied ones", () => {
-    const { container } = mountControls({
+  it("retains permitted runtime alternatives without offering denied ones", async () => {
+    const { container } = await mountControls({
       models: [
         {
           ...models[0]!,
