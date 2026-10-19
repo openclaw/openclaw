@@ -9,7 +9,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -41,6 +44,7 @@ import {
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   assertSessionEventTargetCurrent,
+  combineSessionEventTargetsForHost,
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
@@ -760,4 +764,49 @@ describe("session event target custody", () => {
       });
     },
   );
+});
+
+it("retains only one captured requester and releases it when cancelled before admission", async ({
+  signal,
+}) => {
+  await withTargetFixture(async ({ env }) => {
+    const release = vi.fn();
+    const retain = vi.fn(() => release);
+    const guest = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent() {},
+      retain,
+    });
+    const admin = createAdmittedRunOperatorAuthority({
+      profileId: "admin",
+      scopes: ["operator.admin"],
+      assertCurrent() {},
+    });
+    const target = await captureSessionEventTargetForHost("main", sessionKey, {
+      env,
+      operatorAuthority: guest,
+    });
+    const other = await captureSessionEventTargetForHost("main", sessionKey, {
+      env,
+      operatorAuthority: admin,
+    });
+    expect(() => combineSessionEventTargetsForHost([target, other])).toThrow(
+      "different captured destinations",
+    );
+    const receipt = enqueueSessionEventForHost("Command completed", {
+      agentId: "main",
+      sessionKey,
+      source: "exec",
+      expectedTarget: target,
+    });
+    expect(receipt.cancel()).toBe(true);
+    await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
+      status: "cancelled",
+      executionStarted: false,
+    });
+    expect(retain).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });
