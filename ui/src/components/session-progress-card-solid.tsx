@@ -5,6 +5,7 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CardActivity, StepMarker, Steps } from "./session-progress-card-content.tsx";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import {
+  progressCardNoteSummary,
   progressCardPresentation,
   REFRESH_STATUS_LABEL_KEYS,
   type SessionProgressCardRefreshAction,
@@ -16,7 +17,7 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle, type MenuProps } from "./solid/menu.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
-import { Tooltip } from "./solid/tooltip.tsx";
+import "./tooltip.ts";
 import "../styles/chat/task-progress-details.css";
 
 export type SessionProgressCardProps = {
@@ -273,7 +274,10 @@ export function ProgressDetailsRefresh(props: {
   const pending = () => props.action?.state === "pending";
   return (
     <Show when={props.action}>
-      <Tooltip placement="top" disabled={props.disabled || props.hideTooltip}>
+      <openclaw-tooltip
+        prop:placement="top"
+        prop:disabled={props.disabled || props.hideTooltip || false}
+      >
         <button
           type="button"
           class="task-progress-details__refresh"
@@ -301,7 +305,7 @@ export function ProgressDetailsRefresh(props: {
             hideTooltip={props.desktopDetails}
           />
         </span>
-      </Tooltip>
+      </openclaw-tooltip>
     </Show>
   );
 }
@@ -346,15 +350,12 @@ function DetailsCard(props: CardProps) {
       return "";
     }
     // Reuse the full note's parser; the collapsed text preview omits progress bars.
-    const template = document.createElement("template");
-    template.innerHTML = toSanitizedMarkdownHtml(props.card.markdown, {
-      progressBars: true,
-      codeBlockChrome: "none",
-    });
-    for (const bar of template.content.querySelectorAll("progress")) {
-      bar.remove();
-    }
-    return template.content.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+    return progressCardNoteSummary(
+      toSanitizedMarkdownHtml(props.card.markdown, {
+        progressBars: true,
+        codeBlockChrome: "none",
+      }),
+    );
   });
   const currentOverflow = useScrollState(true, false);
   const disclosure = createComposerProgressDisclosure(() => [

@@ -164,7 +164,7 @@ suite.define(() => {
       };
       await page.goto(suite.server.baseUrl + "chat");
       await openChatDetails(page);
-      await card.locator(".session-progress-card__body").waitFor();
+      await card.locator(".task-progress-details__body").waitFor();
       await waitForChatScrollIdle(page);
       expect(await card.getAttribute("open")).toBe("");
       expect(
