@@ -1,4 +1,3 @@
-// Whatsapp helper module supports test helpers behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -27,7 +26,6 @@ const DEFAULT_CONFIG = {
   },
 };
 
-// Initialize default if not set
 if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
 }
@@ -539,19 +537,13 @@ vi.mock("./qr-terminal.js", () => ({
 
 export const baileys = await import("./session.runtime.js");
 
-function resetMockExport<T extends (...args: never[]) => unknown>(params: {
-  current: T;
-  implementation: T;
-}) {
-  if (!("mockReset" in params.current) || typeof params.current.mockReset !== "function") {
+function resetMockExport<T extends (...args: never[]) => unknown>(current: T, implementation: T) {
+  if (!("mockReset" in current) || typeof current.mockReset !== "function") {
     return;
   }
-  params.current.mockReset();
-  if (
-    "mockImplementation" in params.current &&
-    typeof params.current.mockImplementation === "function"
-  ) {
-    params.current.mockImplementation(params.implementation);
+  current.mockReset();
+  if ("mockImplementation" in current && typeof current.mockImplementation === "function") {
+    current.mockImplementation(implementation);
   }
 }
 
@@ -560,44 +552,10 @@ export function resetBaileysMocks() {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
 
-  const makeWASocket = vi.mocked(baileys.makeWASocket);
-  const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
-    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
-  resetMockExport({
-    current: makeWASocket,
-    implementation: makeWASocketImpl,
-  });
-
-  const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
-  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
-    (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
-      ...args,
-    );
-  resetMockExport({
-    current: useMultiFileAuthState,
-    implementation: useMultiFileAuthStateImpl,
-  });
-
-  const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
-  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
-    (
-      recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
-    )(...args);
-  resetMockExport({
-    current: fetchLatestBaileysVersion,
-    implementation: fetchLatestBaileysVersionImpl,
-  });
-
-  const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
-  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
-    (
-      recreated.mod
-        .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
-    )(...args);
-  resetMockExport({
-    current: makeCacheableSignalKeyStore,
-    implementation: makeCacheableSignalKeyStoreImpl,
-  });
+  resetMockExport(baileys.makeWASocket, recreated.mod.makeWASocket);
+  resetMockExport(baileys.useMultiFileAuthState, recreated.mod.useMultiFileAuthState);
+  resetMockExport(baileys.fetchLatestBaileysVersion, recreated.mod.fetchLatestBaileysVersion);
+  resetMockExport(baileys.makeCacheableSignalKeyStore, recreated.mod.makeCacheableSignalKeyStore);
 }
 
 export function getLastSocket(): MockBaileysSocket {
