@@ -40,8 +40,13 @@ suite.define(() => {
   it("opens Details when its offline trigger retires during the click", async () => {
     await suite.withPage({ viewport: { width: 560, height: 900 } }, async ({ page }) => {
       page.setDefaultTimeout(1_000);
-      await page.setContent("<button id=offline>Details</button>");
+      await page.setContent(`
+        <openclaw-chat-pane class="chat-pane-cache__pane--active">
+          <div class="sidebar-region__header"><button id="offline">Details</button></div>
+        </openclaw-chat-pane>
+      `);
       await page.evaluate(() => {
+        const pane = document.querySelector("openclaw-chat-pane")!;
         const offline = document.getElementById("offline")!;
         offline.addEventListener(
           "pointerover",
@@ -58,10 +63,10 @@ suite.define(() => {
                 details.setAttribute("role", "complementary");
                 details.setAttribute("aria-label", "Details");
                 details.textContent = "Session details content";
-                document.body.append(details);
+                pane.append(details);
                 item.remove();
               });
-              document.body.append(item);
+              pane.append(item);
             });
             offline.replaceWith(menu);
           },
