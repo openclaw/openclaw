@@ -152,6 +152,8 @@ export function saveCronStoreChangesInDatabase(
   hooks?.hooks.beforeWrite?.(db, hooks.receiptSchema);
   assertCronStoreChangesCurrent(prepared, currentById, resolvedStorePath, opts);
   let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1;
+  // Each canonical job is upserted once. Repeated upserts would need the preceding
+  // write's generation copied back into rowsById before the next upsert.
   for (const jobId of changedIds) {
     const before = previousById.get(jobId);
     const after = nextById.get(jobId);
