@@ -122,7 +122,9 @@ it("keeps delayed work alive when a loaded plugin supplies oversized deadlines",
       activate: false,
     });
     expect(registry.diagnostics.filter((item) => item.level === "error")).toEqual([]);
-    await expect(trace.result).resolves.toEqual({
+    const result = await trace.result;
+    console.info(`[plugin-time-runtime] ${JSON.stringify(result)}`);
+    expect(result).toEqual({
       outcomes: ["done", "done"],
       overflowWarnings: 0,
     });
