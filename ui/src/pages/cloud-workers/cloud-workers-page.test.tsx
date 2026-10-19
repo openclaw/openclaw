@@ -25,6 +25,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { CloudWorkersPage } from "./cloud-workers-page.tsx";
+import { change, click, configSnapshot, field } from "./cloud-workers.test-support.ts";
 
 // mock-isolation: Replace the imperative dialog so confirmations remain deterministic.
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -48,12 +49,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function profileRow(page: Element, id: string) {
+  return expectDefined(
+    [...page.querySelectorAll(".settings-row")].find(
+      (row) => row.querySelector("code")?.textContent === id,
+    ),
+    id,
+  );
+}
+
 const operatingSystems = [
   { id: "linux", label: "Linux", default: true },
   { id: "macos", label: "macOS" },
   { id: "windows/wsl2", label: "Windows (WSL2)" },
   { id: "future-os", label: "Future OS", disabledReason: "Upgrade the worker provider." },
 ];
+
+function mutation(
+  initialTarget?: string,
+  target?: string,
+  systems = operatingSystems,
+  action = "setup-clear",
+) {
+  return { action, initialTarget, target, systems };
+}
+
+function osSelect(page: Element) {
+  return page.querySelector<HTMLSelectElement>('select[aria-label="Operating system"]');
+}
 
 it("retires a pending profile catalog when permissions change on the same connection", async () => {
   const pendingCatalog = createDeferred<EnvironmentsListResult>();
@@ -66,15 +89,7 @@ it("retires a pending profile catalog when permissions change on the same connec
   };
   const request = createGatewayRequestMock(async (method, params) => {
     if (method === "config.get") {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash: "initial",
-        appliedConfigHash: "initial",
-        valid: true,
-        issues: [],
-      };
+      return configSnapshot(config, "initial");
     }
     if (method === "environments.list") {
       return isRecord(params) && params.projection === "profiles"
@@ -123,17 +138,16 @@ it("retires a pending profile catalog when permissions change on the same connec
   ));
   try {
     await waitForSolid(() => expect(view.getByText("worker", { selector: "code" })).toBeTruthy());
-    const catalogIndex = () =>
-      transport.mock.calls.findLastIndex(
+    const index = await waitForSolid(() => {
+      const candidateIndex = transport.mock.calls.findLastIndex(
         ([method, params]) =>
           method === "environments.list" && isRecord(params) && params.projection === "profiles",
       );
-    await waitForSolid(() => {
-      expect(catalogIndex()).toBeGreaterThanOrEqual(0);
-      const call = expectDefined(transport.mock.calls[catalogIndex()], "Profile catalog request");
+      expect(candidateIndex).toBeGreaterThanOrEqual(0);
+      const call = expectDefined(transport.mock.calls[candidateIndex], "Profile catalog request");
       expect(call[2]?.signal?.aborted).toBe(false);
+      return candidateIndex;
     });
-    const index = catalogIndex();
     const call = expectDefined(transport.mock.calls[index], "Profile catalog request");
     const catalogSignal = expectDefined(call[2]?.signal, "Profile catalog cancellation signal");
     const catalogCompletion = expectDefined(
@@ -162,33 +176,13 @@ it("retires a pending profile catalog when permissions change on the same connec
 
 describe("Cloud Workers mutation requests", () => {
   it.each([
-    { action: "delete", initialTarget: undefined, target: undefined, systems: operatingSystems },
-    {
-      action: "setup-clear",
-      initialTarget: undefined,
-      target: undefined,
-      systems: operatingSystems.slice(0, 1),
-    },
-    {
-      action: "setup-clear",
-      initialTarget: "linux",
-      target: "linux",
-      systems: operatingSystems.slice(0, 1),
-    },
-    { action: "setup-clear", initialTarget: undefined, target: "macos", systems: operatingSystems },
-    {
-      action: "setup-clear",
-      initialTarget: "linux",
-      target: "windows/wsl2",
-      systems: operatingSystems,
-    },
-    {
-      action: "setup-clear",
-      initialTarget: "windows/wsl2",
-      target: "",
-      systems: operatingSystems.slice(0, 1),
-    },
-    { action: "setup-clear", initialTarget: "retired-os", target: "", systems: [] },
+    mutation(undefined, undefined, operatingSystems, "delete"),
+    mutation(undefined, undefined, operatingSystems.slice(0, 1)),
+    mutation("linux", "linux", operatingSystems.slice(0, 1)),
+    mutation(undefined, "macos"),
+    mutation("linux", "windows/wsl2"),
+    mutation("windows/wsl2", "", operatingSystems.slice(0, 1)),
+    mutation("retired-os", "", []),
   ])(
     "forwards exact array intent for $action and saves OS $initialTarget → $target without losing unrelated data",
     async ({ action, initialTarget, target, systems }) => {
@@ -216,15 +210,7 @@ describe("Cloud Workers mutation requests", () => {
       const patches: ConfigPatchParams[] = [];
       const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "config.get") {
-          return {
-            config,
-            sourceConfig: config,
-            raw: JSON.stringify(config),
-            hash,
-            appliedConfigHash: hash,
-            valid: true,
-            issues: [],
-          };
+          return configSnapshot(config, hash);
         }
         if (method === "environments.list") {
           if (!isRecord(params) || params.projection !== "profiles") {
@@ -268,18 +254,13 @@ describe("Cloud Workers mutation requests", () => {
         runtimeConfig,
         navigate: vi.fn(),
       } as unknown as ApplicationContext;
-      const container = document.createElement("div");
-      document.body.append(container);
-      const view = mountSolid(
-        () => (
-          <ApplicationProvider value={context}>
-            <CloudWorkersPage />
-          </ApplicationProvider>
-        ),
-        { container },
-      );
+      const view = mountSolid(() => (
+        <ApplicationProvider value={context}>
+          <CloudWorkersPage />
+        </ApplicationProvider>
+      ));
       const page = expectDefined(
-        container.querySelector("openclaw-cloud-workers-page"),
+        view.container.querySelector("openclaw-cloud-workers-page"),
         "Cloud workers page",
       );
       try {
@@ -289,23 +270,14 @@ describe("Cloud Workers mutation requests", () => {
           );
           expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
         });
-        const row = expectDefined(
-          [...page.querySelectorAll(".settings-row")].find(
-            (entry) => entry.querySelector("code")?.textContent === "pending",
-          ),
-          "pending profile row",
-        );
+        const row = profileRow(page, "pending");
         if (action === "delete") {
           await waitForSolid(() => expect(actionButton(row, "Delete").disabled).toBe(false));
-          actionButton(row, "Delete").click();
-          flush();
+          click(row, "Delete");
         } else {
-          actionButton(row, "Edit").click();
-          flush();
+          click(row, "Edit");
           await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
-          const operatingSystem = page.querySelector<HTMLSelectElement>(
-            'select[aria-label="Operating system"]',
-          );
+          const operatingSystem = osSelect(page);
           if (
             systems.length < 2 &&
             (!initialTarget || systems.some((system) => system.id === initialTarget))
@@ -331,42 +303,32 @@ describe("Cloud Workers mutation requests", () => {
                 expect(option.textContent).toContain(system.disabledReason);
               }
             }
-            select.value = expectDefined(target, "Selected OS");
-            select.dispatchEvent(new Event("change", { bubbles: true }));
-            flush();
+            change(select, expectDefined(target, "Selected OS"));
           }
-          const setup = expectDefined(page.querySelector("textarea"), "Setup editor");
-          setup.value = "";
-          setup.dispatchEvent(new Event("input", { bubbles: true }));
-          flush();
+          const setup = field<HTMLTextAreaElement>(page, "textarea");
+          change(setup, "");
           await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
-          actionButton(page, "Save").click();
-          flush();
+          click(page, "Save");
           await waitForSolid(() =>
             expect(page.textContent).toContain(
               "Enter a setup command or clear the setup environment names.",
             ),
           );
           expect(patches).toHaveLength(0);
-          const setupEnv = expectDefined(
-            page.querySelector<HTMLInputElement>('input[aria-label="Setup environment names"]'),
-            "Setup environment names editor",
+          const setupEnv = field<HTMLInputElement>(
+            page,
+            'input[aria-label="Setup environment names"]',
           );
           expect(setupEnv.value).toBe("QA_WORKER_FLAG");
-          setupEnv.value = "";
-          setupEnv.dispatchEvent(new Event("input", { bubbles: true }));
-          flush();
+          change(setupEnv, "");
           await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
-          actionButton(page, "Save").click();
-          flush();
+          click(page, "Save");
         }
         await waitForSolid(() => expect(patches).toHaveLength(1));
         await runtimeConfig.refresh();
         flush();
         await waitForSolid(() => {
-          const retainedRow = [...page.querySelectorAll(".settings-row")].find(
-            (entry) => entry.querySelector("code")?.textContent === "retained",
-          );
+          const retainedRow = profileRow(page, "retained");
           expect(retainedRow?.textContent).toContain("Advertised");
         });
         if (action !== "delete") {
@@ -403,12 +365,7 @@ describe("Cloud Workers mutation requests", () => {
         });
         if (action !== "delete") {
           await waitForSolid(() => expect(page.querySelector("textarea")).toBeNull());
-          const savedRow = expectDefined(
-            [...page.querySelectorAll(".settings-row")].find(
-              (entry) => entry.querySelector("code")?.textContent === "pending",
-            ),
-            "Saved profile row",
-          );
+          const savedRow = profileRow(page, "pending");
           if (target && target !== "linux") {
             expect(savedRow.textContent).toContain(
               `Operating system: ${systems.find((system) => system.id === target)?.label ?? target}`,
@@ -416,32 +373,25 @@ describe("Cloud Workers mutation requests", () => {
           } else {
             expect(savedRow.textContent).not.toContain("Operating system:");
           }
-          actionButton(savedRow, "Edit").click();
-          flush();
+          click(savedRow, "Edit");
           await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
-          const savedSelect = page.querySelector<HTMLSelectElement>(
-            'select[aria-label="Operating system"]',
-          );
+          const savedSelect = osSelect(page);
           if (systems.length >= 2) {
             expect(savedSelect?.value).toBe(target || "");
           } else {
             expect(savedSelect).toBeNull();
           }
-          actionButton(page, "Cancel").click();
-          flush();
-          actionButton(page, "Add profile").click();
-          flush();
+          click(page, "Cancel");
+          click(page, "Add profile");
           await waitForSolid(() =>
             expect(page.querySelector('input[aria-label="Profile ID"]')).not.toBeNull(),
           );
-          expect(page.querySelector('select[aria-label="Operating system"]')).toBeNull();
+          expect(osSelect(page)).toBeNull();
         } else {
           gatewayHarness.publish(false);
           flush();
           const deleteButton = await waitForSolid(() => {
-            const retainedRow = [...page.querySelectorAll(".settings-row")].find(
-              (entry) => entry.querySelector("code")?.textContent === "retained",
-            );
+            const retainedRow = profileRow(page, "retained");
             expect(retainedRow?.textContent).toContain("Advertised");
             expect(retainedRow?.textContent).not.toContain("Unavailable");
             const button = actionButton(expectDefined(retainedRow, "Retained profile"), "Delete");
@@ -453,7 +403,6 @@ describe("Cloud Workers mutation requests", () => {
         }
       } finally {
         view.unmount();
-        container.remove();
         runtimeConfig.dispose();
       }
       expect(renderingErrors).not.toHaveBeenCalled();

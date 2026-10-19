@@ -7,18 +7,23 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  button,
-  mountPage,
-  setupSnapshotsDomSuite,
-} from "./cloud-worker-snapshots-dom.test-support.ts";
+import { button, mountPage } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
 } from "./cloud-worker-snapshots.test-support.ts";
+import {
+  setupSnapshotTests,
+  sheet,
+  click,
+  waitText,
+  waitRequest,
+  configSnapshot,
+} from "./cloud-workers.test-support.ts";
+
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-setupSnapshotsDomSuite();
+const mountTestPage = setupSnapshotTests();
 const methods = [
   "environments.list",
   "environments.prepare",
@@ -38,13 +43,10 @@ function localSnapshot() {
   ];
   return result;
 }
-function sheet(page: Element) {
-  return expectDefined(page.querySelector(".cloud-environments__sheet"), "Environment sheet");
-}
 
 describe("Cloud environment builds", () => {
   it("rebuilds the selected local repository and shows capacity failures", async () => {
-    const fixture = mountPage(methods, {
+    const { page, request } = mountTestPage(methods, {
       result: localSnapshot(),
       response: (method) => {
         if (method === "environments.prepare") {
@@ -56,20 +58,13 @@ describe("Cloud environment builds", () => {
         }
       },
     });
-    try {
-      await waitForSolid(() => expect(button(sheet(fixture.page), "Rebuild").disabled).toBe(false));
-      button(sheet(fixture.page), "Rebuild").click();
-      flush();
-      await waitForSolid(() =>
-        expect(fixture.page.textContent).toContain("The prepared worker pool is full"),
-      );
-      expect(fixture.request).toHaveBeenCalledWith("environments.prepare", {
-        profileId: "linux-build",
-        projectPath: "/projects/app",
-      });
-    } finally {
-      fixture.dispose();
-    }
+    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+    click(sheet(page), "Rebuild");
+    await waitText(() => page, "The prepared worker pool is full");
+    expect(request).toHaveBeenCalledWith("environments.prepare", {
+      profileId: "linux-build",
+      projectPath: "/projects/app",
+    });
   });
   it("refreshes rebuild eligibility after a machine configuration save", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -89,20 +84,12 @@ describe("Cloud environment builds", () => {
         },
       },
     });
-    const fixture = mountPage([...methods, "config.patch"], {
+    const { page, request } = mountTestPage([...methods, "config.patch"], {
       response: (method, params) => {
         if (method === "config.get") {
           const config = configuration();
           const hash = enabled ? "enabled" : "disabled";
-          return {
-            config,
-            sourceConfig: config,
-            raw: JSON.stringify(config),
-            hash,
-            appliedConfigHash: hash,
-            valid: true,
-            issues: [],
-          };
+          return configSnapshot(config, hash);
         }
         if (method === "config.patch") {
           expect(
@@ -119,35 +106,28 @@ describe("Cloud environment builds", () => {
         return undefined;
       },
     });
-    try {
-      await waitForSolid(() => expect(sheet(fixture.page).textContent).toContain("01234567"));
-      expect(button(sheet(fixture.page), "Rebuild").disabled).toBe(true);
-      button(fixture.page, "Edit").click();
-      flush();
-      const warmImages = expectDefined(
-        fixture.page.querySelector<HTMLSelectElement>('select[aria-label="Warm images"]'),
-        "Warm image selector",
-      );
-      warmImages.value = "on";
-      warmImages.dispatchEvent(new Event("change", { bubbles: true }));
-      flush();
-      button(fixture.page, "Save").click();
-      await waitForSolid(() =>
-        expect(fixture.page.querySelector('select[aria-label="Warm images"]')).toBeNull(),
-      );
-      await vi.advanceTimersByTimeAsync(250);
-      flush();
-      await waitForSolid(() => expect(button(sheet(fixture.page), "Rebuild").disabled).toBe(false));
-      button(sheet(fixture.page), "Rebuild").click();
-      await waitForSolid(() =>
-        expect(fixture.request).toHaveBeenCalledWith("environments.prepare", {
-          profileId: "linux-build",
-          projectPath: "/projects/app",
-        }),
-      );
-    } finally {
-      fixture.dispose();
-    }
+    await waitText(() => sheet(page), "01234567");
+    expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+    click(page, "Edit");
+    const warmImages = expectDefined(
+      page.querySelector<HTMLSelectElement>('select[aria-label="Warm images"]'),
+      "Warm image selector",
+    );
+    warmImages.value = "on";
+    warmImages.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    button(page, "Save").click();
+    await waitForSolid(() =>
+      expect(page.querySelector('select[aria-label="Warm images"]')).toBeNull(),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    flush();
+    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+    button(sheet(page), "Rebuild").click();
+    await waitRequest(request, "environments.prepare", {
+      profileId: "linux-build",
+      projectPath: "/projects/app",
+    });
   });
 
   it("keeps unlabeled builds inspectable and actionable in Advanced", async () => {
@@ -168,7 +148,7 @@ describe("Cloud environment builds", () => {
         },
       },
     ];
-    const fixture = mountPage(methods, {
+    const { page, request } = mountTestPage(methods, {
       result: { ...localSnapshot(), images: [], legacyLeases: [] },
       response: (method, params) => {
         if (method === "environments.list" && params?.includePreparedDetails) {
@@ -181,32 +161,19 @@ describe("Cloud environment builds", () => {
         return undefined;
       },
     });
-    try {
-      const advanced = expectDefined(
-        fixture.page.querySelector(".cloud-environments__advanced"),
-        "Advanced",
-      );
-      await waitForSolid(() => expect(advanced.textContent).toContain("Unlabeled setup failed"));
-      expect(fixture.page.querySelectorAll(".cloud-environments__row")).toHaveLength(0);
-      button(advanced, "Cancel").click();
-      await waitForSolid(() =>
-        expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-          environmentId: "unlabeled-pending",
-        }),
-      );
-      await waitForSolid(() => expect(button(advanced, "Dismiss").disabled).toBe(false));
-      button(advanced, "Dismiss").click();
-      await waitForSolid(() =>
-        expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-          environmentId: "unlabeled-failed",
-        }),
-      );
-      await waitForSolid(() =>
-        expect(advanced.textContent).not.toContain("Unlabeled setup failed"),
-      );
-    } finally {
-      fixture.dispose();
-    }
+    const advanced = expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+    await waitText(() => advanced, "Unlabeled setup failed");
+    expect(page.querySelectorAll(".cloud-environments__row")).toHaveLength(0);
+    button(advanced, "Cancel").click();
+    await waitRequest(request, "environments.destroy", {
+      environmentId: "unlabeled-pending",
+    });
+    await waitForSolid(() => expect(button(advanced, "Dismiss").disabled).toBe(false));
+    button(advanced, "Dismiss").click();
+    await waitRequest(request, "environments.destroy", {
+      environmentId: "unlabeled-failed",
+    });
+    await waitForSolid(() => expect(advanced.textContent).not.toContain("Unlabeled setup failed"));
   });
 
   it.each([true, false])(
@@ -225,30 +192,22 @@ describe("Cloud environment builds", () => {
           },
         },
       };
-      const fixture = mountPage(methods, {
+      const { page, request } = mountTestPage(methods, {
         result: { ...localSnapshot(), images: [], legacyLeases: [] },
         response: (method, params) =>
           method === "environments.list" && params?.includePreparedDetails
             ? { environments: [worker], profiles: [] }
             : undefined,
       });
-      try {
-        await waitForSolid(() =>
-          expect(fixture.page.textContent).toContain("Provider cleanup failed"),
-        );
-        const surface = labeled
-          ? sheet(fixture.page)
-          : expectDefined(fixture.page.querySelector(".cloud-environments__advanced"), "Advanced");
-        expect(surface.textContent).toContain("Needs attention");
-        button(surface, "Cancel").click();
-        await waitForSolid(() =>
-          expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-            environmentId: "build-app",
-          }),
-        );
-      } finally {
-        fixture.dispose();
-      }
+      await waitText(() => page, "Provider cleanup failed");
+      const surface = labeled
+        ? sheet(page)
+        : expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+      expect(surface.textContent).toContain("Needs attention");
+      button(surface, "Cancel").click();
+      await waitRequest(request, "environments.destroy", {
+        environmentId: "build-app",
+      });
     },
   );
 
@@ -265,11 +224,8 @@ describe("Cloud environment builds", () => {
     const confirmation = createDeferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValue(confirmation.promise);
     try {
-      await waitForSolid(() =>
-        expect(sheet(fixture.page).textContent).toContain("Paused: uncertain"),
-      );
-      button(sheet(fixture.page), "Recover").click();
-      flush();
+      await waitText(() => sheet(fixture.page), "Paused: uncertain");
+      click(sheet(fixture.page), "Recover");
       await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalled());
       expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0].requiredAcknowledgement).toBe(
         "I stopped the owning capture and worker and reconciled provider artifacts",
@@ -288,7 +244,7 @@ describe("Cloud environment builds", () => {
   });
   it("dismisses a failed build immediately even when its inventory refresh fails", async () => {
     let dismissed = false;
-    const fixture = mountPage(methods, {
+    const { page, request } = mountTestPage(methods, {
       result: localSnapshot(),
       response: (method, params) => {
         if (method === "environments.destroy") {
@@ -307,21 +263,16 @@ describe("Cloud environment builds", () => {
         return undefined;
       },
     });
-    try {
-      await waitForSolid(() => expect(sheet(fixture.page).textContent).toContain("Setup failed"));
-      expect(fixture.page.querySelector(".cloud-environments__row")?.textContent).toBe(
-        "github.com/acme/appNeeds attention",
-      );
-      button(sheet(fixture.page), "Dismiss").click();
-      flush();
-      await waitForSolid(() => expect(fixture.page.textContent).toContain("Inventory unavailable"));
-      expect(sheet(fixture.page).textContent).not.toContain("Setup failed");
-      expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-        environmentId: "build-app",
-      });
-    } finally {
-      fixture.dispose();
-    }
+    await waitText(() => sheet(page), "Setup failed");
+    expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
+      "github.com/acme/appNeeds attention",
+    );
+    click(sheet(page), "Dismiss");
+    await waitText(() => page, "Inventory unavailable");
+    expect(sheet(page).textContent).not.toContain("Setup failed");
+    expect(request).toHaveBeenCalledWith("environments.destroy", {
+      environmentId: "build-app",
+    });
   });
   it("polls automatic preparation through worker readiness before reading the published snapshot", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -331,7 +282,7 @@ describe("Cloud environment builds", () => {
     build.preparation.purpose = "reserve";
     const result = localSnapshot();
     result.images = [];
-    const fixture = mountPage(methods, {
+    const { page, request } = mountTestPage(methods, {
       result,
       response: (method, params) => {
         if (method === "environments.list" && params?.includePreparedDetails) {
@@ -348,33 +299,27 @@ describe("Cloud environment builds", () => {
         return undefined;
       },
     });
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      expect(fixture.page.querySelector(".cloud-environments__row")?.textContent).toBe(
-        "github.com/acme/appBuilding",
-      );
-      ready = true;
-      await vi.advanceTimersByTimeAsync(10_000);
-      flush();
-      expect(fixture.page.querySelector(".cloud-environments__row")?.textContent).toContain(
-        "Ready ·",
-      );
-      consumed = true;
-      await vi.advanceTimersByTimeAsync(10_000);
-      flush();
-      const count = fixture.request.mock.calls.filter(
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
+      "github.com/acme/appBuilding",
+    );
+    ready = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    flush();
+    expect(page.querySelector(".cloud-environments__row")?.textContent).toContain("Ready ·");
+    consumed = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    flush();
+    const count = request.mock.calls.filter(
+      ([method, params]) => method === "environments.list" && params?.includePreparedDetails,
+    ).length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    flush();
+    expect(
+      request.mock.calls.filter(
         ([method, params]) => method === "environments.list" && params?.includePreparedDetails,
-      ).length;
-      await vi.advanceTimersByTimeAsync(30_000);
-      flush();
-      expect(
-        fixture.request.mock.calls.filter(
-          ([method, params]) => method === "environments.list" && params?.includePreparedDetails,
-        ),
-      ).toHaveLength(count);
-    } finally {
-      fixture.dispose();
-    }
+      ),
+    ).toHaveLength(count);
   });
 });
