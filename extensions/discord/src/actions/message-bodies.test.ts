@@ -1,33 +1,21 @@
 import { createServer, type Server } from "node:http";
-import type { ChannelProgressDraftCompositorSnapshot } from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordMessageActions } from "../channel-actions.js";
 import { RequestClient } from "../internal/rest.js";
-import { sendDiscordComponentMessage } from "../send.components.js";
+import * as components from "../send.components.js";
 import * as runtime from "../send.js";
 import { sendPollDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
-  return {
-    ...actual,
-    editMessageDiscord: vi.fn(actual.editMessageDiscord),
-    deleteMessageDiscord: vi.fn(actual.deleteMessageDiscord),
-    fetchChannelInfoDiscord: vi.fn(actual.fetchChannelInfoDiscord),
-    fetchGuildInfoDiscord: vi.fn(actual.fetchGuildInfoDiscord),
-    sendMessageDiscord: vi.fn(actual.sendMessageDiscord),
-    sendStickerDiscord: vi.fn(actual.sendStickerDiscord),
-    createThreadDiscord: vi.fn(actual.createThreadDiscord),
-  };
-});
-
-vi.mock("../send.components.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.components.js")>();
-  return { ...actual, sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage) };
-});
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
+}));
+vi.mock("../send.components.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.components.js")>()),
+}));
 
 const originalComponents =
   await vi.importActual<typeof import("../send.components.js")>("../send.components.js");
@@ -38,9 +26,12 @@ const guildId = "323456789012345678";
 const threadId = "623456789012345678";
 const token = "synthetic-message-body-token";
 const attachment = { id: "423456789012345678", filename: "example.txt", size: 4 };
-const cfg: OpenClawConfig = {
-  channels: { discord: { token, groupPolicy: "open" } },
-};
+const config = (
+  overrides: NonNullable<OpenClawConfig["channels"]>["discord"] = {},
+): OpenClawConfig => ({
+  channels: { discord: { token, groupPolicy: "open", ...overrides } },
+});
+const cfg = config();
 const original = await vi.importActual<typeof import("../send.js")>("../send.js");
 const originalFetch = globalThis.fetch;
 let server: Server;
@@ -123,28 +114,28 @@ beforeAll(async () => {
     return originalFetch(input, init);
   });
   rest = new RequestClient(token, { baseUrl, timeout: 5000 });
-  vi.mocked(runtime.editMessageDiscord).mockImplementation((channel, id, payload, opts) =>
+  vi.spyOn(runtime, "editMessageDiscord").mockImplementation((channel, id, payload, opts) =>
     original.editMessageDiscord(channel, id, payload, { ...opts, rest }),
   );
-  vi.mocked(runtime.deleteMessageDiscord).mockImplementation((channel, id, opts) =>
+  vi.spyOn(runtime, "deleteMessageDiscord").mockImplementation((channel, id, opts) =>
     original.deleteMessageDiscord(channel, id, { ...opts, rest }),
   );
-  vi.mocked(runtime.fetchChannelInfoDiscord).mockImplementation((channel, opts) =>
+  vi.spyOn(runtime, "fetchChannelInfoDiscord").mockImplementation((channel, opts) =>
     original.fetchChannelInfoDiscord(channel, { ...opts, rest }),
   );
-  vi.mocked(runtime.fetchGuildInfoDiscord).mockImplementation((guild, opts) =>
+  vi.spyOn(runtime, "fetchGuildInfoDiscord").mockImplementation((guild, opts) =>
     original.fetchGuildInfoDiscord(guild, { ...opts, rest }),
   );
-  vi.mocked(runtime.sendMessageDiscord).mockImplementation((to, content, opts) =>
+  vi.spyOn(runtime, "sendMessageDiscord").mockImplementation((to, content, opts) =>
     original.sendMessageDiscord(to, content, { ...opts, rest }),
   );
-  vi.mocked(sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
+  vi.spyOn(components, "sendDiscordComponentMessage").mockImplementation((to, spec, opts) =>
     originalComponents.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
   );
-  vi.mocked(runtime.sendStickerDiscord).mockImplementation((to, ids, opts) =>
+  vi.spyOn(runtime, "sendStickerDiscord").mockImplementation((to, ids, opts) =>
     original.sendStickerDiscord(to, ids, { ...opts, rest }),
   );
-  vi.mocked(runtime.createThreadDiscord).mockImplementation((channel, payload, opts) =>
+  vi.spyOn(runtime, "createThreadDiscord").mockImplementation((channel, payload, opts) =>
     original.createThreadDiscord(channel, payload, { ...opts, rest }),
   );
 });
@@ -162,18 +153,6 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  for (const mock of [
-    runtime.editMessageDiscord,
-    runtime.deleteMessageDiscord,
-    runtime.fetchChannelInfoDiscord,
-    runtime.fetchGuildInfoDiscord,
-    runtime.sendMessageDiscord,
-    sendDiscordComponentMessage,
-    runtime.sendStickerDiscord,
-    runtime.createThreadDiscord,
-  ]) {
-    vi.mocked(mock).mockReset();
-  }
   vi.restoreAllMocks();
   rest?.abortAllRequests();
   server?.closeAllConnections();
@@ -185,6 +164,29 @@ afterAll(async () => {
 });
 
 const writes = () => requests.filter((request) => request.method !== "GET");
+const verifySnapshot = { lines: [], plan: [{ step: "Verify", status: "in_progress" }] } as const;
+
+function progressEdit(overrides: Partial<ChannelMessageActionContext> = {}) {
+  return discordMessageActions.handleAction?.({
+    channel: "discord",
+    action: "edit",
+    cfg,
+    params: { to: `channel:${channelId}`, messageId, message: "Generic fallback" },
+    progressSnapshot: verifySnapshot,
+    conversationReadOrigin: "direct-operator",
+    ...overrides,
+  });
+}
+
+function expectPost(body: Record<string, unknown>) {
+  expect(writes()).toHaveLength(1);
+  expect(writes()[0]).toMatchObject({
+    method: "POST",
+    path: `/v10/channels/${channelId}/messages`,
+    body,
+  });
+  expect(writes()[0]?.body).not.toHaveProperty("content");
+}
 
 function expectEdit(target: string, content: unknown, fields: Record<string, unknown> = {}) {
   expect(writes()).toEqual([
@@ -198,46 +200,36 @@ function expectEdit(target: string, content: unknown, fields: Record<string, unk
 
 describe("Discord retained progress edits", () => {
   it("edits the same checklist with account-scoped rendering and inert mentions", async () => {
-    const snapshot: ChannelProgressDraftCompositorSnapshot = {
-      label: "Working",
-      statusHeadline: "Waiting @everyone for child verification",
-      statusHeadlineFormat: "plain",
-      lines: ["Child verifier: checks passed"],
-      plan: [
-        { step: "Inspect source and configuration", status: "completed" },
-        { step: "Verify the child result", status: "in_progress" },
-      ],
-    };
-    const accountCfg: OpenClawConfig = {
-      channels: {
-        discord: {
-          token,
-          groupPolicy: "disabled",
-          streaming: { progress: { maxLines: 1, maxLineChars: 8 } },
-          accounts: {
-            worker: {
-              groupPolicy: "open",
-              streaming: {
-                mode: "progress",
-                progress: { toolProgress: true, maxLines: 3, maxLineChars: 120 },
-              },
+    await progressEdit({
+      progressSnapshot: {
+        label: "Working",
+        statusHeadline: "Waiting @everyone for child verification",
+        statusHeadlineFormat: "plain",
+        lines: ["Child verifier: checks passed"],
+        plan: [
+          { step: "Inspect source and configuration", status: "completed" },
+          { step: "Verify the child result", status: "in_progress" },
+        ],
+      },
+      cfg: config({
+        groupPolicy: "disabled",
+        streaming: { progress: { maxLines: 1, maxLineChars: 8 } },
+        accounts: {
+          worker: {
+            groupPolicy: "open",
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: true, maxLines: 3, maxLineChars: 120 },
             },
           },
         },
-      },
-    };
-    await discordMessageActions.handleAction?.({
-      channel: "discord",
-      action: "edit",
-      cfg: accountCfg,
+      }),
       accountId: "worker",
       params: {
         to: `channel:${threadId}`,
         messageId,
         message: "Generic fallback must not replace the retained card.",
       },
-      progressSnapshot: snapshot,
-      conversationReadOrigin: "direct-operator",
     });
 
     expectEdit(threadId, expect.stringContaining("Inspect source and configuration"), {
@@ -250,22 +242,9 @@ describe("Discord retained progress edits", () => {
   });
 
   it("bounds a retained edit to one configured Discord message", async () => {
-    await discordMessageActions.handleAction?.({
-      channel: "discord",
-      action: "edit",
-      cfg: {
-        channels: {
-          discord: {
-            token,
-            groupPolicy: "open",
-            textChunkLimit: 100,
-            streaming: { progress: { maxLineChars: 1000 } },
-          },
-        },
-      },
-      params: { to: `channel:${channelId}`, messageId, message: "Generic fallback" },
+    await progressEdit({
+      cfg: config({ textChunkLimit: 100, streaming: { progress: { maxLineChars: 1000 } } }),
       progressSnapshot: { lines: ["Child verifier: " + "result ".repeat(500)] },
-      conversationReadOrigin: "direct-operator",
     });
 
     expect(writes()).toHaveLength(1);
@@ -282,14 +261,11 @@ describe("Discord retained progress edits", () => {
     "uses the current DM channel only for its captured user target (matching: %s)",
     async (matching) => {
       parentChannelType = 1;
-      const editing = discordMessageActions.handleAction?.({
-        channel: "discord",
-        action: "edit",
-        cfg,
+      const editing = progressEdit({
+        conversationReadOrigin: undefined,
         accountId: "default",
         requesterAccountId: "default",
         params: { to: "user:523456789012345678", messageId, message: "Generic fallback" },
-        progressSnapshot: { lines: [], plan: [{ step: "Verify", status: "in_progress" }] },
         toolContext: {
           currentChannelProvider: "discord",
           currentChannelId: channelId,
@@ -318,13 +294,7 @@ describe("Discord retained progress edits", () => {
       return channel;
     });
     let authorized = true;
-    const editing = discordMessageActions.handleAction?.({
-      channel: "discord",
-      action: "edit",
-      cfg,
-      params: { to: `channel:${channelId}`, messageId, message: "Generic fallback" },
-      progressSnapshot: { lines: [], plan: [{ step: "Verify", status: "in_progress" }] },
-      conversationReadOrigin: "direct-operator",
+    const editing = progressEdit({
       assertDirectAdapterHandoff: () => {
         if (!authorized) {
           throw new Error("Progress owner retired");
@@ -342,26 +312,24 @@ describe("Discord retained progress edits", () => {
 });
 
 describe("Discord action message bodies", () => {
+  const invoke = (
+    action: Parameters<typeof handleDiscordMessageAction>[0]["action"],
+    params: Record<string, unknown>,
+    overrides: Partial<Parameters<typeof handleDiscordMessageAction>[0]> = {},
+  ) => handleDiscordMessageAction({ cfg, action, params, ...overrides });
   const send = (content: unknown, extra: Record<string, unknown> = {}) =>
-    handleDiscordMessageAction({
-      action: "send",
-      params: { to: ` channel:${channelId} `, message: content, ...extra },
-      cfg,
-    });
-  const edit = (content: unknown, config = cfg, id: unknown = messageId) =>
-    handleDiscordMessageAction({
-      action: "edit",
-      params: { to: `channel:${channelId}`, messageId: id, message: content },
-      cfg: config,
-      conversationReadOrigin: "direct-operator",
-    });
-
+    invoke("send", { to: ` channel:${channelId} `, message: content, ...extra });
+  const edit = (content: unknown, cfgOverride = cfg, id: unknown = messageId) =>
+    invoke(
+      "edit",
+      { to: `channel:${channelId}`, messageId: id, message: content },
+      {
+        cfg: cfgOverride,
+        conversationReadOrigin: "direct-operator",
+      },
+    );
   const createThread = (content?: string) =>
-    handleDiscordMessageAction({
-      action: "thread-create",
-      params: { channelId, threadName: "example", message: content },
-      cfg,
-    });
+    invoke("thread-create", { channelId, threadName: "example", message: content });
 
   it.each([
     [0, "a".repeat(2001), 2],
@@ -434,13 +402,7 @@ describe("Discord action message bodies", () => {
   it("delivers embeds without a text body", async () => {
     const embeds = [{ title: "Release notes", description: "Version available" }];
     await send(undefined, { embeds });
-    expect(writes()).toHaveLength(1);
-    expect(writes()[0]).toMatchObject({
-      method: "POST",
-      path: `/v10/channels/${channelId}/messages`,
-      body: { embeds },
-    });
-    expect(writes()[0]?.body).not.toHaveProperty("content");
+    expectPost({ embeds });
   });
 
   it("delivers presentation text without a separate message body", async () => {
@@ -458,32 +420,27 @@ describe("Discord action message bodies", () => {
         ],
       },
     });
-    expect(writes()).toHaveLength(1);
-    expect(writes()[0]).toMatchObject({
-      method: "POST",
-      path: `/v10/channels/${channelId}/messages`,
-      body: { components: [{ type: 17, components: [{ type: 10, content: text }] }] },
-    });
-    expect(writes()[0]?.body).not.toHaveProperty("content");
+    expectPost({ components: [{ type: 17, components: [{ type: 10, content: text }] }] });
   });
 
   it("keeps disabled and blocked edit targets from mutating", async () => {
     await expect(
-      edit("caption", { channels: { discord: { token, actions: { messages: false } } } }),
+      edit("caption", config({ groupPolicy: undefined, actions: { messages: false } })),
     ).rejects.toThrow(/disabled/);
-    await expect(
-      edit("caption", { channels: { discord: { token, groupPolicy: "disabled" } } }),
-    ).rejects.toThrow(/not allowed/);
+    await expect(edit("caption", config({ groupPolicy: "disabled" }))).rejects.toThrow(
+      /not allowed/,
+    );
     expect(writes()).toEqual([]);
   });
 
   it("deletes the exact message through the same target projection", async () => {
-    await handleDiscordMessageAction({
-      action: "delete",
-      params: { to: `channel:${channelId}`, messageId },
-      cfg,
-      conversationReadOrigin: "direct-operator",
-    });
+    await invoke(
+      "delete",
+      { to: `channel:${channelId}`, messageId },
+      {
+        conversationReadOrigin: "direct-operator",
+      },
+    );
     expect(writes()).toEqual([
       { method: "DELETE", path: `/v10/channels/${channelId}/messages/${messageId}`, body: {} },
     ]);
@@ -493,17 +450,13 @@ describe("Discord action message bodies", () => {
     "preserves indentation and trailing newline for %s",
     async (action) => {
       const content = "    console.log(1);\n";
-      await handleDiscordMessageAction({
-        action,
-        params: {
-          to: `channel:${channelId}`,
-          channelId,
-          threadId: channelId,
-          threadName: "example",
-          message: content,
-          stickerId: ["523456789012345678"],
-        },
-        cfg,
+      await invoke(action, {
+        to: `channel:${channelId}`,
+        channelId,
+        threadId: channelId,
+        threadName: "example",
+        message: content,
+        stickerId: ["523456789012345678"],
       });
       const messages = writes().filter((request) => request.path.endsWith("/messages"));
       expect(messages).toHaveLength(1);
