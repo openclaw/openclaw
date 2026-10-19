@@ -11,6 +11,7 @@ import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "../../agents/worktrees/capacity-contract.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -20,6 +21,7 @@ import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   mutateLocalWorkspaceProjection as mutateProjection,
@@ -43,6 +45,18 @@ beforeAll(() => {
   env = { ...process.env, OPENCLAW_STATE_DIR: root };
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("distinguishes committed deletion from unknown or mismatched row coverage", () => {
+  const worktreeId = randomUUID();
+  expect(readLocalWorkspaceCommit(null, worktreeId)).toBeUndefined();
+  expect(() => readLocalWorkspaceCommit(undefined, worktreeId)).toThrow("coverage is incomplete");
+  expect(() =>
+    readLocalWorkspaceCommit(
+      { ...localWorkspaceProjectionFixture(randomUUID(), root), revision: 0 },
+      worktreeId,
+    ),
+  ).toThrow("committed row is invalid");
+});
 
 it("keeps mutation preconditions small without trimming committed payloads", () => {
   using cleanup = new DisposableStack();
@@ -198,7 +212,6 @@ it("adopts native committed facts after reply loss without replaying the mutatio
     expect(store.get()).toEqual(row);
     return row;
   });
-  lostReply.mockRestore();
   expect(writes).toBe(1);
   expect(acknowledged).toMatchObject({
     revision: 1,
@@ -210,4 +223,46 @@ it("adopts native committed facts after reply loss without replaying the mutatio
     await expect(store.delete(store.get()!)).rejects.toThrow("unsettled edits");
   });
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const cleared = await store.update(store.get()!, { pending_ref: null });
+    await store.delete(cleared);
+    expect(store.get()).toBeUndefined();
+  });
+  lostReply.mockRestore();
+  expect(writes).toBe(3);
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toBeUndefined();
+});
+
+it("refuses unknown recovery after an oversized committed row loses its reply", async () => {
+  const worktreeId = randomUUID();
+  await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+    store.create(localWorkspaceProjectionFixture(worktreeId, root)),
+  );
+  const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
+  let writes = 0;
+  let retainedGuard: (() => void) | undefined;
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "localWorkspace.mutate") {
+      writes += 1;
+      throw new Error("Synthetic local workspace reply lost after native commit");
+    }
+    return result;
+  });
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+      retainedGuard = store.assertCurrent;
+      await store.update(store.get()!, {
+        baseline_ref: "sha256:oversized",
+        baseline_json: baseline,
+      });
+    }),
+  ).rejects.toThrow("Local workspace commit coverage is incomplete");
+  lostReply.mockRestore();
+  expect(writes).toBe(1);
+  assert(retainedGuard);
+  expect(retainedGuard).toThrow();
+  const committed = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(committed).toMatchObject({ revision: 1, baseline_ref: "sha256:oversized" });
+  expect(committed?.baseline_json).toBe(baseline);
 });

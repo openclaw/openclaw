@@ -70,7 +70,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 import {
-  findMissingRequiredPluginDependencies,
+  buildManagedPluginDependencyStatus,
   normalizePluginDependencySpecs,
 } from "./status-dependencies-core.js";
 
@@ -504,7 +504,7 @@ export async function installPluginFromManagedNpmRoot(
       };
     }
 
-    const missingRequired = await findMissingRequiredPluginDependencies({
+    const { missing: missingRequired } = buildManagedPluginDependencyStatus({
       rootDir: installRoot,
       dependencyRootDir: npmRoot,
       ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),

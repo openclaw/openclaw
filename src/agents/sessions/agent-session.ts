@@ -1,5 +1,6 @@
-import { AgentSessionTree } from "./agent-session-tree.js";
+import { AgentSessionExecution } from "./agent-session-execution.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
+import type { ExtensionRunner } from "./extensions/index.js";
 
 export * from "./agent-session-types.js";
 
@@ -9,7 +10,7 @@ export * from "./agent-session-types.js";
  * Shared by interactive, print, and RPC modes. Mode-specific I/O stays above
  * this class while the feature layers below own session behavior.
  */
-export class AgentSession extends AgentSessionTree {
+export class AgentSession extends AgentSessionExecution {
   constructor(config: AgentSessionConfig) {
     super(config);
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
@@ -17,5 +18,9 @@ export class AgentSession extends AgentSessionTree {
     this.buildRuntime({
       activeToolNames: [...this.allowedToolNames],
     });
+  }
+
+  get extensionRunner(): ExtensionRunner {
+    return this.currentExtensionRunner;
   }
 }

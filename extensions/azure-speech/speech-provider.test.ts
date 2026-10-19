@@ -1,34 +1,26 @@
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { azureSpeechTTSMock, listAzureSpeechVoicesMock, resolveGeneratedMediaMaxBytesMock } =
-  vi.hoisted(() => ({
-    azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
-    listAzureSpeechVoicesMock: vi.fn(async () => [{ id: "en-US-JennyNeural", name: "Jenny" }]),
-    resolveGeneratedMediaMaxBytesMock:
-      vi.fn<
-        typeof import("openclaw/plugin-sdk/media-generation-runtime").resolveGeneratedMediaMaxBytes
-      >(),
-  }));
+const { resolveGeneratedMediaMaxBytesMock } = vi.hoisted(() => ({
+  resolveGeneratedMediaMaxBytesMock:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/media-generation-runtime").resolveGeneratedMediaMaxBytes
+    >(),
+}));
 
 // The SDK facade imports host worker declarations that trigger unrelated test-worker compilation.
 vi.mock("openclaw/plugin-sdk/media-generation-runtime", () => ({
   resolveGeneratedMediaMaxBytes: resolveGeneratedMediaMaxBytesMock,
 }));
 
-vi.mock("./tts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./tts.js")>();
-  return {
-    ...actual,
-    azureSpeechTTS: azureSpeechTTSMock,
-    listAzureSpeechVoices: listAzureSpeechVoicesMock,
-  };
-});
-
 import { buildAzureSpeechProvider } from "./speech-provider.js";
 
 type Config = Record<string, unknown>;
 
 describe("buildAzureSpeechProvider", () => {
+  installPinnedHostnameTestHooks();
+  const fetchMock = vi.fn<typeof fetch>();
   const provider = buildAzureSpeechProvider();
   const synthesisRequest = {
     text: "hello",
@@ -53,18 +45,18 @@ describe("buildAzureSpeechProvider", () => {
   const talkEndpoint = { endpoint: `${talkUrl}/cognitiveservices/v1/` };
   const westusUrl = "https://westus.tts.speech.microsoft.com";
   const voiceOverrides = { voice: "en-US-AriaNeural", lang: "en-US" };
-  const expectedTtsRequest = {
-    text: "hello",
-    apiKey: "key",
-    baseUrl: "https://eastus.tts.speech.microsoft.com",
-    endpoint: undefined,
-    region: "eastus",
-    voice: "en-US-AriaNeural",
-    timeoutMs: 30_000,
-    maxBytes: 16 * 1024 * 1024,
-  };
   function expectAudio(result: unknown, lang: string, outputFormat: string, metadata: Config) {
-    expect(azureSpeechTTSMock).toHaveBeenCalledWith({ ...expectedTtsRequest, lang, outputFormat });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Ocp-Apim-Subscription-Key": "key",
+          "X-Microsoft-OutputFormat": outputFormat,
+        }),
+        body: `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${lang}"><voice name="en-US-AriaNeural">hello</voice></speak>`,
+      }),
+    );
     expect(result).toEqual({ audioBuffer: Buffer.from("audio-bytes"), outputFormat, ...metadata });
   }
   const envKeys = [
@@ -77,6 +69,13 @@ describe("buildAzureSpeechProvider", () => {
   ] as const;
 
   beforeEach(() => {
+    fetchMock
+      .mockReset()
+      .mockImplementation(
+        async () =>
+          new Response(Buffer.from("audio-bytes"), { headers: { "Content-Type": "audio/mpeg" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
     resolveGeneratedMediaMaxBytesMock.mockReset().mockReturnValue(16 * 1024 * 1024);
     for (const key of envKeys) {
       vi.stubEnv(key, undefined);
@@ -85,13 +84,11 @@ describe("buildAzureSpeechProvider", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    azureSpeechTTSMock.mockClear();
-    listAzureSpeechVoicesMock.mockClear();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   afterAll(() => {
-    vi.doUnmock("./tts.js");
     vi.doUnmock("openclaw/plugin-sdk/media-generation-runtime");
     vi.resetModules();
   });
@@ -168,7 +165,10 @@ describe("buildAzureSpeechProvider", () => {
     const resolved = resolveTalk({ apiKey: "key", region: "eastus", ...base }, talk);
     const providerConfig = resolveConfig({ "azure-speech": resolved });
     await provider.synthesize({ ...synthesisRequest, providerConfig, target: "audio-file" });
-    expect(azureSpeechTTSMock).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: expected }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${expected}/cognitiveservices/v1`,
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("parses provider-specific TTS directives", () => {
@@ -217,19 +217,23 @@ describe("buildAzureSpeechProvider", () => {
   });
 
   it("lists voices through config or explicit request auth", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify([{ ShortName: "en-US-JennyNeural", DisplayName: "Jenny" }]), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
     const voices = await provider.listVoices?.({
       providerConfig: { apiKey: "key", region: "eastus", timeoutMs: 45_000 },
       timeoutMs: 30_000,
     });
 
     expect(voices).toEqual([{ id: "en-US-JennyNeural", name: "Jenny" }]);
-    expect(listAzureSpeechVoicesMock).toHaveBeenCalledWith({
-      apiKey: "key",
-      baseUrl: "https://eastus.tts.speech.microsoft.com",
-      endpoint: undefined,
-      region: "eastus",
-      timeoutMs: 45_000,
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://eastus.tts.speech.microsoft.com/cognitiveservices/voices/list",
+      expect.objectContaining({ headers: { "Ocp-Apim-Subscription-Key": "key" } }),
+    );
+    expect(guardedFetch).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45_000 }));
   });
 
   it("rejects blank credentials across readiness, discovery, and synthesis", async () => {
@@ -254,7 +258,6 @@ describe("buildAzureSpeechProvider", () => {
       "Azure Speech API key missing",
     );
 
-    expect(listAzureSpeechVoicesMock).not.toHaveBeenCalled();
-    expect(azureSpeechTTSMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

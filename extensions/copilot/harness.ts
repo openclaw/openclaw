@@ -538,13 +538,7 @@ export function createCopilotAgentHarness(
         throw new Error("[copilot] harness has been disposed; cannot start new attempts");
       }
       const { resolvePoolAcquire, runCopilotAttempt } = await import("./src/attempt.js");
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting an attempt");
-      }
       const pool = await getPool();
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting an attempt");
-      }
       let poolAcquire: ReturnType<typeof resolvePoolAcquire>;
       try {
         poolAcquire = resolvePoolAcquire(params as never);
@@ -582,9 +576,6 @@ export function createCopilotAgentHarness(
             return binding?.compatKey === currentCompatKey ? binding : undefined;
           })
         : undefined;
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting an attempt");
-      }
       const resumableSessionId = resumableBinding?.sdkSessionId;
       if (operation === "settled-tool-finalization" && !resumableSessionId) {
         throw new Error(
@@ -711,14 +702,8 @@ export function createCopilotAgentHarness(
         throw new Error("[copilot] harness has been disposed; cannot start isolated completion");
       }
       const { runCopilotIsolatedCompletion } = await import("./src/isolated-completion.js");
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting isolated completion");
-      }
       return await runCopilotIsolatedCompletion(params, async () => {
         const pool = await getPool();
-        if (disposed) {
-          throw new Error("[copilot] harness was disposed while starting isolated completion");
-        }
         return pool;
       });
     });

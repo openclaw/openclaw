@@ -482,8 +482,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   agentId={model().agentId}
                   selected={draft()?.selected ?? new Set()}
                   disabled={disabled()}
-                  onResource-selection={(event: CustomEvent<{ values: string[] }>) =>
-                    updateDraft(item(), { selected: new Set(event.detail.values), freeText: "" })
+                  onSelection={(values) =>
+                    updateDraft(item(), { selected: new Set(values), freeText: "" })
                   }
                 />
               )}

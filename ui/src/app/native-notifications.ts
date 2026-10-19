@@ -1,4 +1,3 @@
-import { registerListener } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
@@ -70,13 +69,11 @@ export function createNativeNotificationsCapability() {
     permission: "unknown" as const,
     test: null,
   };
-  const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
+  let render: ((snapshot: NativeNotificationsSnapshot) => void) | undefined;
 
   const publish = (next: NativeNotificationsSnapshot) => {
     snapshot = next;
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
+    render?.(snapshot);
   };
   const handleStatus = (event: Event) => {
     const next = snapshotFrom((event as CustomEvent<unknown>).detail);
@@ -97,8 +94,12 @@ export function createNativeNotificationsCapability() {
     get snapshot() {
       return snapshot;
     },
-    subscribe: (listener: (snapshot: NativeNotificationsSnapshot) => void) =>
-      registerListener(listeners, listener),
+    subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     requestPermission(this: void) {
       postMessage({ type: "request-permission" });
     },
@@ -114,7 +115,7 @@ export function createNativeNotificationsCapability() {
     },
     dispose(this: void) {
       stops.forEach((stop) => stop());
-      listeners.clear();
+      render = undefined;
     },
   };
 }

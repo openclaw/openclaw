@@ -20,9 +20,9 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -58,9 +58,8 @@ export type BoardDocumentProps = {
 function createBoardDocument(
   props: BoardDocumentProps,
   readPresentationScope: () => object | undefined,
+  notify: () => void,
 ) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
   let documentState: DashboardDocumentState = "loading";
   let ownedSnapshot: BoardSnapshot | undefined;
   let activeTabId = "";
@@ -306,12 +305,6 @@ function createBoardDocument(
       error: errorText,
       board: presentation(passive),
     }),
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
   };
 }
 
@@ -324,8 +317,10 @@ function BoardDocumentContent(
   const context = useOptionalApplication();
   const readPresentationScope = () =>
     context ? gatewayPresentationScope(context.gateway) : undefined;
-  const document = createBoardDocument(host, readPresentationScope);
-  const projection = projectOwner(document, (current) => current);
+  const { owner: document, view: projection } = projectCallbackOwner(
+    (notify) => createBoardDocument(host, readPresentationScope, notify),
+    (current) => current,
+  );
   onSettled(() => {
     let active = true;
     let pending = false;

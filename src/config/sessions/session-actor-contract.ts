@@ -328,7 +328,11 @@ type SessionActorCommands = {
 };
 
 type SessionActorStorageCommitObserver<Value> = {
-  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(
+    outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>,
+  ): void | Promise<void>;
+  /** Memory companions settle before this owner's FIFO admits later work. */
+  settled?(outcome: SessionActorStorageOutcome<Value>): void | Promise<void>;
   committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 
