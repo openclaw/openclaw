@@ -5,6 +5,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
@@ -28,7 +29,6 @@ import {
   type DesktopPictureInPicture,
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
-import dockStyles from "../dock-panel-solid.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 
 type Methods = { handleToggleRequest(event: Event): void };

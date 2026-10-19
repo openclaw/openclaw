@@ -7,7 +7,6 @@ import type { LobsterPetDismissMenuPosition } from "./lobster-pet-dismiss-menu.t
 import * as lobsterLook from "./lobster-pet-identity.ts";
 import { LobsterPetInteractions } from "./lobster-pet-interactions.ts";
 import * as plans from "./lobster-pet-plans.ts";
-import type { LobsterPetSceneProps } from "./lobster-pet-scene-view.tsx";
 import {
   LobsterComposerGeometry,
   lobsterTravelDuration,
@@ -638,12 +637,13 @@ export class LobsterPetOwner {
     this.applyMove(this.geometry.planHop(this.anchor, this.spotPct));
   }
 
-  private scene(): LobsterPetSceneProps | null {
+  private scene() {
     const look = this.look;
     if (!look) {
       return null;
     }
     const identity = this.identity;
+    // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
     const flavor = identity?.elder
       ? "old as the tides"
       : identity?.oldFriend
