@@ -42,6 +42,34 @@ const roots: string[] = [];
 const independent: DatabaseSync[] = [];
 const realOpen = sqlite.openNodeSqliteDatabase;
 
+function tempRoot(prefix: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  roots.push(directory);
+  return directory;
+}
+
+function leases(options: Parameters<typeof openOpenClawAgentDatabase>[0]) {
+  return openOpenClawStateDatabase({ env: options.env })
+    .db.prepare("SELECT lease_id FROM agent_database_leases;")
+    .all();
+}
+
+function expectNoLeases(options: Parameters<typeof openOpenClawAgentDatabase>[0]) {
+  expect(() =>
+    assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
+  ).not.toThrow();
+}
+
+function afterWorker(checkpoint: () => void) {
+  const check = integrityWorker.assertSqliteIntegrityInWorker;
+  return vi
+    .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+    .mockImplementation(async (...args) => {
+      await check(...args);
+      checkpoint();
+    });
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const db of independent.splice(0)) {
@@ -59,9 +87,10 @@ afterEach(async () => {
 });
 
 function seed(freshIdentity = false) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-order-"));
-  roots.push(root);
-  const options = { agentId: "synthetic-owner", env: { OPENCLAW_STATE_DIR: root } };
+  const options = {
+    agentId: "synthetic-owner",
+    env: { OPENCLAW_STATE_DIR: tempRoot("agent-open-order-") },
+  };
   openOpenClawStateDatabase({ env: options.env });
   const database = openOpenClawAgentDatabase(options);
   database.db.exec(`
@@ -258,8 +287,7 @@ describe("asynchronous canonical admission", () => {
         };
         await import(${JSON.stringify(integrityWorkerModule)});
       `;
-    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sqlite-integrity-wal-fixture-"));
-    roots.push(fixtureRoot);
+    const fixtureRoot = tempRoot("sqlite-integrity-wal-fixture-");
     const fixturePath = path.join(fixtureRoot, "worker.mts");
     fs.writeFileSync(fixturePath, commitBetweenChecks);
     const worker = fork(fixturePath, [pathname], {
@@ -345,12 +373,11 @@ describe("asynchronous canonical admission", () => {
     } finally {
       state.db.exec("DROP TRIGGER fail_owned_release");
     }
-    const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases;").all();
-    expect(leases()).toHaveLength(1);
+    expect(leases(options)).toHaveLength(1);
     expect(closeOpenClawAgentDatabaseByPath(pathname, "foreign-owner")).toBe(false);
-    expect(leases()).toHaveLength(1);
+    expect(leases(options)).toHaveLength(1);
     closeOpenClawAgentDatabaseByPath(pathname, options.agentId);
-    expect(leases()).toEqual([]);
+    expect(leases(options)).toEqual([]);
   });
 
   it.each([null, 1])(
@@ -358,13 +385,7 @@ describe("asynchronous canonical admission", () => {
     async (initial) => {
       const { options } = seed();
       const identity = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(initial);
-      const check = integrityWorker.assertSqliteIntegrityInWorker;
-      vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-        async (...args) => {
-          await check(...args);
-          identity.mockReturnValue(2);
-        },
-      );
+      afterWorker(() => identity.mockReturnValue(2));
       const opening = openOpenClawAgentDatabaseAsync(options);
       if (initial === null) {
         await expect(opening).resolves.toMatchObject({ agentId: options.agentId });
@@ -377,75 +398,64 @@ describe("asynchronous canonical admission", () => {
   it("rejects a lost original lease before publishing the checked handle", async () => {
     const { options, pathname } = seed();
     const state = openOpenClawStateDatabase({ env: options.env });
-    const check = integrityWorker.assertSqliteIntegrityInWorker;
-    vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-      async (...args) => {
-        await check(...args);
-        const lease = state.db
-          .prepare("SELECT lease_id FROM agent_database_leases WHERE path=?")
-          .get(pathname);
-        expect(lease).toBeDefined();
-        releaseOpenClawAgentDatabaseLease(String(lease?.lease_id), { env: options.env });
-      },
-    );
+    afterWorker(() => {
+      const lease = state.db
+        .prepare("SELECT lease_id FROM agent_database_leases WHERE path=?")
+        .get(pathname);
+      expect(lease).toBeDefined();
+      releaseOpenClawAgentDatabaseLease(String(lease?.lease_id), { env: options.env });
+    });
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(/lost its runtime lease/);
     expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
   });
 
-  it.each([true])(
-    "refuses physical index corruption without changing it (unrelated damage: %s)",
-    async (unrelated) => {
-      const { options, pathname, writer } = seed();
-      writer.exec(`
+  it("refuses physical index corruption without changing unrelated damage", async () => {
+    const { options, pathname, writer } = seed();
+    writer.exec(`
       INSERT INTO cache_entries (scope,key,value_json,expires_at,updated_at)
       VALUES ('scope-a','key-a','{}',100,1);
       DROP INDEX idx_agent_cache_expiry;
       CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
     `);
-      if (unrelated) {
-        writer.exec(`
+    writer.exec(`
         CREATE TABLE unsafe_records (id INTEGER PRIMARY KEY, value TEXT, alternate TEXT);
         CREATE INDEX unsafe_records_value ON unsafe_records(value);
         INSERT INTO unsafe_records (value,alternate) VALUES ('alpha','zeta'),('beta','eta');
       `);
-      }
-      writer.enableDefensive?.(false);
-      writer.exec("PRAGMA writable_schema=ON;");
-      writer.exec(`UPDATE sqlite_schema SET sql=
+    writer.enableDefensive?.(false);
+    writer.exec("PRAGMA writable_schema=ON;");
+    writer.exec(`UPDATE sqlite_schema SET sql=
       'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
       WHERE name='idx_agent_cache_expiry';`);
-      if (unrelated) {
-        writer.exec(`UPDATE sqlite_schema SET sql=
+    writer.exec(`UPDATE sqlite_schema SET sql=
         'CREATE INDEX unsafe_records_value ON unsafe_records(alternate)'
         WHERE name='unsafe_records_value';`);
-      }
-      const version = Number(writer.prepare("PRAGMA schema_version").get()?.schema_version);
-      writer.exec(`PRAGMA writable_schema=OFF; PRAGMA schema_version=${version + 1};`);
-      const findings = writer.prepare("PRAGMA integrity_check").all();
-      expect(findings).not.toEqual([{ integrity_check: "ok" }]);
-      writer.close();
-      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
-        /integrity_check failed.*openclaw doctor --fix/,
-      );
-      const unchanged = realOpen(pathname, { readOnly: true });
-      try {
-        expect(unchanged.prepare("PRAGMA integrity_check").all()).toEqual(findings);
-        expect(unchanged.prepare("SELECT key FROM cache_entries NOT INDEXED").all()).toEqual([
-          { key: "key-a" },
-        ]);
-      } finally {
-        unchanged.close();
-      }
-    },
-  );
+    const version = Number(writer.prepare("PRAGMA schema_version").get()?.schema_version);
+    writer.exec(`PRAGMA writable_schema=OFF; PRAGMA schema_version=${version + 1};`);
+    const findings = writer.prepare("PRAGMA integrity_check").all();
+    expect(findings).not.toEqual([{ integrity_check: "ok" }]);
+    writer.close();
+    await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+      /integrity_check failed.*openclaw doctor --fix/,
+    );
+    const unchanged = realOpen(pathname, { readOnly: true });
+    try {
+      expect(unchanged.prepare("PRAGMA integrity_check").all()).toEqual(findings);
+      expect(unchanged.prepare("SELECT key FROM cache_entries NOT INDEXED").all()).toEqual([
+        { key: "key-a" },
+      ]);
+    } finally {
+      unchanged.close();
+    }
+  });
 
   it.each([false, true])("retains its state owner across await (ambient: %s)", async (ambient) => {
     const { options, pathname } = seed();
     const originalEnv = { ...options.env };
-    const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-next-owner-"));
-    roots.push(nextRoot);
+    const nextRoot = tempRoot("agent-open-next-owner-");
     const state = openOpenClawStateDatabase({ env: originalEnv });
-    const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
+    const originalLeases = () =>
+      state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
     vi.stubEnv("OPENCLAW_STATE_DIR", originalEnv.OPENCLAW_STATE_DIR);
     const check = integrityWorker.assertSqliteIntegrityInWorker;
     vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
@@ -463,23 +473,24 @@ describe("asynchronous canonical admission", () => {
         ...(ambient ? {} : { env: options.env }),
       });
       await expect(opening).resolves.toMatchObject({ path: pathname });
-      expect(leases()).toHaveLength(1);
+      expect(originalLeases()).toHaveLength(1);
       closeOpenClawAgentDatabaseByPath(pathname);
-      expect(leases()).toEqual([]);
+      expect(originalLeases()).toEqual([]);
       expect(fs.readdirSync(nextRoot)).toEqual([]);
     } finally {
       options.env.OPENCLAW_STATE_DIR = originalEnv.OPENCLAW_STATE_DIR;
       vi.stubEnv("OPENCLAW_STATE_DIR", originalEnv.OPENCLAW_STATE_DIR);
-      for (const lease of leases()) {
+      for (const lease of originalLeases()) {
         releaseOpenClawAgentDatabaseLease(String(lease.lease_id), { env: originalEnv });
       }
     }
   });
 
   it("publishes a registered replacement database after full checks and before yielding", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-empty-"));
-    roots.push(root);
-    const options = { agentId: "synthetic-new", env: { OPENCLAW_STATE_DIR: root } };
+    const options = {
+      agentId: "synthetic-new",
+      env: { OPENCLAW_STATE_DIR: tempRoot("agent-open-empty-") },
+    };
     const original = openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabaseByPath(original.path);
     fs.renameSync(path.dirname(original.path), `${path.dirname(original.path)}-retired`);
@@ -505,9 +516,10 @@ describe("asynchronous canonical admission", () => {
   });
 
   it("keeps a nonempty unversioned database with no application tables on async admission", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-retained-pages-"));
-    roots.push(root);
-    const options = { agentId: "synthetic-retained", env: { OPENCLAW_STATE_DIR: root } };
+    const options = {
+      agentId: "synthetic-retained",
+      env: { OPENCLAW_STATE_DIR: tempRoot("agent-open-retained-pages-") },
+    };
     const pathname = resolveOpenClawAgentSqlitePath(options);
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
     const writer = realOpen(pathname);
@@ -543,13 +555,7 @@ describe("asynchronous canonical admission", () => {
 
   it("preserves point-in-time admission when a writer commits after the Worker check", async () => {
     const { options, writer } = seed();
-    const check = integrityWorker.assertSqliteIntegrityInWorker;
-    vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-      async (...args) => {
-        await check(...args);
-        corruptForeignKey(writer);
-      },
-    );
+    afterWorker(() => corruptForeignKey(writer));
     const database = await openOpenClawAgentDatabaseAsync(options);
     expect(database.db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
@@ -564,20 +570,12 @@ describe("asynchronous canonical admission", () => {
       } else if (replacement === "role") {
         writer.exec("UPDATE schema_meta SET role='global'");
       }
-      const check = integrityWorker.assertSqliteIntegrityInWorker;
-      const worker = vi
-        .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
-        .mockImplementation(async (...args) => {
-          await check(...args);
-          writer.exec("PRAGMA user_version=9999;");
-        });
+      const worker = afterWorker(() => writer.exec("PRAGMA user_version=9999;"));
       await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
       expect(worker).toHaveBeenCalledTimes(replacement === "version" ? 1 : 0);
-      expect(() =>
-        assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
-      ).not.toThrow();
+      expectNoLeases(options);
     },
   );
 
@@ -642,9 +640,7 @@ describe("asynchronous canonical admission", () => {
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(/revoked/);
     await drain;
     expect(completed).toBe(true);
-    expect(() =>
-      assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
-    ).not.toThrow();
+    expectNoLeases(options);
     writer.exec("BEGIN IMMEDIATE; ROLLBACK;");
   });
 
@@ -690,9 +686,7 @@ describe("asynchronous canonical admission", () => {
       expect(source?.isOpen).toBe(failClose);
       expect(closeOpenClawAgentDatabaseByPath(pathname)).toBe(true);
       expect(source?.isOpen).toBe(false);
-      expect(() =>
-        assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
-      ).not.toThrow();
+      expectNoLeases(options);
     },
   );
 });
@@ -728,8 +722,7 @@ describe("failed-open cleanup ownership", () => {
       }
       expect(rows()).toHaveLength(1);
       const originalLease = rows()[0];
-      const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-close-next-owner-"));
-      roots.push(nextRoot);
+      const nextRoot = tempRoot("agent-close-next-owner-");
       options.env.OPENCLAW_STATE_DIR = nextRoot;
       await expect(closeOpenClawAgentDatabasesAsync()).rejects.toMatchObject(closeFailure);
       expect(rows()).toEqual([originalLease]);
@@ -775,10 +768,6 @@ it("joins only the pending admissions in the closing runtime root", async () => 
   const secondDatabase = await secondOpen;
   expect(secondDatabase.db.isOpen).toBe(true);
   expect(ordinaryWrite(second.options)).toEqual({ n: 1 });
-  const leases = (options: typeof first.options) =>
-    openOpenClawStateDatabase({ env: options.env })
-      .db.prepare("SELECT lease_id FROM agent_database_leases;")
-      .all();
   expect(leases(first.options)).toEqual([]);
   expect(leases(second.options)).toHaveLength(1);
 });

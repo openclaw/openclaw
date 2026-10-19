@@ -32,6 +32,72 @@ import {
 
 const key = "agent:main:target";
 const sibling = "agent:main:sibling";
+const witnessOwner = { role: "agent", agentId: "main" } as const;
+const nodeRows = "SELECT * FROM session_nodes ORDER BY session_key";
+const schemaRows = "SELECT name, sql FROM sqlite_schema ORDER BY name";
+
+function readVersion(database: DatabaseSync) {
+  return {
+    user: database.prepare("PRAGMA user_version").get()?.user_version,
+    schema: database
+      .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+      .get()?.schema_version,
+  };
+}
+
+function denyVersionPublication(database: DatabaseSync) {
+  database.setAuthorizer((action, name, value) =>
+    action === constants.SQLITE_PRAGMA &&
+    name === "user_version" &&
+    value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+      ? constants.SQLITE_DENY
+      : constants.SQLITE_OK,
+  );
+}
+
+function withMigrationDatabase(
+  version: number,
+  schema: string,
+  run: (
+    database: DatabaseSync,
+    migrate: () => void,
+    env: NodeJS.ProcessEnv,
+    pathname: string,
+  ) => Promise<void>,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const pathname = state.path("migration.sqlite");
+    const database = new DatabaseSync(pathname);
+    try {
+      if (version === 24) {
+        database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+      }
+      database.exec(schema);
+      database.exec(`PRAGMA user_version = ${version};
+        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+        VALUES ('primary', 'agent', ${version}, 'main', 1, 1)`);
+      await run(
+        database,
+        () =>
+          ensureOpenClawAgentDatabaseSchema(database, {
+            agentId: "main",
+            env: state.env,
+            path: pathname,
+          }),
+        state.env,
+        pathname,
+      );
+    } finally {
+      database.setAuthorizer(null);
+      database.close();
+    }
+  });
+}
+
+const schema20 = OPENCLAW_AGENT_SCHEMA_V21_SQL.replace(
+  canonicalSessionValidationSchemaSql(OPENCLAW_AGENT_SCHEMA_V21_SQL),
+  "",
+);
 
 function pendingKeys(database: DatabaseSync) {
   return database
@@ -279,120 +345,59 @@ describe("canonical validation schema admission", () => {
 
 describe("agent schema 21 migration", () => {
   it("seeds all rows without parsing their contents when migrating schema 20", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("pre-validation.sqlite");
-      const database = new DatabaseSync(pathname);
-      try {
-        database.exec(
-          OPENCLAW_AGENT_SCHEMA_V21_SQL.replace(
-            canonicalSessionValidationSchemaSql(OPENCLAW_AGENT_SCHEMA_V21_SQL),
-            "",
-          ),
-        );
-        database.exec(`PRAGMA user_version = 20;
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
-        insertNode(database, key, "target");
-        insertNode(database, sibling, "sibling");
+    await withMigrationDatabase(20, schema20, async (database, migrate, env) => {
+      insertNode(database, key, "target");
+      insertNode(database, sibling, "sibling");
+      database
+        .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
+        .run(sibling);
+      const before = database
+        .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY session_key")
+        .all();
+      await withAgentDatabaseMaintenanceLease({ env }, async () => migrate());
+      expect(
         database
-          .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
-          .run(sibling);
-        const before = database
-          .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY session_key")
-          .all();
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          ensureOpenClawAgentDatabaseSchema(database, {
-            agentId: "main",
-            env: state.env,
-            path: pathname,
-          });
-        });
-        expect(
-          database
-            .prepare("SELECT * FROM session_nodes ORDER BY session_key")
-            .all()
-            .map(
-              ({
-                session_started_at: _sessionStartedAt,
-                has_optional_references: _hasOptionalReferences,
-                ...row
-              }) => row,
-            ),
-        ).toEqual(before);
-        expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
-        );
-        expect(
-          database
-            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-            .get()?.schema_version,
-        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-        assertCanonicalSessionValidationSchema(database);
-      } finally {
-        database.close();
-      }
+          .prepare(nodeRows)
+          .all()
+          .map(
+            ({
+              session_started_at: _sessionStartedAt,
+              has_optional_references: _hasOptionalReferences,
+              ...row
+            }) => row,
+          ),
+      ).toEqual(before);
+      expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
+      expect(readVersion(database)).toEqual({
+        user: OPENCLAW_AGENT_SCHEMA_VERSION,
+        schema: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      assertCanonicalSessionValidationSchema(database);
     });
   });
 
   it("rolls back schema installation, pending seed and version publication together", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("interrupted-validation.sqlite");
-      const database = new DatabaseSync(pathname);
-      try {
-        database.exec(
-          OPENCLAW_AGENT_SCHEMA_V21_SQL.replace(
-            canonicalSessionValidationSchemaSql(OPENCLAW_AGENT_SCHEMA_V21_SQL),
-            "",
-          ),
-        );
-        database.exec(`PRAGMA user_version = 20;
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
-        insertNode(database, key, "target");
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA &&
-            name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
-          try {
-            expect(() =>
-              ensureOpenClawAgentDatabaseSchema(database, {
-                agentId: "main",
-                env: state.env,
-                path: pathname,
-              }),
-            ).toThrow(/authoriz/u);
-          } finally {
-            database.setAuthorizer(null);
-          }
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(20);
-          expect(
-            database
-              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-              .get()?.schema_version,
-          ).toBe(20);
-          expect(
-            database
-              .prepare(
-                "SELECT name FROM sqlite_schema WHERE name = 'session_canonical_validation_pending'",
-              )
-              .get(),
-          ).toBeUndefined();
-          ensureOpenClawAgentDatabaseSchema(database, {
-            agentId: "main",
-            env: state.env,
-            path: pathname,
-          });
-          expect(pendingKeys(database)).toEqual([key]);
-          assertCanonicalSessionValidationSchema(database);
-        });
-      } finally {
-        database.close();
-      }
+    await withMigrationDatabase(20, schema20, async (database, migrate, env) => {
+      insertNode(database, key, "target");
+      await withAgentDatabaseMaintenanceLease({ env }, async () => {
+        denyVersionPublication(database);
+        try {
+          expect(migrate).toThrow(/authoriz/u);
+        } finally {
+          database.setAuthorizer(null);
+        }
+        expect(readVersion(database)).toEqual({ user: 20, schema: 20 });
+        expect(
+          database
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE name = 'session_canonical_validation_pending'",
+            )
+            .get(),
+        ).toBeUndefined();
+        migrate();
+        expect(pendingKeys(database)).toEqual([key]);
+        assertCanonicalSessionValidationSchema(database);
+      });
     });
   });
 });
@@ -401,15 +406,10 @@ describe("agent schema 25 migration", () => {
   it.each(["commit", "missing-column", "rollback", "drift"] as const)(
     "retires writer bookkeeping with pending validation and source preservation (%s)",
     async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const pathname = state.path("canonical-v24.sqlite");
-        const database = new DatabaseSync(pathname);
-        try {
-          database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
-          database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
-          database.exec(`PRAGMA user_version = 24;
-            INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-            VALUES ('primary', 'agent', 24, 'main', 1, 1)`);
+      await withMigrationDatabase(
+        24,
+        OPENCLAW_AGENT_SCHEMA_V24_SQL,
+        async (database, migrate, env, pathname) => {
           insertNode(database, key, "target");
           insertNode(database, sibling, "sibling");
           database
@@ -447,35 +447,23 @@ describe("agent schema 25 migration", () => {
             original =
               outcome === "drift"
                 ? undefined
-                : captureOpenClawMigrationWitness(reader, { role: "agent", agentId: "main" });
+                : captureOpenClawMigrationWitness(reader, witnessOwner);
           } finally {
             reader.close();
           }
           if (outcome === "drift") {
-            expect(() =>
-              captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
-            ).toThrow(/trigger/u);
-          }
-          const before = {
-            schema: database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
-            nodes: database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-          };
-          if (outcome === "rollback") {
-            database.setAuthorizer((action, name, value) =>
-              action === constants.SQLITE_PRAGMA &&
-              name === "user_version" &&
-              value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
-                ? constants.SQLITE_DENY
-                : constants.SQLITE_OK,
+            expect(() => captureOpenClawMigrationWitness(database, witnessOwner)).toThrow(
+              /trigger/u,
             );
           }
-          await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-            const migrate = () =>
-              ensureOpenClawAgentDatabaseSchema(database, {
-                agentId: "main",
-                env: state.env,
-                path: pathname,
-              });
+          const before = {
+            schema: database.prepare(schemaRows).all(),
+            nodes: database.prepare(nodeRows).all(),
+          };
+          if (outcome === "rollback") {
+            denyVersionPublication(database);
+          }
+          await withAgentDatabaseMaintenanceLease({ env }, async () => {
             if (outcome === "commit" || outcome === "missing-column") {
               migrate();
             } else {
@@ -483,14 +471,9 @@ describe("agent schema 25 migration", () => {
             }
           });
           database.setAuthorizer(null);
-          expect(
-            database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-          ).toMatchObject(before.nodes);
+          expect(database.prepare(nodeRows).all()).toMatchObject(before.nodes);
           if (original) {
-            const current = captureOpenClawMigrationWitness(database, {
-              role: "agent",
-              agentId: "main",
-            });
+            const current = captureOpenClawMigrationWitness(database, witnessOwner);
             expect(assertOpenClawMigrationWitnessPreserved(original, current).warnings).toEqual([
               "Preexisting session history gap: missingWindows (1)",
             ]);
@@ -511,7 +494,7 @@ describe("agent schema 25 migration", () => {
                 expect(() =>
                   assertOpenClawMigrationWitnessPreserved(
                     original,
-                    captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
+                    captureOpenClawMigrationWitness(database, witnessOwner),
                   ),
                 ).toThrow(/changed or lost/u);
                 database.exec("ROLLBACK TO lost_history; RELEASE lost_history");
@@ -519,16 +502,14 @@ describe("agent schema 25 migration", () => {
               database.exec(`SAVEPOINT retired_trigger;
                 CREATE TRIGGER session_nodes_entry_valid_after_insert
                 AFTER INSERT ON session_nodes BEGIN SELECT 1; END`);
-              expect(() =>
-                captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
-              ).toThrow(/trigger/u);
+              expect(() => captureOpenClawMigrationWitness(database, witnessOwner)).toThrow(
+                /trigger/u,
+              );
               database.exec("ROLLBACK TO retired_trigger; RELEASE retired_trigger");
             }
           }
           if (outcome === "rollback" || outcome === "drift") {
-            expect(
-              database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
-            ).toEqual(before.schema);
+            expect(database.prepare(schemaRows).all()).toEqual(before.schema);
             expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
             expect(
               database.prepare("SELECT canonical_ready FROM session_key_contract").get()
@@ -537,12 +518,10 @@ describe("agent schema 25 migration", () => {
             expect(pendingKeys(database)).toEqual([]);
             return;
           }
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_AGENT_SCHEMA_VERSION,
-          );
-          expect(
-            database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-          ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+          expect(readVersion(database)).toEqual({
+            user: OPENCLAW_AGENT_SCHEMA_VERSION,
+            schema: OPENCLAW_AGENT_SCHEMA_VERSION,
+          });
           expect(
             database.prepare("SELECT canonical_ready FROM session_key_contract").get()
               ?.canonical_ready,
@@ -570,11 +549,8 @@ describe("agent schema 25 migration", () => {
               ?.entry_valid,
           ).toBe(1);
           expect(pendingKeys(database)).toEqual([]);
-        } finally {
-          database.setAuthorizer(null);
-          database.close();
-        }
-      });
+        },
+      );
     },
   );
 });
