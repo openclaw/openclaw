@@ -21,12 +21,19 @@ const channel = "account-policy-chat";
 const accountKeyPolicy = { canonicalAliasesRequireOwnField: "account" };
 
 type AccountConfig = { account?: string; allowFrom: string[] };
+const account = (sender = "bob", eligible = false): AccountConfig => ({
+  allowFrom: [sender],
+  ...(eligible ? { account: "+12025550124" } : {}),
+});
+const eligibleAccounts = { "Work Phone": account("bob", true) };
+const priorityAccounts = (key: string) => ({
+  "Work Phone": account("alice", true),
+  [key]: account(),
+});
 
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => {
-    rollbackStagedPluginRegistry(previous);
-  });
+  onTestFinished(() => rollbackStagedPluginRegistry(previous));
   stageActivePluginRegistry(
     createTestRegistry([
       {
@@ -50,7 +57,7 @@ beforeEach(({ onTestFinished }) => {
 });
 
 async function dispatch(params: {
-  accounts: Record<string, AccountConfig>;
+  accounts?: Record<string, AccountConfig>;
   defaultAccount?: string;
   accountId?: string;
   sender: string;
@@ -64,7 +71,7 @@ async function dispatch(params: {
         account: "+12025550123",
         allowFrom: ["alice"],
         defaultAccount: params.defaultAccount,
-        accounts: params.accounts,
+        accounts: params.accounts ?? { "Work Phone": account() },
       },
     },
   };
@@ -124,19 +131,19 @@ function expectAccess(
   owner = false,
 ) {
   expect(actual.command.senderIsOwner).toBe(owner);
-  if (authorized) {
-    expect.soft(actual.result).toMatchObject({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("/acp spawn") },
-    });
-  } else {
+  if (!authorized) {
     expect.soft(actual.result).toEqual({ shouldContinue: false });
   }
-  expect.soft(actual.command.isAuthorizedSender).toBe(authorized);
-  expect.soft(actual.reset.resetAuthorized).toBe(authorized);
-  expect
-    .soft(actual.reset.resetCommand.matchedResetTriggerLower)
-    .toBe(authorized ? "/reset" : undefined);
+  expect.soft(actual).toMatchObject({
+    result: authorized
+      ? { shouldContinue: false, reply: { text: expect.stringContaining("/acp spawn") } }
+      : { shouldContinue: false },
+    command: { isAuthorizedSender: authorized },
+    reset: {
+      resetAuthorized: authorized,
+      resetCommand: { matchedResetTriggerLower: authorized ? "/reset" : undefined },
+    },
+  });
 }
 
 describe("handleCommands and session reset account-policy authorization for admitted groups", () => {
@@ -147,51 +154,21 @@ describe("handleCommands and session reset account-policy authorization for admi
   )(
     "uses root access for an ignored alias: sender=$sender, default=$defaultAccount",
     async ({ defaultAccount, sender }) => {
-      const actual = await dispatch({
-        accounts: { "Work Phone": { allowFrom: ["bob"] } },
-        accountId: "work-phone",
-        defaultAccount,
-        sender,
-      });
+      const actual = await dispatch({ accountId: "work-phone", defaultAccount, sender });
       expectAccess(actual, sender === "alice");
     },
   );
 
-  it.each<
-    Omit<Parameters<typeof dispatch>[0], "sender"> & {
-      name: string;
-    }
-  >([
-    {
-      name: "eligible sole alias",
-      accounts: { "Work Phone": { account: "+12025550124", allowFrom: ["bob"] } },
-    },
+  it.each<Omit<Parameters<typeof dispatch>[0], "sender"> & { name: string }>([
+    { name: "eligible sole alias", accounts: eligibleAccounts },
     {
       name: "eligible configured default",
-      accounts: { "Work Phone": { account: "+12025550124", allowFrom: ["bob"] } },
+      accounts: eligibleAccounts,
       defaultAccount: "work-phone",
     },
-    {
-      name: "undeclared channel singleton",
-      accounts: { "Work Phone": { allowFrom: ["bob"] } },
-      declaresPolicy: false,
-    },
-    {
-      name: "exact key wins over an eligible alias",
-      accounts: {
-        "Work Phone": { account: "+12025550124", allowFrom: ["alice"] },
-        "work-phone": { allowFrom: ["bob"] },
-      },
-      accountId: "work-phone",
-    },
-    {
-      name: "case-only key wins over an eligible alias",
-      accounts: {
-        "Work Phone": { account: "+12025550124", allowFrom: ["alice"] },
-        "WORK-PHONE": { allowFrom: ["bob"] },
-      },
-      accountId: "work-phone",
-    },
+    { name: "undeclared channel singleton", declaresPolicy: false },
+    { name: "exact key", accounts: priorityAccounts("work-phone"), accountId: "work-phone" },
+    { name: "case-only key", accounts: priorityAccounts("WORK-PHONE"), accountId: "work-phone" },
   ])("preserves $name command and reset access", async (testCase) => {
     for (const sender of ["alice", "bob"]) {
       const actual = await dispatch({ ...testCase, sender });
@@ -202,12 +179,7 @@ describe("handleCommands and session reset account-policy authorization for admi
   it.each(["alice", "bob", "owner"])(
     "keeps explicit global owner authority separate: %s",
     async (sender) => {
-      const actual = await dispatch({
-        accounts: { "Work Phone": { allowFrom: ["bob"] } },
-        accountId: "work-phone",
-        ownerAllowFrom: ["owner"],
-        sender,
-      });
+      const actual = await dispatch({ accountId: "work-phone", ownerAllowFrom: ["owner"], sender });
       expectAccess(actual, sender === "owner", sender === "owner");
     },
   );

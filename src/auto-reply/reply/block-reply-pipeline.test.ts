@@ -1,6 +1,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
@@ -12,10 +16,6 @@ const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
     }
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
-
-beforeEach(() => {
-  vi.useRealTimers();
-});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -35,6 +35,8 @@ function capturePipeline(options: Partial<Parameters<typeof createBlockReplyPipe
 
 const coalescing = { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" };
 const mediaCoalescing = { ...coalescing, minChars: 1, joiner: " " };
+const sourceReply = (text: string, metadata: ReplyPayloadMetadata, payload: ReplyPayload = {}) =>
+  setReplyPayloadMetadata({ text, ...payload }, metadata);
 
 describe("createBlockReplyPipeline dedup with threading", () => {
   it("keeps an un-aborted delivery signal when timeouts are disabled", async () => {
@@ -164,24 +166,26 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       });
       const routing = { replyToId: "100", replyToCurrent: true };
       pipeline.enqueue(
-        setReplyPayloadMetadata(
-          { text: "Preview", ...routing },
+        sourceReply(
+          "Preview",
           {
             assistantMessageIndex: 7,
             replyToIdExplicit: true,
             blockSourceText: "Preview",
             blockSourceRange: [0, 7],
           },
+          routing,
         ),
       );
       pipeline.enqueue(
-        setReplyPayloadMetadata(
-          { text: "below", ...routing },
+        sourceReply(
+          "below",
           {
             assistantMessageIndex: 7,
             blockSourceText: "below",
             blockSourceRange: [7, 12],
           },
+          routing,
         ),
       );
       const media = setReplyPayloadMetadata(
@@ -213,24 +217,19 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       for (const payload of sent) {
         expect(payload).toMatchObject(routing);
       }
+      const expectedMetadata = {
+        assistantMessageIndex: 7,
+        replyToIdExplicit: true,
+        blockSourceText: "Previewbelow" + (split ? "" : (caption ?? "")),
+        blockSourceRange: [0, !split && caption ? 19 : 12],
+      };
       expect(sent.map(getReplyPayloadMetadata)).toEqual(
         split
-          ? [
-              expect.objectContaining({
-                assistantMessageIndex: 7,
-                replyToIdExplicit: true,
-                blockSourceText: "Previewbelow",
-                blockSourceRange: [0, 12],
-              }),
-              getReplyPayloadMetadata(media),
-            ]
+          ? [expect.objectContaining(expectedMetadata), getReplyPayloadMetadata(media)]
           : [
               expect.objectContaining({
-                assistantMessageIndex: 7,
-                replyToIdExplicit: true,
+                ...expectedMetadata,
                 assistantTranscriptMediaUrls: ["file:///photo.png"],
-                blockSourceText: caption ? "Previewbelowcaption" : "Previewbelow",
-                blockSourceRange: caption ? [0, 19] : [0, 12],
               }),
             ],
       );
@@ -270,10 +269,11 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     pipeline.enqueue(sourceChunk([3, 6]));
     pipeline.enqueue(sourceChunk([0, 3]));
     pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: "bbb" },
-        { assistantMessageIndex: 1, blockSourceText: "bbb", blockSourceRange: [0, 3] },
-      ),
+      sourceReply("bbb", {
+        assistantMessageIndex: 1,
+        blockSourceText: "bbb",
+        blockSourceRange: [0, 3],
+      }),
     );
     await pipeline.flush({ force: true });
 
@@ -284,14 +284,11 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     const { sent, pipeline } = capturePipeline();
 
     pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: "unchanged" },
-        {
-          assistantMessageIndex: 1,
-          blockSourceText: "unchanged",
-          blockSourceRange: [0, 9],
-        },
-      ),
+      sourceReply("unchanged", {
+        assistantMessageIndex: 1,
+        blockSourceText: "unchanged",
+        blockSourceRange: [0, 9],
+      }),
     );
     await pipeline.flush({ force: true });
     pipeline.enqueue(setReplyPayloadMetadata({ text: "unchanged" }, { assistantMessageIndex: 1 }));
@@ -309,17 +306,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
       { assistantMessageIndex: 7 },
     );
     pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: first },
-        { assistantMessageIndex: 7, blockSourceText: "```ts\nconst x = " },
-      ),
+      sourceReply(first, { assistantMessageIndex: 7, blockSourceText: "```ts\nconst x = " }),
     );
-    pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: second },
-        { assistantMessageIndex: 7, blockSourceText: "1;\n```" },
-      ),
-    );
+    pipeline.enqueue(sourceReply(second, { assistantMessageIndex: 7, blockSourceText: "1;\n```" }));
     expect(pipeline.hasSentPayload(final)).toBe(false);
 
     await pipeline.flush({ force: true });
@@ -341,15 +330,13 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     pipeline.enqueue({ text: "Example:" });
     pipeline.enqueue({ text: "Snippet:" });
     pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: "```ts\nconst x = \n```" },
-        { blockSourceText: "```ts\nconst x = " },
-      ),
+      sourceReply("```ts\nconst x = \n```", { blockSourceText: "```ts\nconst x = " }),
     );
     pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: "```ts\n1;\n```", mediaUrl: "file:///example.png" },
+      sourceReply(
+        "```ts\n1;\n```",
         { blockSourceText: "1;\n```" },
+        { mediaUrl: "file:///example.png" },
       ),
     );
     await pipeline.flush({ force: true });
@@ -368,10 +355,7 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   it("does not credit removed source text when merging a media-only reply", async () => {
     const { pipeline } = capturePipeline({ coalescing });
     pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: "```ts\nconst x = 1;\n```" },
-        { blockSourceText: "```ts\nconst x = 1;\n```" },
-      ),
+      sourceReply("```ts\nconst x = 1;\n```", { blockSourceText: "```ts\nconst x = 1;\n```" }),
     );
     pipeline.enqueue(
       setReplyPayloadMetadata(

@@ -23,6 +23,19 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
+function prepare(params: Partial<Parameters<typeof prepareChannelRunAdmission>[0]> = {}) {
+  const prepared = prepareChannelRunAdmission({
+    cfg: identityConfig,
+    runId: "run-1",
+    agentId: "main",
+    ingressKind: "channel",
+    boundary: "test.channel",
+    ...params,
+  });
+  onTestFinished(() => prepared.close());
+  return prepared;
+}
+
 function captureAdmission() {
   const identityWork: ExecutionIdentityAdmissionWork[] = [];
   const decisions: unknown[] = [];
@@ -47,23 +60,23 @@ function captureAdmission() {
       channelId: "test",
       participantId: "person-1",
     });
-  const prepare = (params: Partial<Parameters<typeof prepareChannelRunAdmission>[0]> = {}) =>
-    prepareChannelRunAdmission({
-      cfg: identityConfig,
-      runId: "run-1",
-      agentId: "main",
-      ingressKind: "channel",
-      boundary: "test.channel",
-      ...params,
-    });
-  return { identityWork, decisions, audit, evidence, prepare };
+  const envelope = () => {
+    expect(identityWork).toHaveLength(1);
+    const captured = identityWork[0];
+    expect(captured?.kind).toBe("capture");
+    if (captured?.kind !== "capture") {
+      throw new Error("Expected identity capture");
+    }
+    return captured.envelope;
+  };
+  return { identityWork, decisions, audit, evidence, envelope };
 }
 
 describe("channel run admission", () => {
   it.each(["unresolved", "forged"] as const)(
     "records only owner-prepared Gateway facts for a %s carrier",
     async (kind) => {
-      const { identityWork, prepare } = captureAdmission();
+      const { envelope } = captureAdmission();
       const ingress = prepareGatewayLocalUserIngress({
         authMethod: "token",
         authenticatedUserExpected: true,
@@ -82,40 +95,29 @@ describe("channel run admission", () => {
         boundary: "auto-reply.agent-runner",
         gatewayLocalUserIngress,
       });
-      try {
-        await prepared.admit("embedded");
-        expect(identityWork).toHaveLength(1);
-        const captured = identityWork[0];
-        expect(captured?.kind).toBe("capture");
-        if (captured?.kind !== "capture") {
-          throw new Error("Expected the admitted identity envelope");
-        }
-        expect(captured.envelope.ingress).toEqual(
-          kind === "unresolved"
-            ? {
-                kind: "gateway-client",
-                boundary: "gateway.ws.authenticated-connect",
-                state: "present",
-              }
-            : { kind: "channel", boundary: "auto-reply.agent-runner", state: "unknown" },
-        );
-        expect(captured.envelope.invoker).toEqual({ state: "unknown" });
-        expect(captured.envelope.assurance).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
-        );
-      } finally {
-        prepared.close();
-      }
+      await prepared.admit("embedded");
+      const captured = envelope();
+      expect(captured.ingress).toEqual(
+        kind === "unresolved"
+          ? {
+              kind: "gateway-client",
+              boundary: "gateway.ws.authenticated-connect",
+              state: "present",
+            }
+          : { kind: "channel", boundary: "auto-reply.agent-runner", state: "unknown" },
+      );
+      expect(captured.invoker).toEqual({ state: "unknown" });
+      expect(captured.assurance).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
+      );
     },
   );
 
   it("rejects a retired Gateway binding before host tool I/O", async () => {
     const current: { value?: GatewayRequestContext } = {};
-    const prepared = prepareChannelRunAdmission({
+    const prepared = prepare({
       cfg: {},
       runId: "run-without-gateway-context",
-      agentId: "main",
-      ingressKind: "channel",
       boundary: "channel/auto-reply",
       onAdmitted: (context) => bindGatewayContextResolver(context, () => current.value),
     });
@@ -135,23 +137,22 @@ describe("channel run admission", () => {
       pluginId: "codex",
     });
 
-    try {
-      expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-      current.value = {} as GatewayRequestContext;
-      expect(() => host.capabilities.assertActive()).toThrow("no longer active");
-      await host.runWithScope(async () => {
-        expect(getGatewayToolCallerIdentity()?.gatewayContextResolver?.()).toBeUndefined();
-        expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-      });
-    } finally {
+    onTestFinished(() => {
       host.close();
       prepared.close();
       resetAgentRunRegistryForTest();
-    }
+    });
+    expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+    current.value = {} as GatewayRequestContext;
+    expect(() => host.capabilities.assertActive()).toThrow("no longer active");
+    await host.runWithScope(async () => {
+      expect(getGatewayToolCallerIdentity()?.gatewayContextResolver?.()).toBeUndefined();
+      expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+    });
   });
 
   it("consumes once across fallback admission and closes the exact prepared owner", async () => {
-    const { identityWork, decisions, evidence: createEvidence, prepare } = captureAdmission();
+    const { identityWork, decisions, evidence: createEvidence, envelope } = captureAdmission();
     const admittedContexts: unknown[] = [];
     const evidence = createEvidence();
     const prepared = prepare({
@@ -165,21 +166,16 @@ describe("channel run admission", () => {
     const fallback = await prepared.admit("embedded");
 
     expect(fallback).toBe(first);
-    expect(identityWork).toMatchObject([
-      {
-        kind: "capture",
-        envelope: {
-          invoker: { state: "present", kind: "person" },
-          assurance: [
-            {
-              kind: "channel-admission",
-              rawEvidenceRef: "channel-admission",
-              strength: "boundary-verified",
-            },
-          ],
+    expect(envelope()).toMatchObject({
+      invoker: { state: "present", kind: "person" },
+      assurance: [
+        {
+          kind: "channel-admission",
+          rawEvidenceRef: "channel-admission",
+          strength: "boundary-verified",
         },
-      },
-    ]);
+      ],
+    });
     expect(decisions).toHaveLength(1);
     expect(admittedContexts).toEqual([first]);
     expect(decisions).toMatchObject([
@@ -200,7 +196,7 @@ describe("channel run admission", () => {
   });
 
   it("explains identifier-authentication effects alongside an unevaluated contribution", async () => {
-    const { decisions, audit, prepare } = captureAdmission();
+    const { decisions, audit } = captureAdmission();
     const prepared = prepare({
       runId: "run-auth",
       evidence: combineChannelAdmissionEvidence(
@@ -217,23 +213,23 @@ describe("channel run admission", () => {
 
     await prepared.admit("embedded");
 
-    expect(decisions).toEqual([
-      expect.objectContaining({
+    expect(decisions).toMatchObject([
+      {
         receiptId: expect.stringContaining(":channel-admission"),
-        decision: expect.objectContaining({
+        decision: {
           reasonCode: "channel_ingress_identifier_authentication_applied",
-        }),
-        enforcement: expect.objectContaining({
+        },
+        enforcement: {
           policyRefs: ["channel.identifier-authentication"],
           contextFieldsUsed: ["channel.identifier-authentication"],
-        }),
-      }),
+        },
+      },
     ]);
     expect(JSON.stringify(decisions)).not.toContain("private-person-value");
   });
 
   it("does not consume a cancelled pre-admission carrier or label internal ACP as a person", async () => {
-    const { identityWork, evidence: createEvidence, prepare } = captureAdmission();
+    const { evidence: createEvidence, envelope } = captureAdmission();
     const evidence = createEvidence();
     const cancelled = prepare({
       runId: "cancelled-run",
@@ -259,13 +255,6 @@ describe("channel run admission", () => {
     await internalAcp.admit("acp");
     internalAcp.close();
 
-    expect(identityWork).toHaveLength(1);
-    expect(identityWork).toMatchObject([{ kind: "capture", envelope: {} }]);
-    const captured = identityWork[0];
-    expect(captured?.kind).toBe("capture");
-    if (captured?.kind !== "capture") {
-      throw new Error("Expected identity capture");
-    }
-    expect(captured.envelope.invoker).toBeUndefined();
+    expect(envelope().invoker).toBeUndefined();
   });
 });
