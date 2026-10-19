@@ -129,6 +129,39 @@ it("does not describe a different user-selected model as restoration of the prev
   });
 });
 
+it("does not restore when the model selection changes while the notice is prepared", async () => {
+  const f = await fixture();
+  const selected = { provider: "new-fixture", model: "selected" };
+  const changedNotice = {
+    kind: "active" as const,
+    selectedModel: `${selected.provider}/${selected.model}`,
+    activeModel: "fallback-fixture/available",
+  };
+  const append = transcript.appendAssistantMessageToSessionTranscript;
+  vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
+    async (params) => {
+      await f.replace({
+        ...f.read()!,
+        providerOverride: selected.provider,
+        modelOverride: selected.model,
+        modelOverrideSource: "user",
+        fallbackNotice: changedNotice,
+      });
+      return append(params);
+    },
+  );
+
+  await f.account("ordinary", primary);
+
+  expect(await f.notices()).toEqual([]);
+  expect(f.read()).toMatchObject({
+    providerOverride: selected.provider,
+    modelOverride: selected.model,
+    modelOverrideSource: "user",
+    fallbackNotice: changedNotice,
+  });
+});
+
 it.each(["session", "lifecycle", "writer", "cancellation"] as const)(
   "rejects restoration after %s replacement at the canonical write boundary",
   async (replacement) => {

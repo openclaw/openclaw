@@ -4,6 +4,15 @@ import type { InternalSessionEntry as SessionEntry, PersistedSessionRunStatus } 
 /** `null` requires a revision-less row; omitting the field skips the revision fence. */
 export type SessionLifecycleRevisionExpectation = string | null;
 
+/** Exact persisted routing fields captured before a delayed fallback notice write. */
+export type SessionTranscriptTurnModelSelectionFence = {
+  modelOverrideSource: SessionEntry["modelOverrideSource"] | null;
+  providerOverride: SessionEntry["providerOverride"] | null;
+  modelOverride: SessionEntry["modelOverride"] | null;
+  fallbackSelectedModel: NonNullable<SessionEntry["fallbackNotice"]>["selectedModel"] | null;
+  fallbackActiveModel: NonNullable<SessionEntry["fallbackNotice"]>["activeModel"] | null;
+};
+
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
   /** When supplied, fences exact pending-final custody; null requires its absence. */
@@ -29,6 +38,8 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: PersistedSessionRunStatus | undefined;
+  /** When supplied, rejects a delayed write after the model selection changes. */
+  modelSelectionFence?: SessionTranscriptTurnModelSelectionFence;
 };
 
 /** Lifecycle fields committed with an accepted transcript turn. */

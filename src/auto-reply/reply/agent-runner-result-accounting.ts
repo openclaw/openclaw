@@ -9,6 +9,10 @@ import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-p
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionActorReducer } from "../../config/sessions/session-actor-contract.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
+import {
+  buildModelSelectionFence,
+  matchesModelSelectionFence,
+} from "../../config/sessions/session-transcript-turn-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -283,6 +287,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       fallbackTransition.fallbackCleared = false;
     } else if (completion && sessionKey && context.storePath && !preserveUserFacingSessionState) {
       const fromModel = fallbackTransition.previousState.activeModel!;
+      const expectedModelSelection = buildModelSelectionFence(fallbackStateEntry);
       const recorded = await persistModelFallbackRestoredTranscriptNotice({
         agentId: followupRun.run.agentId,
         sessionKey,
@@ -294,7 +299,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         toModel: fallbackTransition.selectedModelRef,
         assertCurrent() {
           operation?.abortSignal.throwIfAborted();
-          completion.assertCurrent();
+          const current = completion.assertCurrent();
+          if (!current || !matchesModelSelectionFence(current, expectedModelSelection)) {
+            throw new Error("Model restoration source changed before commit");
+          }
         },
       });
       if (!recorded) {

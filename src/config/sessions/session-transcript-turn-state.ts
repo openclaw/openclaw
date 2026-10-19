@@ -7,6 +7,7 @@ import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
+  SessionTranscriptTurnModelSelectionFence,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -38,6 +39,31 @@ export function buildRestartRecoveryExpectedState(
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
   };
+}
+
+export function buildModelSelectionFence(
+  entry: SessionEntry,
+): SessionTranscriptTurnModelSelectionFence {
+  return {
+    modelOverrideSource: entry.modelOverrideSource ?? null,
+    providerOverride: entry.providerOverride ?? null,
+    modelOverride: entry.modelOverride ?? null,
+    fallbackSelectedModel: entry.fallbackNotice?.selectedModel ?? null,
+    fallbackActiveModel: entry.fallbackNotice?.activeModel ?? null,
+  };
+}
+
+export function matchesModelSelectionFence(
+  entry: SessionEntry,
+  fence: SessionTranscriptTurnModelSelectionFence,
+): boolean {
+  return (
+    (entry.modelOverrideSource ?? null) === fence.modelOverrideSource &&
+    (entry.providerOverride ?? null) === fence.providerOverride &&
+    (entry.modelOverride ?? null) === fence.modelOverride &&
+    (entry.fallbackNotice?.selectedModel ?? null) === fence.fallbackSelectedModel &&
+    (entry.fallbackNotice?.activeModel ?? null) === fence.fallbackActiveModel
+  );
 }
 
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
@@ -105,7 +131,9 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,
         ) &&
-        selected.entry.status === expectedState.status)),
+        selected.entry.status === expectedState.status &&
+        (expectedState.modelSelectionFence === undefined ||
+          matchesModelSelectionFence(selected.entry, expectedState.modelSelectionFence)))),
   );
 }
 

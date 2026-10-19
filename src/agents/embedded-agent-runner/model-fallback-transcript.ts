@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  buildModelSelectionFence,
+  buildRestartRecoveryExpectedState,
+} from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -53,6 +57,10 @@ export async function persistModelFallbackRestoredTranscriptNotice(params: {
       runId,
       config: params.config,
       assertCurrent: params.assertCurrent,
+      expectedSessionState: {
+        ...buildRestartRecoveryExpectedState(entry),
+        modelSelectionFence: buildModelSelectionFence(entry),
+      },
       idempotencyKey: `model-fallback-restored:${transition}`,
       text: `Selected model ${toModel} restored (was ${fromModel}).`,
       deliveryMirror: {
