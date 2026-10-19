@@ -5,16 +5,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-  type MockInstance,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock, MockInstance } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
@@ -116,6 +108,7 @@ describe("entry compile cache", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     child.emit("close", 0, null);
     await Promise.allSettled(pending.splice(0));
     process.exitCode = originalExitCode;
@@ -223,22 +216,23 @@ describe("entry compile cache", () => {
       const { completion } = await startRespawn();
       expect(spawn).toHaveBeenCalledOnce();
       const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
-      expect(command).toBe(process.execPath);
-      expect(args).toEqual([
-        "--import",
-        CLI_PARENT_BOUND_PRELOAD,
-        "--no-warnings",
-        entryFile,
-        "status",
-        "--json",
-      ]);
-      expect(options?.env?.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-      expect(options?.env?.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED).toBe("1");
+      expect({ command, args, options }).toMatchObject({
+        command: process.execPath,
+        args: [
+          "--import",
+          CLI_PARENT_BOUND_PRELOAD,
+          "--no-warnings",
+          entryFile,
+          "status",
+          "--json",
+        ],
+        options: {
+          env: { NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1" },
+          stdio: ["inherit", "inherit", "inherit", "ipc"],
+          detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+        },
+      });
       expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
-      expect(options?.stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
-      expect(options?.detached).toBe(
-        process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
-      );
       expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
         onSignal: expect.any(Function),
       });
@@ -317,33 +311,29 @@ describe("entry compile cache", () => {
       await markSourceCheckout();
       argv = [process.execPath, entryFile, "tui"];
       vi.useFakeTimers();
-      try {
-        await withMockedPlatform(platform, async () => {
-          const { completion } = await startRespawn();
-          const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
-          expectDefined(options?.onSignal, "signal handler")("SIGTERM");
-          vi.advanceTimersByTime(1_000);
-          expect(kill).toHaveBeenCalledWith("SIGTERM");
-          expect(process.exitCode).toBe(17);
-          vi.advanceTimersByTime(1_000);
-          expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
-          expect(process.exitCode).toBe(17);
+      await withMockedPlatform(platform, async () => {
+        const { completion } = await startRespawn();
+        const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
+        expectDefined(options?.onSignal, "signal handler")("SIGTERM");
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledWith("SIGTERM");
+        expect(process.exitCode).toBe(17);
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
+        expect(process.exitCode).toBe(17);
+        expect(processKill).not.toHaveBeenCalled();
+        child.emit("exit", null, "SIGKILL");
+        expect(process.exitCode).toBe(17);
+        expect(processKill).not.toHaveBeenCalled();
+        child.emit("close", null, "SIGKILL");
+        await expect(completion).resolves.toBe(true);
+        expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
+        if (platform === "win32") {
           expect(processKill).not.toHaveBeenCalled();
-          child.emit("exit", null, "SIGKILL");
-          expect(process.exitCode).toBe(17);
-          expect(processKill).not.toHaveBeenCalled();
-          child.emit("close", null, "SIGKILL");
-          await expect(completion).resolves.toBe(true);
-          expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
-          if (platform === "win32") {
-            expect(processKill).not.toHaveBeenCalled();
-          } else {
-            expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
-          }
-        });
-      } finally {
-        vi.useRealTimers();
-      }
+        } else {
+          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+        }
+      });
     },
   );
 

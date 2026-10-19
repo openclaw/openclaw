@@ -13,6 +13,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "../test/helpers/gateway-integration-fixtures.js";
+import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../test/helpers/openclaw-test-instance.js";
@@ -35,6 +41,49 @@ type MemoryRootFixture = {
   stderr: () => string;
   invoke: (args: string[]) => Promise<void>;
 };
+
+function memoryConfig(workspace: string, baseUrl?: string): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace,
+        skipBootstrap: baseUrl ? true : undefined,
+        heartbeat: baseUrl ? { every: "0m" } : undefined,
+        model: baseUrl ? { primary: "fixture/unused" } : undefined,
+      },
+      entries: { main: {} },
+    },
+    plugins: {
+      allow: ["memory-core"],
+      slots: { memory: "memory-core" },
+      entries: baseUrl
+        ? { "memory-core": { config: { dreaming: { enabled: false } } } }
+        : undefined,
+    },
+    memory: {
+      search: baseUrl
+        ? {
+            provider: "openai-compatible",
+            model: "synthetic-embedding",
+            fallback: "none",
+            sources: ["memory"],
+            remote: { baseUrl, apiKey: "fixture-unused-key" },
+            query: { minScore: 0.2 },
+          }
+        : { provider: "none", sources: ["memory"], store: { vector: { enabled: false } } },
+    },
+    gateway: baseUrl ? { mode: "local", bind: "loopback" } : undefined,
+    hooks: baseUrl ? { enabled: false } : undefined,
+    tools: baseUrl ? { allow: ["memory_search"] } : undefined,
+  };
+}
+
+function expectJsonFailure({ stdout, stderr }: MemoryRootFixture, message: string) {
+  expect(JSON.parse(stdout())).toEqual({ ok: false, error: { type: "cli_error", message } });
+  expect(stderr().trim()).toBe(message);
+  expect(process.exitCode).toBe(1);
+}
 
 async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>) {
   // A later invocation must not adopt roots retained after failed owner drainage.
@@ -65,22 +114,10 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
       return true;
     });
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { workspace: workspaceDir },
-        entries: { main: {} },
-      },
-      plugins: { allow: ["memory-core"], slots: { memory: "memory-core" } },
-      memory: {
-        search: {
-          provider: "none",
-          sources: ["memory"],
-          store: { vector: { enabled: false } },
-        },
-      },
-    };
-    await fs.writeFile(path.join(root, "openclaw.json"), JSON.stringify(config));
+    await fs.writeFile(
+      path.join(root, "openclaw.json"),
+      JSON.stringify(memoryConfig(workspaceDir)),
+    );
     const fixtureEnv = { ...process.env };
     const invoke = async (args: string[]) => {
       const argv = ["node", "openclaw", "memory", ...args];
@@ -145,9 +182,10 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
 }
 
 async function prepareHistoricalMemoryControl(
-  { workspaceDir, invoke, stdout }: Pick<MemoryRootFixture, "workspaceDir" | "invoke" | "stdout">,
+  fixture: MemoryRootFixture,
   command: "rem-harness" | "rem-backfill",
 ) {
+  const { workspaceDir, invoke, stdout } = fixture;
   const historyPath = path.join(workspaceDir, "2025-01-01.md");
   const history =
     "## Preferences Learned\n- Always choose the copper telescope for observations.\n";
@@ -168,30 +206,22 @@ async function prepareHistoricalMemoryControl(
 
 describe("memory command failures at the root JSON boundary", () => {
   it("writes one actionable JSON failure for a queryless search", async () => {
-    await withMemoryRoot(async ({ invoke, stdout, stderr }) => {
-      await invoke(["search", "--json"]);
-
-      expect(JSON.parse(stdout())).toEqual({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: "Missing search query. Provide a positional query or use --query <text>.",
-        },
-      });
-      expect(stderr().trim()).toBe(
+    await withMemoryRoot(async (fixture) => {
+      await fixture.invoke(["search", "--json"]);
+      expectJsonFailure(
+        fixture,
         "Missing search query. Provide a positional query or use --query <text>.",
       );
-      // Vitest suppresses the native one-shot exit; this checks the logical code only.
-      expect(process.exitCode).toBe(1);
     });
   });
 
   it.each(["rem-harness", "rem-backfill"] as const)(
     "%s writes one failure document when historical scratch removal rejects",
     async (command) => {
-      await withMemoryRoot(async ({ workspaceDir, invoke, stdout, stderr }) => {
+      await withMemoryRoot(async (fixture) => {
+        const { invoke, stdout } = fixture;
         const { historyPath, history, args } = await prepareHistoricalMemoryControl(
-          { workspaceDir, invoke, stdout },
+          fixture,
           command,
         );
         const realCopyFile = fs.copyFile.bind(fs);
@@ -239,14 +269,9 @@ describe("memory command failures at the root JSON boundary", () => {
 
           // Parse the entire stream: a success document followed by the root
           // failure document must fail even when each document is valid JSON.
-          expect(JSON.parse(stdout())).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: cleanupError.message },
-          });
+          expectJsonFailure(fixture, cleanupError.message);
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr().trim()).toBe(cleanupError.message);
-          expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {
           // Release and join even when a baseline assertion fails. Restoring the
@@ -300,24 +325,17 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
       let instance: OpenClawTestInstance | undefined;
       const provider = createServer((request, response) => {
         void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          const body: { input: string[] } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              data: body.input.map((text, index) => {
-                const embedding =
-                  text === query || text === "ping" ? vector(0) : embeddings.get(text.trim());
-                if (!embedding) {
-                  throw new Error("Unexpected embedding fixture input");
-                }
-                return { index, embedding };
-              }),
+          const body: { input: string[] } = JSON.parse(await readRequestText(request));
+          respondJson(response, {
+            data: body.input.map((text, index) => {
+              const embedding =
+                text === query || text === "ping" ? vector(0) : embeddings.get(text.trim());
+              if (!embedding) {
+                throw new Error("Unexpected embedding fixture input");
+              }
+              return { index, embedding };
             }),
-          );
+          });
         })().catch((error: unknown) => {
           providerErrors.push(error);
           response.writeHead(500).end();
@@ -331,52 +349,13 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
           for (const [name, text] of documents) {
             await fs.writeFile(path.join(workspace, "memory", `${name}.md`), `${text}\n`);
           }
-          await new Promise<void>((resolve, reject) => {
-            provider.once("error", reject);
-            provider.listen(0, "127.0.0.1", resolve);
-          });
-          const address = provider.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Embedding fixture did not bind a TCP port");
-          }
+          const providerUrl = await listenLoopback(provider);
           instance = await createOpenClawTestInstance({
             name: "memory-query-plan",
             entrypoint: [path.resolve("openclaw.mjs")],
             signal,
             verifyCleanup,
-            config: {
-              agents: {
-                ownership: "explicit",
-                defaults: {
-                  workspace,
-                  skipBootstrap: true,
-                  heartbeat: { every: "0m" },
-                  model: { primary: "fixture/unused" },
-                },
-                entries: { main: {} },
-              },
-              gateway: { mode: "local", bind: "loopback" },
-              hooks: { enabled: false },
-              memory: {
-                search: {
-                  provider: "openai-compatible",
-                  model: "synthetic-embedding",
-                  fallback: "none",
-                  sources: ["memory"],
-                  remote: {
-                    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                    apiKey: "fixture-unused-key",
-                  },
-                  query: { minScore: 0.2 },
-                },
-              },
-              plugins: {
-                allow: ["memory-core"],
-                slots: { memory: "memory-core" },
-                entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
-              },
-              tools: { allow: ["memory_search"] },
-            },
+            config: memoryConfig(workspace, `${providerUrl}/v1`),
             env: {
               VITEST: undefined,
               NODE_ENV: undefined,
@@ -471,10 +450,7 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
         async () => instance?.cleanup(),
         async () => {
           if (provider.listening) {
-            provider.closeAllConnections();
-            await new Promise<void>((resolve, reject) => {
-              provider.close((error) => (error ? reject(error) : resolve()));
-            });
+            await closeHttpServer(provider);
           }
         },
       );

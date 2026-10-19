@@ -33,12 +33,6 @@ async function versionFixture(files: Record<string, unknown>) {
   return pathToFileURL(path.join(root, "dist/plugin-sdk/core.js")).href;
 }
 
-function expectVersionMetadataToBeMissing(moduleUrl: string) {
-  expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
-  expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
-  expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
-}
-
 describe("version resolution", () => {
   it("reports the built version when dist lags the source package version", async () => {
     const moduleUrl = await versionFixture({
@@ -75,12 +69,15 @@ describe("version resolution", () => {
   });
 
   it("ignores non-openclaw package and blank build-info versions", async () => {
-    expectVersionMetadataToBeMissing(
-      await versionFixture({
-        "package.json": { name: "other-package", version: "9.9.9" },
-        "build-info.json": { version: "  " },
-      }),
-    );
+    const moduleUrl = await versionFixture({
+      "package.json": { name: "other-package", version: "9.9.9" },
+      "build-info.json": { version: "  " },
+    });
+    expect([
+      readVersionFromPackageJsonForModuleUrl(moduleUrl),
+      readVersionFromBuildInfoForModuleUrl(moduleUrl),
+      resolveVersionFromModuleUrl(moduleUrl),
+    ]).toEqual([null, null, null]);
   });
 
   it("resolves binary version with explicit precedence", async () => {

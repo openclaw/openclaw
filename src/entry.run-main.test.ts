@@ -42,19 +42,42 @@ describe("entry run-main boundary", () => {
     });
   });
 
-  it("frames a command-phase failure as a command failure, not a startup failure", async () => {
-    // mock-isolation: Exercise entry failure framing without starting the real CLI runtime.
-    vi.doMock("./cli/run-main.js", async () => ({
-      runCli: vi.fn(async () => {
-        throw new Error(
-          "Multiple agents are configured, but this operation has no explicit owner.",
-        );
-      }),
-    }));
-    await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"]);
+  it.each(["command", "startup", "expected"])("frames a %s failure", async (phase) => {
+    const message = "Enable the workboard plugin.";
+    const error =
+      phase === "expected"
+        ? new ExpectedCliError({ message, humanOutput: message, machineOutput: message })
+        : new Error("synthetic CLI failure");
+    // mock-isolation: Distinguish import failure from failure inside the loaded command.
+    vi.doMock("./cli/run-main.js", async () => {
+      if (phase === "startup") {
+        throw error;
+      }
+      return {
+        runCli: async () => {
+          throw error;
+        },
+      };
+    });
+    const args =
+      phase === "command"
+        ? ["onboard", "recommendations"]
+        : phase === "expected"
+          ? ["workboard", "list"]
+          : ["status"];
+    await runMainOrRootHelp(["node", "openclaw", ...args]);
     expect(process.exitCode).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith("[openclaw] The CLI command failed.");
-    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Could not start the CLI"));
+    if (phase === "expected") {
+      expect(errorSpy.mock.calls).toEqual([[message]]);
+    } else {
+      const startup = phase === "startup";
+      expect(errorSpy).toHaveBeenCalledWith(
+        `[openclaw] ${startup ? "Could not start the CLI." : "The CLI command failed."}`,
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining(startup ? "The CLI command failed" : "Could not start the CLI"),
+      );
+    }
   });
 
   it.each([false, true])(
@@ -114,36 +137,6 @@ describe("entry run-main boundary", () => {
       }
     },
   );
-
-  it("frames a failure before the command runs as a startup failure", async () => {
-    // mock-isolation: Model an import failure before the real CLI runtime initializes.
-    vi.doMock("./cli/run-main.js", async () => {
-      throw new Error("cannot load run-main");
-    });
-    await runMainOrRootHelp(["node", "openclaw", "status"]);
-    expect(process.exitCode).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith("[openclaw] Could not start the CLI.");
-    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("The CLI command failed"));
-  });
-
-  it("keeps expected conditions at exit 1 without crash framing", async () => {
-    const message =
-      'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
-    const error = new ExpectedCliError({
-      message,
-      humanOutput: message,
-      machineOutput: message,
-    });
-    // mock-isolation: Exercise expected entry failures without starting the real CLI runtime.
-    vi.doMock("./cli/run-main.js", async () => ({
-      runCli: vi.fn(async () => {
-        throw error;
-      }),
-    }));
-    await runMainOrRootHelp(["node", "openclaw", "workboard", "list"]);
-    expect(process.exitCode).toBe(1);
-    expect(errorSpy.mock.calls).toEqual([[message]]);
-  });
 });
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
