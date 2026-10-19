@@ -136,11 +136,12 @@ function brokerFixture(ready = true) {
   return { host, worker, send, receive, requestSent: requestSent.promise };
 }
 
-function missingExecutableResult(): BrokerExecaResult {
-  const error = Object.assign(new Error("spawn synthetic-missing ENOENT"), { code: "ENOENT" });
+function failedResult(
+  error = Object.assign(new Error("spawn synthetic-missing ENOENT"), { code: "ENOENT" }),
+): BrokerExecaResult {
   return {
     failed: true,
-    code: "ENOENT",
+    code: error.code,
     timedOut: false,
     isCanceled: false,
     isGracefullyCanceled: false,
@@ -219,12 +220,7 @@ describe("broker host scope settlement", () => {
           fixture.receive({
             type: "execa-result",
             id,
-            result: {
-              ...missingExecutableResult(),
-              ...(failure.result === "capacity"
-                ? { code: refusal.code, error: serializeExecaError(refusal) }
-                : {}),
-            },
+            result: failedResult(failure.result === "capacity" ? refusal : undefined),
           });
         }
         fixture.receive({
@@ -269,11 +265,7 @@ describe("broker host scope settlement", () => {
     fixture.receive({
       type: "execa-result",
       id,
-      result: {
-        ...missingExecutableResult(),
-        code: refusal.code,
-        error: serializeExecaError(refusal),
-      },
+      result: failedResult(refusal),
     });
     fixture.receive({ type: "error", id, error: refusal, resultUnavailable: true });
     await closed;

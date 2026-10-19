@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { spawn, type SpawnOptions } from "node:child_process";
+import { once, type EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnAndWait } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
@@ -29,6 +30,36 @@ async function start() {
 }
 
 const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
+
+function nodeCommand(
+  host: SpawnBrokerHost,
+  source: string,
+  options: SpawnOptions,
+  initiate?: SpawnInitiation,
+) {
+  return host.spawn(process.execPath, ["-e", source], options, initiate);
+}
+
+function capture(stream: EventEmitter | null | undefined) {
+  let output = "";
+  stream?.on("data", (chunk) => {
+    output += chunk;
+  });
+  return () => output;
+}
+
+async function runFixture(script: string, options: SpawnOptions, input?: string) {
+  const child = spawn(
+    process.execPath,
+    ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+    options,
+  );
+  const stdout = capture(child.stdout),
+    stderr = capture(child.stderr);
+  child.stdin?.end(input);
+  const [code, signal] = await once(child, "close");
+  return { code, signal, stdout: stdout(), stderr: stderr() };
+}
 
 type BootstrapFixtureMode =
   | "native"
@@ -168,20 +199,11 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
     }
   `;
   // A failing bootstrap or close stays outside the shared broker afterEach cleanup.
-  const fixture = spawn(
-    process.execPath,
-    ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
-    { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" },
-  );
-  let stdout = "";
-  let stderr = "";
-  fixture.stdout.on("data", (chunk) => {
-    stdout += chunk;
+  const { code, signal, stdout, stderr } = await runFixture(script, {
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
-  fixture.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const [code, signal] = await once(fixture, "close");
   expect({ code, signal }, stderr).toEqual({ code: 0, signal: null });
   return JSON.parse(stdout);
 }
@@ -225,9 +247,9 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
     const admitted = createDeferredCore();
-    const child = host.spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume(); process.stdin.once('end', () => process.exit(0))"],
+    const child = nodeCommand(
+      host,
+      "process.stdin.resume(); process.stdin.once('end', () => process.exit(0))",
       { stdio: ["pipe", "ignore", "ignore"] },
       (launch, settlement) => {
         if (!settlement) {
@@ -246,9 +268,9 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
 
     const grantReached = createDeferredCore<{ settlement: Promise<unknown> }>();
     let pausedPid: number | undefined;
-    const failed = host.spawn(
-      process.execPath,
-      ["-e", "process.exit(0)"],
+    const failed = nodeCommand(
+      host,
+      "process.exit(0)",
       { stdio: "ignore" },
       (launch, settlement) => {
         if (!settlement || !host.pid) {
@@ -309,12 +331,9 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
       await Promise.resolve();
       await Promise.resolve();
       const events: string[] = [];
-      child.on("exit", () => {
-        events.push("exit");
-      });
-      child.on("close", () => {
-        events.push("close");
-      });
+      for (const event of ["exit", "close"]) {
+        child.on(event, () => events.push(event));
+      }
       expect(child.exitCode).toBe(null);
       const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
       await delay(0);
@@ -343,21 +362,15 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await child.ready();
     expect(child.spawnfile).toBe(process.execPath);
     expect(child.spawnargs).toEqual([argv0, ...args]);
-    let stdout = "",
-      stderr = "";
-    child.stdout!.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr!.on("data", (chunk) => {
-      stderr += chunk;
-    });
+    const stdout = capture(child.stdout),
+      stderr = capture(child.stderr);
     child.stdin!.end("input-prefix:");
     await once(child, "close");
-    const newline = stdout.indexOf("\n");
-    expect(JSON.parse(stdout.slice(0, newline))).toEqual({ parent: host.pid, argv0 });
+    const newline = stdout().indexOf("\n");
+    expect(JSON.parse(stdout().slice(0, newline))).toEqual({ parent: host.pid, argv0 });
     expect(host.pid).not.toBe(process.pid);
-    expect(stdout.slice(newline + 1)).toBe("input-prefix:" + "o".repeat(size));
-    expect(stderr).toBe("e".repeat(size));
+    expect(stdout().slice(newline + 1)).toBe("input-prefix:" + "o".repeat(size));
+    expect(stderr()).toBe("e".repeat(size));
   });
 
   it("preserves real inherited stdin across the host and broker", async () => {
@@ -376,48 +389,30 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
         child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
         await once(child,'close'); await broker?.close();
       `;
-      const fixture = spawn(
-        process.execPath,
-        ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
-        { stdio: ["pipe", "pipe", "pipe"] },
-      );
-      let stdout = "",
-        stderr = "";
-      fixture.stdout.on("data", (chunk) => {
-        stdout += chunk;
+      expect(await runFixture(script, { stdio: ["pipe", "pipe", "pipe"] }, input)).toEqual({
+        code: 0,
+        signal: null,
+        stdout: input,
+        stderr: "",
       });
-      fixture.stderr.on("data", (chunk) => {
-        stderr += chunk;
-      });
-      fixture.stdin.end(input);
-      const [code] = await once(fixture, "close");
-      expect(stderr).toBe("");
-      expect(code).toBe(0);
-      expect(stdout).toBe(input);
     }
   });
 
   it("forwards child IPC and retains separate extra pipes", async () => {
     const host = await start();
-    const child = host.spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+    const child = nodeCommand(
+      host,
+      `
       const fs = require('node:fs');
       process.on('message', value => {
         fs.writeSync(3, 'private-pipe');
         process.send(value, () => process.disconnect());
       });
     `,
-      ],
       { stdio: ["ignore", "pipe", "pipe", "pipe", "ipc"] },
     );
     await child.ready();
-    let extra = "";
-    child.stdio[3]!.on("data", (chunk) => {
-      extra += chunk;
-    });
+    const extra = capture(child.stdio[3]);
     const message = once(child, "message");
     const closed = once(child, "close");
     await new Promise<void>((resolve, reject) => {
@@ -425,7 +420,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     });
     expect((await message)[0]).toEqual({ hello: "broker" });
     await closed;
-    expect(extra).toBe("private-pipe");
+    expect(extra()).toBe("private-pipe");
     expect(child.connected).toBe(false);
   });
 
@@ -434,35 +429,24 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
       "settles a real child after parent-initiated IPC disconnect (" + output + ")",
       async ({ signal }) => {
         const host = await start();
-        const child = host.spawn(
-          process.execPath,
-          [
-            "-e",
-            "process.on('disconnect', () => { process.stdout.end('stdout-tail'); process.stderr.end('stderr-tail'); }); process.send('ready');",
-          ],
+        const child = nodeCommand(
+          host,
+          "process.on('disconnect', () => { process.stdout.end('stdout-tail'); process.stderr.end('stderr-tail'); }); process.send('ready');",
           { stdio: ["ignore", output, output, "ipc"], serialization: "advanced" },
         );
         const ready = once(child, "message");
-        let stdout = "",
-          stderr = "";
         await child.ready();
         // Native streams arrive with the spawn receipt, before lifecycle messages are released.
-        child.stdout?.on("data", (chunk) => {
-          stdout += chunk;
-        });
-        child.stderr?.on("data", (chunk) => {
-          stderr += chunk;
-        });
+        const stdout = capture(child.stdout),
+          stderr = capture(child.stderr);
         expect((await ready)[0]).toBe("ready");
         const exited = once(child, "exit");
         child.disconnect();
         expect(await withinTest(exited, signal)).toEqual([0, null]);
         await withinTest(child.waitForClose(), signal);
-        expect(child.exitCode).toBe(0);
-        expect(child.signalCode).toBe(null);
-        expect(child.connected).toBe(false);
-        expect(stdout).toBe(output === "pipe" ? "stdout-tail" : "");
-        expect(stderr).toBe(output === "pipe" ? "stderr-tail" : "");
+        expect(child).toMatchObject({ exitCode: 0, signalCode: null, connected: false });
+        expect(stdout()).toBe(output === "pipe" ? "stdout-tail" : "");
+        expect(stderr()).toBe(output === "pipe" ? "stderr-tail" : "");
       },
       10_000,
     );
@@ -473,17 +457,14 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     async (signal) => {
       const host = await start();
       const brokerPid = host.pid!;
-      const child = host.spawn(
-        process.execPath,
-        [
-          "-e",
-          `
+      const child = nodeCommand(
+        host,
+        `
           process.on('message', () => {
             process.send('completed', () => process.disconnect());
           });
           process.send('ready');
         `,
-        ],
         { stdio: ["ignore", "ignore", "ignore", "ipc"] },
       );
       await child.ready();
@@ -500,18 +481,13 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
       expect(message[0]).toBe("completed");
       expect(closed).toEqual([0, null]);
 
-      const cleanup = host.spawn(
-        process.execPath,
-        ["-e", "process.stdout.write(String(process.ppid))"],
-        { stdio: ["ignore", "pipe", "ignore"] },
-      );
-      await cleanup.ready();
-      let output = "";
-      cleanup.stdout!.on("data", (chunk) => {
-        output += chunk;
+      const cleanup = nodeCommand(host, "process.stdout.write(String(process.ppid))", {
+        stdio: ["ignore", "pipe", "ignore"],
       });
+      await cleanup.ready();
+      const output = capture(cleanup.stdout);
       expect(await once(cleanup, "close")).toEqual([0, null]);
-      expect(Number(output)).toBe(brokerPid);
+      expect(Number(output())).toBe(brokerPid);
       expect(host.pid).toBe(brokerPid);
     },
     15_000,
@@ -521,26 +497,20 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     signal,
   }) => {
     const host = await start();
-    const child = host.spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+    const child = nodeCommand(
+      host,
+      `
       const {spawn}=require('node:child_process');
       const descendant=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});
       process.stdout.write(String(descendant.pid),()=>process.exit(0));
     `,
-      ],
       { stdio: ["ignore", "pipe", "pipe"], detached: true },
     );
     await child.ready();
     const pidOutput = once(child.stdout!, "data");
-    let stdout = "";
-    child.stdout!.on("data", (chunk) => {
-      stdout += chunk;
-    });
+    const stdout = capture(child.stdout);
     await Promise.all([once(child, "exit"), pidOutput]);
-    const descendant = Number(stdout);
+    const descendant = Number(stdout());
     try {
       await withinTest(host.close(), signal);
       const running = async () => {
@@ -575,11 +545,9 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   it("fails in-flight commands on broker loss and restarts without local spawning", async () => {
     const host = await start();
     const previousPid = host.pid!;
-    const child = host.spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+    const child = nodeCommand(
+      host,
+      `
       let stopping = false;
       process.on('SIGTERM', () => {
         if (!stopping) {
@@ -590,7 +558,6 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
       process.stdout.write('ready');
       setInterval(() => {}, 1000);
     `,
-      ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     await child.ready();
@@ -619,18 +586,13 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
       expect(isPidDefinitelyDead(facts.childPid), JSON.stringify(facts)).toBe(true);
       await host.ready();
       expect(host.pid, JSON.stringify(facts)).not.toBe(previousPid);
-      const next = host.spawn(
-        process.execPath,
-        ["-e", "process.stdout.write(String(process.ppid))"],
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-      await next.ready();
-      let stdout = "";
-      next.stdout!.on("data", (chunk) => {
-        stdout += chunk;
+      const next = nodeCommand(host, "process.stdout.write(String(process.ppid))", {
+        stdio: ["ignore", "pipe", "pipe"],
       });
+      await next.ready();
+      const stdout = capture(next.stdout);
       await once(next, "close");
-      expect(Number(stdout), JSON.stringify(facts)).toBe(host.pid);
+      expect(Number(stdout()), JSON.stringify(facts)).toBe(host.pid);
     } finally {
       try {
         process.kill(child.pid!, "SIGKILL");

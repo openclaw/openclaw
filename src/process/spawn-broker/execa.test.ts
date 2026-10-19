@@ -30,7 +30,7 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     await host.close();
   });
 
-  function start(source: string, options: CommandSpawnOptions, broker: boolean) {
+  function start(source: string, options: CommandSpawnOptions, broker = true) {
     const argv = [process.execPath, "-e", source];
     if (!broker) {
       return execa(argv[0]!, argv.slice(1), options);
@@ -40,6 +40,14 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
       throw new Error("Fixture unexpectedly selected an in-process transport");
     }
     return spawnBrokerCommand(host, argv, options, prepared);
+  }
+
+  async function ready(command: ReturnType<typeof start>) {
+    const child = command.nodeChildProcess;
+    if (!(child instanceof BrokerChild)) {
+      throw new Error("Fixture did not use the broker");
+    }
+    await child.ready();
   }
 
   const cases = [
@@ -268,13 +276,8 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
           maxBuffer: 2 * 1024 * 1024,
           stripFinalNewline: false,
         },
-        true,
       );
-      const child = command.nodeChildProcess;
-      if (!(child instanceof BrokerChild)) {
-        throw new Error("Fixture did not use the broker");
-      }
-      await child.ready();
+      await ready(command);
       const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
       command.stdout?.on("data", (chunk: Buffer) => chunks.stdout.push(chunk));
       command.stderr?.on("data", (chunk: Buffer) => chunks.stderr.push(chunk));
@@ -294,16 +297,12 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   );
 
   it("drains buffered results larger than one IPC frame when callers only await", async () => {
-    const command = start(
-      "process.stdout.write('x'.repeat(17*1024*1024))",
-      {
-        encoding: "buffer",
-        stdin: "ignore",
-        stderr: "ignore",
-        maxBuffer: 18 * 1024 * 1024,
-      },
-      true,
-    );
+    const command = start("process.stdout.write('x'.repeat(17*1024*1024))", {
+      encoding: "buffer",
+      stdin: "ignore",
+      stderr: "ignore",
+      maxBuffer: 18 * 1024 * 1024,
+    });
     const result = await command;
     expect(result.stdout).toHaveLength(17 * 1024 * 1024);
   });
@@ -343,7 +342,6 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
         buffer: { stdout: false },
         reject: false,
       },
-      true,
     );
     expect(await readFile(file, "utf8")).toBe("file bytes");
     expect(result).toBeInstanceOf(Error);
@@ -366,39 +364,25 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     }
     const controller = new AbortController();
     controller.abort();
-    const canceled = await start(
-      "setInterval(()=>{},1000)",
-      {
-        input: Buffer.alloc(2 * 1024 * 1024),
-        reject: false,
-        cancelSignal: controller.signal,
-      },
-      true,
-    );
+    const canceled = await start("setInterval(()=>{},1000)", {
+      input: Buffer.alloc(2 * 1024 * 1024),
+      reject: false,
+      cancelSignal: controller.signal,
+    });
     expect(canceled).toBeInstanceOf(Error);
     expect(canceled).toMatchObject({ failed: true, isCanceled: true });
   });
 
   it("fails in-flight commands on broker loss and resumes in the next broker", async () => {
-    const command = start(
-      "process.stdout.write('ready');setTimeout(()=>{},2000)",
-      { stdin: "ignore" },
-      true,
-    );
-    const child = command.nodeChildProcess;
-    if (!(child instanceof BrokerChild)) {
-      throw new Error("Fixture did not use the broker");
-    }
-    await child.ready();
+    const command = start("process.stdout.write('ready');setTimeout(()=>{},2000)", {
+      stdin: "ignore",
+    });
+    await ready(command);
     const oldPid = host.pid!;
     process.kill(oldPid, "SIGKILL");
     await expect(command).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
     await host.ready();
-    const result = await start(
-      "process.stdout.write(String(process.ppid))",
-      { stdin: "ignore" },
-      true,
-    );
+    const result = await start("process.stdout.write(String(process.ppid))", { stdin: "ignore" });
     expect(Number(result.stdout)).toBe(host.pid);
     expect(host.pid).not.toBe(oldPid);
   });
