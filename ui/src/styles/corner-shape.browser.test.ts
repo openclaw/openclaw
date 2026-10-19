@@ -1,18 +1,8 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeCornerShape = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const fixture = styleFixture("corner-shape-", { ignoreCloseErrors: true });
 
 // Rewrite the property in both feature queries and declarations: unsupported
 // engines also ignore corner-shape outside an @supports block.
@@ -114,37 +104,29 @@ const ROOT_RADIUS_TOKENS = {
 } as const;
 
 function readUiCss(): string {
-  return [
-    "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/option-card.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer-surface.css",
-    "ui/src/styles/chat/composer.css",
-    "ui/src/styles/settings-controls.css",
-    "ui/src/styles/settings.css",
-    "ui/src/pages/activity/run-inspector.css",
-  ]
-    .map((file) => readStyleSheet(file))
-    .join("\n");
-}
-
-function fixtureDocument(css: string): string {
-  return `<!doctype html><html data-theme-mode="light"><head><style>${css}</style></head><body>
-    <main>${ALL_CASES.map((item) => item.markup).join("")}</main>
-  </body></html>`;
+  const css = readStyles(
+    "styles/base",
+    "styles/components",
+    "styles/layout",
+    "styles/option-card",
+    "styles/chat/startup-layout",
+    "styles/chat/layout",
+    "styles/chat/message-layout",
+    "styles/chat/composer-surface",
+    "styles/chat/composer",
+    "styles/settings-controls",
+    "styles/settings",
+    "pages/activity/run-inspector",
+  );
+  expect(css).toContain(SUPPORTS_CONDITION);
+  return css;
 }
 
 type CornerProbe = Record<string, { radius: string; shape: string }>;
 
-async function probeCorners(browser: Browser, fixtureFile: string): Promise<CornerProbe> {
-  const page = await browser.newPage();
-  try {
-    await page.goto(`file://${fixtureFile}`);
-    return await page.evaluate(
+async function probeCorners(supported: boolean): Promise<CornerProbe> {
+  return withFixture(supported, (page) =>
+    page.evaluate(
       (probes: readonly string[]) => {
         return Object.fromEntries(
           probes.map((selector) => {
@@ -159,95 +141,49 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
         );
       },
       ALL_CASES.map((item) => item.selector),
-    );
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
-async function probeRootRadiusTokens(
-  browser: Browser,
-  fixtureFile: string,
-): Promise<Record<string, string>> {
-  const page = await browser.newPage();
-  try {
-    await page.goto(`file://${fixtureFile}`);
-    return await page.evaluate((tokens: readonly string[]) => {
-      const style = getComputedStyle(document.documentElement);
-      return Object.fromEntries(
-        tokens.map((token) => [token, style.getPropertyValue(token).trim()]),
-      );
-    }, Object.keys(ROOT_RADIUS_TOKENS));
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
-let fixtureDirectory: string;
-let superellipticalFixture: string;
-let circularFixture: string;
-let browser: Browser;
-
-beforeAll(async () => {
-  if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
-    return;
-  }
-  const css = readUiCss();
-  expect(css).toContain(SUPPORTS_CONDITION);
-  fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "corner-shape-"));
-  superellipticalFixture = path.join(fixtureDirectory, "superelliptical.html");
-  circularFixture = path.join(fixtureDirectory, "circular.html");
-  fs.writeFileSync(superellipticalFixture, fixtureDocument(css), "utf8");
-  fs.writeFileSync(
-    circularFixture,
-    fixtureDocument(css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:")),
-    "utf8",
+    ),
   );
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-});
+}
 
-afterAll(async () => {
-  await browser?.close().catch(() => {});
-  if (fixtureDirectory) {
-    fs.rmSync(fixtureDirectory, { force: true, recursive: true });
-  }
-});
+function withFixture<T>(supported: boolean, run: (page: Page) => Promise<T>) {
+  const css = readUiCss();
+  return fixture.withPage(
+    String(supported),
+    styleDocument(
+      supported ? css : css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:"),
+      `<main>${ALL_CASES.map((item) => item.markup).join("")}</main>`,
+      'data-theme-mode="light"',
+    ),
+    run,
+  );
+}
 
-describeCornerShape("Control UI corner curvature", () => {
-  it("scales and reshapes the surfaces that carry the app silhouette", async () => {
-    const probe = await probeCorners(browser, superellipticalFixture);
-
-    expect(probe).toEqual(
-      Object.fromEntries([
-        ...CORNER_CASES.map((item) => [
-          item.selector,
-          { radius: item.superelliptical, shape: "superellipse(1.5)" },
-        ]),
-        ...ROUND_CASES.map((item) => [
-          item.selector,
-          { radius: item.superelliptical, shape: CIRCULAR_SHAPE },
-        ]),
-        ...EXCLUDED_CASES.map((item) => [
-          item.selector,
-          { radius: item.superelliptical, shape: CIRCULAR_SHAPE },
-        ]),
-      ]),
-    );
-  });
-
-  it("keeps today's corners on engines without corner-shape", async () => {
-    const probe = await probeCorners(browser, circularFixture);
-
-    expect(probe).toEqual(
-      Object.fromEntries(
-        ALL_CASES.map((item) => [item.selector, { radius: item.circular, shape: CIRCULAR_SHAPE }]),
-      ),
-    );
-  });
+fixture.describe("Control UI corner curvature", () => {
+  it.each([true, false])(
+    "preserves opted-in, round and excluded corners (supported=%s)",
+    async (supported) => {
+      expect(await probeCorners(supported)).toEqual(
+        Object.fromEntries(
+          ALL_CASES.map((item) => [
+            item.selector,
+            {
+              radius: supported ? item.superelliptical : item.circular,
+              shape:
+                supported && CORNER_CASES.includes(item) ? "superellipse(1.5)" : CIRCULAR_SHAPE,
+            },
+          ]),
+        ),
+      );
+    },
+  );
 
   it("keeps the :root radius tokens MCP apps read canonical under the scale", async () => {
-    const probe = await probeRootRadiusTokens(browser, superellipticalFixture);
-
-    expect(probe).toEqual(ROOT_RADIUS_TOKENS);
+    const tokens = await withFixture(true, (page) =>
+      page.evaluate((names: string[]) => {
+        const style = getComputedStyle(document.documentElement);
+        return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name).trim()]));
+      }, Object.keys(ROOT_RADIUS_TOKENS)),
+    );
+    expect(tokens).toEqual(ROOT_RADIUS_TOKENS);
   });
 });

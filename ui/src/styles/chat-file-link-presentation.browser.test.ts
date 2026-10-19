@@ -1,18 +1,7 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeFileLinkPresentation = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const fixture = styleFixture("chat-file-link-presentation-");
 
 // File-link labels match except for glyph spacing owned by the outer anchor.
 const CHIP_PROPERTIES = [
@@ -29,27 +18,30 @@ const CHIP_PROPERTIES = [
 ] as const;
 
 // Match styles/chat.ts: sidebar-markdown must load after chat/text.
-function readChatCss(): string {
-  return [
-    "ui/src/styles/base.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/text.css",
-    "ui/src/styles/sidebar-markdown.css",
-  ]
-    .map((file) => readStyleSheet(file))
-    .join("\n");
+function chatDocument(body: string, theme: "dark" | "light") {
+  return styleDocument(
+    readStyles(
+      "styles/base",
+      "styles/chat/startup-layout",
+      "styles/chat/text",
+      "styles/sidebar-markdown",
+    ),
+    body,
+    theme === "light" ? 'data-theme="light" data-theme-mode="light"' : 'data-theme="dark"',
+  );
 }
 
 function fixtureDocument(themeMode: "dark" | "light"): string {
-  const themeAttributes =
-    themeMode === "light" ? `data-theme="light" data-theme-mode="light"` : `data-theme="dark"`;
   const links = (prefix: string) => `<p>
     <a id="${prefix}from-text" class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts</a>
     <a id="${prefix}from-code" class="markdown-file-link" data-file-kind="code" data-file-path="ui/app.ts"><code>app.ts</code></a>
     <code id="${prefix}plain-code">npm run dev</code></p>`;
-  return `<!doctype html><html ${themeAttributes}><head><style>${readChatCss()}</style></head><body>
+  return chatDocument(
+    `
     <div class="chat-text">${links("")}</div>
-    <article class="sidebar-markdown">${links("panel-")}</article></body></html>`;
+    <article class="sidebar-markdown">${links("panel-")}</article>`,
+    themeMode,
+  );
 }
 
 // The reported list-edge reference includes a path the parser cannot shorten.
@@ -88,15 +80,14 @@ const WRAP_CASES = (["light", "dark"] as const).flatMap((themeMode) =>
 );
 
 function wrapFixtureDocument(themeMode: "dark" | "light", container: WrapContainer): string {
-  const themeAttributes =
-    themeMode === "light" ? `data-theme="light" data-theme-mode="light"` : `data-theme="dark"`;
   const separationLinks = SEPARATION_CASES.map(({ filePath, id, label, line }) => {
     const lineAttribute = line === undefined ? "" : ` data-file-line="${line}"`;
     const linkLabel = line === undefined ? label : `${label}:${line}`;
     return `<p><a id="${id}" class="markdown-file-link" data-file-kind="code"
         data-file-path="${filePath}"${lineAttribute}>${linkLabel}</a></p>`;
   }).join("\n");
-  return `<!doctype html><html ${themeAttributes}><head><style>${readChatCss()}</style></head><body>
+  return chatDocument(
+    `
     <div class="${container}" id="column">
       <ol><li>Reproduce the failing run, then read the harness entry point
         (<a id="wrap-chip" class="markdown-file-link" data-file-kind="code"
@@ -105,8 +96,9 @@ function wrapFixtureDocument(themeMode: "dark" | "light", container: WrapContain
       <p><a id="long-chip" class="markdown-file-link" data-file-kind="code"
         data-file-path="${LONG_CHIP_PATH}">${LONG_CHIP_PATH}</a></p>
       ${separationLinks}
-    </div>
-  </body></html>`;
+    </div>`,
+    themeMode,
+  );
 }
 
 type SeparationSample = {
@@ -134,103 +126,75 @@ async function probeWrap(
   readonly samples: readonly WrapSample[];
   readonly separation: readonly SeparationSample[];
 }> {
-  const fixtureFile = path.join(fixtureDirectory, `${themeMode}-${container}-wrap.html`);
-  fs.writeFileSync(fixtureFile, wrapFixtureDocument(themeMode, container), "utf8");
-  const page = await browser.newPage();
-  try {
-    await page.goto(`file://${fixtureFile}`);
-    return await page.evaluate(
-      (caseIds) => {
-        const resolve = (selector: string) => {
-          const element = document.querySelector(selector);
-          if (!(element instanceof HTMLElement)) {
-            throw new Error(`Missing wrap fixture element for ${selector}`);
-          }
-          return element;
-        };
-        const column = resolve("#column");
-        const chip = resolve("#wrap-chip");
-        const longChip = resolve("#long-chip");
-        const separationChips = caseIds.map((caseId) => ({
-          caseId,
-          element: resolve(`#${caseId}`),
-        }));
-        const samples: WrapSample[] = [];
-        const separation: SeparationSample[] = [];
-        for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
-          column.style.width = `${columnWidth}px`;
-          samples.push({
-            chipLineCount: chip.getClientRects().length,
-            chipTop: chip.getBoundingClientRect().top,
-            columnWidth,
-            longChipLineCount: longChip.getClientRects().length,
-            longChipWidth: longChip.getBoundingClientRect().width,
-          });
-        }
-        // Narrower widths force even short basenames to wrap.
-        for (let columnWidth = 40; columnWidth <= 320; columnWidth += 4) {
-          column.style.width = `${columnWidth}px`;
-          const columnRight = column.getBoundingClientRect().right;
-          for (const { caseId, element } of separationChips) {
-            const elementTop = element.getBoundingClientRect().top;
-            const labelTextNode = element.firstChild;
-            if (!labelTextNode) {
-              throw new Error(`Separation fixture ${caseId} has no label text node`);
+  return fixture.withPage(
+    `${themeMode}-${container}-wrap`,
+    wrapFixtureDocument(themeMode, container),
+    async (page) => {
+      return await page.evaluate(
+        (caseIds) => {
+          const resolve = (selector: string) => {
+            const element = document.querySelector(selector);
+            if (!(element instanceof HTMLElement)) {
+              throw new Error(`Missing wrap fixture element for ${selector}`);
             }
-            const firstCharacterRange = document.createRange();
-            firstCharacterRange.setStart(labelTextNode, 0);
-            firstCharacterRange.setEnd(labelTextNode, 1);
-            const firstCharacterTop = firstCharacterRange.getBoundingClientRect().top;
-            const labelRange = document.createRange();
-            labelRange.selectNodeContents(labelTextNode);
-            const lineHeightPx = Number.parseFloat(getComputedStyle(element).lineHeight);
-            separation.push({
-              caseId,
+            return element;
+          };
+          const column = resolve("#column");
+          const chip = resolve("#wrap-chip");
+          const longChip = resolve("#long-chip");
+          const separationChips = caseIds.map((caseId) => ({
+            caseId,
+            element: resolve(`#${caseId}`),
+          }));
+          const samples: WrapSample[] = [];
+          const separation: SeparationSample[] = [];
+          for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
+            column.style.width = `${columnWidth}px`;
+            samples.push({
+              chipLineCount: chip.getClientRects().length,
+              chipTop: chip.getBoundingClientRect().top,
               columnWidth,
-              glyphToLabelGapPx: firstCharacterTop - elementTop,
-              lineHeightPx,
-              labelOverflowPx: labelRange.getBoundingClientRect().right - columnRight,
-              wrapped: element.getBoundingClientRect().height > lineHeightPx * 1.3,
+              longChipLineCount: longChip.getClientRects().length,
+              longChipWidth: longChip.getBoundingClientRect().width,
             });
           }
-        }
-        return { samples, separation };
-      },
-      SEPARATION_CASES.map((testCase) => testCase.id),
-    );
-  } finally {
-    await page.close();
-  }
+          // Narrower widths force even short basenames to wrap.
+          for (let columnWidth = 40; columnWidth <= 320; columnWidth += 4) {
+            column.style.width = `${columnWidth}px`;
+            const columnRight = column.getBoundingClientRect().right;
+            for (const { caseId, element } of separationChips) {
+              const elementTop = element.getBoundingClientRect().top;
+              const labelTextNode = element.firstChild;
+              if (!labelTextNode) {
+                throw new Error(`Separation fixture ${caseId} has no label text node`);
+              }
+              const firstCharacterRange = document.createRange();
+              firstCharacterRange.setStart(labelTextNode, 0);
+              firstCharacterRange.setEnd(labelTextNode, 1);
+              const firstCharacterTop = firstCharacterRange.getBoundingClientRect().top;
+              const labelRange = document.createRange();
+              labelRange.selectNodeContents(labelTextNode);
+              const lineHeightPx = Number.parseFloat(getComputedStyle(element).lineHeight);
+              separation.push({
+                caseId,
+                columnWidth,
+                glyphToLabelGapPx: firstCharacterTop - elementTop,
+                lineHeightPx,
+                labelOverflowPx: labelRange.getBoundingClientRect().right - columnRight,
+                wrapped: element.getBoundingClientRect().height > lineHeightPx * 1.3,
+              });
+            }
+          }
+          return { samples, separation };
+        },
+        SEPARATION_CASES.map((testCase) => testCase.id),
+      );
+    },
+  );
 }
 
-let browser: Browser;
-let fixtureDirectory: string;
-
-beforeAll(async () => {
-  if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
-    return;
-  }
-  // Resolve the temp root: macOS hands back a /var symlink and the file:// URL
-  // must be the canonical path.
-  fixtureDirectory = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "chat-file-link-presentation-")),
-  );
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-});
-
-afterAll(async () => {
-  await browser?.close();
-  if (fixtureDirectory) {
-    fs.rmSync(fixtureDirectory, { force: true, recursive: true });
-  }
-});
-
 async function probe(themeMode: "dark" | "light") {
-  const fixtureFile = path.join(fixtureDirectory, `${themeMode}.html`);
-  fs.writeFileSync(fixtureFile, fixtureDocument(themeMode), "utf8");
-  const page = await browser.newPage();
-  try {
-    await page.goto(`file://${fixtureFile}`);
+  return fixture.withPage(themeMode, fixtureDocument(themeMode), async (page) => {
     return await page.evaluate((properties) => {
       const resolve = (selector: string) => {
         const element = document.querySelector(selector);
@@ -264,12 +228,10 @@ async function probe(themeMode: "dark" | "light") {
         plainCode: read("#plain-code"),
       };
     }, CHIP_PROPERTIES);
-  } finally {
-    await page.close();
-  }
+  });
 }
 
-describeFileLinkPresentation("chat file link presentation", () => {
+fixture.describe("chat file link presentation", () => {
   it.each(["light", "dark"] as const)(
     "renders code-authored and text-authored file links identically in %s",
     async (themeMode) => {
@@ -285,8 +247,10 @@ describeFileLinkPresentation("chat file link presentation", () => {
       const { fromText, plainCode } = await probe(themeMode);
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
       expect(plainCode.borderTopWidth).not.toBe("0px");
-      expect(fromText.borderTopWidth).toBe("0px");
-      expect(fromText.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      expect(fromText).toMatchObject({
+        borderTopWidth: "0px",
+        backgroundColor: "rgba(0, 0, 0, 0)",
+      });
     },
   );
 
@@ -294,9 +258,11 @@ describeFileLinkPresentation("chat file link presentation", () => {
     "gives the Chat Detail Panel the same file-link treatment in %s",
     async (themeMode) => {
       const probed = await probe(themeMode);
-      expect(probed.panelFromText).toEqual(probed.fromText);
-      expect(probed.panelFromCode).toEqual(probed.fromCode);
-      expect(probed.panelGlyph).toEqual(probed.chatGlyph);
+      expect([probed.panelFromText, probed.panelFromCode, probed.panelGlyph]).toEqual([
+        probed.fromText,
+        probed.fromCode,
+        probed.chatGlyph,
+      ]);
       expect(probed.panelGlyph.maskImage).toContain("svg");
     },
   );
@@ -306,10 +272,12 @@ describeFileLinkPresentation("chat file link presentation", () => {
     async (themeMode) => {
       const { chatGlyph, panelGlyph } = await probe(themeMode);
       for (const glyph of [chatGlyph, panelGlyph]) {
-        expect(glyph.position).toBe("absolute");
-        expect(glyph.width).toBe(glyph.fontSize);
-        expect(glyph.height).toBe(glyph.fontSize);
-        expect(glyph.paddingInlineStart).toBe("0px");
+        expect(glyph).toMatchObject({
+          position: "absolute",
+          width: glyph.fontSize,
+          height: glyph.fontSize,
+          paddingInlineStart: "0px",
+        });
       }
     },
   );
