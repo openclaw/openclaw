@@ -595,53 +595,53 @@ it("preserves context-category order, sorted cards, expansion, and callbacks", (
   const container = mount([], { contextWeight, onToggleContextExpanded });
   const categories = ["system", "skills", "tools", "files"];
 
-    expect(
-      [...container.querySelectorAll(".context-stacked-bar .context-segment")].map((segment) =>
-        categories.find((category) => segment.classList.contains(category)),
-      ),
-    ).toEqual(categories);
-    const cards = [...container.querySelectorAll(".context-breakdown-card")];
-    expect(texts(container, ".context-breakdown-title").map((value) => value?.trim())).toEqual([
-      "Skills (5)",
-      "Tools (2)",
-      "Files (3)",
-    ]);
-    expect(texts(cards[0]!, ".context-breakdown-item .mono")).toEqual([
-      "skill-4",
-      "skill-3",
-      "skill-2",
-      "skill-1",
-    ]);
-    expect(text(cards[1], ".context-breakdown-item .mono")).toBe("larger-tool");
-    const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
-    expect(fileEntries.map((entry) => text(entry, ".mono"))).toEqual([
-      "large.md",
-      "small.md",
-      "AGENTS.md",
-    ]);
-    expect(text(fileEntries[2], ".muted")).toBe("unknown");
-    expect(text(cards[0], ".context-breakdown-more")).toContain("1 more");
-    document.body.append(container);
-    const toggle = container.querySelector<HTMLButtonElement>(".context-breakdown-header button")!;
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    toggle.focus();
-    toggle.click();
-    flush();
-    expect(onToggleContextExpanded).toHaveBeenCalledOnce();
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelector(".context-breakdown-header button")).toBe(toggle);
-    expect(document.activeElement).toBe(toggle);
-    expect(
-      container
-        .querySelectorAll(".context-breakdown-card")[0]
-        ?.querySelectorAll(".context-breakdown-item"),
-    ).toHaveLength(5);
-    expect(container.querySelector(".context-breakdown-more")).toBeNull();
+  expect(
+    [...container.querySelectorAll(".context-stacked-bar .context-segment")].map((segment) =>
+      categories.find((category) => segment.classList.contains(category)),
+    ),
+  ).toEqual(categories);
+  const cards = [...container.querySelectorAll(".context-breakdown-card")];
+  expect(texts(container, ".context-breakdown-title").map((value) => value?.trim())).toEqual([
+    "Skills (5)",
+    "Tools (2)",
+    "Files (3)",
+  ]);
+  expect(texts(cards[0]!, ".context-breakdown-item .mono")).toEqual([
+    "skill-4",
+    "skill-3",
+    "skill-2",
+    "skill-1",
+  ]);
+  expect(text(cards[1], ".context-breakdown-item .mono")).toBe("larger-tool");
+  const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
+  expect(fileEntries.map((entry) => text(entry, ".mono"))).toEqual([
+    "large.md",
+    "small.md",
+    "AGENTS.md",
+  ]);
+  expect(text(fileEntries[2], ".muted")).toBe("unknown");
+  expect(text(cards[0], ".context-breakdown-more")).toContain("1 more");
+  document.body.append(container);
+  const toggle = container.querySelector<HTMLButtonElement>(".context-breakdown-header button")!;
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  toggle.focus();
+  toggle.click();
+  flush();
+  expect(onToggleContextExpanded).toHaveBeenCalledOnce();
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(container.querySelector(".context-breakdown-header button")).toBe(toggle);
+  expect(document.activeElement).toBe(toggle);
+  expect(
+    container
+      .querySelectorAll(".context-breakdown-card")[0]
+      ?.querySelectorAll(".context-breakdown-item"),
+  ).toHaveLength(5);
+  expect(container.querySelector(".context-breakdown-more")).toBeNull();
 
-    toggle.click();
-    flush();
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(toggle);
-    expect(cards[0]?.querySelectorAll(".context-breakdown-item")).toHaveLength(4);
-    expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
+  toggle.click();
+  flush();
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(toggle);
+  expect(cards[0]?.querySelectorAll(".context-breakdown-item")).toHaveLength(4);
+  expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
 });
