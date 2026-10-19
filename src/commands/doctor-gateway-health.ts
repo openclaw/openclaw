@@ -311,6 +311,7 @@ export async function checkGatewayHealth(params: {
       method: "status",
       params: { includeChannelSummary: false },
       timeoutMs: remainingMs,
+      sharedStateMode: "read-only",
       config: params.cfg,
       onHelloOk: ({ snapshot }: GatewayHello) => {
         gatewaySnapshot = snapshot;
@@ -367,6 +368,7 @@ export async function checkGatewayHealth(params: {
         method: "channels.status",
         params: { probe: true, timeoutMs: channelProbeTimeoutMs },
         timeoutMs: diagnosticsTimeoutMs,
+        sharedStateMode: "read-only",
         config: params.cfg,
       }),
       requestGateway({
