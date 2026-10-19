@@ -58,16 +58,19 @@ export function createMatrixIngressMonitor(params: {
   onError?: (error: unknown) => void;
   queue?: ChannelIngressQueue<MatrixIngressPayload>;
 }) {
+  let queue = params.queue;
+  const getQueue = () =>
+    (queue ??= getMatrixRuntime().state.openChannelIngressQueue<MatrixIngressPayload>({
+      accountId: params.accountId,
+    }));
+  let lastReceivedAt = 0;
+  let initializeOrder: Promise<void> | undefined;
   const monitor = createChannelIngressMonitor<
     MatrixIngressEvent,
     MatrixIngressEvent,
     MatrixIngressPayload
   >({
-    queue: () =>
-      params.queue ??
-      getMatrixRuntime().state.openChannelIngressQueue<MatrixIngressPayload>({
-        accountId: params.accountId,
-      }),
+    queue: getQueue,
     inspect: inspectMatrixIngressEvent,
     payload: {
       version: 1,
@@ -146,7 +149,38 @@ export function createMatrixIngressMonitor(params: {
         });
       }
     }
-    await monitor.admitBatch(events);
+    if (events.length === 0) {
+      return;
+    }
+    await (initializeOrder ??= (async () => {
+      const queue = getQueue();
+      const { pending, claims } = queue.listUnsettled
+        ? await queue.listUnsettled()
+        : {
+            pending: await queue.listPending({ limit: "all" }),
+            claims: await queue.listClaims(),
+          };
+      for (const row of [...pending, ...claims]) {
+        lastReceivedAt = Math.max(lastReceivedAt, row.receivedAt);
+      }
+    })());
+    // Sync-store callbacks are serialized. Matrix IDs do not encode order, so
+    // continue the queued receipt order instead of tying a whole batch on time.
+    for (const event of events) {
+      const result = await monitor.admit(event, {
+        receivedAt: Math.max(Date.now(), lastReceivedAt + 1),
+      });
+      if (result.kind === "durable") {
+        const admitted = result.queueResult;
+        if (
+          admitted.kind === "accepted" ||
+          admitted.kind === "pending" ||
+          admitted.kind === "claimed"
+        ) {
+          lastReceivedAt = Math.max(lastReceivedAt, admitted.record.receivedAt);
+        }
+      }
+    }
   };
 
   return {

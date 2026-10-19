@@ -15,6 +15,7 @@ Matrix saves inbound messages to the shared SQLite ingress spool before advancin
 its sync cursor. Messages remain queued until an agent turn adopts them; a
 Gateway restart resumes any unadopted messages. Matrix event IDs prevent sync
 replay from delivering the same event twice within the retained replay window.
+Messages keep their sync timeline order within each room across restarts.
 Existing accounts migrate their committed replay markers automatically and need
 no configuration changes.
 

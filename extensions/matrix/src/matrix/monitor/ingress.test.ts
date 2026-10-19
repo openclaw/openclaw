@@ -145,4 +145,60 @@ describe("Matrix sync admission", () => {
       await retry.stop();
     }
   });
+
+  it.each(["pending", "claimed"] as const)(
+    "preserves timeline order across batches and restart with a %s tail",
+    async (headState) => {
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const queue = createChannelIngressQueueForTests<{
+        version: 1;
+        roomId: string;
+        event: MatrixRawEvent;
+      }>({ channelId: "matrix", accountId: "default", stateDir: storage.root, now: () => now });
+      const roomId = "!ordered:example.org";
+      const event = {
+        event_id: "$z-first",
+        sender: "@alice:example.org",
+        type: "m.room.message",
+        content: { msgtype: "m.text", body: "First" },
+      };
+      const sync = matrixSyncResponse("first-batch", roomId, event, "previous");
+      sync.rooms.join[roomId]!.timeline!.events.push({ ...event, event_id: "$a-second" });
+      const delivered: string[] = [];
+      const params = {
+        accountId: "default",
+        client: new MatrixClient("https://example.org", "synthetic-token"),
+        startupMs: 0,
+        queue,
+        dispatch: async (
+          _room: string,
+          raw: MatrixRawEvent,
+          lifecycle: ChannelIngressMonitorLifecycle,
+        ) => {
+          delivered.push(raw.event_id!);
+          await lifecycle.onAdopted();
+        },
+      };
+      const first = createMatrixIngressMonitor(params);
+      await first.admitSync(sync, { hasSavedSync: true });
+      await first.stop();
+      if (headState === "claimed") {
+        await queue.claim("$a-second", { ownerId: "2147483647:0:dead-worker" });
+      }
+
+      const restarted = createMatrixIngressMonitor(params);
+      try {
+        await restarted.admitSync(
+          matrixSyncResponse("second-batch", roomId, { ...event, event_id: "$0-third" }, "next"),
+          { hasSavedSync: true },
+        );
+        restarted.start();
+        await restarted.waitForIdle();
+        expect(delivered).toEqual(["$z-first", "$a-second", "$0-third"]);
+      } finally {
+        await restarted.stop();
+      }
+    },
+  );
 });
