@@ -23,6 +23,31 @@ import * as spawnRuntime from "./subagent-spawn.runtime.js";
 
 const readEntry = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", storePath, sessionKey });
+type SpawnInput = Parameters<typeof createInitialSubagentSession>[0];
+async function spawn(sessionKey: string, childSessionKey: string, patch: Partial<SpawnInput> = {}) {
+  const input = {
+    cfg: {},
+    requesterAgentId: "main",
+    targetAgentId: "main",
+    childSessionKey,
+    incognito: false,
+    requesterInternalKey: sessionKey,
+    creationPolicy: { actor: { type: "agent" as const, id: "main" } },
+    completionOwnerSessionKey: sessionKey,
+    modelPatch: {},
+    collect: false,
+    ...patch,
+  };
+  const parentTarget =
+    input.parentTarget ??
+    (await spawnRuntime.resolveGatewaySessionStoreTargetInWorker({
+      cfg: input.cfg,
+      key: input.requesterInternalKey,
+      agentId: input.requesterAgentId,
+      projection: "full",
+    }));
+  return createInitialSubagentSession({ ...input, parentTarget });
+}
 
 it.each(["creation", "fork"] as const)(
   "keeps the selected physical store when its alias changes before child %s",
@@ -46,9 +71,6 @@ it.each(["creation", "fork"] as const)(
         writeSessionEntry(database, parentSessionKey, {
           sessionId,
           updatedAt: 1,
-          totalTokens: 1,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
         });
         if (operation === "fork") {
           await replaceTranscriptEvents(
@@ -68,11 +90,7 @@ it.each(["creation", "fork"] as const)(
                 message: {
                   role: "assistant",
                   content: [{ type: "text", text: `${source} reply` }],
-                  api: "openai-responses",
-                  provider: "openai",
-                  model: "gpt-5.4",
                   stopReason: "stop",
-                  timestamp: 1,
                 },
               },
             ],
@@ -120,10 +138,7 @@ it.each(["creation", "fork"] as const)(
       try {
         const result =
           operation === "creation"
-            ? await createFromParent({
-                ...lineageSpawnParams(parentSessionKey, childSessionKey),
-                cfg,
-              })
+            ? await spawn(parentSessionKey, childSessionKey, { cfg })
             : await prepareSubagentSessionContext({
                 cfg,
                 contextMode: "fork",
@@ -135,13 +150,10 @@ it.each(["creation", "fork"] as const)(
         expect(result).toMatchObject({ status: "ok" });
         expect(aliasMoved).toBe(true);
         const originalChild = readEntry(original.path, childSessionKey);
-        expect({
-          original: originalChild?.sessionId,
-          successor: readEntry(successor.path, childSessionKey)?.sessionId,
-        }).toEqual({
-          original: expect.any(String),
-          successor: undefined,
-        });
+        expect([
+          originalChild?.sessionId,
+          readEntry(successor.path, childSessionKey)?.sessionId,
+        ]).toEqual([expect.any(String), undefined]);
         if (operation === "fork") {
           expect(result).toMatchObject({ mode: "fork" });
           expect(
@@ -151,13 +163,11 @@ it.each(["creation", "fork"] as const)(
               sessionId: originalChild!.sessionId,
               storePath: original.path,
             }),
-          ).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: { role: "user", content: "original context" },
-              }),
-            ]),
+          ).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: { role: "user", content: "original context" },
+            }),
           );
         }
       } finally {
@@ -170,27 +180,6 @@ it.each(["creation", "fork"] as const)(
     });
   },
 );
-// Spawn parameters for a same-agent child of `sessionKey`; lineage facts come from overrides.
-function lineageSpawnParams(
-  sessionKey: string,
-  childSessionKey: string,
-  lineage: { expectedParentSessionId?: string; senderIsOwner?: boolean } = {},
-) {
-  return {
-    cfg: {},
-    requesterAgentId: "main",
-    targetAgentId: "main",
-    childSessionKey,
-    incognito: false,
-    requesterInternalKey: sessionKey,
-    creationPolicy: { actor: { type: "agent" as const, id: "main" } },
-    completionOwnerSessionKey: sessionKey,
-    modelPatch: {},
-    collect: false,
-    ...lineage,
-  };
-}
-
 // Writes the parent row again whenever the child's store target is prepared.
 function writeParentDuringChildPrepare(
   childSessionKey: string,
@@ -213,8 +202,8 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
     const childSessionKey = "agent:main:subagent:child";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const scope = { storePath, sessionKey };
-    const spawn = (lineage: { expectedParentSessionId?: string; senderIsOwner: boolean }) =>
-      createFromParent(lineageSpawnParams(sessionKey, childSessionKey, lineage));
+    const createChild = (lineage: { expectedParentSessionId?: string; senderIsOwner: boolean }) =>
+      spawn(sessionKey, childSessionKey, lineage);
     const child = () => readEntry(storePath, childSessionKey);
     await upsertSessionEntryCore(scope, {
       sessionId: "parent-first",
@@ -222,18 +211,18 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
       updatedAt: 1,
     });
     expect(
-      await spawn({ expectedParentSessionId: "parent-old", senderIsOwner: true }),
+      await createChild({ expectedParentSessionId: "parent-old", senderIsOwner: true }),
     ).toMatchObject({ status: "error", error: expect.stringContaining("Parent session changed") });
     expect(child()).toBeUndefined();
     expect(
-      await spawn({ expectedParentSessionId: "parent-first", senderIsOwner: true }),
+      await createChild({ expectedParentSessionId: "parent-first", senderIsOwner: true }),
     ).toMatchObject({ status: "ok" });
     expect(child()).toMatchObject({
       spawnedBySessionId: "parent-first",
       parentSessionLifecycleRevision: "first",
       spawnedBySenderIsOwner: true,
     });
-    expect(await spawn({ senderIsOwner: false })).toMatchObject({ status: "ok" });
+    expect(await createChild({ senderIsOwner: false })).toMatchObject({ status: "ok" });
     expect(child()).toMatchObject({ spawnedBySenderIsOwner: false });
   });
 });
@@ -268,12 +257,10 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
       });
     });
     try {
-      const result = await createFromParent(
-        lineageSpawnParams(sessionKey, childSessionKey, {
-          expectedParentSessionId: "parent-first",
-          senderIsOwner: true,
-        }),
-      );
+      const result = await spawn(sessionKey, childSessionKey, {
+        expectedParentSessionId: "parent-first",
+        senderIsOwner: true,
+      });
       expect(result).toMatchObject({ status: "ok" });
       const child = readEntry(storePath, childSessionKey);
       expect(child).toMatchObject({
@@ -298,12 +285,10 @@ it("spawns from a parent without a stored row, as before lineage receipts", asyn
     const childSessionKey = "agent:main:subagent:rowless-child";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     expect(
-      await createFromParent(
-        lineageSpawnParams(sessionKey, childSessionKey, {
-          expectedParentSessionId: "turn-session",
-          senderIsOwner: true,
-        }),
-      ),
+      await spawn(sessionKey, childSessionKey, {
+        expectedParentSessionId: "turn-session",
+        senderIsOwner: true,
+      }),
     ).toMatchObject({ status: "ok" });
     expect(readEntry(storePath, childSessionKey)).toMatchObject({
       spawnedBy: sessionKey,
@@ -311,18 +296,6 @@ it("spawns from a parent without a stored row, as before lineage receipts", asyn
     });
   });
 });
-
-async function createFromParent(
-  input: Omit<Parameters<typeof createInitialSubagentSession>[0], "parentTarget">,
-) {
-  const parentTarget = await spawnRuntime.resolveGatewaySessionStoreTargetInWorker({
-    cfg: input.cfg,
-    key: input.requesterInternalKey,
-    agentId: input.requesterAgentId,
-    projection: "full",
-  });
-  return createInitialSubagentSession({ ...input, parentTarget });
-}
 
 it.each(["sqlite", "json"] as const)(
   "creates the child in its configured %s store independently of the parent's history",
@@ -349,8 +322,8 @@ it.each(["sqlite", "json"] as const)(
           path: state.statePath("current", "store.sqlite"),
         });
       }
-      const result = await createInitialSubagentSession({
-        ...lineageSpawnParams(sessionKey, childSessionKey, { senderIsOwner: true }),
+      const result = await spawn(sessionKey, childSessionKey, {
+        senderIsOwner: true,
         cfg: { session: { store: configured } },
         parentTarget,
         firstAdmission: { group: {} },
@@ -382,8 +355,8 @@ it("commits group and delivery facts with creation for one host-bound admission"
         space: "workspace-one",
       },
     );
-    const result = await createFromParent({
-      ...lineageSpawnParams(sessionKey, childSessionKey, { senderIsOwner: true }),
+    const result = await spawn(sessionKey, childSessionKey, {
+      senderIsOwner: true,
       firstAdmission: {
         delivery: { channel: "discord", to: "channel:group-one", accountId: "default" },
         group: { groupId: "group-one" },

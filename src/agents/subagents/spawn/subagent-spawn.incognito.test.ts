@@ -5,6 +5,7 @@ import { memorySessionActorOwners } from "../../../config/sessions/session-actor
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { createSubagentControllerRead } from "../registry/subagent-controller-read.js";
 import {
   readAcpSpawnParentDeliveryContext,
@@ -155,6 +156,10 @@ it.each([false, true])(
     const parentKey = await create(parent, name, { skillLibrarySelections });
     const childOwner = crossAgent ? sibling : parent;
     const childKey = `agent:${childOwner.agentId}:dashboard:incognito-child-${name}`;
+    const parentEntry = expectDefined(
+      parent.readSession(parentKey, authority)?.entry,
+      "parent entry",
+    );
     const result = await withMemorySource(parent, parentKey, () =>
       createInitialSubagentSession({
         cfg: {},
@@ -166,12 +171,7 @@ it.each([false, true])(
           storePath: parent.path,
           canonicalKey: parentKey,
           storeKeys: [parentKey],
-          store: {
-            [parentKey]: expectDefined(
-              parent.readSession(parentKey, authority)?.entry,
-              "parent session entry",
-            ),
-          },
+          store: { [parentKey]: parentEntry },
         },
         childSessionKey: childKey,
         incognito: true,
@@ -179,11 +179,6 @@ it.each([false, true])(
         senderIsOwner: true,
         creationPolicy: { actor: { type: "agent", id: parent.agentId } },
         completionOwnerSessionKey: parentKey,
-        admissionPatch: {
-          spawnDepth: 1,
-          subagentRole: "orchestrator",
-          subagentControlScope: "children",
-        },
         inheritedToolAllowlist: ["read"],
         inheritedToolDenylist: ["exec"],
         modelPatch: {},
@@ -205,16 +200,9 @@ it.each([false, true])(
 
 it("reads unbound ACP requester delivery and heartbeat routing from memory", async () => {
   const parentKey = await create(parent, "heartbeat", {
-    delivery: {
-      kind: "external",
-      route: {
-        channel: "telegram",
-        accountId: "default",
-        target: { to: "123", chatType: "direct" },
-      },
-      origin: { provider: "telegram", to: "123" },
+    delivery: normalizeSessionDeliveryState({
       context: { channel: "telegram", to: "123", accountId: "default" },
-    },
+    }),
   });
   expect(
     await readAcpSpawnParentDeliveryContext({
