@@ -16,6 +16,10 @@ vi.mock("./launchd-runtime.js", () => ({
 }));
 
 const noop = () => {};
+const unit = "openclaw-test.service";
+const systemctl = vi.mocked(execSystemctl);
+const readFile = vi.mocked(fs.readFile);
+const executor = vi.mocked(prepareHostedStopExecutor);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 let cgroup = "/system.slice/openclaw-test.service";
 const executorPid = 4321;
@@ -27,7 +31,7 @@ const identityResult = (fields: Record<string, string> = {}) => ({
   termination: "exit" as const,
   stderr: "",
   stdout: Object.entries({
-    Id: "openclaw-test.service",
+    Id: unit,
     LoadState: "loaded",
     ActiveState: "active",
     SubState: "running",
@@ -46,8 +50,8 @@ const identityResult = (fields: Record<string, string> = {}) => ({
 const revoked = (message: string) => () => {
   throw new Error(message);
 };
-const prepare = (assertCaller = noop, signal = new AbortController().signal) =>
-  prepareHostedGatewayStop(processOwner, assertCaller, signal);
+const prepare = (caller = noop, owner = processOwner, signal?: AbortSignal) =>
+  prepareHostedGatewayStop(owner, caller, signal ?? new AbortController().signal);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -58,11 +62,11 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.test");
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
   vi.mocked(getFileLockProcessStartTime).mockReturnValue(10);
-  vi.mocked(execSystemctl).mockImplementation(async () => identityResult());
-  vi.mocked(fs.readFile).mockImplementation(async () => `0::${cgroup}\n`);
-  vi.mocked(prepareHostedStopExecutor).mockImplementation(async (params) => {
+  systemctl.mockImplementation(async () => identityResult());
+  readFile.mockImplementation(async () => `0::${cgroup}\n`);
+  executor.mockImplementation(async (params) => {
     const scope = params.scopeArgs?.find((arg) => arg.startsWith("--unit="))?.slice(7);
-    vi.mocked(fs.readFile).mockImplementation(async (file) =>
+    readFile.mockImplementation(async (file) =>
       file === `/proc/${executorPid}/cgroup`
         ? `0::${cgroup.slice(0, cgroup.lastIndexOf("/"))}/${scope}\n`
         : `0::${cgroup}\n`,
@@ -88,11 +92,7 @@ it.each([
   async ({ platformName, supervisor }) => {
     Object.defineProperty(process, "platform", { ...platform, value: platformName });
     const abort = new AbortController();
-    const stop = await prepareHostedGatewayStop(
-      { ownsProcessLifecycle: true, supervisor },
-      noop,
-      abort.signal,
-    );
+    const stop = await prepare(noop, { ownsProcessLifecycle: true, supervisor }, abort.signal);
     await expect(stop.execute(noop)).resolves.toEqual({ outcome: "exit" });
     await expect(stop.execute(revoked("retired host"))).rejects.toThrow("retired host");
     abort.abort();
@@ -111,20 +111,13 @@ async function expectScopeStop(scope: "--user" | "--system") {
   expect(execute).not.toHaveBeenCalled();
   expect(prepareHostedStopExecutor).toHaveBeenCalledWith(
     expect.objectContaining({
-      command: [
-        "systemctl",
-        scope,
-        "--no-ask-password",
-        "--no-block",
-        "stop",
-        "openclaw-test.service",
-      ],
+      command: ["systemctl", scope, "--no-ask-password", "--no-block", "stop", unit],
       scopeArgs: expect.arrayContaining([scope, "--scope"]),
     }),
   );
   await expect(stop.execute(noop)).resolves.toEqual({ outcome: "accepted" });
   expect(execSystemctl).toHaveBeenCalled();
-  expect(vi.mocked(execSystemctl).mock.calls.every(([args]) => args[0] === scope)).toBe(true);
+  expect(systemctl.mock.calls.every(([args]) => args[0] === scope)).toBe(true);
   await stop.dispose();
 }
 
@@ -140,19 +133,17 @@ it.each([
   ["CanStop", "no"],
   ["RefuseManualStop", "yes"],
 ])("rejects %s=%s before acceptance and reports a late refusal", async (field, value) => {
-  vi.mocked(execSystemctl).mockResolvedValue(identityResult({ [field]: value }));
+  systemctl.mockResolvedValue(identityResult({ [field]: value }));
   await expect(prepare()).rejects.toThrow("does not permit manual stop");
   expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
-  vi.mocked(execSystemctl).mockResolvedValue(identityResult());
+  systemctl.mockResolvedValue(identityResult());
   const stop = await prepare();
-  vi.mocked(execSystemctl).mockResolvedValue(identityResult({ [field]: value }));
+  systemctl.mockResolvedValue(identityResult({ [field]: value }));
   await expect(stop.execute(noop)).resolves.toMatchObject({ outcome: "refused" });
   expect(execute).not.toHaveBeenCalled();
   await stop.dispose();
 });
-it("prepares an independent control scope and acknowledges native acceptance only at execution", async () => {
-  await expectScopeStop("--system");
-});
+it("acknowledges system stop only at execution", () => expectScopeStop("--system"));
 
 it.each([
   ["Id", "other.service"],
@@ -162,7 +153,7 @@ it.each([
   ["Job", "23"],
   ["ControlGroup", "/system.slice/other.service"],
 ])("rejects changed %s during preparation before accepting stop", async (field, value) => {
-  vi.mocked(execSystemctl)
+  systemctl
     .mockResolvedValueOnce(identityResult())
     .mockResolvedValue(identityResult({ [field]: value }));
   await expect(prepare()).rejects.toThrow(/systemd|instance/);
@@ -174,22 +165,18 @@ it.each(["cgroup", "unit", "executor"])(
   "rejects caller revocation during awaited %s discovery",
   async (discovery) => {
     const assertCaller = vi.fn();
-    const revoke = () => assertCaller.mockImplementation(revoked("closed caller"));
+    const revokeAfter =
+      <T>(value: T) =>
+      async () => {
+        assertCaller.mockImplementation(revoked("closed caller"));
+        return value;
+      };
     if (discovery === "cgroup") {
-      vi.mocked(fs.readFile).mockImplementationOnce(async () => {
-        revoke();
-        return `0::${cgroup}\n`;
-      });
+      readFile.mockImplementationOnce(revokeAfter(`0::${cgroup}\n`));
     } else if (discovery === "unit") {
-      vi.mocked(execSystemctl).mockImplementationOnce(async () => {
-        revoke();
-        return identityResult();
-      });
+      systemctl.mockImplementationOnce(revokeAfter(identityResult()));
     } else {
-      vi.mocked(prepareHostedStopExecutor).mockImplementationOnce(async () => {
-        revoke();
-        return { execute, dispose };
-      });
+      executor.mockImplementationOnce(revokeAfter({ execute, dispose }));
     }
     await expect(prepare(assertCaller)).rejects.toThrow("closed caller");
     expect(execute).not.toHaveBeenCalled();
@@ -222,12 +209,12 @@ it.each(["InvocationID", "ExecMainStartTimestampMonotonic", "caller"])(
     const stop = await prepare();
     const assertCurrent = vi.fn();
     if (field === "caller") {
-      vi.mocked(execSystemctl).mockImplementationOnce(async () => {
+      systemctl.mockImplementationOnce(async () => {
         assertCurrent.mockImplementation(revoked("retired host"));
         return identityResult();
       });
     } else {
-      vi.mocked(execSystemctl).mockResolvedValue(
+      systemctl.mockResolvedValue(
         identityResult({
           [field]: field === "InvocationID" ? "b".repeat(32) : "101",
         }),
@@ -275,13 +262,9 @@ it.each([
   "rejects unsupported %s/%s ownership",
   async (platformName, supervisor, ownsProcessLifecycle) => {
     Object.defineProperty(process, "platform", { ...platform, value: platformName });
-    await expect(
-      prepareHostedGatewayStop(
-        { ownsProcessLifecycle, supervisor },
-        noop,
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow(/external supervisor|does not own the process lifecycle/);
+    await expect(prepare(noop, { ownsProcessLifecycle, supervisor })).rejects.toThrow(
+      /external supervisor|does not own the process lifecycle/,
+    );
     expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
   },
 );

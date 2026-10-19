@@ -45,6 +45,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -259,8 +260,6 @@ it.each(["process timeout", "absent port", "late absent port"])(
 
 it("settles exact Startup inspection when its initial file read stalls", async () => {
   const { startupPath } = await startup("9.4");
-  const original = await fs.readFile(startupPath);
-  const pending = createDeferred<typeof original>();
   const entered = createDeferred();
   let signal: AbortSignal | undefined;
   vi.mocked(spawnSync).mockReturnValue(nativeResult(JSON.stringify([processSnapshot()])));
@@ -270,29 +269,20 @@ it("settles exact Startup inspection when its initial file read stalls", async (
       const options = args[1];
       signal = typeof options === "object" && options !== null ? options.signal : undefined;
       entered.resolve();
-      return pending.promise;
+      return new Promise<Buffer>(() => {});
     }
     return readFile(...args);
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  let result: Awaited<ReturnType<typeof readGatewayServiceState>> | undefined;
-  const inspection = readStartupWithinDeadline(startupPath).then((state) => {
-    result = state;
+  const inspection = readStartupWithinDeadline(startupPath);
+  await entered.promise;
+  await vi.advanceTimersByTimeAsync(200);
+  expect(await inspection).toMatchObject({
+    running: false,
+    runtime: { status: "unknown", inspectionFailure: { timeoutMs: 200 } },
   });
-  try {
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(200);
-    expect(result).toMatchObject({
-      running: false,
-      runtime: { status: "unknown", inspectionFailure: { timeoutMs: 200 } },
-    });
-    expect(signal?.aborted).toBe(true);
-    expect(spawnSync).not.toHaveBeenCalled();
-  } finally {
-    pending.resolve(original);
-    await inspection;
-    vi.useRealTimers();
-  }
+  expect(signal?.aborted).toBe(true);
+  expect(spawnSync).not.toHaveBeenCalled();
 });
 
 it("reports Startup entries through Doctor when the selected Task exists", async () => {
