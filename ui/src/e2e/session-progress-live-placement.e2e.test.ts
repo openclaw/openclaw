@@ -9,7 +9,7 @@ import {
   controlUiBundledSettingsStorageKey,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -363,7 +363,6 @@ suite.define(() => {
         await expectVisibleLastActivity("details");
         await captureProof(page, "details-with-side-chat.png");
 
-        const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
         await focusChatSidePanel(page);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="details"]').count())
@@ -376,25 +375,26 @@ suite.define(() => {
         await openChatDetails(visiblePane);
 
         await page.setViewportSize({ height: 900, width: 560 });
+        await openChatDetails(visiblePane);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="details"]').count())
           .toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        const sideHeader = sidePanel.locator('[data-region-header="side"]');
+        const mobileHost = visiblePane.locator(".chat-mobile-host");
         await captureProof(page, "details-mobile-header.png");
         await expect
           .poll(() =>
             visiblePane.evaluate((element) => {
               const header = element.querySelector(".sidebar-region__header")!;
-              const details = element.querySelector(".chat-details")!;
-              return details.getBoundingClientRect().top >= header.getBoundingClientRect().bottom;
+              const host = element.querySelector(".chat-mobile-host")!;
+              return host.getBoundingClientRect().top >= header.getBoundingClientRect().bottom;
             }),
           )
           .toBe(true);
-        await selectChatLayoutAction(page, "Minimize side panel");
-        await sideHeader.waitFor({ state: "hidden" });
+        await closeChatDetails(visiblePane);
+        await mobileHost.waitFor({ state: "hidden" });
         await openChatDetails(visiblePane);
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
         await expect
