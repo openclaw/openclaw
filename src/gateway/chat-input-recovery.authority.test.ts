@@ -17,6 +17,9 @@ import {
 } from "../../test/helpers/gateway-websocket.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -81,7 +84,34 @@ it.for(["steer", "followup"] as const)(
           return;
         }
         const body = await readProviderBody(request);
-        if (body.includes("PREDECESSOR_INPUT") && !body.includes("REPLAY_UNCHANGED")) {
+        const payload = JSON.parse(body) as {
+          input: Array<{
+            type?: string;
+            role?: string;
+            content?: string | Array<{ text?: string }>;
+          }>;
+        };
+        // Historical interrupted-input notices may quote future queued messages.
+        const activeInput = payload.input
+          .filter((item) => item.role === "user")
+          .map((item) =>
+            stripInternalRuntimeContext(
+              typeof item.content === "string"
+                ? item.content
+                : (item.content ?? []).map((part) => part.text ?? "").join("\n"),
+            ),
+          )
+          .findLast((text) => text.trim());
+        if (activeInput?.includes("PEER_INPUT")) {
+          replayOrder.push("peer");
+          writeOpenAiResponsesText(response, {
+            text: "Peer completed.",
+            messageId: randomUUID(),
+            responseId: randomUUID(),
+          });
+          return;
+        }
+        if (activeInput?.includes("PREDECESSOR_INPUT")) {
           replayOrder.push("predecessor");
           writeOpenAiResponsesText(response, {
             text: "Predecessor completed.",
@@ -92,7 +122,6 @@ it.for(["steer", "followup"] as const)(
         }
         replayOrder.push("chat");
         requests.push(body);
-        const payload = JSON.parse(body) as { input: Array<{ type?: string }> };
         if (payload.input.some((item) => item.type === "function_call_output")) {
           writeOpenAiResponsesText(response, {
             text: "Replay completed.",
@@ -161,6 +190,7 @@ it.for(["steer", "followup"] as const)(
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
+      await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: true });
       await loadOrCreateDeviceIdentityAsync();
       const cases = [];
       const owner = ensureProfileForEmail("owner@example.test");
@@ -250,6 +280,59 @@ it.for(["steer", "followup"] as const)(
               sourceRunId: `${runPrefix}-predecessor`,
             },
           });
+          const source = {
+            agentId: "main",
+            sessionKey: `agent:main:${runPrefix}-peer-source`,
+            sessionId: `${runPrefix}-peer-source`,
+            lifecycleRevision: `${runPrefix}-peer-source`,
+          };
+          await replaceSessionEntry(source, {
+            sessionId: source.sessionId,
+            lifecycleRevision: source.lifecycleRevision,
+            updatedAt: Date.now(),
+            createdActor: { type: "human", source: "profile", id: profile.id },
+          });
+          const peerRunId = `${runPrefix}-peer`;
+          const peerReceipt = expectDefined(
+            await stageSessionPendingInput(fixture.target, {
+              runId: peerRunId,
+              message: {
+                role: "user",
+                content: "PEER_INPUT",
+                timestamp: Date.now(),
+                idempotencyKey: `${peerRunId}:user`,
+                provenance: {
+                  kind: "inter_session",
+                  sourceTool: "sessions_send",
+                  sourceSessionKey: source.sessionKey,
+                },
+                __openclaw: {
+                  requesterOrigin: captureRequesterOrigin({
+                    sessionKey: source.sessionKey,
+                    operatorProfileId: profile.id,
+                  }),
+                  sessionSendDelivery: {
+                    version: 1,
+                    runId: peerRunId,
+                    source,
+                    target: {
+                      agentId: "main",
+                      sessionKey: fixture.target.sessionKey,
+                      sessionId: fixture.target.sessionId,
+                      lifecycleRevision: fixture.entry.lifecycleRevision,
+                    },
+                    sandboxed: false,
+                    message: "PEER_INPUT",
+                    operatorSource: { kind: "gateway", snapshot: recovery.source.snapshot },
+                  },
+                },
+              },
+              assertCurrent() {},
+            }),
+            "accepted peer input",
+          );
+          peerReceipt.finish("interrupted");
+          await peerReceipt.settled?.();
         } else {
           await replaceSessionEntry(fixture.target, {
             sessionId: fixture.entry.sessionId,
@@ -363,6 +446,23 @@ it.for(["steer", "followup"] as const)(
         }
         releaseRecovery.resolve();
       }
+      await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-peer`), {
+        timeout: 30_000,
+      });
+      const peerResult = await gateway.client.request("agent.wait", {
+        runId: `${runPrefix}-peer`,
+        timeoutMs: 30_000,
+      });
+      expect(peerResult, JSON.stringify({ peerResult, startedRuns, replayOrder })).toMatchObject({
+        status: "ok",
+      });
+      expect(startedRuns.slice(0, 2)).toEqual([
+        `${runPrefix}-recovery-predecessor`,
+        `${runPrefix}-peer`,
+      ]);
+      await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-unchanged`), {
+        timeout: 30_000,
+      });
       await expect(
         gateway.client.request("agent.wait", {
           runId: `${runPrefix}-unchanged`,
@@ -370,11 +470,12 @@ it.for(["steer", "followup"] as const)(
         }),
       ).resolves.toMatchObject({ status: "ok" });
       expect(providerErrors).toEqual([]);
-      expect(startedRuns.slice(0, 2)).toEqual([
+      expect(startedRuns.slice(0, 3)).toEqual([
         `${runPrefix}-recovery-predecessor`,
+        `${runPrefix}-peer`,
         `${runPrefix}-unchanged`,
       ]);
-      expect(replayOrder).toEqual(["predecessor", "chat", "chat"]);
+      expect(replayOrder).toEqual(["predecessor", "peer", "chat", "chat"]);
       expect(requests).toHaveLength(2);
       expect(requests.every((body) => body.includes("REPLAY_UNCHANGED"))).toBe(true);
       expect(requests.join("\n")).not.toMatch(/REPLAY_ROLE|REPLAY_DEVICE|REPLAY_MEMBERSHIP/);

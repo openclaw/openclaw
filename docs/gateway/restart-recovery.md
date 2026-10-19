@@ -101,6 +101,9 @@ If an input exhausts the existing bounded attempts on a transient failure, later
 inputs in that session remain interrupted too, preserving their replay order.
 This also applies when the earlier input is an inter-session update.
 Other sessions continue recovery. No additional retry loop is started.
+Before replaying queued inter-session updates, the Gateway resumes any interrupted
+main turn through its existing recovery owner, preserving the predecessor's order.
+The updates remain queued when that owner defers recovery.
 
 Automatic chat-input recovery selects inputs accepted in the past 24 hours;
 the existing bounded recovery attempts may finish after that window. Cancelled

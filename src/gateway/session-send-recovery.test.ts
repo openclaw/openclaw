@@ -38,7 +38,18 @@ const io = vi.hoisted(() => ({
   withdraw: vi.fn(),
   restoreOperator:
     vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
+  resumeMain:
+    vi.fn<
+      typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
+    >(),
 }));
+vi.mock(
+  import("../agents/main-session-recovery/main-session-restart-recovery.js"),
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    retryRestartAbortedMainSessionRecovery: io.resumeMain,
+  }),
+);
 vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
   async (importOriginal) => ({
@@ -198,6 +209,7 @@ beforeEach(() => {
   io.load.mockImplementation(async ({ key }: { key: string }) => storeTarget(key));
   io.report.mockResolvedValue({ ok: true });
   io.withdraw.mockResolvedValue(true);
+  io.resumeMain.mockResolvedValue({ started: 1, settled: 0, failed: 0, skipped: 0 });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -205,6 +217,21 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   recordAgentDatabaseAdmissions([]);
+});
+
+it("retains queued peers when the interrupted predecessor is paused", async () => {
+  io.entries.mockResolvedValue([
+    {
+      sessionKey: delivery.target.sessionKey,
+      entry: { ...targetEntry, abortedLastRun: true },
+    },
+  ]);
+  io.resumeMain.mockResolvedValue({ started: 0, settled: 0, failed: 0, skipped: 0 });
+
+  await recover();
+
+  expect(io.resumeMain).toHaveBeenCalledOnce();
+  expectNoCalls(dispatch, resumeChat, io.withdraw, io.report);
 });
 
 it("recovers a logical agent's saved input from its shared physical store", async () => {

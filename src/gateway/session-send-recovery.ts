@@ -3,6 +3,7 @@ import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import { SessionCommunicationDeniedError } from "../agents/tools/sessions-send-communication.js";
+import { isMainRestartRecoveryCandidate } from "../config/sessions/restart-recovery-state.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { readSessionSendRecoveryPage } from "../config/sessions/session-pending-input-history.js";
@@ -38,7 +39,7 @@ import {
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 class SessionSendRequesterUnavailableError extends Error {}
 
-/** Re-admit saved inputs, not predecessor executions or sender tool calls. */
+/** Discover saved inputs; existing turn owners retain execution and sender custody. */
 export async function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
@@ -156,6 +157,28 @@ async function recoverSessionSendDeliveriesForAgents(
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
+      // Peer replay enters agent admission directly, which would claim the
+      // interrupted turn. Start that predecessor through its owner first.
+      if (
+        entry.abortedLastRun &&
+        isMainRestartRecoveryCandidate(entry, sessionKey) &&
+        pending.some(
+          (input) => input.state === "interrupted" && readSessionSendDelivery(input.message),
+        )
+      ) {
+        const { retryRestartAbortedMainSessionRecovery } =
+          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
+        const recovery = await retryRestartAbortedMainSessionRecovery({
+          ...scope,
+          cfg: config,
+          expectedSessionId: entry.sessionId,
+          gatewayRuntime: runtime,
+        });
+        assertCurrent();
+        if (recovery.started === 0 && recovery.settled === 0) {
+          continue;
+        }
+      }
       const undeliverableRunIds: string[] = [];
       const blocked: {
         inputId: string;
