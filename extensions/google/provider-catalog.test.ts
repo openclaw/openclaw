@@ -1,4 +1,3 @@
-// Google tests cover provider catalog plugin behavior.
 import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
@@ -10,10 +9,43 @@ import {
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
 
-describe("google provider catalog", () => {
-  beforeEach(() => {
-    clearLiveCatalogCacheForTests();
+const geminiFields = {
+  reasoning: true,
+  input: ["text", "image", "video"],
+  contextWindow: 1_048_576,
+  maxTokens: 65_536,
+  compat: { codeMode: "preferred" },
+};
+const thinkingLevelMap = { minimal: null };
+function expectedGemini(id: string, name: string, hasThinkingFloor = false) {
+  return expect.objectContaining({
+    id,
+    name,
+    ...geminiFields,
+    ...(hasThinkingFloor ? { thinkingLevelMap } : {}),
   });
+}
+function liveRow(id: string, displayName = id, overrides: Record<string, unknown> = {}) {
+  return {
+    name: `models/${id}`,
+    displayName,
+    inputTokenLimit: 1_048_576,
+    outputTokenLimit: 65_536,
+    supportedGenerationMethods: ["generateContent"],
+    thinking: true,
+    ...overrides,
+  };
+}
+function inventory(body: unknown): LiveModelCatalogFetchGuard {
+  return vi.fn(async ({ url }) => ({
+    response: Response.json(body),
+    finalUrl: url,
+    release: async () => undefined,
+  }));
+}
+
+describe("google provider catalog", () => {
+  beforeEach(() => clearLiveCatalogCacheForTests());
 
   it("keeps Google AI Studio and Vertex model ids aligned", () => {
     expect(buildGoogleVertexStaticCatalogProvider().models.map((model) => model.id)).toEqual(
@@ -22,26 +54,18 @@ describe("google provider catalog", () => {
     expect(buildGoogleStaticCatalogProvider().models[0]).toEqual({
       id: "gemini-4-argon",
       name: "Gemini 4 Argon",
-      reasoning: true,
-      input: ["text", "image", "video"],
+      ...geminiFields,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
-      thinkingLevelMap: { minimal: null },
-      compat: { codeMode: "preferred" },
+      thinkingLevelMap,
     });
     expect(
       buildGoogleStaticCatalogProvider().models.find((model) => model.id === "gemini-3.8-flash"),
     ).toEqual({
       id: "gemini-3.8-flash",
       name: "Gemini 3.8 Flash",
-      reasoning: true,
-      input: ["text", "image", "video"],
+      ...geminiFields,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
-      thinkingLevelMap: { minimal: null },
-      compat: { codeMode: "preferred" },
+      thinkingLevelMap,
     });
   });
 
@@ -54,78 +78,42 @@ describe("google provider catalog", () => {
           isSecondPage
             ? {
                 models: [
-                  {
-                    name: "models/gemini-4-argon",
-                    displayName: "Gemini 4 Argon",
-                    inputTokenLimit: 1_048_576,
-                    outputTokenLimit: 65_536,
+                  liveRow("gemini-4-argon", "Gemini 4 Argon", {
                     supportedGenerationMethods: ["generateContent", "countTokens"],
-                    thinking: true,
-                  },
-                  {
-                    name: "models/gemini-3.5-flash-lite",
-                    displayName: "Gemini 3.5 Flash-Lite",
-                    inputTokenLimit: 1_048_576,
-                    outputTokenLimit: 65_536,
-                    supportedGenerationMethods: ["generateContent"],
-                    thinking: true,
-                  },
-                  {
-                    name: "models/gemma-3-4b-it",
-                    displayName: "Gemma 3 4B",
+                  }),
+                  liveRow("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
+                  liveRow("gemma-3-4b-it", "Gemma 3 4B", {
                     inputTokenLimit: 131_072,
                     outputTokenLimit: 8_192,
-                    supportedGenerationMethods: ["generateContent"],
-                  },
+                    thinking: undefined,
+                  }),
                 ],
               }
             : {
                 models: [
-                  {
-                    name: "models/gemini-3.6-flash",
-                    displayName: "Gemini 3.6 Flash",
-                    inputTokenLimit: 1_048_576,
-                    outputTokenLimit: 65_536,
+                  liveRow("gemini-3.6-flash", "Gemini 3.6 Flash", {
                     supportedGenerationMethods: ["generateContent", "countTokens"],
-                    thinking: true,
-                  },
-                  {
-                    name: "models/gemini-3.7-flash",
-                    displayName: "Gemini 3.7 Flash",
-                    inputTokenLimit: 1_048_576,
-                    outputTokenLimit: 65_536,
-                    supportedGenerationMethods: ["generateContent"],
-                    thinking: true,
-                  },
-                  {
-                    name: "models/gemini-3.8-flash",
-                    displayName: "Gemini 3.8 Flash",
-                    inputTokenLimit: 1_048_576,
-                    outputTokenLimit: 65_536,
+                  }),
+                  liveRow("gemini-3.7-flash", "Gemini 3.7 Flash"),
+                  liveRow("gemini-3.8-flash", "Gemini 3.8 Flash", {
                     supportedGenerationMethods: ["generateContent", "createCachedContent"],
-                    thinking: true,
-                  },
-                  {
-                    name: "models/gemma-3-1b-it",
-                    displayName: "Gemma 3 1B",
+                  }),
+                  liveRow("gemma-3-1b-it", "Gemma 3 1B", {
                     inputTokenLimit: 32_768,
                     outputTokenLimit: 8_192,
-                    supportedGenerationMethods: ["generateContent"],
-                  },
-                  {
-                    name: "models/gemini-3.1-flash-image",
-                    displayName: "Nano Banana 2",
+                    thinking: undefined,
+                  }),
+                  liveRow("gemini-3.1-flash-image", "Nano Banana 2", {
                     inputTokenLimit: 65_536,
                     outputTokenLimit: 32_768,
-                    supportedGenerationMethods: ["generateContent"],
-                  },
-                  {
-                    name: "models/gemini-embedding-2-preview",
-                    displayName: "Gemini Embedding 2",
+                    thinking: undefined,
+                  }),
+                  liveRow("gemini-embedding-2-preview", "Gemini Embedding 2", {
                     inputTokenLimit: 8_192,
                     outputTokenLimit: 8_192,
+                    thinking: undefined,
                     supportedGenerationMethods: ["embedContent"],
-                  },
+                  }),
                 ],
                 nextPageToken: "page-2",
               },
@@ -146,54 +134,11 @@ describe("google provider catalog", () => {
 
     expect(provider.apiKey).toBe("GEMINI_API_KEY");
     expect(provider.models).toEqual([
-      expect.objectContaining({
-        id: "gemini-3.5-flash-lite",
-        name: "Gemini 3.5 Flash-Lite",
-        reasoning: true,
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-        input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
-      }),
-      expect.objectContaining({
-        id: "gemini-3.6-flash",
-        name: "Gemini 3.6 Flash",
-        reasoning: true,
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-        input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
-      }),
-      expect.objectContaining({
-        id: "gemini-3.7-flash",
-        name: "Gemini 3.7 Flash",
-        reasoning: true,
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-        input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
-        thinkingLevelMap: { minimal: null },
-      }),
-      expect.objectContaining({
-        id: "gemini-3.8-flash",
-        name: "Gemini 3.8 Flash",
-        reasoning: true,
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-        input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
-        thinkingLevelMap: { minimal: null },
-      }),
-      expect.objectContaining({
-        id: "gemini-4-argon",
-        name: "Gemini 4 Argon",
-        reasoning: true,
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-        input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
-        thinkingLevelMap: { minimal: null },
-      }),
+      expectedGemini("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
+      expectedGemini("gemini-3.6-flash", "Gemini 3.6 Flash"),
+      expectedGemini("gemini-3.7-flash", "Gemini 3.7 Flash", true),
+      expectedGemini("gemini-3.8-flash", "Gemini 3.8 Flash", true),
+      expectedGemini("gemini-4-argon", "Gemini 4 Argon", true),
       expect.objectContaining({
         id: "gemma-3-1b-it",
         name: "Gemma 3 1B",
@@ -234,20 +179,7 @@ describe("google provider catalog", () => {
       // Unknown family member fails closed: no static entry, no compat.
       { id: "gemini-3.9-flash", compat: undefined },
     ];
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-      response: Response.json({
-        models: cases.map(({ id }) => ({
-          name: `models/${id}`,
-          displayName: id,
-          inputTokenLimit: 1_048_576,
-          outputTokenLimit: 65_536,
-          supportedGenerationMethods: ["generateContent"],
-          thinking: true,
-        })),
-      }),
-      finalUrl: url,
-      release: async () => undefined,
-    }));
+    const fetchGuard = inventory({ models: cases.map(({ id }) => liveRow(id)) });
 
     const provider = await buildGoogleLiveCatalogProvider({
       apiKey: "GEMINI_API_KEY",
@@ -262,11 +194,7 @@ describe("google provider catalog", () => {
   });
 
   it.each([{}])("preserves a successful empty text inventory: %j", async (body) => {
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-      response: Response.json(body),
-      finalUrl: url,
-      release: async () => undefined,
-    }));
+    const fetchGuard = inventory(body);
 
     const provider = await buildGoogleLiveCatalogProvider({
       discoveryMode: "strict",
@@ -287,11 +215,7 @@ describe("google provider catalog", () => {
   it.each([{ models: "invalid" }, { models: [null] }])(
     "rejects a malformed inventory: %j",
     async (body) => {
-      const fetchGuard: LiveModelCatalogFetchGuard = async ({ url }) => ({
-        response: Response.json(body),
-        finalUrl: url,
-        release: async () => undefined,
-      });
+      const fetchGuard = inventory(body);
       await expect(
         buildGoogleLiveCatalogProvider({
           discoveryMode: "strict",
