@@ -361,6 +361,7 @@ it.for([
         expect(resultState.admission).toEqual({
           status: "accepted",
           mode: steered ? "steer" : "followup",
+          ...(!steered ? { reason: "steering-unavailable" } : {}),
         });
         expect(original.run.gitContributorProfileId).toBe("requester-c");
         if (!steered) {

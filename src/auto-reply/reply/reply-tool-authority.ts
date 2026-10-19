@@ -74,15 +74,6 @@ import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 
-function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
-  return {
-    cfg: execution.config,
-    agentId: execution.agentId,
-    sessionKey: execution.sessionKey,
-    classificationSessionKey: execution.runtimePolicySessionKey ?? execution.sessionKey,
-  };
-}
-
 export function resolveReplyToolAuthorityContext(
   snapshot: ReplyToolAuthorityInput,
   route: ReplyToolAuthorityRoute | undefined,
@@ -92,8 +83,6 @@ export function resolveReplyToolAuthorityContext(
   const execution = snapshot.run;
   const provider = route?.provider ?? execution.provider;
   const model = route?.model ?? execution.model;
-  const policySessionKey = execution.runtimePolicySessionKey ?? execution.sessionKey;
-  const sandboxRuntime = preparedSandbox;
   const capabilityProfile = resolveConversationCapabilityProfile({
     requesterOrigin: execution.requesterOrigin,
     config: execution.config,
@@ -101,7 +90,7 @@ export function resolveReplyToolAuthorityContext(
     // Capability identity follows execution, not the independent sandbox policy owner.
     sessionKey: execution.sessionKey,
     preparedSessionCapabilityStore,
-    sandboxSessionKey: policySessionKey,
+    sandboxSessionKey: execution.runtimePolicySessionKey ?? execution.sessionKey,
     agentId: execution.agentId,
     agentAccountId: execution.agentAccountId,
     modelProvider: provider,
@@ -123,7 +112,7 @@ export function resolveReplyToolAuthorityContext(
     senderIsOwner: execution.senderIsOwner,
     workspaceDir: execution.workspaceDir,
     cwd: execution.cwd,
-    sandboxToolPolicy: sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined,
+    sandboxToolPolicy: preparedSandbox.sandboxed ? preparedSandbox.toolPolicy : undefined,
     inputProvenance: execution.inputProvenance,
     trustedInternalHandoff: execution.trustedInternalHandoff,
     scheduledToolPolicy: execution.scheduledToolPolicy,
@@ -216,8 +205,8 @@ function resolveFollowupRunToolAuthorityFingerprint(
         provider,
         model,
         policy: capabilityProfile.policy,
-        // Main routes unrelated requests. Its tools retain the originating credit; a
-        // different requester must use the existing follow-up path, not those closures.
+        // Main's tools retain originating credit. Without explicit collaboration,
+        // a different requester uses the followup path instead of those closures.
         gitContributorProfileId: isMainGitContributorScope({
           agentId:
             execution.agentId ?? parseAgentSessionKey(execution.sessionKey)?.agentId ?? "main",
@@ -313,7 +302,10 @@ function resolvePreparedReplyToolAuthorityFingerprint(
   preparedSessionCapabilityStore?: SessionCapabilityStore,
 ) {
   const sandbox = resolveSandboxRuntimeStatus({
-    ...resolveReplyToolSandboxParams(input.run),
+    cfg: input.run.config,
+    agentId: input.run.agentId,
+    sessionKey: input.run.sessionKey,
+    classificationSessionKey: input.run.runtimePolicySessionKey ?? input.run.sessionKey,
     preparedSessionEntry: entry ?? null,
   });
   const preparedInput = narrow?.(input, sandbox) ?? input;

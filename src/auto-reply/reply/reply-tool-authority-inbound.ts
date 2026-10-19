@@ -15,9 +15,9 @@ import type {
   ReplyToolAuthorityRequester,
 } from "../../sessions/session-controller.contracts.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
-import { getRequesterProfile } from "../requester-profile.js";
 import { internalSessionConversationId } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
