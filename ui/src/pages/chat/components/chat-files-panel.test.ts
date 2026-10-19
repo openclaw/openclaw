@@ -22,7 +22,11 @@ import {
   loadSessionWorkspace,
   sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
-import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
+import {
+  createSessionWorkspaceProps,
+  openSessionWorkspaceFile,
+  type SessionWorkspaceHost,
+} from "./chat-session-workspace.ts";
 import type { SessionWorkspacePreview } from "./chat-sidebar-content-types.ts";
 import "./chat-files-panel.tsx";
 
@@ -705,7 +709,14 @@ describe("workspace file tabs", () => {
   it("opens the file browser from its action hosted outside the panel", async () => {
     const panel = mountPanel();
     panel.tabsInHeader = true;
-    panel.browser = Object.assign(document.createElement("button"), { textContent: "reports" });
+    panel.workspace = {
+      ...createSessionWorkspaceProps(host(), { presentation: "desktop" }),
+      list: {
+        sessionKey: "agent:main:files",
+        root: "/workspace",
+        files: [{ path: "reports", name: "reports", kind: "read", missing: false }],
+      },
+    };
     const onSelect = vi.fn((id: string | null) => {
       panel.activeId = id;
     });
@@ -733,9 +744,10 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     expect(changed).toHaveBeenCalledOnce();
 
-    panel.browser = Object.assign(document.createElement("div"), {
-      textContent: "Refreshed workspace",
-    });
+    panel.workspace = {
+      ...createSessionWorkspaceProps(host(), { presentation: "desktop" }),
+      browserSearch: "Refreshed",
+    };
     panel.renderDetail = () =>
       Object.assign(document.createElement("div"), { textContent: "File contents" });
     panel.onSelect = vi.fn();

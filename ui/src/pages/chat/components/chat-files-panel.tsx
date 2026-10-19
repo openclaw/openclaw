@@ -23,8 +23,10 @@ import { i18n } from "../../../i18n/index.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { createTabFocus } from "../../../lib/tabs.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import type {
   SessionWorkspacePreview,
   SessionWorkspaceProps,
@@ -40,7 +42,8 @@ type Props = {
   presentation: SessionWorkspaceProps["presentation"];
   treeVisible: boolean;
   folderView: boolean;
-  browser: JSX.Element;
+  workspace?: SessionWorkspaceProps;
+  browserPresented: () => boolean;
   renderDetail: ((props: { content: SidebarContent; previewId: string }) => JSX.Element) | null;
   onSelect: (id: string | null) => void;
   onClose: (id: string) => void | boolean | Promise<boolean>;
@@ -81,7 +84,9 @@ defineSolidBridge<Props, Methods>(
     });
     const physicalRatio = (width: number, total: number) =>
       getComputedStyle(contentElement).direction === "rtl" ? 1 - width / total : width / total;
-    const appUnmount = createMcpAppUnmountGate<Props>(() => void refresh(rendered));
+    const appUnmount = createMcpAppUnmountGate<Omit<Props, "workspace" | "browserPresented">>(
+      () => void refresh(rendered),
+    );
     const rendered = createMemo(() => {
       const snapshot = {
         sessionKey: props.sessionKey,
@@ -91,7 +96,6 @@ defineSolidBridge<Props, Methods>(
         presentation: props.presentation,
         treeVisible: props.treeVisible,
         folderView: props.folderView,
-        browser: props.browser,
         renderDetail: props.renderDetail,
         onSelect: props.onSelect,
         onClose: props.onClose,
@@ -264,7 +268,9 @@ defineSolidBridge<Props, Methods>(
               !rendered().previews.find((entry) => entry.id === rendered().activeId)?.catalogVisible
             }
           >
-            {rendered().browser}
+            <ContentPresentation value={() => props.browserPresented()}>
+              <SessionWorkspaceRail workspace={props.workspace} />
+            </ContentPresentation>
           </div>
           <Show
             when={reading() && rendered().treeVisible && contentWidth() > FILE_COLUMN_MIN_WIDTH * 2}
@@ -391,7 +397,8 @@ defineSolidBridge<Props, Methods>(
       presentation: { default: undefined, attribute: false },
       treeVisible: { default: true, type: Boolean },
       folderView: { default: false, type: Boolean },
-      browser: { default: undefined, attribute: false },
+      workspace: { default: undefined, attribute: false },
+      browserPresented: { default: () => true, attribute: false },
       renderDetail: { default: null, attribute: false },
       onSelect: { default: () => {}, attribute: false },
       onClose: { default: () => {}, attribute: false },

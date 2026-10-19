@@ -14,6 +14,7 @@ import {
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
 import "../pages/chat/components/chat-detail-panel.tsx";
+import "../pages/chat/components/chat-files-panel.tsx";
 import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";
 import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { createSessionWorkspaceProps } from "../pages/chat/components/chat-session-workspace.ts";
