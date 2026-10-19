@@ -269,14 +269,12 @@ it("refreshes the embedded frame and keeps Portal actions scoped across desktop 
     )!;
     expect(denied.getAttribute("aria-disabled")).toBe("true");
     denied.click();
-    expect(
-      source.request.mock.calls.filter(([method]) => method === "portal.close"),
-    ).toHaveLength(0);
+    expect(source.request.mock.calls.filter(([method]) => method === "portal.close")).toHaveLength(
+      0,
+    );
     source.updateSnapshot({ hello: gatewayHelloForMethods(methods, ["operator.write"]) });
     await page.updateComplete;
-    page
-      .querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Close portal"]')!
-      .click();
+    page.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Close portal"]')!.click();
     await waitForSolid(() =>
       expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id }),
     );
