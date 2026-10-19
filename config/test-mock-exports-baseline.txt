@@ -2415,7 +2415,6 @@
 ["src/agents/prepared-model-runtime.test-harness.ts","../logging/subsystem.js","c6d857f7f225a1af0033624d60e54ffcac09836640a0c06a0dee716eb7ff4967",1]
 ["src/agents/prepared-model-runtime.test-harness.ts","./agent-auth-discovery.js","814e64adf7d6c7f9cc66dc965644162bafe0ea219a8cdf90a119d079cd1b7a3f",1]
 ["src/agents/prepared-model-runtime.test-harness.ts","./auth-profiles/external-cli-sync.js","48ec8019987ab3079bf38d6d55869206a9b7978a441f73133af08f9aebf9f1f1",1]
-["src/agents/prepared-model-runtime.test-harness.ts","./auth-profiles/runtime-materializations.js","6c7781dcb5e2c61a47ac98eded9d0f26dd5fa645dfd34b026bf523afe8417081",1]
 ["src/agents/prepared-model-runtime.test-harness.ts","./model-catalog.js","da87cffa152803d11d93bb23abb516ac71d88066e075301cf5c64c639e65e75e",1]
 ["src/agents/prepared-model-runtime.test-harness.ts","./model-discovery-context.js","d382c3016a1ac7f67b03dc1d7643c11c75a0dc6818e0b71404ddae9ec0d027df",1]
 ["src/agents/prepared-model-runtime.test-harness.ts","./models-config.js","6eebba5210860bb1604edb8a8e492ec0f94c8b4b1e13dd12400f25d81f538ad5",1]
