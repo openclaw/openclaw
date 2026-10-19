@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -10,27 +10,15 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { LogsPage } from "./logs-page.tsx";
 
-type TestGateway = ApplicationContext["gateway"] & {
-  publish: (snapshot: ApplicationGatewaySnapshot) => void;
-};
-type TestContext = ApplicationContext & { gateway: TestGateway };
+type TestContext = ReturnType<typeof contextWithClient>;
 
-function contextWithClient(
-  client: GatewayBrowserClient,
-  connected = false,
-  bootId?: string,
-): TestContext {
+function contextWithClient(client: GatewayBrowserClient, connected = false, bootId?: string) {
   const { gateway, publish } = createApplicationGateway({
     client,
     phase: connected ? "connected" : "stopped",
     hello: bootId === undefined ? undefined : { server: { bootId } },
   } as ApplicationGatewaySnapshot);
-  return {
-    basePath: "",
-    gateway: Object.assign(gateway, { publish }),
-    navigate: vi.fn(),
-    preload: vi.fn(async () => undefined),
-  } as unknown as TestContext;
+  return { gateway: Object.assign(gateway, { publish }) };
 }
 
 function mountPage(initial: TestContext) {
@@ -42,7 +30,7 @@ function mountPage(initial: TestContext) {
     },
   };
   const { container, unmount: dispose } = mountSolid(() => (
-    <ApplicationProvider value={liveContext}>
+    <ApplicationProvider value={liveContext as unknown as ApplicationContext}>
       <LogsPage />
     </ApplicationProvider>
   ));
@@ -57,15 +45,19 @@ function mountPage(initial: TestContext) {
     },
     dispose,
     lines: () => Array.from(container.querySelectorAll(".log-message"), (row) => row.textContent),
-    refresh: () => query<HTMLButtonElement>(".settings-section__actions button")!.click(),
+    async refresh() {
+      query<HTMLButtonElement>(".settings-section__actions button")!.click();
+      await settle();
+    },
   };
 }
 async function setup<T>(request: T, connected = true, bootId?: string) {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const client = { request } as unknown as GatewayBrowserClient;
   const context = contextWithClient(client, connected, bootId);
   const page = mountPage(context);
   await settle();
-  return { client, context, page };
+  return { client, context, page, request };
 }
 function tail(cursor: number, lines: string[], file?: string) {
   return { cursor, lines, file };
@@ -82,12 +74,8 @@ function pendingRequests() {
   });
   return { request, replies };
 }
-function reconnect(
-  context: TestContext,
-  next = context.gateway.snapshot,
-  phase: ApplicationGatewaySnapshot["phase"] = "reconnecting",
-) {
-  context.gateway.publish({ ...context.gateway.snapshot, phase });
+function reconnect(context: TestContext, next = context.gateway.snapshot) {
+  context.gateway.publish({ ...context.gateway.snapshot, phase: "reconnecting" });
   context.gateway.publish({ ...next, phase: "connected" });
 }
 function captureFrames() {
@@ -106,9 +94,6 @@ async function poll() {
   await settle();
 }
 
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-});
 afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
@@ -120,10 +105,8 @@ it("retains one initial request across metadata snapshots with empty logs", asyn
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
   expect(request).toHaveBeenCalledOnce();
-  const signal = request.mock.calls[0]![2].signal;
   context.gateway.publish({ ...context.gateway.snapshot });
-  expect(request).toHaveBeenCalledOnce();
-  expect(signal.aborted).toBe(false);
+  expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
 
   replies[0]!.resolve(tail(100, [], "/tmp/initial.log"));
   await settle();
@@ -137,8 +120,7 @@ it("retains one initial request across metadata snapshots with empty logs", asyn
   expect(page.lines()).toEqual(["poll"]);
 
   request.mockResolvedValueOnce(tail(120, ["manual"], "/tmp/initial.log"));
-  page.refresh();
-  await settle();
+  await page.refresh();
   expect(page.lines()).toEqual(["manual"]);
   expect(request).toHaveBeenCalledTimes(3);
   expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
@@ -151,7 +133,6 @@ it.each(["reconnect", "source replacement", "client replacement", "detach/reatta
     const { client, context, page: initialPage } = await setup(request);
     let page = initialPage;
     expect(request).toHaveBeenCalledOnce();
-    const firstSignal = request.mock.calls[0]![2].signal;
     if (transition === "reconnect") {
       reconnect(context);
     } else if (transition === "client replacement") {
@@ -166,11 +147,9 @@ it.each(["reconnect", "source replacement", "client replacement", "detach/reatta
       page = mountPage(context);
     }
     await settle();
-    expect(firstSignal.aborted).toBe(true);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([true, false]);
     context.gateway.publish({ ...context.gateway.snapshot });
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls[1]![2].signal.aborted).toBe(false);
+    expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([true, false]);
 
     replies[1]!.resolve(tail(2, ["current"]));
     await settle();
@@ -183,84 +162,59 @@ it.each(["reconnect", "source replacement", "client replacement", "detach/reatta
   },
 );
 
-it("resumes the loaded cursor after a same-gateway reconnect", async () => {
-  const request = responding(
-    tail(100, ["before"], "/tmp/gateway.log"),
-    tail(110, ["after"], "/tmp/gateway.log"),
-  );
-  const { context, page } = await setup(request, true, "same-boot");
-  expect(page.lines()).toEqual(["before"]);
-
-  reconnect(context);
-  await settle();
-
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls[1]![1]).toMatchObject({ cursor: 100 });
-  expect(page.lines()).toEqual(["before", "after"]);
-});
-
-it("retries a changed boot from the start while retaining stale rows until replacement", async () => {
+it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async (boot) => {
+  const changed = boot === "changed";
   const pending = deferred<ReturnType<typeof tail>>();
   const request = responding(tail(100, ["before"], "/tmp/gateway.log"))
-    .mockImplementationOnce(() => pending.promise)
-    .mockResolvedValueOnce(tail(200, ["restarted"], "/tmp/gateway.log"));
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValueOnce(tail(200, ["after"], "/tmp/gateway.log"));
   const { context, page } = await setup(request, true, "original-boot");
-
+  expect(page.lines()).toEqual(["before"]);
   // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
   reconnect(context, {
     ...context.gateway.snapshot,
-    hello: { server: { bootId: "replacement-boot" } },
+    hello: { server: { bootId: changed ? "replacement-boot" : "original-boot" } },
   } as ApplicationGatewaySnapshot);
   await settle();
-  expect(request.mock.calls[1]![1]).toMatchObject({ cursor: undefined });
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]![1]).toMatchObject({ cursor: changed ? undefined : 100 });
   expect(page.lines()).toEqual(["before"]);
-
-  pending.reject(new Error("replacement boot is not ready"));
-  await settle();
-  expect(page.lines()).toEqual(["before"]);
-  expect(page.container.textContent).toContain("replacement boot is not ready");
-
-  await poll();
-  expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
-  expect(page.lines()).toEqual(["restarted"]);
+  if (changed) {
+    pending.reject(new Error("replacement boot is not ready"));
+    await settle();
+    expect(page.lines()).toEqual(["before"]);
+    expect(page.container.textContent).toContain("replacement boot is not ready");
+    await poll();
+    expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
+  } else {
+    pending.resolve(tail(110, ["after"], "/tmp/gateway.log"));
+    await settle();
+  }
+  expect(page.lines()).toEqual(changed ? ["after"] : ["before", "after"]);
   expect(page.container.textContent).not.toContain("replacement boot is not ready");
 });
 
 it("clears loaded rows, source, and cursor when the gateway provider changes", async () => {
-  const request = vi.fn().mockResolvedValue(tail(42, ["old provider"], "/old/provider.log"));
-  const { client, page } = await setup(request);
-  expect(page.lines()).toEqual(["old provider"]);
-  expect(page.container.textContent).toContain("/old/provider.log");
+  const { client, page, request } = await setup(
+    vi.fn().mockResolvedValue(tail(42, ["old"], "/old")),
+  );
+  expect(page.lines()).toEqual(["old"]);
+  expect(page.container.textContent).toContain("/old");
   const replacement = contextWithClient(client);
   page.replaceContext(replacement);
   expect(page.lines()).toEqual([]);
-  expect(page.container.textContent).not.toContain("/old/provider.log");
-  request.mockResolvedValueOnce(tail(1, ["new provider"], "/new/provider.log"));
+  expect(page.container.textContent).not.toContain("/old");
+  request.mockResolvedValueOnce(tail(1, ["new"], "/new"));
   replacement.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
   await settle();
   expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: undefined });
-  expect(page.lines()).toEqual(["new provider"]);
-});
-
-it("keeps an initial error visible until the next poll succeeds", async () => {
-  const request = vi.fn().mockRejectedValueOnce(new Error("logs unavailable"));
-  const { context, page } = await setup(request);
-  expect(page.container.textContent).toContain("logs unavailable");
-  expect(page.container.textContent).not.toContain("No log entries.");
-  context.gateway.publish({ ...context.gateway.snapshot });
-  expect(request).toHaveBeenCalledOnce();
-  expect(page.query(".logs-refresh-status button")).toBeNull();
-  request.mockResolvedValueOnce(tail(1, ["recovered"], "/tmp/retry.log"));
-  await poll();
-  expect(page.lines()).toEqual(["recovered"]);
-  expect(page.container.textContent).not.toContain("logs unavailable");
+  expect(page.lines()).toEqual(["new"]);
 });
 
 it("pauses polling while hidden and catches up once on reveal", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  const request = vi.fn().mockResolvedValue(tail(1, []));
-  const { page } = await setup(request);
+  const { request, page } = await setup(vi.fn().mockResolvedValue(tail(1, [])));
   expect(request).toHaveBeenCalledOnce();
   await poll();
   expect(request).toHaveBeenCalledOnce();
@@ -297,34 +251,40 @@ it("serializes quiet polls so an older cursor cannot overwrite a newer one", asy
 it("reloads a changed log file before publishing any rows from it", async () => {
   const reset = deferred<ReturnType<typeof tail>>();
   const request = responding(
-    tail(6, ["A-one"], "/tmp/source-a.log"),
-    tail(18, ["B-tail"], "/tmp/source-b.log"),
+    tail(6, ["A-one"], "/a"),
+    tail(18, ["B-tail"], "/b"),
   ).mockReturnValueOnce(reset.promise);
   const { page } = await setup(request);
   await poll();
   expect(page.lines()).toEqual(["A-one"]);
   expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 6 });
   expect(request.mock.calls[2]?.[1]).toMatchObject({ cursor: undefined });
-  reset.resolve(tail(18, ["B-one", "B-tail"], "/tmp/source-b.log"));
+  reset.resolve(tail(18, ["B-one", "B-tail"], "/b"));
   await settle();
   expect(page.lines()).toEqual(["B-one", "B-tail"]);
-  expect(page.container.textContent).toContain("/tmp/source-b.log");
+  expect(page.container.textContent).toContain("/b");
 });
 
-it("retains loaded rows as stale after failure and clears the marker after retry", async () => {
-  const request = responding(tail(1, ["old"]))
+it.each([false, true])("recovers a logs error with previously loaded rows: %s", async (loaded) => {
+  const request = responding(...(loaded ? [tail(1, ["old"])] : []))
     .mockRejectedValueOnce(new Error("logs unavailable"))
-    .mockResolvedValueOnce({ ...tail(2, ["fresh"]), reset: true });
-  const { page } = await setup(request);
-  page.refresh();
-  await settle();
-  expect(page.lines()).toEqual(["old"]);
-  const status = page.query(".logs-refresh-status")?.textContent;
-  expect(status).toContain("logs unavailable");
-  expect(status).toContain("Showing stale data");
-  page.refresh();
-  await settle();
-  expect(page.lines()).toEqual(["fresh"]);
+    .mockResolvedValueOnce({ ...tail(2, ["recovered"]), reset: loaded });
+  const { context, page } = await setup(request);
+  if (loaded) {
+    await page.refresh();
+    expect(page.lines()).toEqual(["old"]);
+    expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing stale data");
+  } else {
+    expect(page.container.textContent).toContain("logs unavailable");
+    expect(page.container.textContent).not.toContain("No log entries.");
+    context.gateway.publish({ ...context.gateway.snapshot });
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.query(".logs-refresh-status button")).toBeNull();
+  }
+  expect(page.query(".logs-refresh-status")?.textContent).toContain("logs unavailable");
+  await (loaded ? page.refresh() : poll());
+  expect(page.lines()).toEqual(["recovered"]);
+  expect(page.container.textContent).not.toContain("logs unavailable");
   expect(page.query(".logs-refresh-status")).toBeNull();
 });
 
@@ -373,7 +333,8 @@ it("drops queued scroll work after a same-client reconnect", async () => {
   const stream = page.query(".log-stream")!;
   Object.defineProperty(stream, "scrollHeight", { value: 500 });
   stream.scrollTop = 0;
-  reconnect(context, context.gateway.snapshot, "stopped");
+  context.gateway.publish({ ...context.gateway.snapshot, phase: "stopped" });
+  context.gateway.publish({ ...context.gateway.snapshot, phase: "connected" });
   for (const frame of frames) {
     frame(0);
   }
