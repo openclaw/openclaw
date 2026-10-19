@@ -13,7 +13,11 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { nextPaint, singleFileDiff } from "./chat-session-diff.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { seedMainCompanionLayout } from "./chat-sidebar-panel-contract.test-support.ts";
+import {
+  readColdOpenOutcome,
+  seedMainCompanionLayout,
+  type ColdOpenOutcome,
+} from "./chat-sidebar-panel-contract.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -41,15 +45,6 @@ const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
   "base64",
 );
-
-type ColdOpenOutcome =
-  | { outcome: "loading" | "content" }
-  | {
-      outcome: "generic-empty";
-      heading: string;
-      description: string;
-      emptyStateOffersAction: boolean;
-    };
 
 const offeredSlotLabels = [
   "Side chat",
@@ -289,30 +284,6 @@ async function openRetainedDesktop(
 
 async function clickSidebarTab(page: Page, label: string): Promise<void> {
   await page.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
-}
-
-async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
-  const activePanel = page.locator(".side-panel__panel:not([hidden])");
-  await activePanel.waitFor();
-  await activePanel.locator(":scope > *").first().waitFor();
-  if ((await activePanel.locator("openclaw-panel-loading-skeleton").count()) > 0) {
-    return { outcome: "loading" };
-  }
-  const emptyState = activePanel.locator("openclaw-panel-empty-state").first();
-  if (!(await emptyState.count())) {
-    return { outcome: "content" };
-  }
-  return {
-    outcome: "generic-empty",
-    heading: (await emptyState.locator(".empty-state__title").textContent())?.trim() ?? "",
-    description:
-      (await emptyState.locator(".empty-state__description").textContent())?.trim() ?? "",
-    emptyStateOffersAction:
-      (await activePanel
-        .locator('a[href]:not([aria-disabled="true"]), button:enabled:not([aria-disabled="true"])')
-        .filter({ visible: true })
-        .count()) > 0,
-  };
 }
 
 async function readSlotColdOpenOutcome(
