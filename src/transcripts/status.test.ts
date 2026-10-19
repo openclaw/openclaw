@@ -12,7 +12,10 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import * as discovery from "../plugins/discovery.js";
 import * as loader from "../plugins/loader.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
-import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  restorePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -28,7 +31,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture-startup.js";
@@ -51,6 +57,17 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
+
+function withStatusState(run: (state: OpenClawTestState) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const previous = captureActivePluginRegistrySnapshot();
+    try {
+      await run(state);
+    } finally {
+      restoreActivePluginRegistrySnapshot(previous);
+    }
+  });
+}
 
 function createStore() {
   const stateDir = tempDirs.make("transcript-status-");
@@ -75,11 +92,55 @@ function recordCapture(
   });
 }
 
-function providerRegistry(pluginId: string, provider: TranscriptSourceProvider) {
+function providerRegistry(
+  pluginId: string,
+  id: string,
+  overrides: Partial<TranscriptSourceProvider> = {},
+) {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: pluginId }));
-  registry.transcriptSourceProviders.push({ pluginId, source: "fixture", provider });
+  registry.transcriptSourceProviders.push({
+    pluginId,
+    source: "fixture",
+    provider: { id, name: id, sourceKinds: ["live-caption"], ...overrides },
+  });
   return registry;
+}
+
+function metadataFixture(cfg: OpenClawConfig, sources: Record<string, string>) {
+  const manifestRegistry = makeRegistry(Object.keys(sources).map((id) => ({ id, channels: [] })));
+  for (const plugin of manifestRegistry.plugins) {
+    plugin.contracts = { transcriptSourceProviders: [sources[plugin.id]!] };
+  }
+  return createPluginMetadataSnapshot({ config: cfg, manifestRegistry });
+}
+
+function installedPlugin(
+  pluginId: string,
+  { manifestPath, rootDir, source }: { manifestPath: string; rootDir: string; source?: string },
+  enabled = true,
+) {
+  return {
+    pluginId,
+    manifestPath,
+    rootDir,
+    ...(source ? { source } : {}),
+    manifestHash: "fixture",
+    origin: "config" as const,
+    enabled,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
+  };
+}
+
+function readMetadata(
+  store: TranscriptsStore,
+  cfg: OpenClawConfig,
+  metadata: PluginMetadataSnapshot,
+) {
+  return withPluginMetadataSnapshotScope(metadata, () => readTranscriptLibraryStatus(store, cfg), {
+    config: cfg,
+  });
 }
 
 describe("transcript library capture health", () => {
@@ -100,12 +161,7 @@ describe("transcript library capture health", () => {
 
   it("reports a durable source timestamp without inventing persistence time or recording from unstopped rows", async () => {
     const store = createStore();
-    const source = {
-      providerId: "fixture-voice",
-      guildId: "guild",
-      channelId: "room",
-      accountId: "work",
-    };
+    const source = room;
     const cfg: OpenClawConfig = { transcripts: { autoStart: [source] } };
     const session = { sessionId: "persistent-room", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
@@ -114,11 +170,13 @@ describe("transcript library capture health", () => {
       endedAt: "2026-08-20T10:10:00.000Z",
     });
     let result = await readTranscriptLibraryStatus(store, cfg);
-    expect(result.active).toEqual([]);
     expect(result.configuredSources[0]?.state).not.toBe("armed");
-    expect(result.latestTranscript).toMatchObject({
-      lastUtteranceAt: "2026-08-20T10:10:00.000Z",
-      activeSubscription: false,
+    expect(result).toMatchObject({
+      active: [],
+      latestTranscript: {
+        lastUtteranceAt: "2026-08-20T10:10:00.000Z",
+        activeSubscription: false,
+      },
     });
     recordCapture(session);
     result = await readTranscriptLibraryStatus(store, cfg);
@@ -131,95 +189,57 @@ describe("transcript library capture health", () => {
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
     expect(result.active[0]?.activeSubscription).toBe(false);
-    expect(
-      (
-        await readTranscriptLibraryStatus(store, {
-          transcripts: { enabled: false, autoStart: [source] },
-        })
-      ).configuredSources[0]?.state,
-    ).toBe("disabled");
+    result = await readTranscriptLibraryStatus(store, {
+      transcripts: { enabled: false, autoStart: [source] },
+    });
+    expect(result.configuredSources[0]?.state).toBe("disabled");
   });
 
   it("reads declared, disabled and unavailable providers from prepared metadata without calling provider runtime", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withStatusState(async (state) => {
       const cfg: OpenClawConfig = {
         transcripts: { autoStart: [{ providerId: "absent" }, { providerId: "disabled-source" }] },
       };
-      const manifests = makeRegistry([
-        { id: "fixture-plugin", channels: [] },
-        { id: "disabled-plugin", channels: [] },
-      ]);
-      manifests.plugins[0]!.contracts = { transcriptSourceProviders: ["declared-source"] };
-      manifests.plugins[1]!.contracts = { transcriptSourceProviders: ["disabled-source"] };
-      const metadata = createPluginMetadataSnapshot({ config: cfg, manifestRegistry: manifests });
-      metadata.index = {
-        ...metadata.index,
-        plugins: manifests.plugins.map((plugin) => ({
-          pluginId: plugin.id,
-          manifestPath: plugin.manifestPath,
-          manifestHash: "fixture",
-          rootDir: plugin.rootDir,
-          origin: plugin.origin,
-          enabled: plugin.id !== "disabled-plugin",
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          compat: [],
-        })),
-      };
-      const previous = captureActivePluginRegistrySnapshot();
-      const start = vi.fn();
-      const stop = vi.fn();
-      const status = vi.fn();
-      const registry = providerRegistry("live-plugin", {
-        id: "live-source",
-        name: "Fixture source",
-        sourceKinds: ["live-caption"],
-        start,
-        stop,
-        status,
+      const metadata = metadataFixture(cfg, {
+        "fixture-plugin": "declared-source",
+        "disabled-plugin": "disabled-source",
       });
-      setActivePluginRegistry(registry);
-      try {
-        const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
-        const importedBefore = listImportedRuntimePluginIds();
-        const result = await withPluginMetadataSnapshotScope(
-          metadata,
-          () => readTranscriptLibraryStatus(store, cfg),
-          { config: cfg },
-        );
-        expect(result.providers).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ providerId: "declared-source", availability: "enabled" }),
-            expect.objectContaining({ providerId: "disabled-source", availability: "disabled" }),
-            expect.objectContaining({ providerId: "absent", availability: "unavailable" }),
-            expect.objectContaining({
-              providerId: "live-source",
-              sourceKinds: ["live-caption"],
-              canStart: true,
-              canStop: true,
-              canImport: false,
-            }),
-          ]),
-        );
-        expect(
-          result.providers.find((provider) => provider.providerId === "declared-source"),
-        ).not.toHaveProperty("canStart");
-        expect(
-          result.providers.find((provider) => provider.providerId === "declared-source"),
-        ).not.toHaveProperty("autoStart");
-        expect(
-          result.providers.find((provider) => provider.providerId === "manual-transcript"),
-        ).not.toHaveProperty("autoStart");
-        expect(result.configuredSources.map((source) => source.state)).toEqual([
-          "not-active",
-          "not-active",
-        ]);
-        expect(start).not.toHaveBeenCalled();
-        expect(stop).not.toHaveBeenCalled();
-        expect(status).not.toHaveBeenCalled();
-        expect(listImportedRuntimePluginIds()).toEqual(importedBefore);
-      } finally {
-        restoreActivePluginRegistrySnapshot(previous);
+      metadata.index.plugins = metadata.plugins.map((plugin) =>
+        installedPlugin(
+          plugin.id,
+          { manifestPath: plugin.manifestPath, rootDir: plugin.rootDir },
+          plugin.id !== "disabled-plugin",
+        ),
+      );
+      const hooks = { start: vi.fn(), stop: vi.fn(), status: vi.fn() };
+      setActivePluginRegistry(providerRegistry("live-plugin", "live-source", hooks));
+      const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
+      const importedBefore = listImportedRuntimePluginIds();
+      const result = await readMetadata(store, cfg, metadata);
+      const providers = Object.fromEntries(result.providers.map((p) => [p.providerId, p]));
+      expect(providers).toMatchObject({
+        "declared-source": { availability: "enabled" },
+        "disabled-source": { availability: "disabled" },
+        absent: { availability: "unavailable" },
+        "live-source": {
+          sourceKinds: ["live-caption"],
+          canStart: true,
+          canStop: true,
+          canImport: false,
+        },
+      });
+      const declared = providers["declared-source"];
+      expect(declared).not.toHaveProperty("canStart");
+      expect(declared).not.toHaveProperty("autoStart");
+      expect(providers["manual-transcript"]).not.toHaveProperty("autoStart");
+      expect(result.configuredSources.map((source) => source.state)).toEqual([
+        "not-active",
+        "not-active",
+      ]);
+      for (const hook of Object.values(hooks)) {
+        expect(hook).not.toHaveBeenCalled();
       }
+      expect(listImportedRuntimePluginIds()).toEqual(importedBefore);
     });
   });
 
@@ -262,23 +282,13 @@ describe("transcript library capture health", () => {
 });
 
 it("keeps transcript provider health bound to its live Gateway registry", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withStatusState(async (state) => {
     const cfg: OpenClawConfig = {};
-    const manifests = makeRegistry([{ id: "request-plugin", channels: [] }]);
-    manifests.plugins[0]!.contracts = { transcriptSourceProviders: ["request-source"] };
-    const metadata = createPluginMetadataSnapshot({ config: cfg, manifestRegistry: manifests });
-    const previous = captureActivePluginRegistrySnapshot();
+    const metadata = metadataFixture(cfg, { "request-plugin": "request-source" });
     const start = vi.fn();
     const unrelatedStart = vi.fn();
-    const requestRegistry = providerRegistry("request-plugin", {
-      id: "request-source",
-      name: "Request source",
-      sourceKinds: ["live-caption"],
-      start,
-    });
-    const unrelatedRegistry = providerRegistry("unrelated-plugin", {
-      id: "unrelated-source",
-      name: "Unrelated source",
+    const requestRegistry = providerRegistry("request-plugin", "request-source", { start });
+    const unrelatedRegistry = providerRegistry("unrelated-plugin", "unrelated-source", {
       sourceKinds: ["live-audio"],
       start: unrelatedStart,
     });
@@ -316,7 +326,6 @@ it("keeps transcript provider health bound to its live Gateway registry", async 
       failures.push(error);
     } finally {
       const results = await Promise.allSettled([requestOwner.close()]);
-      restoreActivePluginRegistrySnapshot(previous);
       failures.push(
         ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
       );
@@ -327,132 +336,106 @@ it("keeps transcript provider health bound to its live Gateway registry", async 
   });
 });
 
-describe("transcript setup metadata boundary", () => {
-  it("offers a cold manifest source before and after a provider-only scoped registration without discovering runtime in status", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pluginId = "fixture-captions";
-      const providerId = "fixture-caption-source";
-      const rootDir = state.statePath("fixture-plugin");
-      const source = await state.writeText(
-        "fixture-plugin/index.cjs",
-        `module.exports = {
+it("offers a cold manifest source before and after scoped registration without discovering runtime", async () => {
+  await withStatusState(async (state) => {
+    const pluginId = "fixture-captions";
+    const providerId = "fixture-caption-source";
+    const rootDir = state.statePath("fixture-plugin");
+    const source = await state.writeText(
+      "fixture-plugin/index.cjs",
+      `module.exports = {
         id: "fixture-captions", register(api) {
           api.registerTranscriptSourceProvider({ id: "fixture-caption-source", name: "Runtime captions", sourceKinds: ["live-caption"],
             async start() { throw new Error("status must not start capture"); }
           });
         }
       };`,
-      );
-      const descriptor = {
-        name: "Fixture captions",
-        autoStart: { accountId: "optional", meetingUrl: "required" },
-      };
-      const manifestPath = await state.writeJson("fixture-plugin/openclaw.plugin.json", {
-        id: pluginId,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: { transcriptSourceProviders: [providerId] },
-        transcriptSources: { [providerId]: descriptor },
-      });
-      const cfg: OpenClawConfig = {
-        plugins: {
-          allow: [pluginId],
-          entries: { [pluginId]: { enabled: true } },
-          load: { paths: [rootDir] },
-          slots: { memory: "none" },
-        },
-      };
-      const initial = createPluginMetadataSnapshot({
-        config: cfg,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      });
-      initial.index.plugins = [
-        {
-          pluginId,
-          source,
-          manifestPath,
-          rootDir,
-          manifestHash: "fixture",
-          origin: "config",
-          enabled: true,
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          compat: [],
-        },
-      ];
-      const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-        index: initial.index,
-        config: cfg,
-        env: state.env,
-      });
-      const metadata = restorePluginMetadataSnapshot({
-        ...initial,
-        manifestRegistry,
-        plugins: manifestRegistry.plugins,
-        byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
-      });
-      const previous = captureActivePluginRegistrySnapshot();
-      const active = createEmptyPluginRegistry();
-      setActivePluginRegistry(active);
-      const store = new TranscriptsStore(state.statePath("transcripts"));
-      const readStatus = async () => {
-        const discover = vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(() => {
-          throw new Error("status must not discover plugins");
-        });
-        const resolve = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
-          throw new Error("status must not resolve runtime");
-        });
-        const read = vi.spyOn(fs, "readFileSync");
-        try {
-          const result = await withPluginMetadataSnapshotScope(
-            metadata,
-            () => readTranscriptLibraryStatus(store, cfg),
-            { config: cfg },
-          );
-          expect(discover).not.toHaveBeenCalled();
-          expect(resolve).not.toHaveBeenCalled();
-          expect(
-            read.mock.calls.some(
-              ([file]) => String(file) === manifestPath || String(file) === source,
-            ),
-          ).toBe(false);
-          return result;
-        } finally {
-          read.mockRestore();
-          resolve.mockRestore();
-          discover.mockRestore();
-        }
-      };
-      try {
-        const before = await readStatus();
-        const scoped = loader.loadPluginRegistryHandle({
-          config: cfg,
-          env: state.env,
-          onlyPluginIds: [pluginId],
-          manifestRegistry,
-          discovery: {
-            candidates: [{ idHint: pluginId, source, rootDir, origin: "config" }],
-            diagnostics: [],
-          },
-          cache: false,
-        });
-        expect(scoped.transcriptSourceProviders.map((entry) => entry.provider.id)).toEqual([
-          providerId,
-        ]);
-        expect(getActivePluginRegistry()).toBe(active);
-        expect(active.transcriptSourceProviders).toEqual([]);
-        const after = await readStatus();
-        for (const result of [before, after]) {
-          expect(result.providers.find((provider) => provider.providerId === providerId)).toEqual({
-            providerId,
-            pluginId,
-            name: descriptor.name,
-            availability: "enabled",
-            autoStart: descriptor.autoStart,
-          });
-        }
-      } finally {
-        restoreActivePluginRegistrySnapshot(previous);
-      }
+    );
+    const descriptor = {
+      name: "Fixture captions",
+      autoStart: { accountId: "optional", meetingUrl: "required" },
+    };
+    const manifestPath = await state.writeJson("fixture-plugin/openclaw.plugin.json", {
+      id: pluginId,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      contracts: { transcriptSourceProviders: [providerId] },
+      transcriptSources: { [providerId]: descriptor },
     });
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: [pluginId],
+        entries: { [pluginId]: { enabled: true } },
+        load: { paths: [rootDir] },
+        slots: { memory: "none" },
+      },
+    };
+    const initial = metadataFixture(cfg, {});
+    initial.index.plugins = [installedPlugin(pluginId, { source, manifestPath, rootDir })];
+    const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+      index: initial.index,
+      config: cfg,
+      env: state.env,
+    });
+    const metadata = restorePluginMetadataSnapshot({
+      ...initial,
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
+    });
+    const active = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+    const store = new TranscriptsStore(state.statePath("transcripts"));
+    const readStatus = async () => {
+      const discover = vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(() => {
+        throw new Error("status must not discover plugins");
+      });
+      const resolve = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
+        throw new Error("status must not resolve runtime");
+      });
+      const read = vi.spyOn(fs, "readFileSync");
+      try {
+        const result = await readMetadata(store, cfg, metadata);
+        expect(discover).not.toHaveBeenCalled();
+        expect(resolve).not.toHaveBeenCalled();
+        expect(
+          read.mock.calls.some(
+            ([file]) => String(file) === manifestPath || String(file) === source,
+          ),
+        ).toBe(false);
+        return result;
+      } finally {
+        read.mockRestore();
+        resolve.mockRestore();
+        discover.mockRestore();
+      }
+    };
+    const before = await readStatus();
+    const scoped = loader.loadPluginRegistryHandle({
+      config: cfg,
+      env: state.env,
+      onlyPluginIds: [pluginId],
+      manifestRegistry,
+      discovery: {
+        candidates: [{ idHint: pluginId, source, rootDir, origin: "config" }],
+        diagnostics: [],
+      },
+      cache: false,
+    });
+    expect(scoped.transcriptSourceProviders.map((entry) => entry.provider.id)).toEqual([
+      providerId,
+    ]);
+    expect(getActivePluginRegistry()).toBe(active);
+    expect(active.transcriptSourceProviders).toEqual([]);
+    const after = await readStatus();
+    for (const result of [before, after]) {
+      expect(result.providers.find((provider) => provider.providerId === providerId)).toEqual({
+        providerId,
+        pluginId,
+        name: descriptor.name,
+        availability: "enabled",
+        autoStart: descriptor.autoStart,
+      });
+    }
   });
 });
 
