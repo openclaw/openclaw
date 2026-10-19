@@ -37,7 +37,13 @@ function mockJsonResponse(payload: unknown, init?: ResponseInit) {
   return {
     fetchSpy,
     headers: () => new Headers(fetchSpy.mock.calls[0]?.[1]?.headers),
-    body: () => JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as Record<string, unknown>,
+    body: () => {
+      const body = fetchSpy.mock.calls[0]?.[1]?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected a JSON request body");
+      }
+      return JSON.parse(body) as Record<string, unknown>;
+    },
   };
 }
 

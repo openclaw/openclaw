@@ -62,6 +62,7 @@ vi.mock("./registry/subagent-registry.js", () => ({
   claimSubagentYield: fixture.claimSubagentYield,
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: Use revocable fixture session facts without opening the Gateway store.
 vi.mock("../../gateway/session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: async () => {
     let active = true;

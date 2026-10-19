@@ -42,13 +42,14 @@ const { http, auth, availability } = vi.hoisted(() => ({
 // mock-isolation: Provider request tests supply auth readiness without host credential reads.
 vi.mock("../plugins/provider-auth-availability.js", () => availability);
 
+// mock-isolation: Resolve fixture credentials without reading host auth profiles.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => auth);
 
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
-  return { ...http, readProviderJsonResponse: actual.readProviderJsonResponse };
+  return { ...actual, ...http };
 });
 
 function mockResponse(

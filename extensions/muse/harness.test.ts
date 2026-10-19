@@ -62,7 +62,11 @@ afterAll(async () => {
 const harnesses = new Set<ReturnType<typeof createMuseAgentHarnessImpl>>();
 afterEach(async () => {
   try {
-    await Promise.all([...harnesses].map((harness) => harness.dispose?.()));
+    await Promise.all(
+      [...harnesses].map(async (harness) => {
+        await harness.dispose?.();
+      }),
+    );
   } finally {
     harnesses.clear();
     vi.unstubAllEnvs();
