@@ -59,6 +59,8 @@ beforeEach(() => {
 afterEach(() => {
   configureAiTransportHost(initial);
   vi.unstubAllGlobals();
+  expect(gatewayResolve).not.toHaveBeenCalled();
+  expect(gatewayFetch).not.toHaveBeenCalled();
 });
 function model(api: string, provider: string): Model {
   return {
@@ -79,31 +81,23 @@ function runtime(transportHost: Partial<AiTransportHost> = {}) {
   registerBuiltInApiProviders(value.registry);
   return value;
 }
+function frame(type: string, fields: Record<string, unknown> = {}) {
+  return { type, ...fields };
+}
 const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] };
 
 describe("scoped native auth at provider boundaries", () => {
   it.each([
-    {
-      api: "google-generative-ai",
-      provider: "google",
-      sdk: "google",
-      expected: { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } },
-    },
-    {
-      api: "google-vertex",
-      provider: "google-vertex",
-      sdk: "google",
-      expected: { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } },
-    },
-    {
-      api: "mistral-conversations",
-      provider: "mistral",
-      sdk: "mistral",
-      expected: { apiKey: opaque },
-    },
+    ["google-generative-ai", "google", "google"],
+    ["google-vertex", "google-vertex", "google"],
+    ["mistral-conversations", "mistral", "mistral"],
   ] as const)(
-    "preserves external opaque values at $api SDK construction",
-    async ({ api, provider, sdk, expected }) => {
+    "preserves external opaque values at %s SDK construction",
+    async (api, provider, sdk) => {
+      const expected =
+        sdk === "google"
+          ? { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } }
+          : { apiKey: opaque };
       const result = await runtime().completeSimple(
         {
           ...model(api, provider),
@@ -115,8 +109,6 @@ describe("scoped native auth at provider boundaries", () => {
       expect(result.errorMessage).toContain("fixture constructor reached");
       expect(captured[sdk]).toHaveLength(1);
       expect(captured[sdk][0]).toMatchObject(expected);
-      expect(gatewayResolve).not.toHaveBeenCalled();
-      expect(gatewayFetch).not.toHaveBeenCalled();
     },
   );
   it.each(["google-generative-ai", "google-vertex"])(
@@ -138,7 +130,6 @@ describe("scoped native auth at provider boundaries", () => {
       expect(captured.google).toHaveLength(2);
       expect(captured.google[0]).toMatchObject({ httpOptions: { fetch: fetchers[0] } });
       expect(captured.google[1]).toMatchObject({ httpOptions: { fetch: fetchers[1] } });
-      expect(gatewayFetch).not.toHaveBeenCalled();
     },
   );
   it.each(["anthropic-messages", "google-interactions"])(
@@ -159,34 +150,28 @@ describe("scoped native auth at provider boundaries", () => {
                 },
               ]
             : [
-                {
-                  type: "message_start",
+                frame("message_start", {
                   message: {
                     id: "fixture",
                     model: "fixture-model",
                     usage: { input_tokens: 1, output_tokens: 0 },
                   },
-                },
-                {
-                  type: "content_block_start",
+                }),
+                frame("content_block_start", {
                   index: 0,
                   content_block: { type: "text", text: "ok" },
-                },
-                { type: "content_block_stop", index: 0 },
-                {
-                  type: "message_delta",
+                }),
+                frame("content_block_stop", { index: 0 }),
+                frame("message_delta", {
                   delta: { stop_reason: "end_turn" },
                   usage: { output_tokens: 1 },
-                },
-                { type: "message_stop" },
+                }),
+                frame("message_stop"),
               ];
         const body = frames
           .map(
-            (frame) =>
-              ("type" in frame ? "event: " + frame.type + "\n" : "") +
-              "data: " +
-              JSON.stringify(frame) +
-              "\n\n",
+            (event) =>
+              `${"type" in event ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
           )
           .join("");
         return new Response(body, { headers: { "content-type": "text/event-stream" } });
@@ -211,8 +196,6 @@ describe("scoped native auth at provider boundaries", () => {
         );
         expect(headers.get("x-custom-auth")).toBe("Bearer " + opaque);
       }
-      expect(gatewayResolve).not.toHaveBeenCalled();
-      expect(gatewayFetch).not.toHaveBeenCalled();
     },
   );
 });

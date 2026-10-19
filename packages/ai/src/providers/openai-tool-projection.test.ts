@@ -7,6 +7,17 @@ import {
 } from "./openai-tool-projection.js";
 import { findOpenAIStrictToolProjectionDiagnostics } from "./openai-tool-schema.js";
 
+const lookup = projectOpenAITools([{ name: "lookup", parameters: {} }]);
+const responseFunction = (name: string) => ({ type: "function" as const, name });
+const completionFunction = (name: string) => ({ type: "function" as const, function: { name } });
+const custom = { type: "custom" as const, custom: { name: "shell" } };
+function allowedCompletions(
+  mode: "auto" | "required",
+  tools: Array<ReturnType<typeof completionFunction> | typeof custom>,
+) {
+  return { type: "allowed_tools" as const, allowed_tools: { mode, tools } };
+}
+
 describe("OpenAI tool projection", () => {
   it("keeps healthy tools when sibling descriptors or schemas are unreadable", () => {
     const projection = projectOpenAITools([
@@ -53,7 +64,6 @@ describe("OpenAI tool projection", () => {
   });
 
   it("materializes pinned function choices after one name read", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
     let responsesNameReads = 0;
     let completionsNameReads = 0;
     const responsesChoice = {
@@ -73,11 +83,11 @@ describe("OpenAI tool projection", () => {
       },
     };
 
-    expect(reconcileOpenAIResponsesToolChoice(responsesChoice as never, projection)).toEqual({
+    expect(reconcileOpenAIResponsesToolChoice(responsesChoice as never, lookup)).toEqual({
       type: "function",
       name: "lookup",
     });
-    expect(reconcileOpenAICompletionsToolChoice(completionsChoice as never, projection)).toEqual({
+    expect(reconcileOpenAICompletionsToolChoice(completionsChoice as never, lookup)).toEqual({
       type: "function",
       function: { name: "lookup" },
     });
@@ -112,8 +122,8 @@ describe("OpenAI tool projection", () => {
       },
     ]);
     expect(
-      reconcileOpenAIResponsesToolChoice({ type: "function", name: "store_schema" }, projection),
-    ).toEqual({ type: "function", name: "store_schema" });
+      reconcileOpenAIResponsesToolChoice(responseFunction("store_schema"), projection),
+    ).toEqual(responseFunction("store_schema"));
   });
 
   it("classifies sparse descriptors as unreadable tools", () => {
@@ -138,16 +148,13 @@ describe("OpenAI tool projection", () => {
     ]);
 
     expect(() =>
-      reconcileOpenAIResponsesToolChoice({ type: "function", name: "broken" }, projection),
+      reconcileOpenAIResponsesToolChoice(responseFunction("broken"), projection),
     ).toThrow('requested unavailable tool "broken"');
     expect(() => reconcileOpenAIResponsesToolChoice("required", projection)).toThrow(
       "no tools survived schema conversion",
     );
     expect(() =>
-      reconcileOpenAICompletionsToolChoice(
-        { type: "function", function: { name: "broken" } },
-        projection,
-      ),
+      reconcileOpenAICompletionsToolChoice(completionFunction("broken"), projection),
     ).toThrow('requested unavailable tool "broken"');
     expect(() => reconcileOpenAICompletionsToolChoice("required", projection)).toThrow(
       "no tools survived schema conversion",
@@ -155,82 +162,50 @@ describe("OpenAI tool projection", () => {
   });
 
   it("filters official Responses allowed_tools without broadening access", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
-
     expect(
       reconcileOpenAIResponsesToolChoice(
         {
           type: "allowed_tools",
           mode: "required",
           tools: [
-            { type: "function", name: "broken" },
-            { type: "function", name: "lookup" },
+            responseFunction("broken"),
+            responseFunction("lookup"),
             { type: "web_search_preview" },
           ],
         },
-        projection,
+        lookup,
       ),
     ).toEqual({
       type: "allowed_tools",
       mode: "required",
-      tools: [{ type: "function", name: "lookup" }, { type: "web_search_preview" }],
+      tools: [responseFunction("lookup"), { type: "web_search_preview" }],
     });
   });
 
   it("filters official Chat Completions allowed_tools without broadening access", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
-
     expect(
       reconcileOpenAICompletionsToolChoice(
-        {
-          type: "allowed_tools",
-          allowed_tools: {
-            mode: "required",
-            tools: [
-              { type: "function", function: { name: "broken" } },
-              { type: "function", function: { name: "lookup" } },
-              { type: "custom", custom: { name: "shell" } },
-            ],
-          },
-        },
-        projection,
+        allowedCompletions("required", [
+          completionFunction("broken"),
+          completionFunction("lookup"),
+          custom,
+        ]),
+        lookup,
       ),
-    ).toEqual({
-      type: "allowed_tools",
-      allowed_tools: {
-        mode: "required",
-        tools: [{ type: "function", function: { name: "lookup" } }],
-      },
-    });
+    ).toEqual(allowedCompletions("required", [completionFunction("lookup")]));
   });
 
   it("rejects unsupported top-level Chat Completions custom choices", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
-
-    expect(() =>
-      reconcileOpenAICompletionsToolChoice(
-        { type: "custom", custom: { name: "shell" } },
-        projection,
-      ),
-    ).toThrow("custom tool_choice is unsupported");
+    expect(() => reconcileOpenAICompletionsToolChoice(custom, lookup)).toThrow(
+      "custom tool_choice is unsupported",
+    );
   });
 
   it("disables an auto Chat Completions allowed_tools choice when none survive", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
-
     expect(
       reconcileOpenAICompletionsToolChoice(
-        {
-          type: "allowed_tools",
-          allowed_tools: {
-            mode: "auto",
-            tools: [
-              { type: "function", function: { name: "broken" } },
-              { type: "custom", custom: { name: "shell" } },
-            ],
-          },
-        },
-        projection,
+        allowedCompletions("auto", [completionFunction("broken"), custom]),
+        lookup,
       ),
     ).toBe("none");
   });

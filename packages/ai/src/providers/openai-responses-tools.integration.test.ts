@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-client.js";
@@ -9,6 +9,33 @@ import {
 import type { Context, Tool } from "../types.js";
 import { registerBuiltInApiProviders } from "./register-builtins.js";
 
+const options = { apiKey: "synthetic-key", cacheRetention: "none" as const };
+const contextFor = (tools: Tool[]): Context => ({
+  messages: [{ role: "user", content: "hello", timestamp: 1 }],
+  tools,
+});
+let server: Awaited<ReturnType<typeof createResponsesLoopbackServer>>;
+beforeEach(async () => {
+  server = await createResponsesLoopbackServer(completedResponseEvents);
+});
+afterEach(async () => {
+  configureAiTransportHost({});
+  await server.close();
+});
+const runtime = () => {
+  const instance = createLlmRuntime();
+  registerBuiltInApiProviders(instance.registry);
+  return instance;
+};
+function wireTool(name: string, parameters: unknown, strict?: boolean, description?: string) {
+  return {
+    type: "function",
+    name,
+    ...(description === undefined ? {} : { description }),
+    parameters,
+    ...(strict === undefined ? {} : { strict }),
+  };
+}
 function completedResponseEvents() {
   return [
     {
@@ -38,24 +65,18 @@ it.each(
       { native: false, supportsStrictMode: false, strict: undefined },
       { native: false, supportsStrictMode: undefined, strict: undefined },
       { native: true, supportsStrictMode: undefined, strict: true },
-    ].map(({ native, supportsStrictMode, strict }) => ({
-      entrypoint,
-      native,
-      supportsStrictMode,
-      strict,
-    })),
+    ].map((settings) => Object.assign({ entrypoint }, settings)),
   ),
 )("serializes $entrypoint Responses tools with strict=$strict", async (scenario) => {
   const { entrypoint, native, supportsStrictMode, strict } = scenario;
-  const server = await createResponsesLoopbackServer(completedResponseEvents);
   const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
   configureAiTransportHost({
     resolveProviderRequestCapabilities: () => ({
       ...capabilities,
       endpointClass: native ? "openai-public" : "custom",
     }),
-    resolveOpenAIStrictToolSetting: (_model, options) =>
-      native ? true : options?.supportsStrictMode ? false : undefined,
+    resolveOpenAIStrictToolSetting: (_model, settings) =>
+      native ? true : settings?.supportsStrictMode ? false : undefined,
   });
   const model = { ...responsesLoopbackModel, compat: { supportsStrictMode } };
   const parameters = Object.freeze({
@@ -76,24 +97,14 @@ it.each(
       parameters,
     },
   ];
-  const context: Context = {
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools,
-  };
+  const context = contextFor(tools);
   const expectedTools = [
-    { type: "function", name: "alpha", parameters, ...(strict !== undefined ? { strict } : {}) },
-    {
-      type: "function",
-      name: "zeta",
-      description: "Last",
-      parameters,
-      ...(strict !== undefined ? { strict } : {}),
-    },
+    wireTool("alpha", parameters, strict),
+    wireTool("zeta", parameters, strict, "Last"),
   ];
   const lifecycle: string[] = [];
-  const options = {
-    apiKey: "synthetic-key",
-    cacheRetention: "none" as const,
+  const requestOptions = {
+    ...options,
     transport: "sse" as const,
     onPayload: () => {
       lifecycle.push("payload");
@@ -102,43 +113,36 @@ it.each(
       lifecycle.push("response");
     },
   };
-  try {
-    const runtime = createLlmRuntime();
-    registerBuiltInApiProviders(runtime.registry);
-    for (let request = 0; request < 2; request++) {
-      const stream =
-        entrypoint === "provider"
-          ? runtime.stream(model, context, options)
-          : await createOpenAIResponsesTransportStreamFn()(model, context, options);
-      for await (const event of stream) {
-        if (event.type === "start" || event.type === "done" || event.type === "error") {
-          lifecycle.push(event.type);
-        }
+  const owner = runtime();
+  for (let request = 0; request < 2; request++) {
+    const stream =
+      entrypoint === "provider"
+        ? owner.stream(model, context, requestOptions)
+        : await createOpenAIResponsesTransportStreamFn()(model, context, requestOptions);
+    for await (const event of stream) {
+      if (event.type === "start" || event.type === "done" || event.type === "error") {
+        lifecycle.push(event.type);
       }
-      const result = await stream.result();
-      expect(result.stopReason).toBe("stop");
-      expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "done" })]);
-      expect(result.usage).toMatchObject({ input: 5, output: 3, totalTokens: 8 });
     }
-    expect(lifecycle).toEqual(
-      Array.from({ length: 2 }, () => ["payload", "response", "start", "done"]).flat(),
-    );
-    expect(server.requests).toHaveLength(2);
-    for (let request = 0; request < 2; request++) {
-      expect(server.requests[request]?.tools).toEqual(expectedTools);
-      expect(server.rawRequests[request]).toContain(`"tools":${JSON.stringify(expectedTools)}`);
-    }
-    expect(descriptionReads).toBe(2);
-    expect(tools.map((tool) => tool.name)).toEqual(["zeta", "alpha"]);
-    expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
-  } finally {
-    configureAiTransportHost({});
-    await server.close();
+    const result = await stream.result();
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "done" })]);
+    expect(result.usage).toMatchObject({ input: 5, output: 3, totalTokens: 8 });
   }
+  expect(lifecycle).toEqual(
+    Array.from({ length: 2 }, () => ["payload", "response", "start", "done"]).flat(),
+  );
+  expect(server.requests).toHaveLength(2);
+  for (let request = 0; request < 2; request++) {
+    expect(server.requests[request]?.tools).toEqual(expectedTools);
+    expect(server.rawRequests[request]).toContain(`"tools":${JSON.stringify(expectedTools)}`);
+  }
+  expect(descriptionReads).toBe(2);
+  expect(tools.map((tool) => tool.name)).toEqual(["zeta", "alpha"]);
+  expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
 });
 
 it("sends strict=false when a Responses tool pattern uses a regex lookaround", async () => {
-  const server = await createResponsesLoopbackServer(completedResponseEvents);
   configureAiTransportHost({ resolveOpenAIStrictToolSetting: () => true });
   const parameters = {
     type: "object",
@@ -150,27 +154,17 @@ it("sends strict=false when a Responses tool pattern uses a regex lookaround", a
     required: ["folder", "filename", "content"],
     additionalProperties: false,
   };
-  const context: Context = {
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools: [{ name: "create_file", description: "Create", parameters }],
-  };
-  try {
-    const stream = await createOpenAIResponsesTransportStreamFn()(responsesLoopbackModel, context, {
-      apiKey: "synthetic-key",
-      cacheRetention: "none",
-    });
-    expect((await stream.result()).stopReason).toBe("stop");
-    expect(server.requests[0]?.tools).toEqual([
-      { type: "function", name: "create_file", description: "Create", parameters, strict: false },
-    ]);
-  } finally {
-    configureAiTransportHost({});
-    await server.close();
-  }
+  const context = contextFor([{ name: "create_file", description: "Create", parameters }]);
+  const stream = await createOpenAIResponsesTransportStreamFn()(
+    responsesLoopbackModel,
+    context,
+    options,
+  );
+  expect((await stream.result()).stopReason).toBe("stop");
+  expect(server.requests[0]?.tools).toEqual([wireTool("create_file", parameters, false, "Create")]);
 });
 
 it("reports one strict downgrade across Responses entrypoints without changing the wire schema", async () => {
-  const server = await createResponsesLoopbackServer(completedResponseEvents);
   const diagnostics: Array<{ subsystem: string; message: string; data?: unknown }> = [];
   configureAiTransportHost({
     resolveOpenAIStrictToolSetting: () => true,
@@ -188,46 +182,28 @@ it("reports one strict downgrade across Responses entrypoints without changing t
     required: [],
     additionalProperties: false,
   };
-  const context: Context = {
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools: [{ name: "record_value", description: "Record", parameters }],
-  };
-  const options = { apiKey: "synthetic-key", cacheRetention: "none" as const };
-  try {
-    const runtime = createLlmRuntime();
-    registerBuiltInApiProviders(runtime.registry);
-    for (const stream of [
-      () => runtime.stream(model, context, options),
-      () => createOpenAIResponsesTransportStreamFn()(model, context, options),
-    ]) {
-      expect((await (await stream()).result()).stopReason).toBe("stop");
-    }
-    expect(server.requests.map((request) => request.tools)).toEqual(
-      Array.from({ length: 2 }, () => [
-        {
-          type: "function",
-          name: "record_value",
-          description: "Record",
-          parameters,
-          strict: false,
-        },
-      ]),
-    );
-    expect(diagnostics).toEqual([
-      {
-        subsystem: "openai-transport",
-        message: expect.stringContaining("OpenAI responses tool schema strict mode downgraded"),
-        data: expect.objectContaining({
-          transport: "responses",
-          provider: model.provider,
-          model: model.id,
-          incompatibleToolCount: 1,
-          sample: [expect.objectContaining({ tool: "record_value" })],
-        }),
-      },
-    ]);
-  } finally {
-    configureAiTransportHost({});
-    await server.close();
+  const context = contextFor([{ name: "record_value", description: "Record", parameters }]);
+  const owner = runtime();
+  for (const stream of [
+    () => owner.stream(model, context, options),
+    () => createOpenAIResponsesTransportStreamFn()(model, context, options),
+  ]) {
+    expect((await (await stream()).result()).stopReason).toBe("stop");
   }
+  expect(server.requests.map((request) => request.tools)).toEqual(
+    Array.from({ length: 2 }, () => [wireTool("record_value", parameters, false, "Record")]),
+  );
+  expect(diagnostics).toEqual([
+    {
+      subsystem: "openai-transport",
+      message: expect.stringContaining("OpenAI responses tool schema strict mode downgraded"),
+      data: expect.objectContaining({
+        transport: "responses",
+        provider: model.provider,
+        model: model.id,
+        incompatibleToolCount: 1,
+        sample: [expect.objectContaining({ tool: "record_value" })],
+      }),
+    },
+  ]);
 });

@@ -7,6 +7,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../../../src/infra/runtime-worker-url.js";
 import { configureAiTransportHost } from "../host.js";
+import type { Tool } from "../types.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import {
@@ -24,15 +25,32 @@ import { MAX_TOOL_SCHEMA_DEPTH, truncateToolSchemaDepth } from "./tool-schema-de
 import { publishRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 const execFileAsync = promisify(execFile);
+const tool = (name: string, parameters: Tool["parameters"]): Tool => ({
+  name,
+  description: name,
+  parameters,
+});
+const strictPayload = (parameters: Tool["parameters"], name = "reference_tool") =>
+  convertResponsesToolPayload([tool(name, parameters)], { strict: true })[0];
+function expectLeaf(schema: unknown, depth: number, leaf: unknown = {}) {
+  expect(nestedLeaf(schema)).toEqual({ depth, leaf });
+}
 
-function nestedSchema(depth: number, strict = false): Record<string, unknown> {
-  let schema: Record<string, unknown> = { type: "string" };
+function objectSchema(properties: Record<string, unknown>, strict = false) {
+  return {
+    type: "object",
+    properties,
+    ...(strict ? { required: Object.keys(properties), additionalProperties: false } : {}),
+  };
+}
+function nestedSchema(
+  depth: number,
+  strict = false,
+  leaf: Record<string, unknown> = { type: "string" },
+): Record<string, unknown> {
+  let schema = leaf;
   for (let index = 0; index < depth; index++) {
-    schema = {
-      type: "object",
-      properties: { next: schema },
-      ...(strict ? { required: ["next"], additionalProperties: false } : {}),
-    };
+    schema = objectSchema({ next: schema }, strict);
   }
   return schema;
 }
@@ -59,16 +77,13 @@ describe("shared tool schema depth budget", () => {
     );
     expect(stdout).toBe("ok");
   }, 30_000);
-  it.each([["Gemini", cleanSchemaForGemini]] as const)(
-    "%s keeps a deep tool schema usable",
-    (_name, normalize) => {
-      const original = nestedSchema(5000);
-      const normalized = normalize(original);
-      expect(nestedLeaf(normalized)).toEqual({ depth: MAX_TOOL_SCHEMA_DEPTH + 1, leaf: {} });
-      expect(nestedLeaf(original)).toEqual({ depth: 5000, leaf: { type: "string" } });
-      expect(() => JSON.stringify(normalized)).not.toThrow();
-    },
-  );
+  it("Gemini keeps a deep tool schema usable", () => {
+    const original = nestedSchema(5000);
+    const normalized = cleanSchemaForGemini(original);
+    expectLeaf(normalized, MAX_TOOL_SCHEMA_DEPTH + 1);
+    expectLeaf(original, 5000, { type: "string" });
+    expect(() => JSON.stringify(normalized)).not.toThrow();
+  });
 
   it.each([
     ["published", (schema: unknown) => publishRuntimeToolInputSchema(schema).schema],
@@ -80,7 +95,7 @@ describe("shared tool schema depth budget", () => {
     (_name, prepare) => {
       const parameters = prepare(nestedSchema(5000, true));
       assert(isRecord(parameters));
-      const tools = [{ name: "deep_strict", description: "Deep strict tool", parameters }];
+      const tools = [tool("deep_strict", parameters)];
       for (let index = 0; index < 2; index++) {
         const payload = convertResponsesToolPayload(tools, { strict: true });
         expect(payload).toHaveLength(1);
@@ -105,16 +120,12 @@ describe("shared tool schema depth budget", () => {
       enum: [{ items: nested }],
     };
     const normalized = truncateToolSchemaDepth(schema);
+    assert(isRecord(normalized) && isRecord(normalized.properties));
     expect(normalized).toMatchObject({ properties: { short: shared } });
-    expect(isRecord(normalized) && normalized.default).toBe(schema.default);
-    expect(isRecord(normalized) && normalized.enum).toBe(schema.enum);
-    expect(
-      isRecord(normalized) && isRecord(normalized.properties) && normalized.properties.short,
-    ).toBe(shared);
-    let node =
-      isRecord(normalized) && isRecord(normalized.properties)
-        ? normalized.properties.long
-        : undefined;
+    expect(normalized.default).toBe(schema.default);
+    expect(normalized.enum).toBe(schema.enum);
+    expect(normalized.properties.short).toBe(shared);
+    let node = normalized.properties.long;
     for (let index = 0; index < MAX_TOOL_SCHEMA_DEPTH; index++) {
       expect(isRecord(node) && Array.isArray(node.allOf)).toBe(true);
       node = isRecord(node) && Array.isArray(node.allOf) ? node.allOf[0] : undefined;
@@ -131,10 +142,7 @@ describe("shared tool schema depth budget", () => {
       target = name;
     }
     const schema = {
-      type: "object",
-      properties: { value: { $ref: `#/$defs/${target}` } },
-      required: ["value"],
-      additionalProperties: false,
+      ...objectSchema({ value: { $ref: `#/$defs/${target}` } }, true),
       $defs: definitions,
     };
     const logWarn = vi.fn();
@@ -149,7 +157,7 @@ describe("shared tool schema depth budget", () => {
     expect(logWarn.mock.calls[0]?.[1]).toContain('Tool "reference_tool"');
     const parameters = normalizeToolParameterSchema(schema);
     for (const source of [parameters, { toJSON: () => parameters }]) {
-      const tools = [{ name: "reference_tool", description: "Reference tool", parameters: source }];
+      const tools = [tool("reference_tool", source)];
       for (let index = 0; index < 2; index++) {
         expect(convertResponsesToolPayload(tools, { strict: true })[0]).toMatchObject({
           name: "reference_tool",
@@ -159,13 +167,7 @@ describe("shared tool schema depth budget", () => {
       }
     }
     let materialized: unknown = parameters;
-    const tools = [
-      {
-        name: "mutable_reference_tool",
-        description: "Mutable reference tool",
-        parameters: { toJSON: () => materialized },
-      },
-    ];
+    const tools = [tool("mutable_reference_tool", { toJSON: () => materialized })];
     const freshSchema: unknown = structuredClone(parameters);
     for (const [next, strict] of [
       [parameters, false],
@@ -176,26 +178,12 @@ describe("shared tool schema depth budget", () => {
       materialized = next;
       expect(convertResponsesToolPayload(tools, { strict: true })[0]?.strict).toBe(strict);
     }
-    const nested = normalizeToolParameterSchema({
-      type: "object",
-      properties: { nested: parameters },
-      required: ["nested"],
-      additionalProperties: false,
-    });
-    expect(
-      convertResponsesToolPayload([{ name: "nested", description: "Nested", parameters: nested }], {
-        strict: true,
-      })[0]?.strict,
-    ).toBe(false);
+    const nested = normalizeToolParameterSchema(objectSchema({ nested: parameters }, true));
+    expect(strictPayload(nested, "nested")?.strict).toBe(false);
 
     const markedWithToJSON = normalizeToolParameterSchema({ ...schema });
     Object.defineProperty(markedWithToJSON, "toJSON", { value: () => freshSchema });
-    expect(
-      convertResponsesToolPayload(
-        [{ name: "recovered", description: "Recovered", parameters: markedWithToJSON }],
-        { strict: true },
-      )[0]?.strict,
-    ).toBe(true);
+    expect(strictPayload(markedWithToJSON, "recovered")?.strict).toBe(true);
   });
 
   it("keeps deep provider tools and observes source edits and toJSON once per payload", () => {
@@ -204,32 +192,19 @@ describe("shared tool schema depth budget", () => {
     let schema = nestedSchema(5000, true);
     const toJSON = vi.fn(() => schema);
     const parameters = { toJSON };
-    const tools = [
-      { name: "deep_tool", description: "Deep tool", parameters },
-      {
-        name: "healthy",
-        description: "Healthy tool",
-        parameters: { type: "object", properties: {} },
-      },
-    ];
+    const tools = [tool("deep_tool", parameters), tool("healthy", objectSchema({}))];
     for (let index = 0; index < 2; index++) {
       const payload = convertResponsesToolPayload(tools, { strict: true });
-      expect(payload.map((tool) => tool.name)).toEqual(["deep_tool", "healthy"]);
+      expect(payload.map((entry) => entry.name)).toEqual(["deep_tool", "healthy"]);
       expect(payload[0]?.strict).toBe(false);
-      expect(nestedLeaf(payload[0]?.parameters)).toEqual({
-        depth: MAX_TOOL_SCHEMA_DEPTH + 1,
-        leaf: {},
-      });
+      expectLeaf(payload[0]?.parameters, MAX_TOOL_SCHEMA_DEPTH + 1);
     }
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(toJSON).toHaveBeenCalledTimes(2);
     schema = nestedSchema(2, true);
     const recovered = convertResponsesToolPayload(tools, { strict: true });
     expect(recovered[0]?.strict).toBe(true);
-    expect(nestedLeaf(recovered[0]?.parameters)).toEqual({
-      depth: 2,
-      leaf: { type: "string" },
-    });
+    expectLeaf(recovered[0]?.parameters, 2, { type: "string" });
     expect(toJSON).toHaveBeenCalledTimes(3);
   });
 
@@ -246,16 +221,13 @@ describe("shared tool schema depth budget", () => {
     const logWarn = vi.fn();
     configureAiTransportHost({ logWarn });
     for (let index = 0; index < 2; index++) {
-      const payload = convertResponsesToolPayload([
-        { name: "dynamic", description: "Dynamic tool", parameters },
-      ]);
+      const payload = convertResponsesToolPayload([tool("dynamic", parameters)]);
       expect(payload).toHaveLength(1);
       const result = payload[0]?.parameters;
-      expect(
-        nestedLeaf(
-          isRecord(result) && isRecord(result.properties) ? result.properties.payload : undefined,
-        ),
-      ).toEqual({ depth: MAX_TOOL_SCHEMA_DEPTH, leaf: {} });
+      expectLeaf(
+        isRecord(result) && isRecord(result.properties) ? result.properties.payload : undefined,
+        MAX_TOOL_SCHEMA_DEPTH,
+      );
     }
     expect(toJSON).toHaveBeenCalledTimes(2);
     expect(getProperties).toHaveBeenCalledTimes(2);
@@ -272,16 +244,13 @@ describe("shared tool schema depth budget", () => {
   });
 
   it("preserves property dependency names at the schema depth cutoff", () => {
-    let schema: Record<string, unknown> = {
+    const schema = nestedSchema(MAX_TOOL_SCHEMA_DEPTH, false, {
       type: "object",
       dependencies: { billing: ["creditCard"] },
-    };
-    for (let depth = 0; depth < MAX_TOOL_SCHEMA_DEPTH; depth++) {
-      schema = { type: "object", properties: { next: schema } };
-    }
-    expect(nestedLeaf(normalizeToolParameterSchema(schema))).toEqual({
-      depth: MAX_TOOL_SCHEMA_DEPTH,
-      leaf: { type: "object", dependencies: { billing: ["creditCard"] } },
+    });
+    expectLeaf(normalizeToolParameterSchema(schema), MAX_TOOL_SCHEMA_DEPTH, {
+      type: "object",
+      dependencies: { billing: ["creditCard"] },
     });
   });
 });

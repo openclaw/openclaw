@@ -5,6 +5,7 @@ import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-c
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const initialHost = getAiTransportHost();
 afterEach(() => configureAiTransportHost(initialHost));
@@ -12,18 +13,11 @@ afterEach(() => configureAiTransportHost(initialHost));
 const context: Context = {
   messages: [{ role: "user", content: "Hello", timestamp: 1 }],
 };
-const model: Model<"openai-completions"> = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-completions", "openai", "gpt-5.6-luna", {
   name: "Test model",
-  api: "openai-completions",
-  provider: "openai",
   baseUrl: "https://provider.test/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4096,
-};
+});
 const anthropicModel: Model<"anthropic-messages"> = {
   ...model,
   id: "sonnet-4.6",
@@ -32,32 +26,30 @@ const anthropicModel: Model<"anthropic-messages"> = {
 };
 
 const options = { apiKey: "fixture-token", reasoningEffort: "medium" as const };
+function implementation<M extends Model, Result>(
+  name: string,
+  target: M,
+  stream: (
+    model: M,
+    context: Context,
+    streamOptions: typeof options & { signal?: AbortSignal },
+  ) => Result,
+) {
+  return {
+    name,
+    model: target,
+    createStream: (signal?: AbortSignal) => stream(target, context, { ...options, signal }),
+  };
+}
 const implementations = [
-  {
-    name: "Completions SDK",
-    model,
-    createStream: (signal?: AbortSignal) =>
-      streamOpenAICompletions(model, context, { ...options, signal }),
-  },
-  {
-    name: "Completions transport",
-    model,
-    createStream: (signal?: AbortSignal) =>
-      createOpenAICompletionsTransportStreamFn()(model, context, { ...options, signal }),
-  },
-  {
-    name: "Anthropic SDK",
-    model: anthropicModel,
-    createStream: (signal?: AbortSignal) =>
-      streamAnthropic(anthropicModel, context, { ...options, signal }),
-  },
-  {
-    name: "Anthropic transport",
-    model: anthropicModel,
-    createStream: (signal?: AbortSignal) =>
-      createAnthropicMessagesTransportStreamFn()(anthropicModel, context, { ...options, signal }),
-  },
+  implementation("Completions SDK", model, streamOpenAICompletions),
+  implementation("Completions transport", model, createOpenAICompletionsTransportStreamFn()),
+  implementation("Anthropic SDK", anthropicModel, streamAnthropic),
+  implementation("Anthropic transport", anthropicModel, createAnthropicMessagesTransportStreamFn()),
 ];
+function frame(type: string, fields: Record<string, unknown>) {
+  return { type, ...fields };
+}
 
 describe.each(implementations)(
   "$name transport failures",
@@ -79,8 +71,7 @@ describe.each(implementations)(
         const result = await (await createStream()).result();
 
         expect(fetchFailure).toHaveBeenCalledTimes(1);
-        expect(result.stopReason).toBe("error");
-        expect(result.content).toEqual([]);
+        expect(result).toMatchObject({ stopReason: "error", content: [] });
         expect(result.diagnostics).toContainEqual(
           expect.objectContaining({
             type: "provider_transport_failure",
@@ -140,13 +131,11 @@ describe.each(implementations)(
         const events =
           providerModel.api === "anthropic-messages"
             ? [
-                {
-                  type: "message_start",
+                frame("message_start", {
                   message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-                },
-                { type: "content_block_start", index: 0, content_block: anthropicBlock },
-                {
-                  type: "content_block_delta",
+                }),
+                frame("content_block_start", { index: 0, content_block: anthropicBlock }),
+                frame("content_block_delta", {
                   index: 0,
                   delta:
                     kind === "toolCall"
@@ -154,7 +143,7 @@ describe.each(implementations)(
                       : kind === "thinking"
                         ? { type: "thinking_delta", thinking: " more" }
                         : { type: "text_delta", text: " more" },
-                },
+                }),
               ]
             : [
                 {
