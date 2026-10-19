@@ -81,7 +81,7 @@ describe("Gateway health channel discovery", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "admitted-owner", plugin, source: "fixture" }]),
     );
-    const recovered: ChannelAccountSnapshot = {
+    const recoveredFacts: ChannelAccountSnapshot = {
       accountId: "recovered",
       enabled: true,
       configured: true,
@@ -91,10 +91,30 @@ describe("Gateway health channel discovery", () => {
       lastStartAt: 1200,
       tokenSource: "config",
       tokenStatus: "available",
-      baseUrl: "https://runtime-user:runtime-password@chat.example.test/?token=runtime-token",
-      audience:
-        "https://audience-user:audience-password@audience.example.test/?token=audience-token",
-      ...privateRuntimeFields,
+      baseUrl: "https://chat.example.test/?token=***",
+      audience: "https://audience.example.test/?token=***",
+    };
+    const retrying: ChannelAccountSnapshot = {
+      accountId: "retrying",
+      enabled: true,
+      configured: true,
+      running: false,
+      connected: false,
+      lifecycle: "recovering",
+      restartPending: true,
+      reconnectAttempts: 4,
+      terminalDisconnect: false,
+      lastStopAt: 2300,
+      lastError: "waiting for restart",
+    };
+    const terminal: ChannelAccountSnapshot = {
+      accountId: "terminal",
+      enabled: true,
+      configured: true,
+      running: false,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "account requires login",
     };
     const snapshot = await collectGatewayHealthSnapshot({
       audience: "public",
@@ -103,29 +123,16 @@ describe("Gateway health channel discovery", () => {
         channels: { "admitted-chat": { accountId: "primary", running: false } },
         channelAccounts: {
           "admitted-chat": {
-            recovered,
-            retrying: {
-              accountId: "retrying",
-              enabled: true,
-              configured: true,
-              running: false,
-              connected: false,
-              lifecycle: "recovering",
-              restartPending: true,
-              reconnectAttempts: 4,
-              terminalDisconnect: false,
-              lastStopAt: 2300,
-              lastError: "waiting for restart",
+            recovered: {
+              ...recoveredFacts,
+              baseUrl:
+                "https://runtime-user:runtime-password@chat.example.test/?token=runtime-token",
+              audience:
+                "https://audience-user:audience-password@audience.example.test/?token=audience-token",
+              ...privateRuntimeFields,
             },
-            terminal: {
-              accountId: "terminal",
-              enabled: true,
-              configured: true,
-              running: false,
-              lifecycle: "blocked",
-              terminalDisconnect: true,
-              lastError: "account requires login",
-            },
+            retrying: { ...retrying },
+            terminal: { ...terminal },
           },
         },
       },
@@ -141,48 +148,17 @@ describe("Gateway health channel discovery", () => {
       "retrying",
       "terminal",
     ]);
-    expect(accounts.primary).toMatchObject({
-      accountId: "primary",
-      configured: true,
-      running: false,
-      name: "Resolved primary",
+    expect(accounts).toMatchObject({
+      primary: { accountId: "primary", configured: true, running: false, name: "Resolved primary" },
+      recovered: recoveredFacts,
+      retrying,
+      terminal: { ...terminal, healthState: "terminal-disconnect" },
     });
     const admitted = expectDefined(accounts.recovered, "admitted runtime health");
-    expect(admitted).toMatchObject({
-      accountId: "recovered",
-      enabled: true,
-      configured: true,
-      running: true,
-      lifecycle: "starting",
-      stateReason: "admitted before configuration changed",
-      lastStartAt: 1200,
-      tokenSource: "config",
-      tokenStatus: "available",
-      baseUrl: "https://chat.example.test/?token=***",
-      audience: "https://audience.example.test/?token=***",
-    });
     expect(admitted.connected).toBeUndefined();
     for (const field of Object.keys(privateRuntimeFields)) {
       expect(admitted[field], field).toBeUndefined();
     }
-    expect(accounts.retrying).toMatchObject({
-      configured: true,
-      running: false,
-      connected: false,
-      lifecycle: "recovering",
-      restartPending: true,
-      reconnectAttempts: 4,
-      terminalDisconnect: false,
-      lastStopAt: 2300,
-      lastError: "waiting for restart",
-    });
-    expect(accounts.terminal).toMatchObject({
-      running: false,
-      lifecycle: "blocked",
-      terminalDisconnect: true,
-      healthState: "terminal-disconnect",
-      lastError: "account requires login",
-    });
     for (const resolve of [resolveAccount, inspectAccount]) {
       expect(new Set(resolve.mock.calls.map((call) => call[1]))).toEqual(
         new Set(["primary", "bound"]),

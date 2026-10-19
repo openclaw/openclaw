@@ -59,6 +59,20 @@ function writeSession(agentId: string, key: string, updatedAt: number, storePath
   replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, { sessionId: key, updatedAt });
 }
 
+function sessionSummary(count: number, ...entries: [key: string, updatedAt: number][]) {
+  return { count, recent: entries.map(([key, updatedAt]) => ({ key, updatedAt })) };
+}
+
+function summarizeStatus(status: Awaited<ReturnType<typeof readStatusSessionStores>>) {
+  const keys = (rows: typeof status.recent) => rows.map((row) => row.sessionKey);
+  return {
+    paths: status.paths.length,
+    count: status.count,
+    recent: keys(status.recent),
+    byAgent: status.byAgent.map(({ agent, count, recent }) => [agent.id, count, keys(recent)]),
+  };
+}
+
 function fleetConfig(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"],
   store?: string,
@@ -74,10 +88,9 @@ describe("health agent summaries heartbeat roster", () => {
 
   it("resolves heartbeat enrollment for the whole fleet without re-walking the roster per agent", async () => {
     const agentCount = 200;
-    const entries: Record<string, { heartbeat?: { every?: string } }> = {};
-    for (let index = 0; index < agentCount; index += 1) {
-      entries[`agent-${index}`] = {};
-    }
+    const entries: Record<string, { heartbeat?: { every?: string } }> = Object.fromEntries(
+      Array.from({ length: agentCount }, (_, index) => [`agent-${index}`, {}]),
+    );
     entries["agent-7"] = { heartbeat: { every: "45m" } };
     // An absent store isolates enrollment from session storage.
     const plain = {
@@ -275,14 +288,7 @@ describe("health and status resident session summaries", () => {
           agents: [
             {
               agentId: "main",
-              sessions: {
-                count: 3,
-                recent: [
-                  { key: added, updatedAt: 40 },
-                  { key: first, updatedAt: 30 },
-                  { key: second, updatedAt: 20 },
-                ],
-              },
+              sessions: sessionSummary(3, [added, 40], [first, 30], [second, 20]),
             },
           ],
         });
@@ -319,21 +325,18 @@ describe("health and status resident session summaries", () => {
         const reads = observeMainThreadReads();
         const agents = agentIds.map((id) => ({ id }));
         for (const limit of [-2.5, 0, 0.5, 5, 5.7, 10, Infinity, Number.NaN]) {
-          const status = await readStatusSessionStores(cfg, agents, limit, projection);
-          expect(status.paths).toHaveLength(1);
-          expect(status.count).toBe(24);
-          expect(status.recent.map((row) => row.sessionKey)).toEqual(
-            [...sessionKeys.slice(12), ...sessionKeys.slice(0, 12)].slice(0, limit),
-          );
-          expect(status.byAgent.map((agent) => [agent.agent.id, agent.count])).toEqual([
-            ["main", 12],
-            ["worker", 12],
-          ]);
-          for (const agent of status.byAgent) {
-            expect(agent.recent.map((row) => row.sessionKey)).toEqual(
-              suffixes.slice(0, limit).map((suffix) => `agent:${agent.agent.id}:${suffix}`),
-            );
-          }
+          expect(
+            summarizeStatus(await readStatusSessionStores(cfg, agents, limit, projection)),
+          ).toEqual({
+            paths: 1,
+            count: 24,
+            recent: [...sessionKeys.slice(12), ...sessionKeys.slice(0, 12)].slice(0, limit),
+            byAgent: agentIds.map((id) => [
+              id,
+              12,
+              suffixes.slice(0, limit).map((s) => `agent:${id}:${s}`),
+            ]),
+          });
         }
         for (const limit of [0, 5]) {
           const subset = await readStatusSessionStores(
@@ -342,21 +345,15 @@ describe("health and status resident session summaries", () => {
             limit,
             projection,
           );
-          expect(subset.count).toBe(24);
-          expect(subset.recent.map((row) => row.sessionKey)).toEqual(
-            sessionKeys.slice(12, 12 + limit),
-          );
-          expect(
-            subset.byAgent.map(({ agent, count, recent }) => [
-              agent.id,
-              count,
-              recent.map((row) => row.sessionKey),
-            ]),
-          ).toEqual([
-            ["main", 12, sessionKeys.slice(0, limit)],
-            ["empty", 0, []],
-            ["main", 12, sessionKeys.slice(0, limit)],
-          ]);
+          expect(summarizeStatus(subset)).toMatchObject({
+            count: 24,
+            recent: sessionKeys.slice(12, 12 + limit),
+            byAgent: [
+              ["main", 12, sessionKeys.slice(0, limit)],
+              ["empty", 0, []],
+              ["main", 12, sessionKeys.slice(0, limit)],
+            ],
+          });
         }
         const health = await readHealth(cfg, projection);
         expect(health.map((agent) => agent.agentId)).toEqual(agentIds);
@@ -406,11 +403,9 @@ describe("health and status resident session summaries", () => {
           count: 1,
           recent: [{ sessionKey: mainKey, entry: { updatedAt: initialUpdatedAt } }],
         });
-        const firstHealth = await health();
-        expect(firstHealth[0]?.sessions).toMatchObject({
-          count: 1,
-          recent: [{ key: mainKey, updatedAt: initialUpdatedAt }],
-        });
+        expect((await health())[0]?.sessions).toMatchObject(
+          sessionSummary(1, [mainKey, initialUpdatedAt]),
+        );
         await readStatus();
         await health();
         expect(prepares).not.toHaveBeenCalled();
