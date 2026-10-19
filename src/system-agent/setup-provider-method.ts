@@ -11,7 +11,6 @@ import { supportsSetupTextInference } from "./setup-inference-auth-options.js";
 import {
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceParams,
-  type ActivateSetupInferenceDeps,
   type StageFailure,
 } from "./setup-inference-core.js";
 
@@ -27,7 +26,6 @@ export async function withSetupProviderAuthMethod<T>(
     cfg: OpenClawConfig;
     workspace: string;
     choice: ProviderAuthChoiceMetadata;
-    deps: Pick<ActivateSetupInferenceDeps, "resolvePluginProviders">;
     activation?: ActivateSetupInferenceParams;
     beforePersistentEffect?: () => Promise<void>;
     signal?: AbortSignal;
@@ -58,7 +56,7 @@ export async function withSetupProviderAuthMethod<T>(
             error: `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
           };
         }
-        const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+        const providers = resolvePluginProvidersCore({
           config: enabled.config,
           workspaceDir: params.workspace,
           mode: "setup",

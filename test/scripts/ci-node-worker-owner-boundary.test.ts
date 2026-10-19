@@ -3,18 +3,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { shouldUseDetachedVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import { readCiWorkflow, type WorkflowStep } from "./ci-workflow.test-support.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createWorkerArtifactTest, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const it = createWorkerArtifactTest();
 const root = process.cwd();
 // ci.yml's trusted frozen-target checkout is intentionally this lightweight closure.
-const sparseFiles = [
-  "scripts/ci-run-node-test-shard.mts",
-  "scripts/lib/ci-node-test-groups-codec.mts",
-  "scripts/lib/direct-run.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "scripts/lib/numeric-options.mjs",
-];
+const checkout = Object.values(readCiWorkflow().jobs)
+  .flatMap((job) => (job as { steps?: WorkflowStep[] }).steps ?? [])
+  .find((step: WorkflowStep) => step.name === "Checkout trusted Node shard runner");
+const sparseFiles = String(checkout?.with?.["sparse-checkout"]).trim().split(/\s+/u);
+expect(sparseFiles[0]).toBe("scripts/ci-run-node-test-shard.mts");
 
 it.for([
   "frozen",
@@ -37,6 +37,7 @@ it.for([
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(path.join(root, file), target);
     }
+    expect(fs.existsSync(path.join(copiedRoot, "scripts/lib/vitest-worker-run.mts"))).toBe(false);
     writeFixture(
       directory,
       "scripts/test-projects.mjs",
@@ -72,10 +73,11 @@ it.for([
     const result = await node(
       ["--import", "tsx", path.join(copiedRoot, sparseFiles[0]!)],
       directory,
-      {
-        ...process.env,
+      testRunnerFixtureEnv({
         // This sparse adapter exercises the historical Node contract, not the host CI policy.
+        // A prebuilt-dist CI shard must not make the copied runner prepare packages.
         OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "",
         OPENCLAW_NODE_TEST_ENV_JSON: "{}",
         OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
           { configs: ["old.config.ts"], shard_name: "frozen-proof" },
@@ -84,7 +86,7 @@ it.for([
         OPENCLAW_NODE_TEST_TARGETS_JSON: "[]",
         OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
         OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-      },
+      }),
     );
     const unshared =
       mode === "modern-unshared" ||

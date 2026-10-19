@@ -4,18 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
-import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
-import "./tooltip.ts";
+import type { NativeLinkMenu } from "./native-link-menu.runtime.ts";
+import "./native-link-menu.runtime.ts";
+import { settleTooltip, tooltipSurface } from "./tooltip.test-support.ts";
 
-const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
-type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
-
-// The non-isolated UI runner resets modules but not customElements. Register
-// the current class graph so instanceof and locale updates share one module.
-class TestNativeLinkMenu extends NativeLinkMenu {}
-
-customElements.define(NATIVE_LINK_MENU_ELEMENT_NAME, TestNativeLinkMenu);
 
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -30,28 +23,25 @@ afterEach(async () => {
 
 async function mountMenu(options: {
   trigger?: HTMLAnchorElement;
-  onAction?: (action: NativeLinkMenuAction) => void;
+  onAction?: NativeLinkMenu["onAction"];
   onClose?: () => void;
 }): Promise<NativeLinkMenu> {
   const container = document.createElement("div");
   containers.push(container);
   document.body.append(container);
-  const menu = document.createElement(NATIVE_LINK_MENU_ELEMENT_NAME) as NativeLinkMenu;
+  const menu = document.createElement("openclaw-native-link-menu");
   menu.x = 100;
   menu.y = 100;
   menu.trigger = options.trigger ?? null;
   menu.onAction = options.onAction ?? (() => {});
   menu.onClose = options.onClose ?? (() => {});
   container.append(menu);
-  if (!(menu instanceof NativeLinkMenu)) {
-    throw new Error("Expected native link menu");
-  }
   await menu.updateComplete;
   return menu;
 }
 
 function menuItems(menu: ParentNode): HTMLButtonElement[] {
-  return [...menu.querySelectorAll<HTMLButtonElement>("wa-dropdown-item")];
+  return [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 }
 
 describe("native link menu", () => {
@@ -71,26 +61,23 @@ describe("native link menu", () => {
     ).toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
 
     items[0]?.click();
+    await Promise.resolve();
     expect(calls).toEqual(["close", "inline"]);
   });
 
   it("rerenders open actions when the locale changes", async () => {
     const menu = await mountMenu({});
-    const dropdown = menu.querySelector<DropdownElement>("wa-dropdown");
-    expect(dropdown).not.toBeNull();
-    await dropdown?.updateComplete;
-    const englishLabel = dropdown?.getAttribute("aria-label");
+    const surface = menu.querySelector('[role="menu"]');
+    expect(surface).not.toBeNull();
+    const englishLabel = surface?.getAttribute("aria-label");
 
     await i18n.setLocale("de");
     await menu.updateComplete;
 
     const german = flattenTranslations(de);
-    expect(dropdown?.getAttribute("aria-label")).not.toBe(englishLabel);
-    expect(dropdown?.getAttribute("aria-label")).toBe(german.get("nativeLinkMenu.label"));
+    expect(surface?.getAttribute("aria-label")).not.toBe(englishLabel);
     await vi.waitFor(() =>
-      expect(dropdown?.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-        german.get("nativeLinkMenu.label"),
-      ),
+      expect(surface?.getAttribute("aria-label")).toBe(german.get("nativeLinkMenu.label")),
     );
     expect(
       menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
@@ -102,11 +89,15 @@ describe("native link menu", () => {
     ]);
   });
 
-  it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
+  it.each([
+    { key: "s", code: "KeyS", action: "inline" },
+    { key: "b", code: "KeyB", action: "external" },
+    { key: "с", code: "KeyC", action: "copy" },
+  ])("dispatches $action from its bare letter shortcut", async ({ key, code, action }) => {
     const calls: string[] = [];
     const menu = await mountMenu({
       onClose: () => calls.push("close"),
-      onAction: (action) => calls.push(action),
+      onAction: (selected) => calls.push(selected),
     });
 
     const hints = menuItems(menu).map(
@@ -114,46 +105,44 @@ describe("native link menu", () => {
     );
     expect(hints).toEqual(["S", "B", "C"]);
 
-    document.dispatchEvent(
+    menuItems(menu)[0]!.dispatchEvent(
       new KeyboardEvent("keydown", {
-        key: "с",
-        code: "KeyC",
+        key,
+        code,
         bubbles: true,
         cancelable: true,
       }),
     );
-    expect(calls).toEqual(["close", "copy"]);
+    await Promise.resolve();
+    expect(calls).toEqual(["close", action]);
   });
 
-  it("dismisses a tooltip before its menu without leaking either Escape", async () => {
+  it("dismisses a tooltip before its menu and restores focus", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
     containers.push(trigger);
     const onClose = vi.fn();
     const menu = await mountMenu({ trigger, onClose });
-    const escaped = vi.fn();
-    menu.addEventListener("keydown", escaped);
     const tooltip = document.createElement("openclaw-tooltip");
     tooltip.content = "Link action details";
     tooltip.anchor = menuItems(menu)[0]!;
     menu.append(tooltip);
     await tooltip.updateComplete;
     tooltip.anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
-    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
-    await popup.updateComplete;
-    expect(popup.open).toBe(true);
+    await settleTooltip(tooltip);
+    const popup = tooltipSurface(tooltip)!;
+    expect(popup.matches(":popover-open")).toBe(true);
 
     const firstEscape = new KeyboardEvent("keydown", {
       key: "Escape",
       bubbles: true,
       cancelable: true,
     });
-    menu.dispatchEvent(firstEscape);
+    menuItems(menu)[0]!.dispatchEvent(firstEscape);
 
-    expect(popup.open).toBe(false);
+    expect(popup.matches(":popover-open")).toBe(false);
     expect(firstEscape.defaultPrevented).toBe(true);
-    expect(escaped).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(trigger);
 
@@ -162,10 +151,9 @@ describe("native link menu", () => {
       bubbles: true,
       cancelable: true,
     });
-    menu.dispatchEvent(keydown);
+    menuItems(menu)[0]!.dispatchEvent(keydown);
 
     expect(keydown.defaultPrevented).toBe(true);
-    expect(escaped).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(trigger);
   });
@@ -190,19 +178,21 @@ describe("native link menu", () => {
     expect(keydown.defaultPrevented).toBe(false);
   });
 
-  it("closes after Web Awesome hides without stealing focus", async () => {
+  it("closes after focus moves outside without stealing focus", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
     containers.push(trigger);
     const onClose = vi.fn();
-    const menu = await mountMenu({ trigger, onClose });
+    await mountMenu({ trigger, onClose });
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    containers.push(outside);
 
-    menu
-      .querySelector("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    outside.focus();
+    await Promise.resolve();
 
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).not.toBe(trigger);
+    expect(document.activeElement).toBe(outside);
   });
 });

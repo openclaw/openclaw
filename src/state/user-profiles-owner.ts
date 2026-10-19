@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import { type UserProfileRow, userProfilesDb } from "./user-profiles-internal.js";
@@ -11,7 +11,7 @@ const OWNER_PROVIDER = "gateway.local";
 const OWNER_SUBJECT = "owner";
 
 /** Read raw rows: the shared owner must never inherit a person through a merge. */
-export function readGatewayOwnerProfileRows(db: DatabaseSync) {
+export function readGatewayOwnerProfileRows(db: EngineConnection) {
   const kysely = userProfilesDb(db);
   const owner = executeSqliteQueryTakeFirstSync(
     db,
@@ -33,7 +33,7 @@ export function readGatewayOwnerProfileRows(db: DatabaseSync) {
   return { owner, identified };
 }
 
-export function readGatewayOwnerProfileForEnsure(db: DatabaseSync) {
+export function readGatewayOwnerProfileForEnsure(db: EngineConnection) {
   const { owner, identified } = readGatewayOwnerProfileRows(db);
   if (
     owner?.merged_into ||
@@ -47,7 +47,7 @@ export function readGatewayOwnerProfileForEnsure(db: DatabaseSync) {
 
 /** Queue roster invalidation only for actual changes, after the owning transaction commits. */
 export function ensureGatewayOwnerProfileRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   displayName: string | null,
   mutation?: UserProfileMutationContext,
 ): UserProfileRow {

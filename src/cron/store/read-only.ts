@@ -1,36 +1,37 @@
 import fs from "node:fs";
-import path from "node:path";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   removeTempDirectoryAsync,
+  SqliteSnapshotCleanupError,
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
-import {
-  inspectDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "../../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseHandleLease,
-  captureStateDatabaseCoordinatorRuntime,
-  hasStateDatabaseSourceExclusion,
-  prepareStateDatabaseSourceExclusion,
-} from "../../infra/state-database-coordinator.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { getChildLogger } from "../../logging/logger.js";
+import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cronStoreKey } from "./key.js";
 import { restoreCronLoadError } from "./load-error.js";
-import type { CronReadOnlyRequest, CronReadOnlyResult } from "./read-only.types.js";
+import type {
+  CronReadOnlyRequest,
+  CronReadOnlyResult,
+  CronRunHistoryCandidates,
+  CronRunHistoryBinding,
+  CronRunHistorySelector,
+} from "./read-only.types.js";
+import type { CronRunRecord } from "./run-history.types.js";
 import type { LoadedCronStore } from "./types.js";
 
 function emptyLoadedCronStore(): LoadedCronStore {
@@ -43,26 +44,43 @@ function emptyLoadedCronStore(): LoadedCronStore {
   };
 }
 
-/** Loads cron jobs from existing SQLite state without creating or migrating it. */
+/** Loads cron jobs from existing state without creating or migrating it. */
 export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedCronStore> {
+  return (
+    (await readCronState({ storeKey: cronStoreKey(storePath), env })).loaded ??
+    emptyLoadedCronStore()
+  );
+}
+
+/** Doctor inventory includes raw definitions in every persisted partition. */
+export async function inspectCronJobsReadOnly(
+  env: NodeJS.ProcessEnv,
+): Promise<PluginDoctorCronJob[]> {
+  return (await readCronState({ env })).inventory ?? [];
+}
+
+async function readCronState({
+  storeKey,
+  env,
+  history,
+}: {
+  storeKey?: string;
+  env: NodeJS.ProcessEnv;
+  history?: CronReadOnlyRequest["history"];
+}): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
-    return emptyLoadedCronStore();
+    return { ok: true };
   }
-  const storeKey = cronStoreKey(storePath);
-  const preserveArtifacts = isArtifactPreservingStateRead();
-  const assertExcluded = hasStateDatabaseSourceExclusion(statePath)
-    ? prepareStateDatabaseSourceExclusion(statePath)
-    : undefined;
-  const coordinatorRuntime = captureStateDatabaseCoordinatorRuntime();
-  const admission = !assertExcluded
-    ? captureOpenClawStateDatabaseReadAdmission(statePath)
-    : undefined;
-  const identity = admission?.identity ?? inspectDatabasePathIdentitySync(statePath);
-  const canonicalPath = identity?.canonicalPath ?? path.resolve(statePath);
+  // Doctor's all-partition inventory must not create WAL/SHM files beside the source.
+  const preserveArtifacts =
+    !isStatePostgres() && (storeKey === undefined || isArtifactPreservingStateRead());
+  const admission = captureOpenClawStateDatabaseReadAdmission(statePath);
+  const identity = admission.identity;
+  const canonicalPath = identity.canonicalPath;
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   ensureSqliteLibrarySelected();
   const environment = { ...process.env };
@@ -73,16 +91,15 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   const pool = new WorkerTaskPool<CronReadOnlyRequest, CronReadOnlyResult>({
     workerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly"),
     workerOptions: { env: environment },
-    maxWorkers: 1,
+    workerClass: "singleton",
     sharedCompute: true,
   });
   const controller = new AbortController();
   const producerSettled = createDeferredCore();
-  let sourcePin: ReturnType<typeof acquireStateDatabaseHandleLease> | undefined;
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   let stagingRoot: string | undefined;
   let releaseSnapshot: (() => void) | undefined;
   let workerStopped = false;
+  let readSucceeded = false;
   let cleaned = false;
   let cleanupPending: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
@@ -98,20 +115,29 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
       await producerSettled.promise;
       releaseSnapshot?.();
       releaseSnapshot = undefined;
-      if (prepared) {
-        if (!(await prepared.cleanupAsync())) {
-          throw new Error("Cron read-only state snapshot cleanup failed.");
-        }
-        prepared = undefined;
-      }
       if (stagingRoot) {
-        if (!(await removeTempDirectoryAsync(stagingRoot))) {
-          throw new Error("Cron read-only state snapshot cleanup failed.");
+        let cause: unknown;
+        if (!(await removeTempDirectoryAsync(stagingRoot, (error) => (cause = error)))) {
+          const error = new SqliteSnapshotCleanupError(
+            "Cron read-only state snapshot cleanup failed.",
+            { cause },
+          );
+          if (!readSucceeded) {
+            throw error;
+          }
+          // All readers are retired; the disposable directory remains registered for retry.
+          // Failed removal must not replace the successful inventory with a repair failure.
+          try {
+            getChildLogger({ subsystem: "cron" }).warn(
+              { path: stagingRoot, error: String(cause) },
+              "Cron read-only snapshot cleanup deferred; the read completed successfully.",
+            );
+          } catch {
+            // Diagnostic failure cannot change the read's outcome.
+          }
         }
         stagingRoot = undefined;
       }
-      sourcePin?.release();
-      sourcePin = undefined;
       cleaned = true;
       unregister();
     })().finally(() => {
@@ -128,20 +154,11 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   };
   const unregister = registerOpenClawStateDatabaseAsyncResource(resource);
   const run = async () => {
-    let loaded = emptyLoadedCronStore();
+    let loaded: Extract<CronReadOnlyResult, { ok: true }> = { ok: true };
+    const failures: unknown[] = [];
     try {
       maintenance?.own(resource, "shared-resources", () => resource.close());
-      // Only the native exclusion owner can prepare its already-drained source.
-      sourcePin = assertExcluded
-        ? acquireStateDatabaseHandleLease({ databasePath: statePath })
-        : undefined;
-      if (assertExcluded && preserveArtifacts) {
-        prepared = prepareSqliteReadOnlyLocationSync(statePath);
-        releaseSnapshot = retainSnapshotTempDirectory(
-          prepared.cleanupRoot ?? path.dirname(prepared.location),
-        );
-      }
-      if (preserveArtifacts && !assertExcluded) {
+      if (preserveArtifacts) {
         stagingRoot = await createSqliteSnapshotStagingDirectory(
           undefined,
           false,
@@ -150,41 +167,102 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
         );
         releaseSnapshot = retainSnapshotTempDirectory(stagingRoot);
       }
-      const location = prepared?.location ?? statePath;
+      const location = statePath;
       controller.signal.throwIfAborted();
-      assertExcluded?.();
-      admission?.assertCurrent();
+      admission.assertCurrent();
       const result = await pool.run(
         {
           location,
           storeKey,
+          history,
           stagingRoot,
-          coordinatorRuntime,
         },
         {
           signal: controller.signal,
           inputBytes:
             Buffer.byteLength(location) +
-            Buffer.byteLength(storeKey) +
+            Buffer.byteLength(storeKey ?? "") +
+            Buffer.byteLength(history?.jobId ?? "") +
+            Buffer.byteLength(history?.query ?? "") +
+            Buffer.byteLength(JSON.stringify(history?.jobNameById ?? {})) +
+            (history?.taskIds?.reduce((bytes, id) => bytes + Buffer.byteLength(id), 0) ?? 0) +
+            Buffer.byteLength(history?.transcript?.runId ?? "") +
+            (history?.transcript?.runAtMs === undefined ? 0 : 8) +
             Buffer.byteLength(stagingRoot ?? "") +
-            Buffer.byteLength(coordinatorRuntime.directory) +
             environmentBytes,
         },
       );
       if (!result.ok) {
         throw restoreCronLoadError(result.error);
       }
-      loaded = result.loaded ?? loaded;
+      loaded = result;
+      readSucceeded = true;
+    } catch (error) {
+      failures.push(error);
     } finally {
       producerSettled.resolve();
-      await cleanup();
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
     }
+    throwSqliteLifecycleErrors(failures, "Cron read-only state inspection and cleanup failed.");
     controller.signal.throwIfAborted();
-    assertExcluded?.();
-    admission?.assertCurrent();
+    admission.assertCurrent();
     return loaded;
   };
   return await retainSnapshotWork(run(), () =>
     controller.abort(new Error("Cron read-only load closed")),
   );
+}
+
+export async function readCronRunHistoryCandidates(
+  storeKey: string,
+  jobId?: string,
+  query?: string,
+  jobNameById?: Record<string, string>,
+): Promise<CronRunHistoryCandidates> {
+  return (
+    (
+      await readCronState({
+        storeKey: cronStoreKey(storeKey),
+        env: process.env,
+        history: { jobId, query, jobNameById },
+      })
+    ).candidates ?? { records: [] }
+  );
+}
+
+export async function readCronRunHistoryRecords(
+  storeKey: string,
+  taskIds: string[],
+  view?: "full" | "summary",
+): Promise<CronRunRecord[]> {
+  if (taskIds.length === 0) {
+    return [];
+  }
+  return (
+    (
+      await readCronState({
+        storeKey: cronStoreKey(storeKey),
+        env: process.env,
+        history: { taskIds, view },
+      })
+    ).history ?? []
+  );
+}
+
+export async function readCronRunHistoryBinding(
+  storeKey: string,
+  jobId: string,
+  transcript: CronRunHistorySelector,
+): Promise<CronRunHistoryBinding | undefined> {
+  return (
+    await readCronState({
+      storeKey: cronStoreKey(storeKey),
+      env: process.env,
+      history: { jobId, transcript },
+    })
+  ).binding;
 }

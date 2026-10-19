@@ -1,4 +1,4 @@
-// Migrate Claude helper module supports helpers behavior.
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import {
   markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   appendRegularFile,
@@ -23,16 +24,10 @@ export function resolveHomePath(input: string): string {
   return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, () => os.homedir()));
 }
 
-export async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
+export { pathExists as exists };
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(dirPath)).isDirectory();
-  } catch {
-    return false;
-  }
+  return (await safeStat(dirPath))?.isDirectory() === true;
 }
 
 export function sanitizeName(name: string): string {
@@ -57,25 +52,22 @@ export async function readJsonObject(
   }
 }
 
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return isRecord(value) ? value : {};
-}
-
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
   try {
-    const content = await fs.readFile(item.source, "utf8");
+    const content = await fs.readFile(item.source);
+    if (!isUtf8(content)) {
+      throw new Error(
+        `Claude instruction file is not valid UTF-8: ${item.source}. Re-save or re-encode it as UTF-8, then rerun the migration.`,
+      );
+    }
     const label =
       typeof item.details?.sourceLabel === "string"
         ? item.details.sourceLabel
         : path.basename(item.source);
-    const body = content.trimEnd();
+    const body = content.toString("utf8").trimEnd();
     if (!body) {
       return markMigrationItemSkipped(item, "source file is empty");
     }

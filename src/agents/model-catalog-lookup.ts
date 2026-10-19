@@ -24,6 +24,15 @@ type ModelThinkingCompat = {
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
+type ModelRunCapabilityEntry = {
+  provider: string;
+  id: string;
+  api?: string;
+  baseUrl?: string;
+  input?: readonly ModelInputType[];
+  compat?: unknown;
+};
+
 export type PreparedModelThinkingCapability = Readonly<{
   provider: string;
   modelId: string;
@@ -56,8 +65,8 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
 
 /** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
-  entry: ModelCatalogEntry | undefined;
-  route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  entry: ModelRunCapabilityEntry | undefined;
+  route?: Pick<ModelRunCapabilityEntry, "api" | "baseUrl">;
   agentRuntime: string;
 }): PreparedModelThinkingCapability | undefined {
   const compat = projectModelThinkingCompat(params.entry?.compat);
@@ -125,7 +134,10 @@ export function resolvePreparedModelThinkingCompat(params: {
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
 export function prepareModelRunCapabilities(
-  [catalog, configuredCatalog]: readonly [ModelCatalogEntry[] | undefined, ModelCatalogEntry[]],
+  [catalog, configuredCatalog]: readonly [
+    readonly ModelRunCapabilityEntry[] | undefined,
+    readonly ModelRunCapabilityEntry[],
+  ],
   [provider, modelId, agentRuntime]: readonly [string, string, string],
 ) {
   const entry = findModelInCatalog(catalog ?? [], provider, modelId);

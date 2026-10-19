@@ -1,8 +1,5 @@
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
-import type {
-  createPluginCacheArtifacts,
-  createPluginRootArtifacts,
-} from "./plugin-cache-artifacts.js";
+import type { PluginCacheArtifacts, PluginRootArtifactCache } from "./plugin-cache-artifacts.js";
 import type {
   PluginDirectoryCacheEntry,
   PluginEntryCheck,
@@ -14,7 +11,7 @@ import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
 import type { PluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginInstanceResource, PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 
-export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts> & {
+export type PluginRootCacheRecord = PluginRootArtifactCache & {
   rootDir: string;
   files: Map<string, PluginFileCacheEntry>;
   checkedEntries: Map<string, PluginEntryCheck>;
@@ -23,10 +20,7 @@ export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts>
 };
 
 export interface PluginCache
-  extends
-    PluginCacheMetadata,
-    PluginCacheManagement<PluginCache>,
-    ReturnType<typeof createPluginCacheArtifacts> {
+  extends PluginCacheMetadata, PluginCacheManagement<PluginCache>, PluginCacheArtifacts {
   kind: "process" | "operation";
   roots: Map<string, PluginRootCacheRecord>;
   rootAliases: Map<string, string>;
@@ -34,6 +28,7 @@ export interface PluginCache
   retireRegistryLoads?: () => Promise<PluginHostCleanupResult>;
   setupModules: Map<string, PluginModuleLoaderOwner>;
   instances: Set<PluginInstanceResource>;
+  sourceAdmissions?: { invalidate(): void; dispose(): Promise<void> };
   retirement?: Promise<PluginHostCleanupResult>;
   [Symbol.asyncDispose](): Promise<void>;
 }

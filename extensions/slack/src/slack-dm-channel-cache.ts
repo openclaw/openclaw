@@ -1,5 +1,6 @@
 import type { WebClient } from "@slack/web-api";
 import { createSlackTokenCacheKey } from "./client.js";
+import { writeLruMapEntry } from "./monitor/lru-map-cache.js";
 
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const slackDmChannelCaches = new WeakMap<WebClient, Map<string, string>>();
@@ -44,13 +45,5 @@ export function cacheSlackDmChannelId(
 ): void {
   const cache = getSlackDmChannelCache(params.cacheOwner);
   const key = createSlackDmCacheKey(params);
-  if (cache.has(key)) {
-    cache.delete(key);
-  } else if (cache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
-  cache.set(key, channelId);
+  writeLruMapEntry(cache, key, channelId, SLACK_DM_CHANNEL_CACHE_MAX);
 }

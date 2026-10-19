@@ -40,7 +40,6 @@ function createHarness() {
     onEvent: (_event: Event) => {},
     onBackfillComplete,
     onClose,
-    eoseConfirmDeadlineMs: 10,
   });
   group.start();
   return { abortController, group, handlers, onBackfillComplete, onClose, subscribeMany };
@@ -65,7 +64,7 @@ describe("Nostr relay subscriptions", () => {
     vi.useFakeTimers();
     const { group, handlers, onBackfillComplete } = createHarness();
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10_000);
     handlers[0]?.oneose?.();
     handlers[1]?.oneose?.();
     await Promise.resolve();

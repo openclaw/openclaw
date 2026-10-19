@@ -1,5 +1,4 @@
 import net from "node:net";
-import type { Duplex } from "node:stream";
 
 export type RfbAttachment =
   | { kind: "unix-socket"; socketPath: string }
@@ -15,5 +14,3 @@ export function connectRfbAttachment(attachment: RfbAttachment): net.Socket {
     ? net.connect(attachment.socketPath)
     : net.connect(attachment.port, attachment.host);
 }
-
-export type ConnectedRfbStream = Duplex;

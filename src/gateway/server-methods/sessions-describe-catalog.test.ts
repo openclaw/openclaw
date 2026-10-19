@@ -108,9 +108,13 @@ describe("sessions.describe catalog projection", () => {
           session: {
             agentId,
             thinkingLevels: [...levels, { id: "ultra", label: "ultra" }],
-            thinkingDefault: defaultLevel,
           },
         });
+        if (defaultLevel === undefined) {
+          expect(response?.[1]).not.toHaveProperty("session.thinkingDefault");
+        } else {
+          expect(response?.[1]).toHaveProperty("session.thinkingDefault", defaultLevel);
+        }
       });
     },
   );

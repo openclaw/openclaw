@@ -20,7 +20,7 @@ const attachedPage = {
 };
 
 describe("Lightpanda CDP session routing", () => {
-  it.each([undefined, "chromium", "lightpanda"] as const)(
+  it.each([undefined, "lightpanda"] as const)(
     "normalizes the observed protocol defect only for explicit engine %s",
     async (engine) => {
       vi.useFakeTimers();

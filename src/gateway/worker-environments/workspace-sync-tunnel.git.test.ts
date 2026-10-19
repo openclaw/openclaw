@@ -11,6 +11,22 @@ import {
   memoryWorkspaceJournal,
   startConnectedTunnel,
 } from "./tunnel.test-support.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
+import {
+  expectWorkspaceFiles as expectFiles,
+  writeWorkspaceFiles as writeFiles,
+} from "./workspace-sync-scripts.test-support.js";
+
+async function expectFile(root: string, relative: string, content: string) {
+  await expect(fs.readFile(path.join(root, relative), "utf8")).resolves.toBe(content);
+}
+
+async function expectAbsent(root: string, ...paths: string[]) {
+  for (const relative of paths) {
+    await expect(fs.access(path.join(root, relative))).rejects.toThrow();
+  }
+}
 
 it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-git-sync-"));
@@ -23,17 +39,14 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
   await git(localPath, "init");
   await git(localPath, "config", "user.name", "Worker Sync Test");
   await git(localPath, "config", "user.email", "worker-sync@example.invalid");
-  await Promise.all([
-    fs.writeFile(
-      path.join(localPath, ".gitignore"),
-      "cache/**\nprivate/**\nmedia/inbound/openclaw-staged-*/\n",
-    ),
-    fs.writeFile(path.join(localPath, ".worktreeinclude"), "cache/*.txt\n"),
-    fs.writeFile(path.join(localPath, "gone.txt"), "delete me\n"),
-    fs.writeFile(path.join(localPath, "rename-old.txt"), "rename me\n"),
-    fs.writeFile(path.join(localPath, "modified.txt"), "before\n"),
-    fs.writeFile(path.join(localPath, "conflict.txt"), "base\n"),
-  ]);
+  await writeFiles(localPath, {
+    ".gitignore": "cache/**\nprivate/**\nmedia/inbound/openclaw-staged-*/\n",
+    ".worktreeinclude": "cache/*.txt\n",
+    "gone.txt": "delete me\n",
+    "rename-old.txt": "rename me\n",
+    "modified.txt": "before\n",
+    "conflict.txt": "base\n",
+  });
   const largeFiles = Array.from(
     { length: 1_800 },
     (_, index) => `generated/long-worker-file-name-${String(index).padStart(4, "0")}.txt`,
@@ -61,18 +74,33 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     fs.mkdir(path.join(localPath, "cache"), { recursive: true }),
     fs.mkdir(path.join(localPath, "private"), { recursive: true }),
   ]);
-  await Promise.all([
-    fs.writeFile(path.join(localPath, "cache/allowed.txt"), "allowed\n"),
-    fs.writeFile(path.join(localPath, "private/ignored.txt"), "private\n"),
-    fs.writeFile(path.join(localPath, "ordinary-untracked.txt"), "before ignore\n"),
-  ]);
+  await writeFiles(localPath, {
+    "cache/allowed.txt": "allowed\n",
+    "private/ignored.txt": "private\n",
+    "ordinary-untracked.txt": "before ignore\n",
+  });
 
   const ownership = await createStagedInputOwnershipFixture(localPath);
   const inputDirectory = stagedInputDirectory("b".repeat(64));
   const privateInput = `${inputDirectory}/input-cache.pyc`;
   await ensureStagedInputDirectory(localPath, inputDirectory);
   await fs.writeFile(path.join(localPath, privateInput), "raw input bytes");
-  const fake = localWorkspaceRunner(remoteHome);
+  let checkedPartialManifest = false;
+  const fake = localWorkspaceRunner(remoteHome, async (argv, localArgv, options) => {
+    if (checkedPartialManifest || !argv.at(-2)?.includes(":.openclaw-worker/manifests/")) {
+      return undefined;
+    }
+    checkedPartialManifest = true;
+    const destination = localArgv.at(-1)!;
+    await fs.writeFile(destination, "partial manifest");
+    const partial = await fs.stat(destination);
+    const transferred = await runCommandWithTimeout(localArgv, options);
+    expect(
+      (await fs.stat(destination)).ino,
+      "inbound manifest filenames stay stable while the quota scan observes them",
+    ).toBe(partial.ino);
+    return transferred;
+  });
   const { handle } = await startConnectedTunnel(fake, "worker:real-git-sync", 11);
 
   try {
@@ -81,72 +109,56 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
       sessionId: "session:real-git-sync",
       generation: 1,
     });
+    const remote = result.remoteWorkspaceDir;
     expect(result.mode).toBe("git");
     for (const relative of ownership.unownedFiles) {
-      await expect(fs.stat(path.join(result.remoteWorkspaceDir, relative))).rejects.toMatchObject({
+      await expect(fs.stat(path.join(remote, relative))).rejects.toMatchObject({
         code: "ENOENT",
       });
     }
     for (const relative of ownership.ownedFiles) {
-      await expect(fs.readFile(path.join(result.remoteWorkspaceDir, relative))).resolves.toEqual(
+      await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
         await fs.readFile(path.join(localPath, relative)),
       );
     }
-    await createStagedInputOwnershipFixture(result.remoteWorkspaceDir);
+    await createStagedInputOwnershipFixture(remote);
     for (const relative of ownership.unownedFiles) {
-      await fs.writeFile(path.join(result.remoteWorkspaceDir, relative), "worker project bytes\n");
+      await fs.writeFile(path.join(remote, relative), "worker project bytes\n");
     }
-    await expect(
-      fs.readFile(path.join(result.remoteWorkspaceDir, privateInput), "utf8"),
-    ).resolves.toBe("raw input bytes");
-    await fs.writeFile(path.join(result.remoteWorkspaceDir, privateInput), "edited input bytes");
+    await expectFiles(remote, {
+      [privateInput]: "raw input bytes",
+      [largeFiles[0] ?? ""]: "0\n",
+      [largeFiles.at(-1) ?? ""]: "1799\n",
+      "rename-new.txt": "rename me\n",
+      "cache/allowed.txt": "allowed\n",
+    });
+    await fs.writeFile(path.join(remote, privateInput), "edited input bytes");
     expect(result.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    await expect(
-      fs.readFile(path.join(result.remoteWorkspaceDir, largeFiles[0] ?? ""), "utf8"),
-    ).resolves.toBe("0\n");
-    await expect(
-      fs.readFile(path.join(result.remoteWorkspaceDir, largeFiles.at(-1) ?? ""), "utf8"),
-    ).resolves.toBe("1799\n");
-    await expect(fs.access(path.join(result.remoteWorkspaceDir, "gone.txt"))).rejects.toThrow();
-    await expect(
-      fs.readFile(path.join(result.remoteWorkspaceDir, "rename-new.txt"), "utf8"),
-    ).resolves.toBe("rename me\n");
-    await expect(
-      fs.readFile(path.join(result.remoteWorkspaceDir, "cache/allowed.txt"), "utf8"),
-    ).resolves.toBe("allowed\n");
-    await expect(
-      fs.access(path.join(result.remoteWorkspaceDir, "private/ignored.txt")),
-    ).rejects.toThrow();
-    await expect(
-      fs.access(path.join(result.remoteWorkspaceDir, "vendor/sub/.git/secret")),
-    ).rejects.toThrow();
-    expect(await git(result.remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(baseCommit);
-    expect(await git(result.remoteWorkspaceDir, "rev-list", "--count", "HEAD")).toBe("1");
-    expect(await git(result.remoteWorkspaceDir, "remote")).toBe("");
-    const status = await runCommandWithTimeout(
-      ["git", "-C", result.remoteWorkspaceDir, "status", "--porcelain"],
-      { timeoutMs: 30_000 },
-    );
+    await expectAbsent(remote, "gone.txt", "private/ignored.txt", "vendor/sub/.git/secret");
+    expect(await git(remote, "rev-parse", "HEAD")).toBe(baseCommit);
+    expect(await git(remote, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(await git(remote, "remote")).toBe("");
+    const status = await runCommandWithTimeout(["git", "-C", remote, "status", "--porcelain"], {
+      timeoutMs: 30_000,
+    });
     const statusLines = status.stdout.split("\n").filter(Boolean);
-    expect(statusLines).toContain(" D gone.txt");
-    expect(statusLines).toContain("?? rename-new.txt");
-    await git(result.remoteWorkspaceDir, "add", "-A");
-    await git(result.remoteWorkspaceDir, "commit", "-m", "worker commit");
-    await git(result.remoteWorkspaceDir, "merge-base", "--is-ancestor", baseCommit, "HEAD");
-    await fs.mkdir(path.join(result.remoteWorkspaceDir, "private"));
+    expect(statusLines).toEqual(expect.arrayContaining([" D gone.txt", "?? rename-new.txt"]));
+    await git(remote, "add", "-A");
+    await git(remote, "commit", "-m", "worker commit");
+    await git(remote, "merge-base", "--is-ancestor", baseCommit, "HEAD");
+    await fs.mkdir(path.join(remote, "private"));
     await Promise.all([
-      fs.writeFile(path.join(result.remoteWorkspaceDir, "modified.txt"), "worker result\n"),
-      fs.writeFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "worker result\n"),
-      fs.appendFile(path.join(result.remoteWorkspaceDir, ".gitignore"), "ordinary-untracked.txt\n"),
-      fs.writeFile(
-        path.join(result.remoteWorkspaceDir, "ordinary-untracked.txt"),
-        "still present after ignore\n",
-      ),
-      fs.writeFile(path.join(result.remoteWorkspaceDir, "worker-untracked.txt"), "artifact\n"),
-      fs.writeFile(path.join(result.remoteWorkspaceDir, "cache/worker-allowed.txt"), "allowed\n"),
-      fs.writeFile(path.join(result.remoteWorkspaceDir, "private/worker-secret.txt"), "private\n"),
-      fs.rm(path.join(result.remoteWorkspaceDir, "rename-new.txt")),
-      fs.symlink("modified.txt", path.join(result.remoteWorkspaceDir, "worker-link")),
+      writeFiles(remote, {
+        "modified.txt": "worker result\n",
+        "conflict.txt": "worker result\n",
+        "ordinary-untracked.txt": "still present after ignore\n",
+        "worker-untracked.txt": "artifact\n",
+        "cache/worker-allowed.txt": "allowed\n",
+        "private/worker-secret.txt": "private\n",
+      }),
+      fs.appendFile(path.join(remote, ".gitignore"), "ordinary-untracked.txt\n"),
+      fs.rm(path.join(remote, "rename-new.txt")),
+      fs.symlink("modified.txt", path.join(remote, "worker-link")),
     ]);
     await fs.writeFile(path.join(localPath, "conflict.txt"), "local result\n");
 
@@ -154,57 +166,47 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     const journal = memoryWorkspaceJournal((manifestRef) => {
       acceptedManifestRef = manifestRef;
     });
-    const reconciled = await handle.reconcileWorkspace({
-      source: { kind: "local", path: localPath, journal },
-      remoteWorkspaceDir: result.remoteWorkspaceDir,
-      baseManifestRef: result.manifestRef,
-    });
+    const reconcile = (id: string, baseManifestRef = result.manifestRef, owner = journal) =>
+      handle.reconcileWorkspace({
+        source: {
+          kind: "local",
+          path: localPath,
+          journal: owner,
+          stagedResult: { ref: workerWorkspaceResultRef(id), record: () => {} },
+        },
+        remoteWorkspaceDir: remote,
+        baseManifestRef,
+      });
+    const quiescence = { assertActive: async () => {}, resume: async () => {} };
+    const reconciled = await reconcile("git-changed");
+    await verifyReconciledWorkspaceFinal(reconciled, quiescence);
     expect(reconciled).toMatchObject({ changed: true });
+    expect(checkedPartialManifest).toBe(true);
     for (const relative of ownership.unownedFiles) {
-      await expect(fs.readFile(path.join(localPath, relative), "utf8")).resolves.toBe(
-        `fixture bytes: ${relative}\n`,
-      );
+      await expectFile(localPath, relative, `fixture bytes: ${relative}\n`);
     }
-    await expect(fs.readFile(path.join(localPath, privateInput), "utf8")).resolves.toBe(
-      "edited input bytes",
-    );
+    await expectFile(localPath, privateInput, "edited input bytes");
     expect(reconciled.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
     await reconciled.verifyStable();
     await reconciled.verifyLocalStable();
-    await expect(fs.readFile(path.join(localPath, "modified.txt"), "utf8")).resolves.toBe(
-      "worker result\n",
-    );
-    await expect(fs.readFile(path.join(localPath, "worker-untracked.txt"), "utf8")).resolves.toBe(
-      "artifact\n",
-    );
-    await expect(fs.readFile(path.join(localPath, "ordinary-untracked.txt"), "utf8")).resolves.toBe(
-      "still present after ignore\n",
-    );
-    await expect(fs.readlink(path.join(localPath, "worker-link"))).resolves.toBe("modified.txt");
-    await expect(
-      fs.readFile(path.join(localPath, "cache/worker-allowed.txt"), "utf8"),
-    ).resolves.toBe("allowed\n");
-    await expect(fs.access(path.join(localPath, "private/worker-secret.txt"))).rejects.toThrow();
-    await expect(fs.access(path.join(localPath, "rename-new.txt"))).rejects.toThrow();
-    await expect(fs.readFile(path.join(localPath, "conflict.txt"), "utf8")).resolves.toBe(
-      "local result\n",
-    );
-    await expect(
-      fs.readFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "utf8"),
-    ).resolves.toBe("local result\n");
-    await expect(
-      fs.access(path.join(result.remoteWorkspaceDir, "private/ignored.txt")),
-    ).rejects.toThrow();
-    expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
-    const unchanged = await handle.reconcileWorkspace({
-      source: { kind: "local", path: localPath, journal },
-      remoteWorkspaceDir: result.remoteWorkspaceDir,
-      baseManifestRef: acceptedManifestRef,
+    await expectFiles(localPath, {
+      "modified.txt": "worker result\n",
+      "worker-untracked.txt": "artifact\n",
+      "ordinary-untracked.txt": "still present after ignore\n",
+      "cache/worker-allowed.txt": "allowed\n",
+      "conflict.txt": "local result\n",
     });
+    await expect(fs.readlink(path.join(localPath, "worker-link"))).resolves.toBe("modified.txt");
+    await expectAbsent(localPath, "private/worker-secret.txt", "rename-new.txt");
+    await expectFile(remote, "conflict.txt", "local result\n");
+    await expectAbsent(remote, "private/ignored.txt");
+    expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
+    const unchanged = await reconcile("git-unchanged", acceptedManifestRef);
+    await verifyReconciledWorkspaceFinal(unchanged, quiescence);
     expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
     await unchanged.verifyStable();
     await unchanged.verifyLocalStable();
-    await fs.writeFile(path.join(result.remoteWorkspaceDir, "modified.txt"), "late write\n");
+    await fs.writeFile(path.join(remote, "modified.txt"), "late write\n");
     await expect(unchanged.verifyStable()).rejects.toThrow(
       "Cloud workspace changed during final reconciliation",
     );
@@ -226,18 +228,16 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
 
     await fs.rm(manifestPath);
     await fs.mkdir(manifestPath);
-    await Promise.all(
-      Array.from({ length: 100 }, (_, index) =>
-        fs.writeFile(path.join(manifestPath, `${index}.txt`), ""),
+    await fs.writeFile(path.join(manifestPath, "child.txt"), "");
+    // GNU rsync skips the directory; OpenRsync can leave an empty directory.
+    // Neither outcome may satisfy regular-file manifest admission.
+    await expect(
+      reconcile("git-invalid", result.manifestRef, memoryWorkspaceJournal()),
+    ).rejects.toThrow(
+      new RegExp(
+        `^(?:File not found: .*${result.manifestRef.slice("sha256:".length)}\\.json|path must be a regular file)$`,
       ),
     );
-    await expect(
-      handle.reconcileWorkspace({
-        source: { kind: "local", path: localPath, journal: memoryWorkspaceJournal() },
-        remoteWorkspaceDir: result.remoteWorkspaceDir,
-        baseManifestRef: result.manifestRef,
-      }),
-    ).rejects.toThrow("manifest transfer is not a bounded regular file");
   } finally {
     await handle.stop();
     await fs.rm(root, { recursive: true });

@@ -1,6 +1,17 @@
-/** Typed private-peer reads through the platform sd-bus ABI, not a D-Bus codec. */
-import { createRequire } from "node:module";
+/** OpenClaw admission and budgets around native-owned systemd connections. */
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import {
+  SystemdBus,
+  type AuthenticatedSystemdBus,
+  type SystemdArg,
+  type SystemdSignature,
+  type SystemdValue,
+} from "@openclaw/proc-safe/systemd";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -8,84 +19,95 @@ import {
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
 
-const require = createRequire(import.meta.url);
-type Pointer = object | null;
-type NativeFunction = { (...args: unknown[]): number; async: (...args: unknown[]) => void };
-const unavailable = () => new Error("Original systemd manager peer inspection is unavailable.");
-const checked = (result: number) => {
-  if (result < 0) {
-    throw unavailable();
-  }
-  return result;
-};
-const invoke = (fn: NativeFunction, ...args: unknown[]): Promise<number> =>
-  new Promise((resolve, reject) => {
-    fn.async(...args, (error: Error | null, result: number) => {
-      if (error) {
-        reject(error);
-      } else {
-        try {
-          resolve(checked(result));
-        } catch (failure) {
-          reject(failure instanceof Error ? failure : unavailable());
-        }
-      }
-    });
-  });
-
 export type SystemdPeerIdentity = { uid: number; pid: number; startTime: number };
+const unavailable = () => new Error("Original systemd manager peer inspection is unavailable.");
+const MAX_VALUES = 16384;
+const MAX_STRING_BYTES = 1024 * 1024;
 
-function loadApi() {
-  // SAFETY: Koffi's require export matches its typed default export.
-  const koffi = require("koffi") as typeof import("koffi").default;
-  const library = koffi.load("libsystemd.so.0");
-  const bind = (declaration: string): NativeFunction => library.func(declaration);
-  return {
-    koffi,
-    errorSize: koffi.sizeof(koffi.struct({ name: "void *", message: "void *", needFree: "int" })),
-    errorHasName: bind("int sd_bus_error_has_name(void *error, const char *name)"),
-    errorFree: bind("void sd_bus_error_free(void *error)"),
-    newBus: bind("int sd_bus_new(_Out_ void **bus)"),
-    // This newer ABI is needed only for machine routes, not ordinary local peers.
-    userMachine: (machine: string, output: Pointer[]) =>
-      invoke(
-        bind("int sd_bus_open_user_machine(_Out_ void **bus, const char *machine)"),
-        output,
-        machine,
-      ),
-    address: bind("int sd_bus_set_address(void *bus, const char *address)"),
-    client: bind("int sd_bus_set_bus_client(void *bus, int client)"),
-    start: bind("int sd_bus_start(void *bus)"),
-    ready: bind("int sd_bus_is_ready(void *bus)"),
-    process: bind("int sd_bus_process(void *bus, void *message)"),
-    wait: bind("int sd_bus_wait(void *bus, uint64_t timeout)"),
-    timeout: bind("int sd_bus_set_method_call_timeout(void *bus, uint64_t timeout)"),
-    credentials: bind("int sd_bus_get_owner_creds(void *bus, uint64_t mask, _Out_ void **creds)"),
-    pid: bind("int sd_bus_creds_get_pid(void *creds, _Out_ int *pid)"),
-    uid: bind("int sd_bus_creds_get_euid(void *creds, _Out_ uint32_t *uid)"),
-    unrefCredentials: bind("void *sd_bus_creds_unref(void *creds)"),
-    property: bind(
-      "int sd_bus_get_property(void *bus, const char *destination, const char *path, const char *interface, const char *member, void *error, _Out_ void **reply, const char *type)",
-    ),
-    newCall: bind(
-      "int sd_bus_message_new_method_call(void *bus, _Out_ void **message, const char *destination, const char *path, const char *interface, const char *member)",
-    ),
-    append: bind("int sd_bus_message_append_basic(void *message, char type, const char *value)"),
-    autoStart: bind("int sd_bus_message_set_auto_start(void *message, int auto_start)"),
-    call: bind(
-      "int sd_bus_call(void *bus, void *message, uint64_t timeout, void *error, _Out_ void **reply)",
-    ),
-    basic: bind("int sd_bus_message_read_basic(void *message, char type, void *value)"),
-    enter: bind(
-      "int sd_bus_message_enter_container(void *message, char type, const char *contents)",
-    ),
-    exit: bind("int sd_bus_message_exit_container(void *message)"),
-    end: bind("int sd_bus_message_at_end(void *message, int complete)"),
-    unrefMessage: bind("void *sd_bus_message_unref(void *message)"),
-    close: bind("void *sd_bus_close_unref(void *bus)"),
-  };
+function remaining(deadline: number, now: () => number): number {
+  assertGatewayServiceUpdateCurrent();
+  const timeoutMs = deadline - now();
+  if (timeoutMs <= 0) {
+    throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+  }
+  return timeoutMs;
 }
-let api: ReturnType<typeof loadApi> | undefined;
+
+function signature(value: string | undefined): SystemdSignature {
+  switch (value) {
+    case "s":
+    case "o":
+    case "u":
+    case "i":
+    case "t":
+    case "b":
+    case "(sb)":
+    case "(sus)":
+    case "(sasbttttuii)":
+    case "as":
+    case "ao":
+    case "au":
+    case "ai":
+    case "at":
+    case "ab":
+    case "a(sb)":
+    case "a(sus)":
+    case "a(sasbttttuii)":
+      return value;
+    default:
+      throw unavailable();
+  }
+}
+
+/** Methods, unlike properties, carry their own wire signature in the reply. */
+function matchesReply(value: unknown, expected: string): boolean {
+  if (expected.startsWith("a")) {
+    return Array.isArray(value) && value.every((entry) => matchesReply(entry, expected.slice(1)));
+  }
+  switch (expected) {
+    case "s":
+    case "o":
+      return typeof value === "string";
+    case "u":
+    case "i":
+      return typeof value === "number" && Number.isInteger(value);
+    case "t":
+      return typeof value === "bigint";
+    case "b":
+      return typeof value === "boolean";
+    case "(sb)":
+    case "(sus)":
+    case "(sasbttttuii)": {
+      const fields =
+        expected === "(sb)"
+          ? ["s", "b"]
+          : expected === "(sus)"
+            ? ["s", "u", "s"]
+            : ["s", "as", "b", "t", "t", "t", "t", "u", "i", "i"];
+      return (
+        Array.isArray(value) &&
+        value.length === fields.length &&
+        fields.every((field, index) => matchesReply(value[index], field))
+      );
+    }
+    default:
+      return false;
+  }
+}
+
+function translateFailure(error: unknown): never {
+  if (
+    error instanceof ProcSafeError &&
+    error.code === "access-denied" &&
+    error.details?.reason === "peer-uid-mismatch"
+  ) {
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+  }
+  if (error instanceof ProcSafeError && error.code === "timeout") {
+    throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+  }
+  throw error;
+}
 
 /** The caller already authenticated this exact manager through its selected broker. */
 export async function openSystemdPrivatePeer(
@@ -93,64 +115,52 @@ export async function openSystemdPrivatePeer(
   expected: SystemdPeerIdentity,
   deadline: number,
 ) {
-  return await openSystemdConnection(address, deadline, expected);
+  return openSystemdConnection(
+    (timeoutMs) => SystemdBus.connectPrivatePeer(address, { timeoutMs }),
+    deadline,
+    expected,
+  );
 }
 
 /** One broker connection: unique names never cross a reconnect or route fallback. */
 export async function openSystemdBroker(address: string, deadline: number) {
-  return await openSystemdConnection(address, deadline);
+  return openSystemdConnection(
+    (timeoutMs) => SystemdBus.connectBroker(address, { timeoutMs }),
+    deadline,
+  );
 }
 
 /** Preserve systemctl's explicit user@ machine route on one broker connection. */
 export async function openSystemdMachineBroker(machine: string, deadline: number) {
-  return await openSystemdConnection({ machine }, deadline);
+  return openSystemdConnection(
+    (timeoutMs) => SystemdBus.connectMachineBroker(machine, { timeoutMs }),
+    deadline,
+  );
 }
 
 /** Ordinary local reads authenticate the connected manager without a session broker. */
 export async function openSystemdUserManager(address: string, deadline: number) {
-  const uid = process.geteuid?.();
-  if (process.platform !== "linux" || uid === undefined) {
-    throw unavailable();
-  }
-  return await openSystemdConnection(address, deadline, undefined, uid);
+  return openSystemdConnection(
+    (timeoutMs) => SystemdBus.connectUserManager(address, { timeoutMs }),
+    deadline,
+  );
 }
 
 async function openSystemdConnection(
-  address: string | { machine: string },
+  connect: (timeoutMs: number) => Promise<SystemdBus | AuthenticatedSystemdBus>,
   deadline: number,
   expected?: SystemdPeerIdentity,
-  managerUid?: number,
 ) {
-  assertGatewayServiceUpdateCurrent();
-  const privatePeer = expected !== undefined || managerUid !== undefined;
+  const admissionNow = getServiceInspectionClock();
   let identity = expected;
-  const native = (api ??= loadApi());
-  const output: Pointer[] = [null];
-  if (typeof address === "string") {
-    checked(native.newBus(output));
-  } else {
-    await native.userMachine(address.machine, output);
-  }
-  const bus = output[0];
+  const bus = await connect(remaining(deadline, admissionNow)).catch(translateFailure);
+  const peer = "peer" in bus ? bus.peer : undefined;
   let closed = false;
   const queue = createSystemdPeerQueue();
   let closing: Promise<void> | undefined;
-  const remaining = (until: number) => {
-    assertGatewayServiceUpdateCurrent();
-    const value = until - performance.now();
-    if (closed) {
-      throw unavailable();
-    }
-    if (value <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-    }
-    return Math.max(1, Math.floor(value * 1000));
-  };
   const close = () => {
     closed = true;
-    return (closing ??= queue.drain().then(() => {
-      native.close(bus);
-    }));
+    return (closing ??= queue.drain().then(() => bus.close()));
   };
   const verify = () => {
     assertGatewayServiceUpdateCurrent();
@@ -167,249 +177,174 @@ async function openSystemdConnection(
       }
     }
   };
-  // Only call while owning the native queue (or before admission is published).
   const verifyConnection = () => {
     verify();
-    if (!privatePeer) {
+    if (!peer) {
       return;
     }
-    const credentials: Pointer[] = [null];
-    // No AUGMENT: these are kernel credentials of THIS connected private peer.
-    checked(native.credentials(bus, 17, credentials)); // PID | EUID, stable sd-bus ABI.
-    try {
-      const pid: [number] = [0];
-      const uid: [number] = [0];
-      checked(native.pid(credentials[0], pid));
-      checked(native.uid(credentials[0], uid));
-      if (pid[0] <= 0 || uid[0] >= 0xffffffff) {
+    const { pid, uid } = peer;
+    if (!identity) {
+      const startTime = getProcessStartTime(pid);
+      if (!isPidAlive(pid) || startTime === null) {
         throw unavailable();
       }
-      if (!identity) {
-        if (uid[0] !== managerUid) {
-          throw new ServiceOwnershipRefusalError("systemd-manager-changed");
-        }
-        const startTime = getProcessStartTime(pid[0]);
-        if (!isPidAlive(pid[0]) || startTime === null) {
-          throw unavailable();
-        }
-        identity = { uid: uid[0], pid: pid[0], startTime };
-      }
-      if (pid[0] !== identity.pid || uid[0] !== identity.uid) {
-        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
-      }
-      const startTime = getProcessStartTime(identity.pid);
-      if (startTime === null) {
-        throw unavailable();
-      }
-      if (startTime !== identity.startTime) {
-        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
-      }
-    } finally {
-      native.unrefCredentials(credentials[0]);
+      identity = { uid, pid, startTime };
     }
+    if (pid !== identity.pid || uid !== identity.uid) {
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+    }
+    verify();
   };
   try {
-    if (typeof address === "string") {
-      checked(native.address(bus, address));
-      checked(native.client(bus, privatePeer ? 0 : 1));
-      remaining(deadline);
-      await invoke(native.start, bus);
-    }
-    // Drive only authentication. No property read or service activation precedes credentials.
-    while (!checked(native.ready(bus))) {
-      remaining(deadline);
-      if (!(await invoke(native.process, bus, null))) {
-        await invoke(native.wait, bus, remaining(deadline));
-      }
-    }
-    remaining(deadline);
+    remaining(deadline, admissionNow);
     verifyConnection();
   } catch (error) {
     await close();
     throw error;
   }
 
-  // These are the existing inspectors' finite property signatures. sd-bus owns
-  // wire decoding; we only copy validated values/containers into their JS shape.
-  const structs: Record<string, string[]> = {
-    "(sb)": ["s", "b"],
-    "(sus)": ["s", "u", "s"],
-    "(sasbttttuii)": ["s", "as", "b", "t", "t", "t", "t", "u", "i", "i"],
-  };
-  const scalar: Record<string, string> = {
-    s: "str",
-    o: "str",
-    u: "uint32_t",
-    i: "int32_t",
-    t: "uint64_t",
-    b: "int32_t",
-  };
-  const read = (
-    message: Pointer | undefined,
-    signature: string | undefined,
-    budget: { values: number; bytes: number },
-  ): unknown => {
-    if (!message || !signature || --budget.values < 0) {
-      throw unavailable();
-    }
-    if (signature.startsWith("a")) {
-      checked(native.enter(message, 97, signature.slice(1)));
-      const values = [];
-      while (!checked(native.end(message, 0))) {
-        values.push(read(message, signature.slice(1), budget));
-      }
-      checked(native.exit(message));
-      return values;
-    }
-    const fields = structs[signature];
-    if (fields) {
-      checked(native.enter(message, 114, signature.slice(1, -1)));
-      const values = fields.map((field) => read(message, field, budget));
-      if (!checked(native.end(message, 0))) {
-        throw unavailable();
-      }
-      checked(native.exit(message));
-      return values;
-    }
-    const type = scalar[signature];
-    if (!type) {
-      throw unavailable();
-    }
-    const bytes = Buffer.alloc(8);
-    if (checked(native.basic(message, signature.charCodeAt(0), bytes)) !== 1) {
-      throw unavailable();
-    }
-    const value: unknown = native.koffi.decode(bytes, type);
-    if (typeof value === "string") {
-      budget.bytes -= Buffer.byteLength(value);
-      if (budget.bytes < 0) {
-        throw unavailable();
-      }
-    }
-    if (signature === "b") {
-      if (value !== 0 && value !== 1) {
-        throw unavailable();
-      }
-      return value === 1;
-    }
-    // Match busctl JSON's numeric representation; existing readers reject
-    // unsafe counters rather than confusing UINT64_MAX with a drained unit.
-    return typeof value === "bigint" ? Number(value) : value;
-  };
   const execute = async (
     args: string[],
     signatures: string[],
     until: number,
-    assertCurrent?: () => void,
-  ) => {
+    assertCurrent: (() => void) | undefined,
+    beforeDispatch: (() => void) | undefined,
+    now: () => number,
+    mutationTimeoutMs?: number,
+  ): Promise<unknown[] | null> => {
+    let mutationDeadline: number | undefined;
     const check = () => {
-      remaining(until);
-      assertCurrent?.();
+      remaining(until, now);
+      runServiceInspectionGuard(assertCurrent);
       verifyConnection();
+      if (mutationDeadline !== undefined && performance.now() >= mutationDeadline) {
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      }
     };
-    check();
-    const member = args[4];
-    if (!member) {
+    const [operation, destination, path, iface, member] = args;
+    if (!destination || !path || !iface || !member) {
       throw unavailable();
     }
-    const values: unknown[] = [];
-    const budget = { values: 16384, bytes: 1024 * 1024 };
-    if (args[0] === "get-property") {
+    const target = { ...(peer ? {} : { destination }), path, interface: iface, member };
+    let values = MAX_VALUES;
+    let bytes = MAX_STRING_BYTES;
+    const account = (value: SystemdValue): void => {
+      if (--values < 0) {
+        throw unavailable();
+      }
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          account(entry);
+        }
+      } else if (typeof value === "string") {
+        bytes -= Buffer.byteLength(value);
+        if (bytes < 0) {
+          throw unavailable();
+        }
+      }
+    };
+    const options = () => ({
+      timeoutMs: remaining(until, now),
+      replyBudgetBytes: MAX_STRING_BYTES + MAX_VALUES * 8,
+    });
+    check();
+    if (operation === "get-property") {
       if (args.length - 4 !== signatures.length) {
         throw unavailable();
       }
+      const result: SystemdValue[] = [];
       for (let index = 0; index < signatures.length; index++) {
-        check();
-        const reply: Pointer[] = [null];
-        checked(native.timeout(bus, remaining(until)));
-        try {
-          await invoke(
-            native.property,
-            bus,
-            privatePeer ? null : args[1],
-            args[2],
-            args[3],
-            args[index + 4],
-            null,
-            reply,
-            signatures[index],
-          );
-          check();
-          values.push(read(reply[0], signatures[index], budget));
-          if (!checked(native.end(reply[0], 0))) {
-            throw unavailable();
-          }
-        } finally {
-          if (reply[0]) {
-            native.unrefMessage(reply[0]);
-          }
+        const property = args[index + 4];
+        if (!property) {
+          throw unavailable();
         }
+        const expectedSignature = signature(signatures[index]);
+        check();
+        const value = await bus
+          .getProperty({ ...target, member: property }, expectedSignature, options())
+          .catch(translateFailure);
+        check();
+        account(value);
+        result.push(value);
       }
-    } else {
-      const message: Pointer[] = [null],
-        reply: Pointer[] = [null];
-      const error = Buffer.alloc(native.errorSize);
-      try {
-        checked(
-          native.newCall(bus, message, privatePeer ? null : args[1], args[2], args[3], args[4]),
-        );
-        checked(native.autoStart(message[0], 0));
-        if (args[5] === "s" && args.length === 7) {
-          checked(native.append(message[0], 115, args[6]));
-        } else if (args[5] === "ss" && args.length === 8) {
-          checked(native.append(message[0], 115, args[6]));
-          checked(native.append(message[0], 115, args[7]));
-        } else if (args.length !== 5) {
-          throw unavailable();
-        }
-        check();
-        try {
-          await invoke(native.call, bus, message[0], remaining(until), error, reply);
-        } catch (failure) {
-          check();
-          if (
-            (["GetUnit", "LoadUnit"].includes(member) &&
-              native.errorHasName(error, "org.freedesktop.systemd1.NoSuchUnit")) ||
-            (args[4] === "GetUnitFileState" &&
-              (native.errorHasName(error, "org.freedesktop.systemd1.NoSuchUnit") ||
-                native.errorHasName(error, "org.freedesktop.systemd1.NoSuchUnitFile") ||
-                native.errorHasName(error, "org.freedesktop.DBus.Error.FileNotFound")))
-          ) {
-            return null;
-          }
-          throw failure;
-        }
-        check();
-        if (signatures.length > 1) {
-          throw unavailable();
-        }
-        // Method replies retain busctl's top-level tuple, unlike properties.
-        if (signatures.length === 1) {
-          values.push([read(reply[0], signatures[0], budget)]);
-        }
-        if (!checked(native.end(reply[0], 1))) {
-          throw unavailable();
-        }
-      } finally {
-        native.errorFree(error);
-        if (message[0]) {
-          native.unrefMessage(message[0]);
-        }
-        if (reply[0]) {
-          native.unrefMessage(reply[0]);
-        }
+      return result;
+    }
+    if (operation !== "call" || signatures.length > 1) {
+      throw unavailable();
+    }
+    const methodArgs: SystemdArg[] = [];
+    if (args[5] === "s" && args.length === 7 && args[6] !== undefined) {
+      methodArgs.push({ type: "s", value: args[6] });
+    } else if (
+      args[5] === "ss" &&
+      args.length === 8 &&
+      args[6] !== undefined &&
+      args[7] !== undefined
+    ) {
+      methodArgs.push({ type: "s", value: args[6] }, { type: "s", value: args[7] });
+    } else if (args.length !== 5) {
+      throw unavailable();
+    }
+    const expectedSignature = signatures.length ? signature(signatures[0]) : undefined;
+    check();
+    beforeDispatch?.();
+    const callOptions = options();
+    if (mutationTimeoutMs !== undefined) {
+      callOptions.timeoutMs = Math.min(callOptions.timeoutMs, mutationTimeoutMs);
+      mutationDeadline = performance.now() + callOptions.timeoutMs;
+    }
+    let reply: SystemdValue;
+    try {
+      reply = await bus.call(target, methodArgs, callOptions);
+    } catch (error) {
+      check();
+      const name = error instanceof ProcSafeError ? error.details?.dbusErrorName : undefined;
+      if (
+        ((member === "GetUnit" || member === "LoadUnit") &&
+          name === "org.freedesktop.systemd1.NoSuchUnit") ||
+        (member === "GetUnitFileState" &&
+          [
+            "org.freedesktop.systemd1.NoSuchUnit",
+            "org.freedesktop.systemd1.NoSuchUnitFile",
+            "org.freedesktop.DBus.Error.FileNotFound",
+          ].includes(String(name)))
+      ) {
+        return null;
       }
+      translateFailure(error);
     }
     check();
-    return values;
+    if (
+      !Array.isArray(reply) ||
+      reply.length !== signatures.length ||
+      (expectedSignature && !matchesReply(reply[0], expectedSignature))
+    ) {
+      throw unavailable();
+    }
+    if (expectedSignature) {
+      account(reply[0]);
+      return [reply];
+    }
+    return [];
   };
   return {
     verify,
     close,
-    query(args: string[], signatures: string[], until: number, assertCurrent?: () => void) {
-      // One sd-bus connection is not thread-safe. Queue within the caller's
-      // deadline; a queue wait never earns a new budget or custody interval.
-      return queue.run(until, () => execute(args, signatures, until, assertCurrent));
+    query(
+      args: string[],
+      signatures: string[],
+      until: number,
+      assertCurrent?: () => void,
+      beforeDispatch?: () => void,
+      mutationTimeoutMs?: number,
+    ) {
+      const now = getServiceInspectionClock();
+      return queue.run(
+        until,
+        () =>
+          execute(args, signatures, until, assertCurrent, beforeDispatch, now, mutationTimeoutMs),
+        now,
+      );
     },
   };
 }

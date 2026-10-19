@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -29,256 +29,238 @@ const binding = {
   sessionKey: "agent:main:preview",
   agentId: "main",
 };
+const turnSource = {
+  turnSourceChannel: "telegram",
+  turnSourceTo: "fixture-chat",
+  turnSourceAccountId: "fixture-account",
+  turnSourceThreadId: "fixture-thread",
+};
 
-describe("attached command approval custody", () => {
-  it.for([
-    { route: "forward", outcome: "allow-once" },
-    { route: "ios", outcome: "allow-once" },
-    { route: "ios", outcome: "expire" },
-    { route: "forward", outcome: "revoke" },
-    { route: "all", outcome: "allow-once" },
-    { route: "all", outcome: "cron" },
-  ] as const)(
-    "delivers through $route with ambient caller custody and handles $outcome",
-    async ({ route, outcome }, test) => {
-      const run = createOperationalRunInstanceRef(`approval-${route}-${outcome}`);
-      const authority = claimAgentRunDelegatedAuthority(run);
-      test.onTestFinished(() => {
-        releaseAgentRunDelegatedAuthority(authority);
-      });
-      if (outcome === "cron") {
-        test.onTestFinished(
-          registerCronRunExecSource(run.runId, {
-            agentId: binding.agentId,
-            jobId: "fixture-job",
-            jobConfigRevision: "fixture-revision",
-            jobName: "Fixture automation",
-          }),
-        );
-      }
-      const manager = createTestApprovalManager(test, {
-        resolveAllowedDecisions: (request: ExecApprovalRequestPayload) =>
-          resolveExecApprovalRequestAllowedDecisions(request),
-        validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-      });
-      const delivered = createDeferredCore<ExecApprovalRequest>();
-      const forward = vi.fn(async (request: ExecApprovalRequest) => {
-        delivered.resolve(request);
-        return true;
-      });
-      const ios = vi.fn<
-        NonNullable<
-          NonNullable<GatewayRequestContext["execApprovalIosPushDelivery"]>["handleRequested"]
-        >
-      >(async (request, delivery) => {
-        expect(
-          delivery?.isTargetVisible?.({
-            deviceId: "requester-device",
-            scopes: ["operator.approvals"],
-          }),
-        ).toBe(true);
-        expect(
-          delivery?.isTargetVisible?.({ deviceId: "other-device", scopes: ["operator.approvals"] }),
-        ).toBe(false);
-        delivered.resolve(request);
-        return true;
-      });
-      const expired = vi.fn(async () => {});
-      const webPush = vi.fn(() => true);
-      const context = createGatewayRequestContext(
-        makeContextParams({
-          execApprovalManager: manager,
-          forwardExecApprovalRequest: route !== "ios" ? forward : undefined,
-          execApprovalIosPushDelivery: {
-            ...(route !== "forward" ? { handleRequested: ios } : {}),
-            handleExpired: expired,
-          },
-          ...(route === "all"
-            ? {
-                approvalWebPushDelivery: {
-                  handleRequested: webPush,
-                  handleResolved: async () => {},
-                  handleExpired: async () => {},
-                },
-              }
-            : {}),
+it.for([
+  { route: "ios", outcome: "expire" },
+  { route: "forward", outcome: "revoke" },
+  { route: "all", outcome: "allow-once" },
+  { route: "all", outcome: "cron" },
+] as const)(
+  "delivers through $route with ambient caller custody and handles $outcome",
+  async ({ route, outcome }, test) => {
+    const run = createOperationalRunInstanceRef(`approval-${route}-${outcome}`);
+    const authority = claimAgentRunDelegatedAuthority(run);
+    test.onTestFinished(() => {
+      releaseAgentRunDelegatedAuthority(authority);
+    });
+    if (outcome === "cron") {
+      test.onTestFinished(
+        registerCronRunExecSource(run.runId, {
+          agentId: binding.agentId,
+          jobId: "fixture-job",
+          jobConfigRevision: "fixture-revision",
+          jobName: "Fixture automation",
         }),
       );
-      if (outcome === "cron") {
-        context.getApprovalClientConnIds = () => new Set(["approval-ui"]);
-        context.broadcastToConnIds = (_event, payload, recipients) => {
-          expect(recipients).toEqual(new Set(["approval-ui"]));
-          expect(payload).toMatchObject({ request: { runId: run.runId } });
-          const record = manager.listLocalPendingRecords()[0];
-          if (!record) {
-            throw new Error("Expected the registered approval before delivery");
-          }
-          delivered.resolve(buildRequestedApprovalEvent(record, "exec"));
-        };
-      }
-      const client = createSyntheticPluginRuntimeClient({
-        pluginRuntimeOwnerId: "crabbox",
-        scopes: ["operator.write"],
-      });
-      client.connId = "requester-connection";
-      client.isDeviceTokenAuth = true;
-      client.connect.device = {
-        id: "requester-device",
-        publicKey: "fixture",
-        signature: "fixture",
-        signedAt: 1,
-        nonce: "fixture",
-      };
-      const options: GatewayRequestHandlerOptions = {
-        req: { type: "req", id: "attached-approval", method: "environments.session.exec" },
-        params: {},
-        context,
-        client,
-        isWebchatConnect: () => false,
-        respond: vi.fn(),
-      };
-      const lifetime = new AbortController();
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: binding.agentId,
-          sessionKey: binding.sessionKey,
-          operationalRunInstance: run,
-          approvalAuthority: authority,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-          turnSourceChannel: "telegram",
-          turnSourceTo: "fixture-chat",
-          turnSourceAccountId: "fixture-account",
-          turnSourceThreadId: "fixture-thread",
-        },
-        async () => {
-          const operation = approveSessionEnvironmentCommand({
-            options,
-            binding,
-            argv: ["node", "preview.js"],
-            background: true,
-            signal: lifetime.signal,
-            assertCurrent: () => {
-              lifetime.signal.throwIfAborted();
-              if (!validateAgentRunDelegatedAuthority(authority)) {
-                throw new Error("run authority ended");
-              }
-            },
-          });
-          const completion =
-            outcome === "allow-once" || outcome === "cron"
-              ? expect(operation).resolves.toBeUndefined()
-              : expect(operation).rejects.toThrow(
-                  outcome === "expire" ? "not approved" : "run authority ended",
-                );
-          const event = await Promise.race([
-            delivered.promise,
-            operation.then(() => {
-              throw new Error("Approval completed before request delivery");
-            }),
-          ]);
-          expect(event.request).toMatchObject({
-            runId: run.runId,
-            sessionKey: binding.sessionKey,
-            turnSourceChannel: "telegram",
-            turnSourceTo: "fixture-chat",
-            turnSourceAccountId: "fixture-account",
-            turnSourceThreadId: "fixture-thread",
-            allowedDecisions: ["allow-once", "deny"],
-          });
-          expect((await manager.listPendingRecords())[0]).toMatchObject({
-            requestedByConnId: "requester-connection",
-            requestedByDeviceId: "requester-device",
-            requestedByDeviceTokenAuth: true,
-            agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
-          });
-          if (outcome === "expire") {
-            await manager.expire(event.id);
-          } else {
-            if (outcome === "revoke") {
-              lifetime.abort(new Error("run authority ended"));
-              releaseAgentRunDelegatedAuthority(authority);
-            }
-            await manager.resolve(event.id, "allow-once", "reviewer");
-          }
-          await completion;
-          expect(await manager.consumeAllowOnce(event.id)).toBe(false);
-          if (outcome === "expire") {
-            expect(expired).toHaveBeenCalledWith(event);
-          }
-          if (outcome === "cron") {
-            expect(forward).not.toHaveBeenCalled();
-            expect(ios).not.toHaveBeenCalled();
-            expect(webPush).not.toHaveBeenCalled();
-          } else {
-            if (route !== "ios") {
-              expect(forward).toHaveBeenCalledOnce();
-            }
-            if (route !== "forward") {
-              expect(ios).toHaveBeenCalledOnce();
-            }
-            if (route === "all") {
-              expect(webPush).toHaveBeenCalledOnce();
-            }
-          }
-        },
-      );
-    },
-  );
-
-  for (const decision of ["allow-once", "deny"] as const) {
-    it(`shows stdin and honors ${decision} exactly once`, async (test) => {
-      const manager = createTestApprovalManager(test, {
-        resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-      });
-      const broadcast = vi.fn(async (_event: string, request: ExecApprovalRequest) => {
-        expect(request.request.command).toContain("script-from-stdin");
-        expect(request.request.allowedDecisions).toEqual(["allow-once", "deny"]);
-        await manager.resolve(request.id, decision, "reviewer");
-      });
-      const options = {
-        client: null,
-        context: {
-          execApprovalManager: manager,
-          broadcast,
-          hasExecApprovalClients: () => true,
-          logGateway: { error: vi.fn() },
-        },
-      } as unknown as GatewayRequestHandlerOptions;
-      const operation = approveSessionEnvironmentCommand({
-        options,
-        binding,
-        argv: ["node"],
-        input: "console.log('script-from-stdin')",
-        background: true,
-        assertCurrent: () => {},
-      });
-      if (decision === "allow-once") {
-        await expect(operation).resolves.toBeUndefined();
-        const id = broadcast.mock.calls[0]![1].id;
-        expect(await manager.consumeAllowOnce(id)).toBe(false);
-      } else {
-        await expect(operation).rejects.toThrow("not approved");
-      }
+    }
+    const manager = createTestApprovalManager(test, {
+      resolveAllowedDecisions: (request: ExecApprovalRequestPayload) =>
+        resolveExecApprovalRequestAllowedDecisions(request),
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
-  }
+    const delivered = createDeferredCore<ExecApprovalRequest>();
+    const forward = vi.fn(async (request: ExecApprovalRequest) => {
+      delivered.resolve(request);
+      return true;
+    });
+    const ios = vi.fn<
+      NonNullable<
+        NonNullable<GatewayRequestContext["execApprovalIosPushDelivery"]>["handleRequested"]
+      >
+    >(async (request, delivery) => {
+      expect(
+        ["requester-device", "other-device"].map((deviceId) =>
+          delivery?.isTargetVisible?.({ deviceId, scopes: ["operator.approvals"] }),
+        ),
+      ).toEqual([true, false]);
+      delivered.resolve(request);
+      return true;
+    });
+    const expired = vi.fn(async () => {});
+    const webPush = vi.fn(() => true);
+    const context = createGatewayRequestContext(
+      makeContextParams({
+        execApprovalManager: manager,
+        forwardExecApprovalRequest: route !== "ios" ? forward : undefined,
+        execApprovalIosPushDelivery: {
+          handleRequested: route !== "forward" ? ios : undefined,
+          handleExpired: expired,
+        },
+        approvalWebPushDelivery:
+          route === "all"
+            ? {
+                handleRequested: webPush,
+                handleResolved: async () => {},
+                handleExpired: async () => {},
+              }
+            : undefined,
+      }),
+    );
+    if (outcome === "cron") {
+      context.getApprovalClientConnIds = () => new Set(["approval-ui"]);
+      context.broadcastToConnIds = (_event, payload, recipients) => {
+        expect(recipients).toEqual(new Set(["approval-ui"]));
+        expect(payload).toMatchObject({ request: { runId: run.runId } });
+        const record = manager.listLocalPendingRecords()[0];
+        if (!record) {
+          throw new Error("Expected the registered approval before delivery");
+        }
+        delivered.resolve(buildRequestedApprovalEvent(record, "exec"));
+      };
+    }
+    const client = createSyntheticPluginRuntimeClient({
+      pluginRuntimeOwnerId: "crabbox",
+      scopes: ["operator.write"],
+    });
+    client.connId = "requester-connection";
+    client.isDeviceTokenAuth = true;
+    client.connect.device = {
+      id: "requester-device",
+      publicKey: "fixture",
+      signature: "fixture",
+      signedAt: 1,
+      nonce: "fixture",
+    };
+    const options: GatewayRequestHandlerOptions = {
+      req: { type: "req", id: "attached-approval", method: "environments.session.exec" },
+      params: {},
+      context,
+      client,
+      isWebchatConnect: () => false,
+      respond: vi.fn(),
+    };
+    const lifetime = new AbortController();
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: binding.agentId,
+        sessionKey: binding.sessionKey,
+        operationalRunInstance: run,
+        approvalAuthority: authority,
+        receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        ...turnSource,
+      },
+      async () => {
+        const operation = approveSessionEnvironmentCommand({
+          options,
+          binding,
+          argv: ["node", "preview.js"],
+          background: true,
+          signal: lifetime.signal,
+          assertCurrent: () => {
+            lifetime.signal.throwIfAborted();
+            if (!validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("run authority ended");
+            }
+          },
+        });
+        const completion =
+          outcome === "allow-once" || outcome === "cron"
+            ? expect(operation).resolves.toBeUndefined()
+            : expect(operation).rejects.toThrow(
+                outcome === "expire" ? "not approved" : "run authority ended",
+              );
+        const event = await Promise.race([
+          delivered.promise,
+          operation.then(() => {
+            throw new Error("Approval completed before request delivery");
+          }),
+        ]);
+        expect(event.request).toMatchObject({
+          runId: run.runId,
+          sessionKey: binding.sessionKey,
+          ...turnSource,
+          allowedDecisions: ["allow-once", "deny"],
+        });
+        expect((await manager.listPendingRecords())[0]).toMatchObject({
+          requestedByConnId: "requester-connection",
+          requestedByDeviceId: "requester-device",
+          requestedByDeviceTokenAuth: true,
+          agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
+        });
+        if (outcome === "expire") {
+          await manager.expire(event.id);
+        } else {
+          if (outcome === "revoke") {
+            lifetime.abort(new Error("run authority ended"));
+            releaseAgentRunDelegatedAuthority(authority);
+          }
+          await manager.resolve(event.id, "allow-once", "reviewer");
+        }
+        await completion;
+        expect(await manager.consumeAllowOnce(event.id)).toBe(false);
+        if (outcome === "expire") {
+          expect(expired).toHaveBeenCalledWith(event);
+        }
+        expect([forward, ios, webPush].map((send) => send.mock.calls.length)).toEqual(
+          outcome === "cron"
+            ? [0, 0, 0]
+            : [Number(route !== "ios"), Number(route !== "forward"), Number(route === "all")],
+        );
+      },
+    );
+  },
+);
 
-  it("refuses approval when the complete command cannot be shown", async (test) => {
-    const manager = createTestApprovalManager(test);
-    const broadcast = vi.fn();
+for (const decision of ["allow-once", "deny"] as const) {
+  it(`shows stdin and honors ${decision} exactly once`, async (test) => {
+    const manager = createTestApprovalManager(test, {
+      resolveAllowedDecisions: (request: ExecApprovalRequestPayload) =>
+        resolveExecApprovalRequestAllowedDecisions(request),
+    });
+    const broadcast = vi.fn(async (_event: string, request: ExecApprovalRequest) => {
+      expect(request.request.command).toContain("script-from-stdin");
+      expect(request.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+      await manager.resolve(request.id, decision, "reviewer");
+    });
     const options = {
       client: null,
-      context: { execApprovalManager: manager, broadcast },
+      context: {
+        execApprovalManager: manager,
+        broadcast,
+        hasExecApprovalClients: () => true,
+        logGateway: { error: vi.fn() },
+      },
     } as unknown as GatewayRequestHandlerOptions;
-    await expect(
-      approveSessionEnvironmentCommand({
-        options,
-        binding,
-        argv: ["node"],
-        input: "x".repeat(20_000),
-        background: false,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("too large to review");
-    expect(broadcast).not.toHaveBeenCalled();
+    const operation = approveSessionEnvironmentCommand({
+      options,
+      binding,
+      argv: ["node"],
+      input: "console.log('script-from-stdin')",
+      background: true,
+      assertCurrent: () => {},
+    });
+    if (decision === "allow-once") {
+      await expect(operation).resolves.toBeUndefined();
+      const id = broadcast.mock.calls[0]![1].id;
+      expect(await manager.consumeAllowOnce(id)).toBe(false);
+    } else {
+      await expect(operation).rejects.toThrow("not approved");
+    }
   });
+}
+
+it("refuses approval when the complete command cannot be shown", async (test) => {
+  const manager = createTestApprovalManager(test);
+  const broadcast = vi.fn();
+  const options = {
+    client: null,
+    context: { execApprovalManager: manager, broadcast },
+  } as unknown as GatewayRequestHandlerOptions;
+  await expect(
+    approveSessionEnvironmentCommand({
+      options,
+      binding,
+      argv: ["node"],
+      input: "x".repeat(20_000),
+      background: false,
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow("too large to review");
+  expect(broadcast).not.toHaveBeenCalled();
 });

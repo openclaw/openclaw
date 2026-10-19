@@ -95,19 +95,28 @@ suite.define(() => {
             { response: rootRows(unrelatedLabel) },
           ],
         });
-        const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+        const listRequests = await gateway.deferNext("sessions.list", rosterMatch);
         await gateway.emitGatewayEvent("sessions.changed", {
           key: unrelatedKey,
           reason: "run",
           sessionKey: unrelatedKey,
           updatedAt: 30 + revision,
         });
-        // Advance the automatic refresh window and its nested mock response timer.
-        await page.clock.runFor(5_001);
+        // Allow the shared refresh policy's maximum cooldown; the fixture owns response delivery.
+        await page.clock.runFor(15_001);
         expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBeGreaterThan(
           listRequests,
         );
-        await page.getByText(unrelatedLabel, { exact: true }).waitFor();
+        // Exercise a slow successful refresh without leaving a mock timer behind the paused clock.
+        if (revision === 1) {
+          await page.clock.runFor(2_000);
+        }
+        await gateway.resolveDeferred("sessions.list", undefined, { match: rosterMatch });
+        await page.clock.runFor(50);
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${unrelatedKey}"]`)
+          .getByText(unrelatedLabel, { exact: true })
+          .waitFor();
         expect(await childRequestCount()).toBe(1);
         expect(await alert.count()).toBe(1);
         expect(await alert.evaluate((node, original) => node === original, mountedAlert)).toBe(

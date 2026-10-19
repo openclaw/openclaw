@@ -1,4 +1,3 @@
-// OpenCode Zen stream adapter handles provider-specific Responses wire compatibility.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
@@ -7,6 +6,10 @@ import {
   type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  mapAssistantMessageStream,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WEB_SEARCH = "web_search";
@@ -207,6 +210,7 @@ function restoreEvent(event: AssistantMessageEvent, state: TransformState): Assi
       // Dynamic-record wire JSON is not prefix-compatible with restored object JSON.
       // Defer argument bytes so consumers emit one canonical payload at toolcall_end.
       restored.delta = "";
+      delete call.partialJson;
     }
   } else if (restored.type === "toolcall_end") {
     restored.toolCall = { ...restored.toolCall };
@@ -238,12 +242,11 @@ export function wrapOpencodeProviderStream(ctx: ProviderWrapStreamFnContext): St
     if (model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
-    const originalOnPayload = options?.onPayload;
     const state: TransformState = { fields: new Map() };
     const maybeStream = underlying(model, context, {
       ...options,
-      async onPayload(payload, payloadModel) {
-        const finalPayload = (await originalOnPayload?.(payload, payloadModel)) ?? payload;
+      onPayload: wrapProviderPayloadHook(options?.onPayload, (payload, replacement) => {
+        const finalPayload = replacement ?? payload;
         state.fields = new Map();
         state.alias = undefined;
         if (isRecord(finalPayload)) {
@@ -256,11 +259,8 @@ export function wrapOpencodeProviderStream(ctx: ProviderWrapStreamFnContext): St
           state.alias = aliasWebSearch(finalPayload);
         }
         return finalPayload;
-      },
+      }),
     });
-    const wrap = (stream: ProviderStream) => wrapResponseStream(stream, state);
-    return maybeStream && typeof maybeStream === "object" && "then" in maybeStream
-      ? Promise.resolve(maybeStream).then(wrap)
-      : wrap(maybeStream);
+    return mapAssistantMessageStream(maybeStream, (stream) => wrapResponseStream(stream, state));
   };
 }

@@ -6,7 +6,11 @@ type StartupExternalAuthHydrationDeps = {
   listAgentIds: (cfg: OpenClawConfig) => string[];
   resolveAgentDir: (cfg: OpenClawConfig, agentId: string) => string;
   collectConfiguredRefs: (cfg: OpenClawConfig, agentId: string) => readonly { value: string }[];
-  hydrate: (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => void;
+  hydrate: (
+    cfg: OpenClawConfig,
+    agentDir: string,
+    providers: readonly string[],
+  ) => void | Promise<void>;
 };
 
 export async function hydrateConfiguredExternalCliAuth(params: {
@@ -25,12 +29,12 @@ export async function hydrateConfiguredExternalCliAuth(params: {
       listAgentIds: scope.listAgentIds,
       resolveAgentDir: scope.resolveAgentDir,
       collectConfiguredRefs: configured.collectPreparedModelRuntimeConfiguredRefs,
-      hydrate: (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => {
+      hydrate: async (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => {
         const discovery = external.externalCliDiscoveryForProviders({ cfg, providers });
         if (discovery.mode === "none") {
           return;
         }
-        store.ensureAuthProfileStore(agentDir, {
+        await store.ensureAuthProfileStoreAsync(agentDir, {
           config: cfg,
           externalCli: discovery,
           allowKeychainPrompt: false,
@@ -52,7 +56,7 @@ export async function hydrateConfiguredExternalCliAuth(params: {
     }
     hydratedDirs.add(agentDir);
     try {
-      deps.hydrate(cfg, agentDir, providers);
+      await deps.hydrate(cfg, agentDir, providers);
     } catch (error) {
       params.log.warn(
         `startup external CLI auth hydration failed for agent ${agentId}: ${String(error)}`,
@@ -65,22 +69,18 @@ export async function hydrateConfiguredExternalCliAuth(params: {
 export async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
   getConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
-  isCurrent?: () => boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
   startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
-  if (params.isCurrent?.() === false) {
-    return;
-  }
   await refreshPreparedModelRuntimeSnapshots(params.getConfig ?? params.cfg, {
     gatewayLifecycle: true,
     startup: true,
+    joinSupersedingPublication: true,
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
-    ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),

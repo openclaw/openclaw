@@ -2,10 +2,10 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/legacy-state-migration.types.js";
 import {
-  closePluginStateDatabaseAsync,
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,7 +20,7 @@ describe("legacy migration plan failure isolation", () => {
   });
 
   afterEach(async () => {
-    await closePluginStateDatabaseAsync();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests({ closeDatabase: false });
     await state.cleanup();
   });

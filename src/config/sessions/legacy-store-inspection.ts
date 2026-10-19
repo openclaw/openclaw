@@ -6,6 +6,7 @@ import { tryResolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import type { DoctorSessionSqliteIssue } from "../../infra/session-sqlite-migration-issues.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -13,10 +14,10 @@ import { isPrimarySessionTranscriptFileName } from "./artifacts.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionFilePathCore } from "./paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
+import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
 import type { SessionEntry } from "./types.js";
 
 export type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };
-type LegacySessionStoreIssue = { code: string; message: string; sessionKey?: string };
 
 export function listLegacySessionTranscriptFiles(directory: string): string[] {
   if (!fs.existsSync(directory)) {
@@ -30,7 +31,7 @@ export function listLegacySessionTranscriptFiles(directory: string): string[] {
 
 export function readLegacySessionStoreEntries(
   target: Pick<LegacySessionStoreTarget, "storePath">,
-  issues: LegacySessionStoreIssue[],
+  issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean; sourcePath?: string } = {},
 ): { entries: Array<{ sessionKey: string; entry: SessionEntry }>; bytes?: Buffer } {
   // Open a file descriptor first, then stat and read through it to eliminate
@@ -100,6 +101,7 @@ export function readLegacySessionStoreEntries(
     }
     const entries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
     for (const [sessionKey, value] of Object.entries(parsed)) {
+      assertSupportedSessionStoreEntry(value);
       if (!isSessionEntry(value)) {
         issues.push({
           code: "entry_invalid",

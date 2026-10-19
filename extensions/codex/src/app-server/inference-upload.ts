@@ -80,3 +80,43 @@ export function createUploadBody(bytes: Buffer, signal: AbortSignal, release: ()
   );
   return { body, length, settle };
 }
+
+/** Retain one bounded upload under its original permit until OAuth accepts it or retries once. */
+export function createRetryableUploadBody(bytes: Buffer, signal: AbortSignal, release: () => void) {
+  let replay: Buffer | undefined = bytes;
+  let firstActive = true;
+  let uploaded = false;
+  let active = createUploadBody(bytes, signal, () => {
+    uploaded = true;
+    if (firstActive && !replay) {
+      release();
+    }
+  });
+  return {
+    body: active.body,
+    length: active.length,
+    commit() {
+      replay = undefined;
+      if (firstActive && uploaded) {
+        release();
+      }
+    },
+    retry() {
+      signal.throwIfAborted();
+      if (!replay) {
+        throw new Error("Codex inference upload cannot be replayed");
+      }
+      // Retire the old stream without releasing the permit now owned by its replacement.
+      firstActive = false;
+      active.settle();
+      active = createUploadBody(replay, signal, release);
+      replay = undefined;
+      return active.body;
+    },
+    settle() {
+      replay = undefined;
+      active.settle();
+      release();
+    },
+  };
+}

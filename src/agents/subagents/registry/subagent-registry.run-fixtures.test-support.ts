@@ -1,4 +1,3 @@
-import type { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
@@ -11,12 +10,6 @@ type RunRecordFixtureOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
 type KilledRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
   Required<Pick<SubagentRunRecord, "task" | "createdAt">> &
   Partial<Omit<SubagentRunRecordOverrides, "runId" | "task" | "createdAt">>;
-type RunningTaskParams = Parameters<typeof createRunningTaskRun>[0];
-type RunningTaskParamsOverrides = Required<
-  Pick<RunningTaskParams, "runId" | "childSessionKey" | "startedAt">
-> &
-  Pick<RunningTaskParams, "task"> &
-  Partial<Omit<RunningTaskParams, "runId" | "childSessionKey" | "startedAt" | "task">>;
 type QueuedRunOverrides = Pick<SubagentRunRecordOverrides, "runId" | "createdAt" | "groupId"> &
   Partial<Omit<SubagentRunRecordOverrides, "runId" | "createdAt" | "groupId" | "queuedLaunch">> & {
     queuedLaunch?: Partial<NonNullable<SubagentRunRecord["queuedLaunch"]>>;
@@ -67,17 +60,6 @@ export const makeCompletedCollectorRun = (
   collectorCompletion: { status: "done" },
   ...overrides,
 });
-export const makeRunningTaskParams = (
-  overrides: RunningTaskParamsOverrides,
-): RunningTaskParams => ({
-  runtime: "subagent",
-  sourceId: overrides.runId,
-  ownerKey: "agent:main:main",
-  scopeKind: "session",
-  deliveryStatus: "pending",
-  lastEventAt: overrides.startedAt,
-  ...overrides,
-});
 export const makeQueuedRun = ({
   queuedLaunch: queuedLaunchOverrides,
   ...overrides
@@ -95,6 +77,7 @@ export const makeQueuedRun = ({
     completion: { required: false },
     ...overrides,
     queuedLaunch: {
+      requesterRecovery: {},
       request: {
         sessionKey: childSessionKey,
         idempotencyKey: overrides.runId,

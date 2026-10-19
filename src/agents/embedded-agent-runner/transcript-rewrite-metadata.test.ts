@@ -1,6 +1,71 @@
-import { expect, it } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { expect, it, vi } from "vitest";
 import { SessionManager } from "../sessions/session-manager.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
+
+it.each([false, true])(
+  "services event-loop work before publication and preserves intervening writes (%s)",
+  async (interveningWrite) => {
+    const manager = SessionManager.inMemory();
+    const first = manager.appendMessage({ role: "user", content: "original", timestamp: 1 });
+    manager.appendMessage({ role: "user", content: "tail", timestamp: 2 });
+    const original = manager.getBranch();
+    let observed: ReturnType<SessionManager["getBranch"]> | undefined;
+    const prepare = manager.prepareTranscriptRewriteAsync.bind(manager);
+    const preparation = vi
+      .spyOn(manager, "prepareTranscriptRewriteAsync")
+      .mockImplementation(async () => {
+        const rewrite = await prepare();
+        void nextTurn().then(() => {
+          observed = manager.getBranch();
+          if (interveningWrite) {
+            manager.appendMessage({ role: "user", content: "newer input", timestamp: 3 });
+          }
+        });
+        return rewrite;
+      });
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => (elapsed += 5));
+    try {
+      const result = rewriteTranscriptEntriesInSessionManager({
+        sessionManager: manager,
+        replacements: [
+          { entryId: first, message: { role: "user", content: "replacement", timestamp: 1 } },
+        ],
+      });
+      if (interveningWrite) {
+        await expect(result).rejects.toThrow(
+          "Session transcript changed before rewrite publication",
+        );
+        expect(
+          manager
+            .getBranch()
+            .map((entry) =>
+              entry.type === "message" && entry.message.role === "user"
+                ? entry.message.content
+                : null,
+            ),
+        ).toEqual(["original", "tail", "newer input"]);
+      } else {
+        await expect(result).resolves.toMatchObject({ changed: true, rewrittenEntries: 1 });
+        expect(
+          manager
+            .getBranch()
+            .map((entry) =>
+              entry.type === "message" && entry.message.role === "user"
+                ? entry.message.content
+                : null,
+            ),
+        ).toEqual(["replacement", "tail"]);
+      }
+      expect(observed).toEqual(original);
+    } finally {
+      clock.mockRestore();
+      preparation.mockRestore();
+      await nextTurn();
+    }
+  },
+);
 
 it("preserves labels targeting asynchronously replayed model and thinking entries", async () => {
   const manager = SessionManager.inMemory();

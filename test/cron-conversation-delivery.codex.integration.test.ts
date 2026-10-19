@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
 import { makeIsolatedAgentParamsFixture } from "../src/cron/isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "../src/cron/isolated-agent/run.suite-helpers.js";
 import {
@@ -13,60 +17,61 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 describe("Codex conversation delivery and cron retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
+  });
 
   it.each(["sent", "queued"] as const)(
-    "preserves the retry decision for a %s core conversation receipt",
+    "does not infer another model turn from a %s core conversation receipt",
     async (status) => {
+      const params = makeIsolatedAgentParamsFixture();
+      setRuntimeConfigSnapshot(params.cfg);
       const { createCodexDynamicToolBridge } = await import("../extensions/codex/test-api.js");
       const { createConversationsSendTool } =
         await import("../src/agents/tools/conversation-tools.js");
-      const { callAgentToolGatewayRequest } =
-        await import("../src/agents/tools/in-process-gateway.js");
+      const gateway = await import("../src/agents/tools/in-process-gateway.js");
       pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
         (payloads?: Array<{ text?: string }>) => payloads?.at(-1)?.text ?? "",
       );
       const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-      const deps = { callGateway: callAgentToolGatewayRequest };
-      const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue({
+      const callGateway = vi.spyOn(gateway, "callAgentToolGatewayRequest").mockResolvedValue({
         status,
         conversationRef,
         channel: "qa-channel",
         messageId: "prepared-id",
       });
-      runEmbeddedAgentMock
-        .mockImplementationOnce(async () => {
-          const tool = createConversationsSendTool({ agentId: "main" }, deps);
-          const bridge = createCodexDynamicToolBridge({
-            tools: [tool],
-            signal: new AbortController().signal,
-          });
-          const response = await bridge.handleToolCall({
-            threadId: "cron-thread",
-            turnId: "cron-turn",
-            callId: "cron-send",
-            namespace: null,
-            tool: tool.name,
-            arguments: { conversationRef, message: "Synthetic scheduled report" },
-          });
-          expect(response.success, JSON.stringify(response)).toBe(true);
-          return {
-            payloads: [{ text: "On it." }],
-            didSendViaMessagingTool: bridge.telemetry.didSendViaMessagingTool,
-            meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-          };
-        })
-        .mockResolvedValueOnce({
-          payloads: [{ text: "Report delivery is still queued." }],
-          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        const tool = createConversationsSendTool({ agentId: "main" });
+        const bridge = createCodexDynamicToolBridge({
+          tools: [tool],
+          signal: new AbortController().signal,
         });
+        const response = await bridge.handleToolCall({
+          threadId: "cron-thread",
+          turnId: "cron-turn",
+          callId: "cron-send",
+          namespace: null,
+          tool: tool.name,
+          arguments: { conversationRef, message: "Synthetic scheduled report" },
+        });
+        expect(response.success, JSON.stringify(response)).toBe(true);
+        return {
+          payloads: [{ text: "On it." }],
+          didSendViaMessagingTool: bridge.telemetry.didSendViaMessagingTool,
+          meta: {
+            terminalReply: { disposition: "visible", text: "On it." },
+            agentMeta: { usage: { input: 10, output: 20 } },
+          },
+        };
+      });
       mockRunCronFallbackPassthrough();
 
-      const attempts = status === "sent" ? 1 : 2;
-      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+      const result = await runCronIsolatedAgentTurn(params);
       expect(result.error).toBeUndefined();
       expect(result).toMatchObject({ status: "ok" });
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(attempts);
-      expect(runWithModelFallbackMock).toHaveBeenCalledTimes(attempts);
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
       expect(callGateway).toHaveBeenCalledOnce();
     },
   );

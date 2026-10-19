@@ -22,7 +22,7 @@ export class WindowsManagementTransportError extends Error {
 export async function runWindowsManagement(
   executable: string,
   request: WindowsManagementRequest,
-  options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv; run?: typeof runCommandBuffered } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<WindowsManagementResponse> {
   const admitted = managementRequestSchema.parse(request);
   const input = JSON.stringify(admitted);
@@ -31,11 +31,11 @@ export async function runWindowsManagement(
   }
   options.signal?.throwIfAborted();
   const env = Object.fromEntries(
-    Object.entries(options.env ?? process.env).filter(([key]) => !/^(NODE_|OPENCLAW_)/i.test(key)),
+    Object.entries(process.env).filter(([key]) => !/^(NODE_|OPENCLAW_)/i.test(key)),
   );
   // Buffered process owner closes stdin after input and joins tree termination on
   // cancellation/timeout/output overflow. Chrome EOF semantics do not apply here.
-  const result = await (options.run ?? runCommandBuffered)([executable, "--manage"], {
+  const result = await runCommandBuffered([executable, "--manage"], {
     baseEnv: env,
     input,
     timeoutMs: 60000,

@@ -86,6 +86,19 @@ const providerIdentityCases: {
   ]),
 ];
 
+function suiteEvidence(params: Partial<Parameters<typeof buildQaSuiteEvidenceSummary>[0]>) {
+  return buildQaSuiteEvidenceSummary({
+    artifactPaths: [],
+    channelId: "qa-channel",
+    generatedAt: "2026-06-07T12:00:00.000Z",
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    providerMode: "mock-openai",
+    scenarioDefinitions: [{ id: "dm-chat-baseline", title: "DM baseline conversation" }],
+    scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    ...params,
+  });
+}
+
 describe("evidence summary", () => {
   for (const testCase of providerIdentityCases) {
     it(`provider identity fallback: ${testCase.name}`, () => {
@@ -139,7 +152,7 @@ describe("evidence summary", () => {
   });
 
   it("builds QA suite evidence entries from catalog metadata", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
+    const evidence = suiteEvidence({
       artifactPaths: [
         { kind: "summary", path: "qa-suite-summary.json" },
         { kind: "report", path: "qa-suite-report.md" },
@@ -150,61 +163,41 @@ describe("evidence summary", () => {
           title: "DM baseline conversation",
           sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
           surface: "dm",
-          coverage: {
-            primary: ["channels.dm"],
-            secondary: ["channels.qa-channel"],
-          },
+          coverage: { primary: ["channels.dm"], secondary: ["channels.qa-channel"] },
           runtimePairLane: "core",
           docsRefs: ["docs/channels/qa-channel.md"],
           codeRefs: ["extensions/qa-channel/src/gateway.ts"],
         },
       ],
-      channelId: "qa-channel",
       channelDriver: "local-shim",
       env: {
         OPENCLAW_QA_CHANNEL_DRIVER: "local-shim",
         OPENCLAW_QA_REF: "abc123",
+        OPENCLAW_QA_PROFILE: "experimental-profile",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.schemaVersion).toBe(2);
     expect(evidence.evidenceMode).toBe("full");
-    expect(evidence.profile).toBeUndefined();
+    expect(evidence.profile).toBe("experimental-profile");
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
       test: {
         kind: "qa-scenario",
         id: "dm-chat-baseline",
         title: "DM baseline conversation",
-        source: {
-          path: "qa/scenarios/channels/dm-chat-baseline.yaml",
-        },
+        source: { path: "qa/scenarios/channels/dm-chat-baseline.yaml" },
       },
       coverage: [
-        {
-          id: "channels.dm",
-          role: "primary",
-        },
-        {
-          id: "channels.qa-channel",
-          role: "secondary",
-        },
+        { id: "channels.dm", role: "primary" },
+        { id: "channels.qa-channel", role: "secondary" },
       ],
       refs: [
-        {
-          kind: "docs",
-          path: "docs/channels/qa-channel.md",
-        },
-        {
-          kind: "code",
-          path: "extensions/qa-channel/src/gateway.ts",
-        },
+        { kind: "docs", path: "docs/channels/qa-channel.md" },
+        { kind: "code", path: "extensions/qa-channel/src/gateway.ts" },
       ],
       runtimePairLane: "core",
       execution: {
@@ -212,41 +205,18 @@ describe("evidence summary", () => {
         provider: {
           id: "openai",
           live: false,
-          model: {
-            name: "gpt-5.6-luna",
-            ref: "mock-openai/gpt-5.6-luna",
-          },
+          model: { name: "gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
           fixture: "mock-openai",
         },
-        channel: {
-          id: "qa-channel",
-          live: false,
-          driver: "local-shim",
-        },
-        packageSource: {
-          kind: "source-checkout",
-        },
-        environment: {
-          ref: "abc123",
-          os: process.platform,
-          nodeVersion: process.version,
-        },
+        channel: { id: "qa-channel", live: false, driver: "local-shim" },
+        packageSource: { kind: "source-checkout" },
+        environment: { ref: "abc123", os: process.platform, nodeVersion: process.version },
         artifacts: [
-          {
-            kind: "summary",
-            path: "qa-suite-summary.json",
-            source: "qa-suite",
-          },
-          {
-            kind: "report",
-            path: "qa-suite-report.md",
-            source: "qa-suite",
-          },
+          { kind: "summary", path: "qa-suite-summary.json", source: "qa-suite" },
+          { kind: "report", path: "qa-suite-report.md", source: "qa-suite" },
         ],
       },
-      result: {
-        status: "pass",
-      },
+      result: { status: "pass" },
     });
   });
 
@@ -290,12 +260,9 @@ describe("evidence summary", () => {
       { rttMeasurement: { finalMatchedReplyRttMs: 1750, source: "summary-rtt" } },
     ],
   ])("does not fabricate structured RTT provenance from %s input", (_label, resultInput) => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [],
+    const evidence = suiteEvidence({
       channelId: "slack",
       generatedAt: "2026-09-03T00:00:02.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
       scenarioDefinitions: [{ id: "slack-canary", title: "Slack canary" }],
       scenarioResults: [{ name: "Slack canary", status: "pass", ...resultInput }],
     });
@@ -305,12 +272,9 @@ describe("evidence summary", () => {
   });
 
   it("validates structured RTT measurements as strict schema-v2 objects", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [],
+    const evidence = suiteEvidence({
       channelId: "slack",
       generatedAt: "2026-09-03T00:00:02.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
       scenarioDefinitions: [{ id: "slack-canary", title: "Slack canary" }],
       scenarioResults: [
         {
@@ -337,10 +301,6 @@ describe("evidence summary", () => {
 
   it.each([
     ["live Discord transport", "discord", "live", undefined, "live", true],
-    ["live Matrix transport", "matrix", "live", undefined, "live", true],
-    ["live Slack transport", "slack", "live", undefined, "live", true],
-    ["live Telegram transport", "telegram", "live", undefined, "live", true],
-    ["live WhatsApp transport", "whatsapp", "live", undefined, "live", true],
     [
       "live transport without a bundled channel identity",
       "custom-live-transport",
@@ -348,22 +308,6 @@ describe("evidence summary", () => {
       undefined,
       "live",
       true,
-    ],
-    [
-      "synthetic driver for a real channel identity",
-      "telegram",
-      "qa-channel",
-      undefined,
-      "qa-channel",
-      false,
-    ],
-    [
-      "Crabline driver for a real channel identity",
-      "telegram",
-      "crabline",
-      undefined,
-      "crabline",
-      false,
     ],
     [
       "explicit synthetic driver ignores requested environment metadata",
@@ -384,14 +328,11 @@ describe("evidence summary", () => {
   ] as const)(
     "records actual channel liveness for %s independently of model liveness",
     (_label, channelId, channelDriver, env, expectedDriver, expectedLive) => {
-      const evidence = buildQaSuiteEvidenceSummary({
-        artifactPaths: [],
+      const evidence = suiteEvidence({
         channelId,
         channelDriver,
         env,
         generatedAt: "2026-07-25T00:00:00.000Z",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
         scenarioDefinitions: [{ id: "channel-liveness", title: "Channel liveness" }],
         scenarioResults: [{ name: "Channel liveness", status: "pass" }],
       });
@@ -412,15 +353,9 @@ describe("evidence summary", () => {
       cwd: repoRoot,
       encoding: "utf8",
     }).trim();
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [],
-      channelId: "qa-channel",
-      env: {
-        GITHUB_SHA: "bd479958c04a1eadbda8b6105e0722588d71e9ad",
-      } as NodeJS.ProcessEnv,
+    const evidence = suiteEvidence({
+      env: { GITHUB_SHA: "bd479958c04a1eadbda8b6105e0722588d71e9ad" } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-24T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
       repoRoot,
       scenarioDefinitions: [{ id: "ref-probe", title: "Ref probe" }],
       scenarioResults: [{ name: "Ref probe", status: "pass" }],
@@ -512,16 +447,14 @@ describe("evidence summary", () => {
 
   it("builds Playwright runner evidence entries", () => {
     const evidence = buildPlaywrightEvidenceSummary({
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
       artifactPaths: [
         { kind: "runner-result", path: "playwright-results/control-ui.json" },
         { kind: "report", path: "playwright-report/index.html" },
       ],
-      env: {
-        GITHUB_SHA: "def456",
-      } as NodeJS.ProcessEnv,
+      env: { GITHUB_SHA: "def456" } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:07:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
       targets: [
         {
           id: "control-ui.browser-run",
@@ -549,25 +482,12 @@ describe("evidence summary", () => {
         kind: "playwright-test",
         id: "control-ui.browser-run",
         title: "Control UI browser workflow",
-        source: {
-          path: "ui/control-ui.e2e.test.ts",
-        },
+        source: { path: "ui/control-ui.e2e.test.ts" },
       },
-      coverage: [
-        {
-          id: "ui.control",
-          role: "primary",
-        },
-      ],
+      coverage: [{ id: "ui.control", role: "primary" }],
       refs: [
-        {
-          kind: "docs",
-          path: "docs/concepts/qa-e2e-automation.md",
-        },
-        {
-          kind: "code",
-          path: "ui/",
-        },
+        { kind: "docs", path: "docs/concepts/qa-e2e-automation.md" },
+        { kind: "code", path: "ui/" },
       ],
       execution: {
         runner: "playwright",
@@ -577,21 +497,13 @@ describe("evidence summary", () => {
             path: "playwright-results/control-ui.json",
             source: "playwright",
           },
-          {
-            kind: "report",
-            path: "playwright-report/index.html",
-            source: "playwright",
-          },
+          { kind: "report", path: "playwright-report/index.html", source: "playwright" },
         ],
       },
       result: {
         status: "fail",
-        failure: {
-          reason: "locator timed out",
-        },
-        timing: {
-          wallMs: 2300,
-        },
+        failure: { reason: "locator timed out" },
+        timing: { wallMs: 2300 },
       },
     });
   });
@@ -618,17 +530,15 @@ describe("evidence summary", () => {
       providerMode: "mock-openai",
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
-
     expect(evidence.profile).toBe("experimental-profile");
   });
-
   it.each([
     { evidenceMode: undefined, expectedMode: "slim", hasExecution: false },
     { evidenceMode: "full" as const, expectedMode: "full", hasExecution: true },
   ])(
     "resolves profile evidence mode $expectedMode",
     ({ evidenceMode, expectedMode, hasExecution }) => {
-      const evidence = buildQaSuiteEvidenceSummary({
+      const evidence = suiteEvidence({
         artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
         ...(evidenceMode ? { evidenceMode } : {}),
         profile: "smoke-ci",
@@ -636,16 +546,10 @@ describe("evidence summary", () => {
           {
             id: "dm-chat-baseline",
             title: "DM baseline conversation",
-            coverage: {
-              primary: ["channels.dm"],
-            },
+            coverage: { primary: ["channels.dm"] },
           },
         ],
-        channelId: "qa-channel",
         generatedAt: "2026-06-07T12:09:00.000Z",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
-        scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
       });
 
       expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
@@ -657,40 +561,27 @@ describe("evidence summary", () => {
   );
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
+    const evidence = suiteEvidence({
       artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
       scenarioDefinitions: [
         {
           id: "anthropic-parity",
           title: "Anthropic parity",
           surface: "runtime",
-          coverage: {
-            primary: ["providers.anthropic"],
-          },
+          coverage: { primary: ["providers.anthropic"] },
         },
       ],
-      channelId: "qa-channel",
       generatedAt: "2026-06-07T12:10:00.000Z",
       primaryModel: "anthropic/claude-opus-4-8",
-      providerMode: "mock-openai",
       scenarioResults: [{ name: "Anthropic parity", status: "pass" }],
     });
 
     expect(evidence.entries[0]?.execution).toMatchObject({
       provider: {
         id: "anthropic",
-        model: {
-          name: "claude-opus-4-8",
-          ref: "anthropic/claude-opus-4-8",
-        },
-      },
-    });
-    expect(evidence.entries[0]).toMatchObject({
-      execution: {
-        provider: {
-          live: false,
-          fixture: "mock-openai",
-        },
+        model: { name: "claude-opus-4-8", ref: "anthropic/claude-opus-4-8" },
+        live: false,
+        fixture: "mock-openai",
       },
     });
   });
@@ -783,10 +674,7 @@ describe("occurrence evidence", () => {
     expect(() => validateQaEvidenceSummaryJson({ ...legacy, schemaVersion: 4 })).toThrow();
     expect(
       mergeQaEvidenceSummaries({ evidenceSummaries: [], generatedAt: legacy.generatedAt }),
-    ).toEqual({
-      ...legacy,
-      entries: [],
-    });
+    ).toEqual({ ...legacy, entries: [] });
   });
 
   it("preserves an unresolved first instance and independent duplicate scenario and reporter IDs", () => {

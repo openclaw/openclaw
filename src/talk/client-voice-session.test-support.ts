@@ -5,7 +5,6 @@ type ClientVoiceSessionTestApi = {
   readRecord(agentId: string, voiceSessionId: string): ClientVoiceSessionRecord | undefined;
   digestDeliveryPolicy: {
     maxRetainedIntents: number;
-    maxRetainedIdentityBytes: number;
     maxConcurrentAttempts: number;
     maxAttemptFailures: number;
     attemptAbortAfterMs: number;
@@ -15,7 +14,6 @@ type ClientVoiceSessionTestApi = {
     active: number;
     pending: number;
     retained: number;
-    retainedIdentityBytes: number;
   };
   reset(): void;
 };

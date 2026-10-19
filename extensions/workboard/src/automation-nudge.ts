@@ -18,15 +18,11 @@ type WorkboardAutomationNudgeService = OpenClawPluginService & {
   nudge: (input: WorkboardAutomationNudgeInput) => Promise<void>;
 };
 
-type PendingBoardNudge = {
-  timer?: ReturnType<typeof setTimeout>;
-};
-
 type NudgeOwner = Pick<Parameters<OpenClawPluginService["start"]>[0], "logger" | "getCron">;
 
 type WorkboardAutomationNudgeState = {
   owner?: NudgeOwner;
-  pendingByBoard: Map<string, PendingBoardNudge>;
+  pendingByBoard: Map<string, ReturnType<typeof setTimeout> | undefined>;
 };
 
 const WORKBOARD_AUTOMATION_NUDGE_STATE_KEY = Symbol.for("openclaw.workboard.automationNudgeState");
@@ -34,9 +30,9 @@ const WORKBOARD_AUTOMATION_NUDGE_STATE_KEY = Symbol.for("openclaw.workboard.auto
 // Prepared model generations register fresh hook closures without starting their services.
 // Shared state lets those closures reach the active service owner and its debounce fence.
 function clearPendingBoardNudges(state: WorkboardAutomationNudgeState): void {
-  for (const pending of state.pendingByBoard.values()) {
-    if (pending.timer) {
-      clearTimeout(pending.timer);
+  for (const timer of state.pendingByBoard.values()) {
+    if (timer) {
+      clearTimeout(timer);
     }
   }
   state.pendingByBoard.clear();
@@ -45,7 +41,7 @@ function clearPendingBoardNudges(state: WorkboardAutomationNudgeState): void {
 function getWorkboardAutomationNudgeState(): WorkboardAutomationNudgeState {
   return resolveGlobalSingleton<WorkboardAutomationNudgeState>(
     WORKBOARD_AUTOMATION_NUDGE_STATE_KEY,
-    () => ({ pendingByBoard: new Map<string, PendingBoardNudge>() }),
+    () => ({ pendingByBoard: new Map() }),
     (state) => {
       state.owner = undefined;
       clearPendingBoardNudges(state);
@@ -76,11 +72,10 @@ export function createWorkboardAutomationNudgeService(params: {
       );
       return;
     }
-    const pending: PendingBoardNudge = {};
     const expiresAt = Date.now() + WORKBOARD_AUTOMATION_NUDGE_DEBOUNCE_MS;
     // The board entry owns both the in-flight request and its cooldown, so a
     // second lifecycle event can never overlap the first automation run request.
-    state.pendingByBoard.set(boardId, pending);
+    state.pendingByBoard.set(boardId, undefined);
     try {
       const enqueueRun = owner.getCron?.()?.enqueueRun;
       if (!enqueueRun) {
@@ -101,22 +96,15 @@ export function createWorkboardAutomationNudgeService(params: {
     } catch (error) {
       // The automation schedule is the backstop; a nudge failure must not alter
       // lifecycle synchronization or card state.
-      if (state.owner === owner) {
-        owner.logger.warn(
-          `workboard automation nudge failed for board ${boardId}: ${String(error)}`,
-        );
-      }
+      owner.logger.warn(`workboard automation nudge failed for board ${boardId}: ${String(error)}`);
     } finally {
-      if (state.owner === owner && state.pendingByBoard.get(boardId) === pending) {
-        pending.timer = setTimeout(
-          () => {
-            if (state.pendingByBoard.get(boardId) === pending) {
-              state.pendingByBoard.delete(boardId);
-            }
-          },
+      if (state.owner === owner) {
+        const timer = setTimeout(
+          () => state.pendingByBoard.delete(boardId),
           Math.max(0, expiresAt - Date.now()),
         );
-        pending.timer.unref?.();
+        timer.unref?.();
+        state.pendingByBoard.set(boardId, timer);
       }
     }
   };
@@ -156,9 +144,7 @@ export function createWorkboardAutomationNudgeService(params: {
           }),
         );
       } catch (error) {
-        if (state.owner === owner) {
-          owner.logger.warn(`workboard automation nudge failed: ${String(error)}`);
-        }
+        owner.logger.warn(`workboard automation nudge failed: ${String(error)}`);
       }
     },
   };

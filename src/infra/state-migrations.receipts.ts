@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -11,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 type MigrationReceiptDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -63,7 +63,7 @@ export function resolveLegacyMigrationSourceKey(
 }
 
 export function readLegacyMigrationReceiptFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourceKey: string,
 ): LegacyMigrationReceipt | null {
   const row = executeSqliteQueryTakeFirstSync(
@@ -90,34 +90,43 @@ export function readLegacyMigrationReceipt(
   return readLegacyMigrationReceiptFromDatabase(openOpenClawStateDatabase({ env }).db, sourceKey);
 }
 
-export function recordLegacyMigrationRun(database: DatabaseSync, run: LegacyMigrationRun): void {
+export function recordLegacyMigrationRun(
+  database: EngineConnection,
+  run: LegacyMigrationRun,
+): void {
+  const updates = () => ({
+    finished_at: run.finishedAt,
+    status: run.status,
+    report_json: run.reportJson,
+  });
   const query = getNodeSqliteKysely<MigrationReceiptDatabase>(database)
     .insertInto("migration_runs")
     .values({
       id: run.runId,
       started_at: run.startedAt,
-      finished_at: run.finishedAt,
-      status: run.status,
-      report_json: run.reportJson,
+      ...updates(),
     });
   executeSqliteQuerySync(
     database,
     run.upsert
-      ? query.onConflict((conflict) =>
-          conflict.column("id").doUpdateSet({
-            finished_at: run.finishedAt,
-            status: run.status,
-            report_json: run.reportJson,
-          }),
-        )
+      ? query.onConflict((conflict) => conflict.column("id").doUpdateSet(updates()))
       : query,
   );
 }
 
 export function recordLegacyMigrationSource(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: LegacyMigrationSource,
 ): void {
+  const updates = () => ({
+    source_sha256: source.sourceSha256,
+    source_size_bytes: source.sourceSizeBytes,
+    source_record_count: source.sourceRecordCount,
+    last_run_id: source.runId,
+    status: source.status,
+    imported_at: source.importedAt,
+    removed_source: 0,
+  });
   const query = getNodeSqliteKysely<MigrationReceiptDatabase>(database)
     .insertInto("migration_sources")
     .values({
@@ -125,13 +134,7 @@ export function recordLegacyMigrationSource(
       migration_kind: source.migrationKind,
       source_path: source.sourcePath,
       target_table: source.targetTable,
-      source_sha256: source.sourceSha256,
-      source_size_bytes: source.sourceSizeBytes,
-      source_record_count: source.sourceRecordCount,
-      last_run_id: source.runId,
-      status: source.status,
-      imported_at: source.importedAt,
-      removed_source: 0,
+      ...updates(),
       report_json: source.reportJson,
     });
   executeSqliteQuerySync(
@@ -139,13 +142,7 @@ export function recordLegacyMigrationSource(
     source.upsert
       ? query.onConflict((conflict) =>
           conflict.column("source_key").doUpdateSet({
-            source_sha256: source.sourceSha256,
-            source_size_bytes: source.sourceSizeBytes,
-            source_record_count: source.sourceRecordCount,
-            last_run_id: source.runId,
-            status: source.status,
-            imported_at: source.importedAt,
-            removed_source: 0,
+            ...updates(),
             ...(source.updateReportOnConflict === false ? {} : { report_json: source.reportJson }),
           }),
         )
@@ -155,7 +152,7 @@ export function recordLegacyMigrationSource(
 
 /** Insert run and source together inside the caller's existing synchronous transaction. */
 export function recordLegacyMigrationReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   receipt: Omit<LegacyMigrationSource, "status" | "importedAt" | "updateReportOnConflict"> & {
     now: number;
   },
@@ -175,20 +172,32 @@ export function recordLegacyMigrationReceipt(
   });
 }
 
+/** The caller owns the transaction and its live mutation admission. */
+export function markLegacyMigrationSourceRemovedInDatabase(
+  database: EngineConnection,
+  sourceKey: string,
+): void {
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
+      .updateTable("migration_sources")
+      .set({ removed_source: 1 })
+      .where("source_key", "=", sourceKey),
+  );
+}
+
 export function markLegacyMigrationSourceRemoved(
   sourceKey: string,
   env: NodeJS.ProcessEnv,
   operationLabel?: string,
+  assertCurrent?: () => void,
 ): void {
+  assertCurrent?.();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<MigrationReceiptDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
+      assertCurrent?.();
+      markLegacyMigrationSourceRemovedInDatabase(db, sourceKey);
+      assertCurrent?.();
     },
     { env },
     operationLabel ? { operationLabel } : {},

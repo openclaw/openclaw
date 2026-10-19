@@ -1,7 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isWithinDir, safeStatSync } from "@openclaw/fs-safe/path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
+import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  resolveSessionStoreTargets,
+} from "../config/sessions/targets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import { hasErrnoCode } from "./errno.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { readDirectoryEntriesSync } from "./path-existence.js";
 import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
 
 type SessionStorePathRelationship = "same" | "different" | "unknown";
@@ -116,4 +130,76 @@ export function resolveSessionStoreAliasPlan(
     hasFinalSymlink,
     hasUnresolvedIdentity,
   };
+}
+
+// Doctor migration must read legacy session stores even before a per-agent
+// SQLite DB exists; active runtime discovery remains SQLite-validated.
+export function resolveLegacyAcpMetadataSessionStoreTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Array<{ agentId: string; storePath: string }> {
+  const stateDir = resolveStateDir(env);
+  const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
+  const targets = new Map<string, { agentId: string; storePath: string }>();
+  const addTarget = (agentId: string, storePath: string) => {
+    if (storePath.endsWith(".sqlite") || !isManagedLegacySessionStorePathSafe(storePath)) {
+      return;
+    }
+    const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
+    if (agentsDir) {
+      agentsDirs.add(agentsDir);
+    }
+    if (!targets.has(storePath)) {
+      targets.set(storePath, { agentId, storePath });
+    }
+  };
+
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+    addTarget(target.agentId, target.storePath);
+  }
+  for (const target of resolveSessionStoreTargets(cfg, { allAgents: true }, { env })) {
+    addTarget(target.agentId, target.storePath);
+  }
+
+  for (const agentsDir of agentsDirs) {
+    if (!safeStatSync(agentsDir)?.isDirectory()) {
+      continue;
+    }
+    for (const entry of readDirectoryEntriesSync(agentsDir)) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const agentId = normalizeAgentId(entry.name);
+      const normalizedDirName = normalizeLowercaseStringOrEmpty(entry.name);
+      if (agentId === DEFAULT_AGENT_ID && normalizedDirName !== agentId) {
+        continue;
+      }
+      addTarget(agentId, path.join(agentsDir, entry.name, "sessions", "sessions.json"));
+    }
+  }
+  return [...targets.values()];
+}
+
+function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
+  const resolvedStorePath = path.resolve(storePath);
+  const agentsDir = resolveAgentsDirFromSessionStorePath(resolvedStorePath);
+  if (!agentsDir) {
+    return true;
+  }
+  if (!safeStatSync(resolvedStorePath)?.isFile()) {
+    return true;
+  }
+
+  try {
+    const stat = fs.lstatSync(resolvedStorePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return false;
+    }
+    const resolvedAgentsDir = path.resolve(agentsDir);
+    const realStorePath = fs.realpathSync.native(resolvedStorePath);
+    const realAgentsDir = fs.realpathSync.native(resolvedAgentsDir);
+    return isWithinDir(realAgentsDir, realStorePath);
+  } catch {
+    return false;
+  }
 }

@@ -1,114 +1,319 @@
-import { performance } from "node:perf_hooks";
+import path from "node:path";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  createOpenClawAgentDatabaseClaim,
-  isOpenClawAgentDatabasePathCurrent,
-  readOpenClawAgentDatabaseIdentity,
-  type OpenClawAgentDatabaseClaim,
-} from "../../state/openclaw-agent-db-identity.js";
-import {
-  borrowOpenClawAgentDatabase,
-  getOpenClawAgentDatabaseIfOpen,
-  isIncognitoOpenClawAgentSqlitePath,
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
-} from "../../state/openclaw-agent-db.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import type {
+  ActorSessionAdmissionClaim,
+  SessionAdmissionDatabaseClaim,
+} from "./session-admission-claim.types.js";
+import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
+import {
+  readRetainedSessionEntryFacts,
+  retainSessionEntryReadFacts,
+} from "./session-entry-read-facts.js";
+import { createAdmittedSessionEntryCohortReader } from "./session-entry-read-ordered.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+export type { SessionAdmissionDatabaseClaim } from "./session-admission-claim.types.js";
+
+type SessionAdmissionEntryIdentity = SessionAdmissionTransition["current"];
 
 /** Admission retains the exact owner that supplied its row across asynchronous policy work. */
 export async function loadSessionEntryForAdmission(
-  scope: SessionAccessScope,
+  input: SessionAccessScope,
   preparation: {
     signal?: AbortSignal;
-    deadlineMs?: number;
     assertCurrent?: () => void;
-    onWait?: () => void;
+    onRegistryChange?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   } = {},
-): Promise<{ entry: SessionEntry | undefined; databaseClaim: OpenClawAgentDatabaseClaim }> {
-  const resolved = resolveSqliteScope(scope);
-  const options = toDatabaseOptions(resolved);
-  options.env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
-  const databasePath = resolveOpenClawAgentSqlitePath(options);
-  options.path = databasePath;
-  const incognito = isIncognitoOpenClawAgentSqlitePath(databasePath, options);
+): Promise<{ entry: SessionEntry | undefined; databaseClaim: SessionAdmissionDatabaseClaim }> {
   const assertCurrent = () => {
     preparation.signal?.throwIfAborted();
     preparation.assertCurrent?.();
   };
   assertCurrent();
-  const capture = () => {
-    assertCurrent();
-    const database = openOpenClawAgentDatabase(options);
-    const borrowed = borrowOpenClawAgentDatabase(options);
-    return {
-      database,
-      databaseClaim: createOpenClawAgentDatabaseClaim(database, borrowed.release),
-    };
-  };
-  let captured: ReturnType<typeof capture>;
-  if (getOpenClawAgentDatabaseIfOpen(options) || incognito) {
-    captured = capture();
-  } else {
-    // Native bootstrap claims a shared-state lease before opening the agent file.
-    // Only its custody acquisition repeats; the open and physical claim run once.
-    const identity = readDatabasePathIdentitySync(databasePath);
-    const assertOpening = () => {
-      // Shared bootstrap owns only this physical file; each caller guards its own result.
-      const current = readDatabasePathIdentitySync(databasePath);
-      if (
-        identity.key.startsWith("file:")
-          ? current.key !== identity.key
-          : current.canonicalPath !== identity.canonicalPath
-      ) {
-        throw new Error("Session database changed while waiting for admission");
-      }
-    };
-    captured = await withOpenClawAgentDatabaseAsync(options, capture, assertOpening, {
-      deadlineMs: preparation.deadlineMs ?? performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      signal: preparation.signal,
-      onWait: preparation.onWait,
-    });
-  }
-  const { database, databaseClaim } = captured;
-  try {
-    if (incognito) {
-      return { entry: readSessionEntryRow(database, resolved.sessionKey)?.entry, databaseClaim };
-    }
-    const { withSessionHistoryWorkerDatabase } =
-      await import("./session-transcript-worker-runtime.js");
-    assertCurrent();
-    const result = await withSessionHistoryWorkerDatabase(options, (owner) => {
-      assertCurrent();
-      return owner.readExactEntries(
-        {
-          sessionKeys: [resolved.sessionKey],
-          env: options.env!,
-          includeAuthorization: true,
+  const captured = captureSessionActorStorageOwner(input, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (captured) {
+    // Admission selects a namespace, but does not create a session entry.
+    const owner = captured.owner ?? memorySessionActorOwners.get(captured);
+    const sessionKey = resolveSqliteSessionKey(input.sessionKey, captured.agentId);
+    const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
+    env.OPENCLAW_STATE_DIR = path.resolve(captured.path, "../../../..");
+    const createClaim = (): ActorSessionAdmissionClaim => {
+      let released = false;
+      const assertClaimCurrent = () => {
+        if (released) {
+          throw new Error("Memory session admission claim is released");
+        }
+        owner.assertCurrent();
+      };
+      return {
+        kind: "memory",
+        identity: owner.identity.handle,
+        incarnation: owner.identity.incarnation,
+        target: {
+          agentId: captured.agentId,
+          env,
+          storePath: captured.path,
+          readSource: {
+            agentId: captured.agentId,
+            path: captured.path,
+            databaseIdentity: owner.identity.incarnation,
+          },
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
         },
-        preparation.signal,
-      );
-    });
-    assertCurrent();
-    databaseClaim.assertCurrent();
-    const physical = readOpenClawAgentDatabaseIdentity(database);
-    if (
-      result.databaseIdentity?.identity !== physical.identity ||
-      result.databaseIdentity.birthtime !== physical.birthtime ||
-      !isOpenClawAgentDatabasePathCurrent(database)
-    ) {
-      throw new Error("Session database changed during admission read");
+        acquireSessionActor(lifetime) {
+          assertClaimCurrent();
+          return owner.acquire({ database: owner.identity, sessionKey }, lifetime);
+        },
+        assertCurrent: assertClaimCurrent,
+        isCurrent() {
+          try {
+            assertClaimCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        async release() {
+          released = true;
+        },
+        async afterTransition(_transition, assertOwnerCurrent) {
+          assertClaimCurrent();
+          assertOwnerCurrent();
+          return createClaim();
+        },
+      };
+    };
+    return {
+      entry: owner.readSession(sessionKey, captured.authority)?.entry,
+      databaseClaim: createClaim(),
+    };
+  }
+  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const scope = { ...input, env };
+  const agentId = scope.agentId
+    ? normalizeAgentId(scope.agentId)
+    : parseAgentSessionKey(scope.sessionKey)?.agentId;
+  let storePath: string;
+  if (scope.storePath) {
+    storePath = path.resolve(scope.storePath);
+  } else {
+    if (!agentId) {
+      throw new Error("Cannot resolve SQLite session scope without an agent id");
     }
-    return { entry: result.entries[0]?.entry, databaseClaim };
+    storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+  }
+  const candidates = captureSessionStoreReadCandidates(storePath);
+  let claim: ActorSessionAdmissionClaim | undefined;
+  try {
+    const result = await withSessionStoreTarget(
+      { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
+      async (target, owner) => {
+        const options = { ...target.database, path: target.sourcePath, env };
+        const observed = readDatabasePathIdentitySync(options.path);
+        return await runOpenClawAgentWorkerWrite(
+          options,
+          async () => {
+            // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
+            const execution = captureOpenClawAgentDatabaseExecution(
+              options,
+              observed.key.startsWith("file:")
+                ? {
+                    expectedIdentity: {
+                      kind: "file",
+                      physicalIdentity: observed.key.slice("file:".length),
+                      nativeLocation: observed.canonicalPath,
+                      birthtime: observed.birthtime,
+                    },
+                  }
+                : { expectedCreationIdentity: observed },
+            );
+            const assertSourceCurrent = () => {
+              assertCurrent();
+              execution.assertCurrent();
+              owner.assertCurrent();
+            };
+            const source: AgentDatabaseRequestExecutionSource = {
+              ...createSessionWorkerExecutionSource(
+                assertSourceCurrent,
+                "Session admission authority expired",
+              ),
+              onRegistryChange(change) {
+                owner.onRegistryChange(change);
+                preparation.onRegistryChange?.(change);
+              },
+            };
+            let transferred = false;
+            try {
+              await owner.refreshBeforeDispatch(() => execution.assertCurrent());
+              assertSourceCurrent();
+              await execution.prepare(source, preparation.signal);
+              const sessionKey = resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId);
+              assertSourceCurrent();
+              const nativeOwner = execution.captureGenerationClaim();
+              const request = { sessionKeys: [sessionKey] };
+              const before = readSqliteDatabaseWriteTokenForPath(options.path);
+              const cached = readRetainedSessionEntryFacts(options, request, nativeOwner);
+              const initial =
+                cached ??
+                (await execution.runExisting(source, (worker) =>
+                  worker.execute(
+                    {
+                      type: "session.entry.read",
+                      input: request,
+                    },
+                    { signal: preparation.signal },
+                  ),
+                ));
+              await owner.revalidateTarget();
+              assertSourceCurrent();
+              nativeOwner.assertCurrent();
+              if (!initial) {
+                throw new Error("Session admission lost its selected database");
+              }
+              if (!cached) {
+                retainSessionEntryReadFacts(options, request, initial, before);
+              }
+              const entry = initial.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+              const nativeIncarnation = nativeOwner.incarnation;
+              const createClaim = (
+                borrowed: OpenClawAgentDatabaseExecution,
+                admittedEntry: SessionAdmissionEntryIdentity | undefined,
+              ): ActorSessionAdmissionClaim => {
+                const generation = borrowed.captureGenerationClaim();
+                const identity = borrowed.fileIdentity;
+                if (!identity) {
+                  throw new Error("Session admission requires its captured physical identity");
+                }
+                const admitted = admittedEntry && {
+                  sessionId: admittedEntry.sessionId,
+                  lifecycleRevision: admittedEntry.lifecycleRevision,
+                };
+                return {
+                  kind: "worker",
+                  identity: generation.identity,
+                  incarnation: generation.incarnation,
+                  target: {
+                    agentId: target.logicalAgentId,
+                    env,
+                    storePath: options.path,
+                    readSource: {
+                      agentId: borrowed.agentId,
+                      path: options.path,
+                      databaseIdentity: identity.physicalIdentity,
+                      databaseBirthtime: identity.birthtime,
+                    },
+                    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+                  },
+                  async acquireSessionActor(lifetime) {
+                    borrowed.assertCurrent();
+                    generation.assertCurrent();
+                    lifetime.assertCurrent();
+                    const { captureDurableSessionActor } =
+                      await import("./session-actor-durable.js");
+                    borrowed.assertCurrent();
+                    generation.assertCurrent();
+                    lifetime.assertCurrent();
+                    return captureDurableSessionActor({
+                      database: { ...options, path: borrowed.path },
+                      target: { database: identity, sessionKey },
+                      lifetime,
+                    });
+                  },
+                  reader: admitted
+                    ? createAdmittedSessionEntryCohortReader({
+                        execution: borrowed,
+                        generation,
+                        database: { ...target.database, env },
+                        sessionKey,
+                        logicalAgentId: target.logicalAgentId,
+                        storePaths: [storePath, target.sourcePath],
+                        expected: {
+                          incarnation: nativeIncarnation,
+                          sessions: [{ sessionKey, ...admitted }],
+                        },
+                      })
+                    : undefined,
+                  assertCurrent: () => generation.assertCurrent(),
+                  isCurrent() {
+                    try {
+                      generation.assertCurrent();
+                      return true;
+                    } catch {
+                      return false;
+                    }
+                  },
+                  release: () => borrowed.release(),
+                  async afterTransition({ previous, current }, assertOwnerCurrent) {
+                    generation.assertCurrent();
+                    assertOwnerCurrent();
+                    if (
+                      previous?.sessionId !== admitted?.sessionId ||
+                      previous?.lifecycleRevision !== admitted?.lifecycleRevision
+                    ) {
+                      throw new Error("Session transition changed its admitted predecessor");
+                    }
+                    const expectedIdentity = borrowed.fileIdentity;
+                    if (!expectedIdentity) {
+                      throw new Error("Session transition lost its admitted physical identity");
+                    }
+                    const successor = captureOpenClawAgentDatabaseExecution(
+                      { ...options, path: borrowed.path },
+                      { expectedIdentity, requestedPath: storePath },
+                    );
+                    try {
+                      generation.assertCurrent();
+                      assertOwnerCurrent();
+                      return createClaim(successor, {
+                        sessionId: current.sessionId,
+                        lifecycleRevision: current.lifecycleRevision,
+                      });
+                    } catch (error) {
+                      await successor.release();
+                      throw error;
+                    }
+                  },
+                };
+              };
+              claim = createClaim(execution, entry);
+              transferred = true;
+              return { entry, databaseClaim: claim };
+            } finally {
+              if (!transferred) {
+                await execution.release();
+              }
+            }
+          },
+          undefined,
+          preparation.signal,
+        );
+      },
+      assertCurrent,
+    );
+    assertCurrent();
+    result.databaseClaim.assertCurrent();
+    return result;
   } catch (error) {
-    databaseClaim.release();
+    await claim?.release();
     throw error;
   }
 }

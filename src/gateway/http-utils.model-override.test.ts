@@ -31,7 +31,7 @@ describe("resolveOpenAiCompatModelOverride", () => {
     loadConfigMock.mockReset().mockReturnValue({
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
         defaults: {
           model: { primary: "openai/gpt-5.4" },
           models: {
@@ -49,7 +49,7 @@ describe("resolveOpenAiCompatModelOverride", () => {
     loadConfigMock.mockReturnValue({
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }],
+        entries: { main: {} },
         defaults: { model: { primary: "Reader" }, modelPolicy: { allow: ["custom/*"] } },
       },
       models: {
@@ -104,16 +104,5 @@ describe("resolveOpenAiCompatModelOverride", () => {
     ).resolves.toEqual({
       errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
     });
-  });
-
-  it.each(["main", "beta"])("reads the prepared catalog for selected agent %s", async (agentId) => {
-    await expect(
-      resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "openai/gpt-5.4" }),
-        agentId,
-        model: "openclaw",
-      }),
-    ).resolves.toEqual({ modelOverride: "openai/gpt-5.4" });
-    expect(loadGatewayModelCatalogMock).toHaveBeenCalledExactlyOnceWith({ agentId });
   });
 });

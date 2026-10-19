@@ -70,6 +70,9 @@ export function snapshotNodeWorkerEnv(
     if (windows) {
       snapshot.USERPROFILE = homeDir;
     }
+    if (process.platform === "linux") {
+      snapshot.PATH = path.join(homeDir, ".local", "bin") + path.delimiter + (snapshot.PATH ?? "");
+    }
   }
   const hostCacheFenced =
     source.NODE_DISABLE_COMPILE_CACHE !== undefined &&

@@ -5,20 +5,11 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider } from "./index.js";
 
-const QA_LIVE_ENV_ALIASES = Object.freeze([
-  {
-    liveVar: "OPENCLAW_LIVE_OPENAI_KEY",
-    providerVar: "OPENAI_API_KEY",
-  },
-  {
-    liveVar: "OPENCLAW_LIVE_ANTHROPIC_KEY",
-    providerVar: "ANTHROPIC_API_KEY",
-  },
-  {
-    liveVar: "OPENCLAW_LIVE_GEMINI_KEY",
-    providerVar: "GEMINI_API_KEY",
-  },
-]);
+const QA_LIVE_ENV_ALIASES = {
+  OPENCLAW_LIVE_OPENAI_KEY: "OPENAI_API_KEY",
+  OPENCLAW_LIVE_ANTHROPIC_KEY: "ANTHROPIC_API_KEY",
+  OPENCLAW_LIVE_GEMINI_KEY: "GEMINI_API_KEY",
+} as const;
 
 export const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
 const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
@@ -52,14 +43,14 @@ export const QA_PROVIDER_SECRET_ENV_KEY_PATTERNS = Object.freeze([
   /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS?$/u,
 ]);
 
-const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
+const QA_MOCK_BLOCKED_ENV_VARS: readonly string[] = [
   ...QA_PROVIDER_SECRET_ENV_VARS,
   "AWS_REGION",
   "OPENAI_BASE_URL",
   "CODEX_HOME",
-]);
+];
 
-const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
+const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS: readonly RegExp[] = [
   /^DISCORD_/i,
   ...QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
   /^TELEGRAM_/i,
@@ -72,9 +63,9 @@ const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
   /^TWILIO_/i,
   /^PLIVO_/i,
   /^NGROK_/i,
-]);
+];
 
-const QA_LIVE_ALLOWED_ENV_VARS = Object.freeze([
+const QA_LIVE_ALLOWED_ENV_VARS: ReadonlySet<string> = new Set([
   ...QA_PROVIDER_SECRET_ENV_VARS,
   "AWS_REGION",
   "OPENAI_BASE_URL",
@@ -82,12 +73,12 @@ const QA_LIVE_ALLOWED_ENV_VARS = Object.freeze([
   "OPENCLAW_CONFIG_PATH",
 ]);
 
-const QA_LIVE_ALLOWED_ENV_PATTERNS = Object.freeze([
+const QA_LIVE_ALLOWED_ENV_PATTERNS: readonly RegExp[] = [
   /^[A-Z0-9_]+_API_KEYS$/u,
   /^[A-Z0-9_]+_API_KEY_[0-9]+$/u,
   /^OPENCLAW_LIVE_[A-Z0-9_]+_KEY$/u,
   /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS$/u,
-]);
+];
 
 function resolveUserPath(value: string, env: NodeJS.ProcessEnv = process.env) {
   if (value === "~") {
@@ -100,7 +91,7 @@ function resolveUserPath(value: string, env: NodeJS.ProcessEnv = process.env) {
 }
 
 function applyLiveProviderEnvAliases(env: NodeJS.ProcessEnv | Record<string, string>) {
-  for (const { liveVar, providerVar } of QA_LIVE_ENV_ALIASES) {
+  for (const [liveVar, providerVar] of Object.entries(QA_LIVE_ENV_ALIASES)) {
     const liveValue = env[liveVar]?.trim();
     if (!liveValue || env[providerVar]?.trim()) {
       continue;
@@ -124,13 +115,9 @@ function parsePreservedCliEnv(baseEnv: NodeJS.ProcessEnv) {
   return (raw ?? "").split(/[,\s]+/).filter((entry) => entry.length > 0);
 }
 
-function renderPreservedCliEnv(values: string[]) {
-  return JSON.stringify(uniqueStrings(values));
-}
-
 export function normalizeQaProviderModeEnv(env: NodeJS.ProcessEnv, providerMode?: QaProviderMode) {
   const provider = providerMode ? getQaProvider(providerMode) : null;
-  if (provider?.scrubsLiveProviderEnv) {
+  if (provider?.kind === "mock") {
     for (const key of QA_MOCK_BLOCKED_ENV_VARS) {
       delete env[key];
     }
@@ -142,7 +129,7 @@ export function normalizeQaProviderModeEnv(env: NodeJS.ProcessEnv, providerMode?
     return env;
   }
 
-  if (provider?.appliesLiveEnvAliases) {
+  if (provider?.kind === "live") {
     applyLiveProviderEnvAliases(env);
   }
 
@@ -165,41 +152,28 @@ export function resolveQaLiveCliAuthEnv(
       "Claude CLI API-key QA mode requires ANTHROPIC_API_KEY or OPENCLAW_LIVE_ANTHROPIC_KEY",
     );
   }
-  const preserveEnvValues = (() => {
-    if (!opts?.forwardHostHomeForClaudeCli) {
-      return undefined;
-    }
+  const claudeCliEnv: Record<string, string> = {};
+  if (opts?.forwardHostHomeForClaudeCli) {
     const values = parsePreservedCliEnv(baseEnv).filter((entry) => entry !== "ANTHROPIC_API_KEY");
     if (authMode === "api-key" || (authMode === "auto" && hasAnthropicKey)) {
       values.push("ANTHROPIC_API_KEY");
     }
-    return renderPreservedCliEnv(values);
-  })();
-  const claudeCliEnv = opts?.forwardHostHomeForClaudeCli
-    ? {
-        [QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV]: authMode,
-        ...(preserveEnvValues ? { [QA_LIVE_CLI_BACKEND_PRESERVE_ENV]: preserveEnvValues } : {}),
-      }
-    : {};
-  const configuredCodexHome = baseEnv.CODEX_HOME?.trim();
-  if (configuredCodexHome) {
-    return {
-      CODEX_HOME: configuredCodexHome,
-      ...claudeCliEnv,
-      ...(opts?.forwardHostHomeForClaudeCli && baseEnv.HOME?.trim()
-        ? { HOME: baseEnv.HOME.trim() }
-        : {}),
-    };
+    claudeCliEnv[QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV] = authMode;
+    claudeCliEnv[QA_LIVE_CLI_BACKEND_PRESERVE_ENV] = JSON.stringify(uniqueStrings(values));
   }
+  const configuredCodexHome = baseEnv.CODEX_HOME?.trim();
   const hostHome = baseEnv.HOME?.trim();
-  if (!hostHome) {
+  if (!configuredCodexHome && !hostHome) {
     return {};
   }
-  const codexHome = path.join(hostHome, ".codex");
+  const defaultCodexHome = hostHome && path.join(hostHome, ".codex");
+  const codexHome =
+    configuredCodexHome ||
+    (defaultCodexHome && existsSync(defaultCodexHome) ? defaultCodexHome : undefined);
   return {
-    ...(existsSync(codexHome) ? { CODEX_HOME: codexHome } : {}),
+    ...(codexHome ? { CODEX_HOME: codexHome } : {}),
     ...claudeCliEnv,
-    ...(opts?.forwardHostHomeForClaudeCli ? { HOME: hostHome } : {}),
+    ...(opts?.forwardHostHomeForClaudeCli && hostHome ? { HOME: hostHome } : {}),
   };
 }
 
@@ -215,7 +189,7 @@ export function resolveQaForwardedLiveEnv(baseEnv: NodeJS.ProcessEnv = process.e
   const forwarded: Record<string, string> = {};
   for (const [key, rawValue] of Object.entries(baseEnv)) {
     if (
-      !QA_LIVE_ALLOWED_ENV_VARS.includes(key) &&
+      !QA_LIVE_ALLOWED_ENV_VARS.has(key) &&
       !QA_LIVE_ALLOWED_ENV_PATTERNS.some((pattern) => pattern.test(key))
     ) {
       continue;

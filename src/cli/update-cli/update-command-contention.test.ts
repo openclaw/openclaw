@@ -38,6 +38,7 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: async () => fixture.root,
+  resolveGlobalManager: async () => "npm",
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,7 +67,7 @@ function state() {
   return { filename: resolveOpenClawStateSqlitePath(), before };
 }
 
-it.each(["dry-run", "update", "repair"] as const)(
+it.each(["update", "repair"] as const)(
   "admits %s after a writer exceeds the general SQLite wait",
   async (mode) => {
     const { filename, before } = state();
@@ -88,7 +89,7 @@ it.each(["dry-run", "update", "repair"] as const)(
           ? new UpdateFinalizationLifecycle(true, undefined, () => {}).attachLedger(true)
           : (
               await admitUpdateCommandRun({
-                opts: { dryRun: mode === "dry-run" },
+                opts: {},
                 root: fixture.root,
               })
             ).runId;

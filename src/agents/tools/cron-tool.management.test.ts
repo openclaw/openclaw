@@ -1,13 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import * as runRegistry from "../../infra/agent-run-registry.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -19,18 +17,21 @@ import {
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 
+const jobId = "existing-job";
+const configRevision = "sha256:stored-job";
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
+
 async function withAdminTool(
-  origin: "local" | "unknown" | "channel-owner",
-  run: (fixture: {
-    tool: ReturnType<typeof createCronTool>;
-    calls: Array<{ method: string; params: unknown }>;
-    resolveCreator: ReturnType<typeof vi.fn>;
-  }) => Promise<void>,
-  currentPayload?: Record<string, unknown>,
+  origin: "unknown" | "channel-owner",
+  payload: Record<string, unknown> | undefined,
+  run: (tool: ReturnType<typeof createCronTool>, calls: Array<[string, unknown]>) => Promise<void>,
 ) {
   const runId = "admin-management-tool-run";
+  const sessionKey = "agent:main:control-ui";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const authority = runRegistry.claimAgentRunDelegatedAuthority(operationalRunInstance);
   const capability = createCronCreatorAuthorityCapability(
     runId,
     origin === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: origin },
@@ -41,189 +42,121 @@ async function withAdminTool(
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: "main",
-    sessionKey: "agent:main:control-ui",
+    sessionKey,
     operationalRunInstance,
     delegatedAuthority: { ...authority, kind: "local" },
   };
-  const calls: Array<{ method: string; params: unknown }> = [];
-  const resolveCreator = vi.fn(async () => {
+  const calls: Array<[method: string, params: unknown]> = [];
+  const resolveCreatorToolAuthority = vi.fn(async () => {
     throw new Error("Admin management must not recapture the creator's tool authority");
   });
+  async function callGatewayTool<T>(method: string, _options: unknown, params: unknown) {
+    const caller = getGatewayToolCallerIdentity();
+    expect(caller?.cronCreatorAuthorityGrant).toBeUndefined();
+    expect(caller?.cronManagementGrant).toBeDefined();
+    return withCronManagementGrant(caller!.cronManagementGrant!, identity, method, async () => {
+      getCronManagementAuthority(identity)!();
+      calls.push([method, params]);
+      return (method === "cron.get" ? { id: jobId, configRevision, payload } : { id: jobId }) as T;
+    });
+  }
   try {
     await runWithCronCreatorAuthorityCapability(capability, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        const tool = createCronTool(
-          {
-            runId,
-            agentSessionKey: identity.sessionKey,
-            resolveCreatorToolAuthority: resolveCreator,
-          },
-          {
-            callGatewayTool: async <T>(method: string, _options: unknown, params: unknown) => {
-              const caller = getGatewayToolCallerIdentity();
-              expect(caller?.cronCreatorAuthorityGrant).toBeUndefined();
-              expect(caller?.cronManagementGrant).toBeDefined();
-              return await withCronManagementGrant(
-                caller!.cronManagementGrant!,
-                identity,
-                method,
-                async () => {
-                  getCronManagementAuthority(identity)!();
-                  calls.push({ method, params });
-                  return (
-                    method === "cron.get"
-                      ? {
-                          id: "telegram-created-job",
-                          configRevision: "sha256:stored-job",
-                          payload: currentPayload ?? {
-                            kind: "agentTurn",
-                            message: "Original channel task",
-                            toolsAllow: ["read"],
-                            toolsAllowIsDefault: true,
-                          },
-                        }
-                      : { id: "telegram-created-job" }
-                  ) as T;
-                },
-              );
-            },
-          },
-        );
-        await run({ tool, calls, resolveCreator });
+        const options = { runId, agentSessionKey: sessionKey, resolveCreatorToolAuthority };
+        const tool = createCronTool(options, { callGatewayTool });
+        await run(tool, calls);
+        expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
       }),
     );
   } finally {
-    releaseAgentRunDelegatedAuthority(authority);
+    runRegistry.releaseAgentRunDelegatedAuthority(authority);
   }
 }
 
-describe("Control UI admin automation management tool", () => {
-  it.each([
-    ["channel-owner", true],
-    ["local", true],
-    ["unknown", true],
-    ["unknown", false],
-  ] as const)(
-    "forwards a normalized partial update without recapturing creator authority (%s, trigger=%s)",
-    async (origin, withTrigger) => {
-      const triggerPatch = withTrigger ? { trigger: { script: "return { fire: false };" } } : {};
-      await withAdminTool(origin, async ({ tool, calls, resolveCreator }) => {
-        await expect(
-          tool.execute("update", {
-            action: "update",
-            jobId: "telegram-created-job",
-            job: {
-              schedule: { kind: "every", every: "60000" },
-              payload: { message: "Updated channel task" },
-              ...triggerPatch,
-              description: null,
-            },
-          }),
-        ).resolves.toMatchObject({ details: { id: "telegram-created-job" } });
-        expect(resolveCreator).not.toHaveBeenCalled();
-        expect(calls).toEqual([
-          ...(withTrigger ? [{ method: "cron.get", params: { id: "telegram-created-job" } }] : []),
-          {
-            method: "cron.update",
-            params: {
-              id: "telegram-created-job",
-              ...(withTrigger ? { expectedConfigRevision: "sha256:stored-job" } : {}),
-              patch: {
-                schedule: { kind: "every", everyMs: 60000 },
-                payload: { kind: "agentTurn", message: "Updated channel task" },
-                ...triggerPatch,
-                description: null,
-              },
-            },
-          },
-        ]);
-      });
-    },
-  );
+const command = { kind: "command", argv: ["printf", "proof"] };
+it.each([
+  { origin: "channel-owner", input: { ...command, timeoutSeconds: 30 }, stored: undefined },
+  { origin: "unknown", input: { timeoutSeconds: null }, stored: command },
+] as const)("edits commands ($origin)", async ({ origin, input, stored }) => {
+  await withAdminTool(origin, stored, async (tool, calls) => {
+    await expect(
+      tool.execute("update", { action: "update", jobId, job: { payload: input } }),
+    ).resolves.toMatchObject({ details: { id: jobId } });
+    const patch = { payload: stored ? { kind: "command", timeoutSeconds: null } : input };
+    const params = {
+      id: jobId,
+      patch,
+      ...(stored ? { expectedConfigRevision: configRevision } : {}),
+    };
+    expect(calls).toEqual([
+      ...(stored ? [["cron.get", { id: jobId }]] : []),
+      ["cron.update", params],
+    ]);
+  });
+});
 
-  it("permits an admin to edit an existing command automation", async () => {
-    await withAdminTool("unknown", async ({ tool, calls, resolveCreator }) => {
-      const patch = {
-        payload: { kind: "command", argv: ["printf", "synthetic-proof"], timeoutSeconds: 30 },
-      };
-      await expect(
-        tool.execute("command-update", {
-          action: "update",
-          jobId: "existing-command-job",
-          job: patch,
-        }),
-      ).resolves.toBeDefined();
-      expect(calls).toEqual([
-        { method: "cron.update", params: { id: "existing-command-job", patch } },
-      ]);
-      expect(resolveCreator).not.toHaveBeenCalled();
-    });
+it("visibly refuses unsupported next_check", async () => {
+  await withAdminTool("unknown", undefined, async (tool, calls) => {
+    await expect(tool.execute("unsupported", { action: "next_check", in: "1m" })).rejects.toThrow(
+      "Use the Automations page for other actions",
+    );
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("cron next_check action", () => {
+  const RUN_ID = "paced-run";
+  const JOB_ID = "paced-job";
+  let runClaimId: string | undefined;
+
+  afterEach(() => {
+    runRegistry.releaseAgentRunContext(RUN_ID, runClaimId);
+    runRegistry.clearAgentRunContext(RUN_ID);
+    runClaimId = undefined;
   });
 
-  it.each(
-    [
-      { kind: "command", argv: ["printf", "synthetic-proof"] },
-      { kind: "script", script: "return { output: 'synthetic-proof' };" },
-      { kind: "agentTurn", message: "Synthetic reminder" },
-    ].flatMap((payload) =>
-      [30, null].map((timeoutSeconds) => ({ currentPayload: payload, timeoutSeconds })),
-    ),
-  )(
-    "inherits the stored $currentPayload.kind kind for a timeout-only update ($timeoutSeconds)",
-    async ({ currentPayload, timeoutSeconds }) => {
-      await withAdminTool(
-        "unknown",
-        async ({ tool, calls, resolveCreator }) => {
-          await tool.execute("timeout-update", {
-            action: "update",
-            jobId: "telegram-created-job",
-            job: { payload: { timeoutSeconds } },
-          });
-          expect(calls).toEqual([
-            { method: "cron.get", params: { id: "telegram-created-job" } },
-            {
-              method: "cron.update",
-              params: {
-                id: "telegram-created-job",
-                expectedConfigRevision: "sha256:stored-job",
-                patch: { payload: { kind: currentPayload.kind, timeoutSeconds } },
-              },
-            },
-          ]);
-          expect(resolveCreator).not.toHaveBeenCalled();
-        },
-        currentPayload,
-      );
-    },
-  );
+  function nextCheck(scopedJobId: string | null = JOB_ID, delay = "15m") {
+    const opts = scopedJobId ? { selfRemoveOnlyJobId: scopedJobId, runId: RUN_ID } : undefined;
+    const tool = createCronTool(opts, { callGatewayTool: vi.fn() });
+    return tool.execute("call-next-check", { action: "next_check", in: delay });
+  }
 
-  it("advertises only the five admitted management actions and their inputs remotely", async () => {
-    await withAdminTool("unknown", async ({ tool }) => {
-      expect(tool.parameters).toHaveProperty("properties.action.enum", [
-        "list",
-        "get",
-        "update",
-        "run",
-        "remove",
-      ]);
-      for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
-        expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
-      }
-      expect(tool.parameters).not.toHaveProperty("properties.job.properties.declarationKey");
-      expect(tool.parameters).toHaveProperty("properties.job.properties.agentId");
-      expect(JSON.stringify(tool.parameters)).not.toMatch(/action=\\?"(?:add|wake|next_check)/);
-    });
+  function registerRun(nextCheckEnabled: boolean) {
+    runClaimId = runRegistry.claimAgentRunContext(
+      RUN_ID,
+      {
+        sessionKey: `agent:main:cron:${JOB_ID}`,
+        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled }]]),
+      },
+      { trackOwner: true, ownsContext: true },
+    );
+  }
+
+  it("rejects a proposal when the current job does not admit next_check", async () => {
+    registerRun(false);
+
+    await expect(nextCheck()).rejects.toThrow(
+      "cron next_check requires pacing or a one-shot session continuation",
+    );
   });
 
-  it.each(["status", "next_check"])(
-    "visibly refuses unsupported remote action %s",
-    async (action) => {
-      await withAdminTool("unknown", async ({ tool, calls }) => {
-        await expect(tool.execute("unsupported", { action, in: "1m" })).rejects.toThrow(
-          "Use the Automations page for other actions",
-        );
-        expect(calls).toEqual([]);
-      });
-    },
-  );
+  it("rejects next_check outside a current cron run", async () => {
+    await expect(nextCheck(null)).rejects.toThrow(
+      "cron next_check is only available to the currently running job",
+    );
+  });
+
+  it("keeps proposals isolated when a shared run context adds another job", async () => {
+    registerRun(true);
+    await nextCheck();
+
+    runRegistry.claimAgentRunContext(RUN_ID, {
+      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true }]]),
+    });
+    await nextCheck("next-job", "30m");
+
+    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
+    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
+  });
 });

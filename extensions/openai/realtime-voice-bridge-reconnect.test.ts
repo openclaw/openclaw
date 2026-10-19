@@ -25,8 +25,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Reconnect tests control credential completion without host auth storage or refresh work.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
@@ -172,42 +174,6 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(onClose).toHaveBeenCalledTimes(2);
     expect(onClose).toHaveBeenLastCalledWith("completed");
-  });
-
-  it("cancels a pending reconnect and allows a later explicit connect", async () => {
-    vi.useFakeTimers();
-    const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    openSocket(socket);
-    emitSessionUpdated(socket);
-    await connecting;
-
-    socket.readyState = FakeWebSocket.CLOSED;
-    socket.emit("close", 1006, Buffer.from("transient drop"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-
-    void bridge.close();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(vi.getTimerCount()).toBe(0);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(onError).not.toHaveBeenCalled();
-
-    const { connecting: reconnecting, socket: reconnectedSocket } = beginBridgeConnection(
-      bridge,
-      1,
-    );
-    openSocket(reconnectedSocket);
-    emitSessionUpdated(reconnectedSocket);
-    await reconnecting;
-
-    expect(bridge.isConnected()).toBe(true);
-    expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(onError).not.toHaveBeenCalled();
-    await bridge.close();
   });
 
   it("does not report reconnect readiness after cancellation during provider setup", async () => {

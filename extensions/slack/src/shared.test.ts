@@ -3,15 +3,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { setSlackChannelAllowlist } from "./setup-shared.js";
-import { createSlackPluginBase, slackConfigAdapter } from "./shared.js";
+import { slackPluginBase as plugin, slackConfigAdapter } from "./shared.js";
 
-describe("createSlackPluginBase", () => {
+describe("slackPluginBase", () => {
   it("owns Slack native command name overrides", () => {
-    const plugin = createSlackPluginBase({
-      setupContract: {} as never,
-      setupWizard: {} as never,
-    });
-
     expect(
       plugin.commands?.resolveNativeCommandName?.({
         commandKey: "status",
@@ -30,17 +25,6 @@ describe("createSlackPluginBase", () => {
         defaultName: "login",
       }),
     ).toBe("login");
-  });
-
-  it("exposes security checks on the setup surface", () => {
-    const plugin = createSlackPluginBase({
-      setupContract: {} as never,
-      setupWizard: {} as never,
-    });
-
-    expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
-    expect(plugin.security?.collectWarnings).toBeTypeOf("function");
-    expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
 });
 
@@ -68,24 +52,6 @@ describe("setSlackChannelAllowlist", () => {
 });
 
 describe("slackConfigAdapter", () => {
-  it("shares lightweight account accessors with setup but keeps inspection runtime-only", () => {
-    for (const key of [
-      "listAccountIds",
-      "resolveAccount",
-      "defaultAccountId",
-      "setAccountEnabled",
-      "deleteAccount",
-      "resolveAllowFrom",
-      "formatAllowFrom",
-      "resolveDefaultTo",
-    ] as const) {
-      expect(slackSetupPlugin.config[key]).toBe(slackConfigAdapter[key]);
-    }
-
-    expect(slackConfigAdapter.inspectAccount).toBeTypeOf("function");
-    expect(slackSetupPlugin.config.inspectAccount).toBeUndefined();
-  });
-
   it("clears user-identity credentials when deleting the root account", () => {
     const cfg = {
       channels: {

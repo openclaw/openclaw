@@ -1,4 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnershipAsync,
@@ -9,7 +10,7 @@ import {
   pruneAuthProfileStoreReferences,
 } from "./runtime-snapshot-owner.js";
 import { loadPersistedAuthProfileStoreFromRows, readSharedAuthProfileRows } from "./sqlite-read.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 /** Prepare the shared read-through view; the scope owner validates it immediately before entry. */
 export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv): Promise<{
@@ -46,5 +47,33 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
         );
       }
     },
+  };
+}
+
+/** Retain live shared authority without extending the scope's static-credential policy. */
+export async function prepareScopedSharedAuthProfileCredentialRead(
+  env: NodeJS.ProcessEnv,
+  profileId: string,
+): Promise<() => AuthProfileCredential | undefined> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const authority = captureAuthProfileCredentialAuthority(
+    context,
+    {
+      identity: `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`,
+      databasePath: context.admission.databasePath,
+    },
+    profileId,
+  );
+  const store = loadPersistedAuthProfileStoreFromRows(
+    await readSharedAuthProfileRows(context),
+    context.admission.databasePath,
+  );
+  authority.observe(store?.profiles[profileId]);
+  return () => {
+    const credential = authority.readCurrentCredential();
+    return credential &&
+      resolveAuthProfilePortability(credential).reason === "portable-static-credential"
+      ? credential
+      : undefined;
   };
 }

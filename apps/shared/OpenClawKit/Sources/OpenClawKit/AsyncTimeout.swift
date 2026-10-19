@@ -10,12 +10,11 @@ private final class AsyncTimeoutRace<T: Sendable>: Sendable {
 
     private let state = Mutex<State>(.pending)
 
-    func wait<C: Clock>(
+    func wait(
         seconds: Double,
-        clock: C,
+        sleep: @escaping @Sendable (Double) async throws -> Void,
         onTimeout: @escaping @Sendable () -> Error,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
-        where C.Duration == Duration
     {
         try await withCheckedThrowingContinuation { continuation in
             let cancelled = self.state.withLock { state in
@@ -39,7 +38,7 @@ private final class AsyncTimeoutRace<T: Sendable>: Sendable {
                     if seconds > 0 {
                         tasks.append(Task {
                             do {
-                                try await clock.sleep(for: .seconds(seconds))
+                                try await sleep(seconds)
                                 self.resolveFailure(onTimeout())
                             } catch is CancellationError {
                                 // The operation or caller resolved the race first.
@@ -99,7 +98,7 @@ public enum AsyncTimeout {
     {
         try await self.withTimeout(
             seconds: seconds,
-            clock: ContinuousClock(),
+            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
             onTimeout: onTimeout,
             operation: operation)
     }
@@ -111,12 +110,26 @@ public enum AsyncTimeout {
         operation: @escaping @Sendable () async throws -> T) async throws -> T
         where C.Duration == Duration
     {
+        // Call the clock requirement directly, avoiding a coalesced Clock.sleep(for:) specialization.
+        try await self.withTimeout(
+            seconds: seconds,
+            sleep: { try await clock.sleep(until: clock.now.advanced(by: .seconds($0)), tolerance: nil) },
+            onTimeout: onTimeout,
+            operation: operation)
+    }
+
+    private static func withTimeout<T: Sendable>(
+        seconds: Double,
+        sleep: @escaping @Sendable (Double) async throws -> Void,
+        onTimeout: @escaping @Sendable () -> Error,
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+    {
         // Unstructured racers avoid joining a cancellation-ignoring loser. Cancellation
         // marks every racer synchronously; callers still own cleanup and stale-result safety.
         let race = AsyncTimeoutRace<T>()
         return try await withTaskCancellationHandler {
             try await race.wait(
-                seconds: max(0, seconds), clock: clock, onTimeout: onTimeout, operation: operation)
+                seconds: max(0, seconds), sleep: sleep, onTimeout: onTimeout, operation: operation)
         } onCancel: {
             race.resolveFailure(CancellationError())
         }

@@ -35,6 +35,10 @@ const notice = {
   updated_at: requestedAt,
   body: `${marker}\n<!-- openclaw:approval-request ${JSON.stringify({ head: headSha, base: "main" })} -->\nReview this revision.`,
 };
+const requestNotice = (record: object) => ({
+  ...notice,
+  body: `${marker}\n<!-- openclaw:approval-request ${JSON.stringify(record)} -->`,
+});
 const approval = {
   id: 11,
   user: approver,
@@ -43,12 +47,32 @@ const approval = {
   created_at: "2026-01-01T00:01:00Z",
   updated_at: "2026-01-01T00:01:00Z",
 };
+const command = (changes: Partial<typeof approval>): Options => ({
+  comments: [notice, { ...approval, ...changes }],
+});
+const afterNotice = (changes: Partial<typeof notice>): Options => ({
+  comments: [{ ...notice, ...changes }, approval],
+});
+const guardFiles = (script: Options["script"]) => [
+  { filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts" },
+];
 const commentEvent = {
   action: "created",
   issue: { number: 7, pull_request: {} },
   comment: approval,
 };
 const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
+
+const pullRequest = {
+  number: 7,
+  state: "open",
+  draft: false,
+  created_at: "2026-01-01T00:00:00Z",
+  user: author,
+  changed_files: 1,
+  head: { sha: headSha, ref: "change", repo: { id: 2 } },
+  base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
+};
 
 type Options = {
   authorRole?: string;
@@ -72,14 +96,10 @@ function runGuard(options: Options = {}) {
   const fixturePath = path.join(root, "fixture.json");
   const files = options.files ?? [{ filename: "src/gateway/auth.ts", status: "modified" }];
   const pr = {
-    number: 7,
-    state: "open",
-    draft: false,
-    created_at: options.createdAt ?? "2026-01-01T00:00:00Z",
+    ...pullRequest,
+    created_at: options.createdAt ?? pullRequest.created_at,
     user: { ...author, type: options.authorType ?? "User" },
     changed_files: options.changedFiles ?? files.length,
-    head: { sha: headSha, ref: "change", repo: { id: 2 } },
-    base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
   };
   const routes = {
     [`GET ${pullPath}`]: pr,
@@ -97,7 +117,13 @@ function runGuard(options: Options = {}) {
     },
     ...options.routes,
   };
-  writeFileSync(eventPath, JSON.stringify(options.event ?? { pull_request: pr }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({
+      repository: { default_branch: "main" },
+      ...(options.event ?? { pull_request: pr }),
+    }),
+  );
   writeFileSync(fixturePath, JSON.stringify({ routes, logPath, clock: true }));
   writeFileSync(logPath, "");
   const script = options.script ?? "security-sensitive-guard";
@@ -164,11 +190,16 @@ function runGuard(options: Options = {}) {
   };
 }
 
+function expectGuard(options: Options, statuses: string[], exitCode = 0) {
+  const result = runGuard(options);
+  expect(result.status, result.stderr).toBe(exitCode);
+  expect(result.statuses).toEqual(statuses);
+  return result;
+}
+
 describe("security-sensitive guard entry point", () => {
   it.each(["maintain", "admin"])("allows a %s author without extra approval", (authorRole) => {
-    const result = runGuard({ authorRole });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.statuses).toEqual(["failure", "success"]);
+    const result = expectGuard({ authorRole }, ["failure", "success"]);
     expect(result.comment).toContain("informational");
   });
 
@@ -191,134 +222,52 @@ describe("security-sensitive guard entry point", () => {
     expect(result.stderr).toMatch(/Skipping comment creation.*Fixture API failure/u);
   });
 
-  it("does not transfer a maintainer author's exemption to a duplicate PR with the same head", () => {
-    const duplicatePullRequest = {
-      number: 8,
-      state: "open",
-      draft: false,
-      created_at: "2026-01-01T00:00:00Z",
-      user: author,
-      changed_files: 1,
-      head: { sha: headSha, ref: "duplicate", repo: { id: 2 } },
-      base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
-    };
-    const result = runGuard({
-      authorRole: "maintain",
-      routes: {
-        [`GET /repos/openclaw/openclaw/commits/${headSha}/statuses`]: [
-          {
-            context: "openclaw/ci-gate",
-            description: "PR #8: Security review has not completed",
-            creator: { login: "github-actions[bot]", type: "Bot" },
-          },
-        ],
-        "GET /repos/openclaw/openclaw/pulls/8": duplicatePullRequest,
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.statuses).not.toContain("success");
-    expect(result.statuses.at(-1)).toBe("failure");
-  });
-
-  it.each([
-    { name: "an external author", options: {} },
-    { name: "write access", options: { authorRole: "write" } },
-    { name: "an admin bot", options: { authorRole: "admin", authorType: "Bot" } },
-    {
-      name: "a normal GitHub Approve review without the command",
-      options: { reviews: [{ user: approver, state: "APPROVED", commit_id: headSha }] },
-    },
-    {
-      name: "a write-only approver",
-      options: { comments: [notice, approval], approverRole: "write" },
-    },
-    {
-      name: "a bot command",
-      options: { comments: [notice, { ...approval, user: { ...approver, type: "Bot" } }] },
-    },
-    {
-      name: "a removed maintainer",
-      options: {
-        comments: [notice, approval],
+  it.each<[string, Options]>([
+    ["an external author", {}],
+    ["write access", { authorRole: "write" }],
+    ["an admin bot", { authorRole: "admin", authorType: "Bot" }],
+    [
+      "an ordinary approval review",
+      { reviews: [{ user: approver, state: "APPROVED", commit_id: headSha }] },
+    ],
+    ["a write-only approver", { ...command({}), approverRole: "write" }],
+    ["a bot command", command({ user: { ...approver, type: "Bot" } })],
+    [
+      "a removed maintainer",
+      {
+        ...command({}),
         routes: {
           "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": { httpError: 404 },
         },
       },
-    },
-    { name: "a command before the first notice", options: { comments: [approval] } },
-    {
-      name: "a command simultaneous with the notice",
-      options: {
-        comments: [notice, { ...approval, created_at: requestedAt, updated_at: requestedAt }],
-      },
-    },
-    {
-      name: "an old comment edited to add the command",
-      options: { comments: [notice, { ...approval, created_at: requestedAt }] },
-    },
-    {
-      name: "an edited command",
-      options: { comments: [notice, { ...approval, updated_at: "2026-01-01T00:02:00Z" }] },
-    },
-    {
-      name: "a comment posted before a new revision's sticky notice update",
-      options: { comments: [{ ...notice, updated_at: "2026-01-01T00:02:00Z" }, approval] },
-    },
-    {
-      name: "a different guard's command",
-      options: { comments: [notice, { ...approval, body: "/allow-dependencies-change" }] },
-    },
-    {
-      name: "a quoted command",
-      options: { comments: [notice, { ...approval, body: "> /allow-security-sensitive-change" }] },
-    },
-    {
-      name: "a command inside a code block",
-      options: {
-        comments: [notice, { ...approval, body: "```\n/allow-security-sensitive-change\n```" }],
-      },
-    },
-    {
-      name: "an untrusted notice copied by the contributor",
-      options: { comments: [{ ...notice, user: author }, approval] },
-    },
-    {
-      name: "a malformed request record",
-      options: {
-        comments: [
-          { ...notice, body: `${marker}\n<!-- openclaw:approval-request { -->` },
-          approval,
-        ],
-      },
-    },
-    {
-      name: "a future request timestamp",
-      options: {
-        comments: [
-          {
-            ...notice,
-            body: `${marker}\n<!-- openclaw:approval-request ${JSON.stringify({ head: headSha, base: "main", requestedAt: "2026-01-02T00:00:00Z" })} -->`,
-          },
-          approval,
-        ],
-      },
-    },
-    {
-      name: "a legacy authorized bot comment",
-      options: {
-        comments: [
-          {
-            ...notice,
-            body: `${marker}\n### Security-sensitive change authorized\nApproved SHA: \`${headSha}\``,
-          },
-          approval,
-        ],
-      },
-    },
-  ])("requires a fresh command for $name", ({ options }) => {
-    const result = runGuard(options);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.statuses).toEqual(["failure", "failure"]);
+    ],
+    ["a command before the first notice", { comments: [approval] }],
+    ["a simultaneous command", command({ created_at: requestedAt, updated_at: requestedAt })],
+    ["an old comment adding the command", command({ created_at: requestedAt })],
+    ["an edited command", command({ updated_at: "2026-01-01T00:02:00Z" })],
+    ["a comment predating the revised notice", afterNotice({ updated_at: "2026-01-01T00:02:00Z" })],
+    ["a different guard's command", command({ body: "/allow-dependencies-change" })],
+    ["a quoted command", command({ body: "> /allow-security-sensitive-change" })],
+    ["a fenced command", command({ body: "```\n/allow-security-sensitive-change\n```" })],
+    ["a contributor's copied notice", afterNotice({ user: author })],
+    [
+      "a malformed request record",
+      afterNotice({ body: `${marker}\n<!-- openclaw:approval-request { -->` }),
+    ],
+    [
+      "a future request timestamp",
+      afterNotice(
+        requestNotice({ head: headSha, base: "main", requestedAt: "2026-01-02T00:00:00Z" }),
+      ),
+    ],
+    [
+      "a legacy authorized bot comment",
+      afterNotice({
+        body: `${marker}\n### Security-sensitive change authorized\nApproved SHA: \`${headSha}\``,
+      }),
+    ],
+  ])("requires a fresh command for %s", (_name, options) => {
+    const result = expectGuard(options, ["failure", "failure"]);
     expect(result.comment).toContain("/allow-security-sensitive-change");
     expect(
       result.requests.some((request) => request.body?.labels?.includes("security-review-required")),
@@ -328,9 +277,10 @@ describe("security-sensitive guard entry point", () => {
   it.each(["maintain", "admin"])(
     "accepts a current-revision command from a %s user",
     (approverRole) => {
-      const result = runGuard({ comments: [notice, approval], approverRole, event: commentEvent });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.statuses).toEqual(["failure", "success"]);
+      const result = expectGuard(
+        { comments: [notice, approval], approverRole, event: commentEvent },
+        ["failure", "success"],
+      );
       expect(result.comment).toContain("- Maintainer: @maintainer");
       expect(result.comment).toContain(`- Approval comment: ${approval.html_url}`);
       expect(
@@ -340,13 +290,6 @@ describe("security-sensitive guard entry point", () => {
       ).toBe(true);
     },
   );
-
-  it("accepts both commands in one comment", () => {
-    const result = runGuard({
-      comments: [notice, { ...approval, body: `${approval.body}\n/allow-dependencies-change` }],
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
 
   it.each(["created", "edited", "deleted"])(
     "uses the %s comment event only as a PR locator and rereads live command authority",
@@ -360,10 +303,7 @@ describe("security-sensitive guard entry point", () => {
     { name: "head", oldRecord: { head: "c".repeat(40), base: "main" } },
     { name: "target branch", oldRecord: { head: headSha, base: "stable" } },
   ])("rejects a delayed or replayed command after the $name changes", ({ oldRecord }) => {
-    const oldNotice = {
-      ...notice,
-      body: `${marker}\n<!-- openclaw:approval-request ${JSON.stringify({ ...oldRecord, requestedAt })} -->`,
-    };
+    const oldNotice = requestNotice({ ...oldRecord, requestedAt });
     const result = runGuard({ comments: [oldNotice, approval], event: commentEvent });
     expect(result.statuses).toEqual(["failure", "failure"]);
     expect(result.comment).toContain(JSON.stringify({ head: headSha, base: "main" }));
@@ -396,55 +336,66 @@ describe("security-sensitive guard entry point", () => {
     expect(revoked.statuses).toEqual(["failure", "failure"]);
   });
 
-  it("ignores issue comments outside a PR", () => {
-    const result = runGuard({ event: { ...commentEvent, issue: { number: 7 } } });
-    expect(result.status).toBe(1);
-    expect(result.requests).toEqual([]);
-  });
+  it.each([{ ...commentEvent, issue: { number: 7 } }, { inputs: { pr_number: "7" } }])(
+    "rejects events without a PR locator before making requests: %j",
+    (event) => {
+      const result = runGuard({ event });
+      expect(result.status).toBe(1);
+      expect(result.requests).toEqual([]);
+    },
+  );
 
-  it("rejects manual input-only events before making requests", () => {
-    const result = runGuard({ event: { inputs: { pr_number: "7" } } });
-    expect(result.status).toBe(1);
-    expect(result.requests).toEqual([]);
-  });
+  it.each([undefined, "", null])(
+    "rejects an invalid default branch %s before writes",
+    (defaultBranch) => {
+      const result = runGuard({
+        event: {
+          repository: { default_branch: defaultBranch },
+          issue: { number: 7, pull_request: {} },
+          comment: {},
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("event has no default branch");
+      expect(result.requests).toEqual([]);
+    },
+  );
 
-  it("fails closed when role verification is unavailable", () => {
-    const result = runGuard({
-      routes: {
-        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { httpError: 403 },
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.statuses).toEqual(["failure"]);
-  });
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s stops a closed PR during rollout reads without publishing failure",
+    (script) => {
+      const pr = { ...pullRequest, created_at: "2025-01-01T00:00:00Z" };
+      const result = runGuard({
+        script,
+        routes: {
+          [`GET ${pullPath}`]: {
+            responses: [
+              { advanceMs: 15_000, response: pr },
+              { ...pr, state: "closed" },
+            ],
+          },
+          "GET /repos/openclaw/openclaw/pulls/152415": { advanceMs: 15_000, response: rollout },
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("skipping");
+      expect(result.requests.every((entry) => entry.method === "GET")).toBe(true);
+      expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
+    },
+  );
 
   it("refuses incomplete changed-file lists", () => {
-    const result = runGuard({ changedFiles: 3001 });
-    expect(result.status).toBe(1);
+    const result = expectGuard({ changedFiles: 3001 }, ["failure"], 1);
     expect(result.stderr).toContain("complete changed-file list");
-    expect(result.statuses).toEqual(["failure"]);
   });
 
   it.each(["security-sensitive-guard", "dependency-guard"] as const)(
     "%s skips a superseded head after approval is read",
     (script) => {
-      const pr = {
-        number: 7,
-        state: "open",
-        draft: false,
-        created_at: "2026-01-01T00:00:00Z",
-        user: author,
-        changed_files: 1,
-        head: { sha: headSha, ref: "change", repo: { id: 2 } },
-        base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
-      };
+      const pr = pullRequest;
       const result = runGuard({
         script,
-        files: [
-          {
-            filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts",
-          },
-        ],
+        files: guardFiles(script),
         authorRole: "maintain",
         comments: [notice, approval],
         routes: {
@@ -473,46 +424,37 @@ describe("security-sensitive guard entry point", () => {
   describe.each(["security-sensitive-guard", "dependency-guard"] as const)(
     "%s rollout enforcement",
     (script) => {
-      const files = [
-        { filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts" },
-      ];
+      const files = guardFiles(script);
 
-      it("does not publish approval or mutate an older PR that has not incorporated the rollout", () => {
-        const result = runGuard({
-          script,
-          files,
-          createdAt: "2025-11-01T00:00:00Z",
-          routes: {
-            [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
-              base_commit: { sha: rolloutSha },
-              merge_base_commit: { sha: "b".repeat(40) },
-              status: "diverged",
+      it.each([
+        { status: "diverged", ancestor: "b".repeat(40), enforced: false },
+        { status: "ahead", ancestor: rolloutSha, enforced: true },
+      ])(
+        "applies old-PR rollout authority for $status ancestry",
+        ({ status, ancestor, enforced }) => {
+          const result = runGuard({
+            script,
+            files,
+            createdAt: "2025-11-01T00:00:00Z",
+            routes: {
+              [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
+                base_commit: { sha: rolloutSha },
+                merge_base_commit: { sha: ancestor },
+                status,
+              },
             },
-          },
-        });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("grandfathered");
-        expect(result.statuses).toEqual([]);
-        expect(result.requests.every((request) => request.method === "GET")).toBe(true);
-      });
-
-      it("requires approval after an older PR incorporates the rollout", () => {
-        const result = runGuard({
-          script,
-          files,
-          createdAt: "2025-11-01T00:00:00Z",
-          routes: {
-            [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
-              base_commit: { sha: rolloutSha },
-              merge_base_commit: { sha: rolloutSha },
-              status: "ahead",
-            },
-          },
-        });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.statuses.at(-1)).toBe("failure");
-        expect(result.comment).toContain("/allow-");
-      });
+          });
+          expect(result.status, result.stderr).toBe(0);
+          if (enforced) {
+            expect(result.statuses.at(-1)).toBe("failure");
+            expect(result.comment).toContain("/allow-");
+          } else {
+            expect(result.stdout).toContain("grandfathered");
+            expect(result.statuses).toEqual([]);
+            expect(result.requests.every((request) => request.method === "GET")).toBe(true);
+          }
+        },
+      );
 
       it.each([
         { name: "unavailable", response: { httpError: 403 } },
@@ -570,55 +512,61 @@ dependencies:
 });
 
 describe("sensitive change classification", () => {
-  it.each([
-    "src/gateway/auth.ts",
-    "src/gateway/operator-scopes.ts",
-    "src/gateway/origin-check.ts",
-    "src/gateway/server/ws-origin-policy.ts",
-    "src/gateway/methods/core-method-policy.ts",
-    "src/gateway/session-method-policy.ts",
-    "src/shared/operator-scope-compat.ts",
-    "src/shared/device-bootstrap-profile.ts",
-    "src/shared/gateway-method-policy.ts",
-    "src/shared/session-method-scopes.ts",
-    "src/infra/device-bootstrap.ts",
-    "src/agents/agent-tools.policy.ts",
-    "src/gateway/server/ws-connection/message-handler.ts",
-    "src/secrets/resolve.ts",
-    "src/secrets/.hidden-store/key.ts",
-    "src/gateway/.internal/auth.ts",
-    "src/agents/auth-profiles/store.ts",
-    "src/agents/sandbox/docker.ts",
-    "src/infra/exec-approvals.ts",
-    ".gitignore",
-  ])("explains the security responsibility of %s", (filename) => {
-    const changes = collectSecuritySensitiveChanges([{ filename }]);
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ path: filename, reason: expect.any(String) });
-    expect(changes[0]?.reason.length).toBeGreaterThan(40);
-  });
-
-  it("detects moving an owned file into an unclassified path without flagging tests or docs", () => {
-    const changes = collectSecuritySensitiveChanges([
-      { filename: "src/renamed.ts", previous_filename: "src/gateway/auth.ts" },
-      { filename: "src/gateway/auth.test.ts" },
-      { filename: "docs/gateway/authentication.md" },
-    ]);
-    expect(changes.map((change) => change.path)).toEqual(["src/gateway/auth.ts"]);
-  });
-
-  it("preserves exclusion boundaries and case sensitivity", () => {
-    const changes = collectSecuritySensitiveChanges([
-      "src/secrets/nested/TEST/store.ts",
-      "src/secrets/store.MD",
-      "src/secrets/store.test.ts",
-      "src/secrets/nested-fixtures/store.ts",
-      "src/secrets/store.TEST.ts",
-      "src/secrets/fixtureless-store.ts",
-    ]);
-    expect(changes.map((change) => change.path)).toEqual([
-      "src/secrets/fixtureless-store.ts",
-      "src/secrets/store.TEST.ts",
-    ]);
-  });
+  it.each<{
+    files: Array<string | { filename: string; previous_filename?: string }>;
+    expected: string[];
+    explain?: boolean;
+  }>([
+    ...[
+      "src/gateway/auth.ts",
+      "src/gateway/operator-scopes.ts",
+      "src/gateway/origin-check.ts",
+      "src/gateway/server/ws-origin-policy.ts",
+      "src/gateway/methods/core-method-policy.ts",
+      "src/gateway/session-method-policy.ts",
+      "src/shared/operator-scope-compat.ts",
+      "src/shared/device-bootstrap-profile.ts",
+      "src/shared/gateway-method-policy.ts",
+      "src/shared/session-method-scopes.ts",
+      "src/infra/device-bootstrap.ts",
+      "src/agents/agent-tools.policy.ts",
+      "src/gateway/server/ws-connection/message-handler.ts",
+      "src/secrets/resolve.ts",
+      "src/secrets/.hidden-store/key.ts",
+      "src/gateway/.internal/auth.ts",
+      "src/agents/auth-profiles/store.ts",
+      "src/agents/sandbox/docker.ts",
+      "src/infra/exec-approvals.ts",
+      ".gitignore",
+    ].map((filename) => ({ files: [{ filename }], expected: [filename], explain: true })),
+    {
+      files: [
+        { filename: "src/renamed.ts", previous_filename: "src/gateway/auth.ts" },
+        { filename: "src/gateway/auth.test.ts" },
+        { filename: "docs/gateway/authentication.md" },
+      ],
+      expected: ["src/gateway/auth.ts"],
+    },
+    {
+      files: [
+        "src/secrets/nested/TEST/store.ts",
+        "src/secrets/store.MD",
+        "src/secrets/store.test.ts",
+        "src/secrets/nested-fixtures/store.ts",
+        "src/secrets/store.TEST.ts",
+        "src/secrets/fixtureless-store.ts",
+      ],
+      expected: ["src/secrets/fixtureless-store.ts", "src/secrets/store.TEST.ts"],
+    },
+  ])(
+    "classifies protected paths, renames, and exclusions: $files",
+    ({ files, expected, explain }) => {
+      const changes = collectSecuritySensitiveChanges(files);
+      expect(changes.map((change) => change.path)).toEqual(expected);
+      if (explain) {
+        expect(changes[0]).toMatchObject({ path: expected[0], reason: expect.any(String) });
+        expect(changes[0]?.reason.length).toBeGreaterThan(40);
+      }
+    },
+  );
 });

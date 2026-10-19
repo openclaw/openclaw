@@ -1,5 +1,5 @@
 import { deserialize } from "node:v8";
-import { MessagePort, Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -14,9 +14,7 @@ export function holdEnqueueReply() {
   let captured = false;
   let attempts = 0;
   const post = vi.spyOn(Worker.prototype, "postMessage");
-  const nativeOn = vi.spyOn(MessagePort.prototype, "on");
-  nativeOn.mockRestore();
-  const on = vi.spyOn(MessagePort.prototype, "on");
+  const emit = vi.spyOn(Worker.prototype, "emit");
   Worker.prototype.postMessage = function (
     this: Worker,
     request: SqliteWorkerRequest,
@@ -32,34 +30,29 @@ export function holdEnqueueReply() {
     }
     return post.call(this, request, transferList);
   };
-  on.mockImplementation(function (this: MessagePort, event, listener) {
-    if (event !== "message") {
-      return nativeOn.call(this, event, listener);
-    }
-    return nativeOn.call(this, event, function (this: MessagePort, ...args: unknown[]) {
-      const message = args[0];
-      const reply = isRecord(message) && message.type === "result" ? message.reply : undefined;
-      if (
-        !captured &&
-        target &&
-        isRecord(reply) &&
-        reply.id === target.requestId &&
-        reply.ok === true &&
-        reply.value instanceof Uint8Array
-      ) {
-        const result: unknown = deserialize(reply.value);
-        if (typeof result === "string") {
-          captured = true;
-          publish = () => {
-            Reflect.apply(listener, this, args);
-          };
-          held.resolve(result);
-          return;
-        }
+  Worker.prototype.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    const reply = args[0];
+    if (
+      event === "message" &&
+      !captured &&
+      target?.worker === this &&
+      isRecord(reply) &&
+      reply.id === target.requestId &&
+      reply.ok === true &&
+      reply.value instanceof Uint8Array
+    ) {
+      const result: unknown = deserialize(reply.value);
+      if (typeof result === "string") {
+        captured = true;
+        publish = () => {
+          emit.call(this, event, ...args);
+        };
+        held.resolve(result);
+        return true;
       }
-      Reflect.apply(listener, this, args);
-    });
-  });
+    }
+    return emit.call(this, event, ...args);
+  };
   return {
     posted: posted.promise,
     held: held.promise,
@@ -78,7 +71,7 @@ export function holdEnqueueReply() {
     },
     restore() {
       post.mockRestore();
-      on.mockRestore();
+      emit.mockRestore();
     },
   };
 }

@@ -1,4 +1,3 @@
-// Whatsapp helper module supports config schema behavior.
 import { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 import { whatsAppChannelConfigUiHints } from "./config-ui-hints.js";
 

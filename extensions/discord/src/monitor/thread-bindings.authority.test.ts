@@ -1,18 +1,23 @@
 import { ChannelType } from "discord-api-types/v10";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RequestClient } from "../internal/rest.js";
-import * as discordRequestClient from "../proxy-request-client.js";
+import * as discordRest from "../internal/rest.js";
 import { getDiscordRuntime } from "../runtime.js";
 import * as discordSend from "../send.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import { unbindThreadBindingsBySessionKeyAsync } from "./thread-bindings.lifecycle.js";
 import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
@@ -21,12 +26,14 @@ const PARENT_ID = "222222222222222222";
 const CREATED_THREAD_ID = "333333333333333333";
 
 function createRestFixture() {
-  const rest = new RequestClient("synthetic-token", {
+  const rest = new discordRest.RequestClient("synthetic-token", {
     fetch: async () => {
       throw new Error("Unexpected Discord network request");
     },
   });
-  vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(rest);
+  vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
+    return rest;
+  });
   return {
     restGet: vi.spyOn(rest, "get").mockResolvedValue({
       id: THREAD_ID,
@@ -60,17 +67,19 @@ installDiscordIngressTestRuntime();
 
 let fixture: ReturnType<typeof createRestFixture>;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resetThreadBindingsForTests();
   resetPluginStateStoreForTests();
-  resetThreadBindingsForTests();
   clearRuntimeConfigSnapshot();
+  getDiscordRuntime().state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreV2ForTests<T>("discord", options, { assertCurrent() {} });
   getDiscordRuntime().state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("discord", options);
   fixture = createRestFixture();
 });
 
-afterEach(() => {
-  resetThreadBindingsForTests();
+afterEach(async () => {
+  await resetThreadBindingsForTests();
   resetPluginStateStoreForTests();
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
@@ -80,7 +89,7 @@ describe("thread binding current authority", () => {
   it.each(["channel-lookup", "webhook-create"] as const)(
     "preserves native-create admission and settlement after owner revocation during %s",
     async (revokeAt) => {
-      const manager = createTestThreadBindingManager();
+      const manager = await createTestThreadBindingManager();
       let ownerCurrent = true;
       if (revokeAt === "channel-lookup") {
         fixture.restGet.mockImplementationOnce(async () => {
@@ -123,13 +132,101 @@ describe("thread binding current authority", () => {
         }
         expect(fixture.restPost).toHaveBeenCalledTimes(revokeAt === "channel-lookup" ? 0 : 1);
       } finally {
-        manager.stop();
+        await manager.stop();
       }
     },
   );
 
+  it("drains its own native create without blocking another account's mutations or shutdown", async () => {
+    const manager = await createTestThreadBindingManager();
+    const independent = await createThreadBindingManager({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      accountId: "independent",
+      persist: false,
+      enableSweeper: false,
+    });
+    const independentThreadId = "444444444444444444";
+    await independent.bindTarget({
+      threadId: independentThreadId,
+      channelId: PARENT_ID,
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:independent",
+      agentId: "main",
+      webhookId: "synthetic-independent-webhook",
+      webhookToken: "synthetic-independent-token",
+    });
+    const entered = createDeferred<void>();
+    const created = createDeferred<void>();
+    fixture.restPost.mockImplementationOnce(async () => {
+      entered.resolve();
+      await created.promise;
+      return { id: "wh-created", token: "tok-created" };
+    });
+    const binding = manager.bindTarget({
+      threadId: THREAD_ID,
+      channelId: PARENT_ID,
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:drained",
+      agentId: "main",
+    });
+    await entered.promise;
+    let unbindingCompleted = false;
+    const unbinding = unbindThreadBindingsBySessionKeyAsync({
+      accountId: "default",
+      targetSessionKey: "agent:main:subagent:drained",
+      sendFarewell: false,
+    }).then((removed) => {
+      unbindingCompleted = true;
+      return removed;
+    });
+    let stopped = false;
+    const stopping = manager.stop().then(() => {
+      stopped = true;
+    });
+    const touchAt = Date.now() + 1000;
+    let touchCompleted = false;
+    let touchFailure: unknown;
+    const touching = independent
+      .touchThread({ threadId: independentThreadId, at: touchAt, persist: false })
+      .then(
+        () => {
+          touchCompleted = true;
+        },
+        (error: unknown) => {
+          touchFailure = error;
+        },
+      );
+    let independentStopped = false;
+    const independentStopping = independent.stop().then(() => {
+      independentStopped = true;
+    });
+    try {
+      // The unrelated mutation is memory-only; a full turn drains its promise work.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(stopped).toBe(false);
+      await expect(manager.touchThread({ threadId: THREAD_ID })).rejects.toThrow("stopping");
+      expect(unbindingCompleted).toBe(false);
+      expect(touchFailure).toBeUndefined();
+      expect(touchCompleted).toBe(true);
+      expect(independentStopped).toBe(true);
+      expect(independent.getByThreadId(independentThreadId)?.lastActivityAt).toBe(touchAt);
+      expect(manager.getByThreadId(THREAD_ID)).toBeUndefined();
+    } finally {
+      created.resolve();
+      await Promise.allSettled([binding, unbinding, stopping, touching, independentStopping]);
+    }
+    await expect(binding).resolves.toMatchObject({
+      targetSessionKey: "agent:main:subagent:drained",
+    });
+    await expect(unbinding).resolves.toHaveLength(1);
+    expect(manager.getByThreadId(THREAD_ID)).toBeUndefined();
+    expect(fixture.restPost).toHaveBeenCalledOnce();
+  });
+
   it("publishes an accepted child thread without admitting a new webhook or intro after revocation", async () => {
-    const manager = createTestThreadBindingManager();
+    const manager = await createTestThreadBindingManager();
     let ownerCurrent = true;
     fixture.restGet.mockResolvedValueOnce({ id: PARENT_ID, type: ChannelType.GuildText });
     fixture.restPost.mockImplementationOnce(async () => {
@@ -144,8 +241,8 @@ describe("thread binding current authority", () => {
           conversation: {
             channel: "discord",
             accountId: "default",
-            conversationId: PARENT_ID,
-            parentConversationId: PARENT_ID,
+            conversationId: `channel:${PARENT_ID}`,
+            parentConversationId: `channel:${PARENT_ID}`,
           },
           placement: "child",
           metadata: { introText: "Binding ready" },
@@ -164,7 +261,7 @@ describe("thread binding current authority", () => {
       expect(fixture.sendMessageDiscord).not.toHaveBeenCalled();
       expect(fixture.sendWebhookMessageDiscord).not.toHaveBeenCalled();
     } finally {
-      manager.stop();
+      await manager.stop();
     }
   });
 });

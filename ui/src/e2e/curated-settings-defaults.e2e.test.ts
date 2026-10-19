@@ -44,21 +44,28 @@ function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
 
-function hasOwnPath(value: Record<string, unknown>, pathSegments: readonly string[]): boolean {
-  let current: unknown = value;
-  for (const [index, segment] of pathSegments.entries()) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return false;
-    }
-    if (!Object.hasOwn(current, segment)) {
-      return false;
-    }
-    current = (current as Record<string, unknown>)[segment];
-    if (index === pathSegments.length - 1) {
-      return true;
-    }
+async function capture(page: Page, name: string, surface: Page | Locator = page) {
+  if (captureUiProofEnabled) {
+    await surface.screenshot({
+      animations: "disabled",
+      ...(surface === page ? { fullPage: true } : {}),
+      path: path.join(uiProofArtifactDir, `${name}.png`),
+    });
   }
-  return false;
+}
+
+const radio = (row: Locator, name: string | RegExp) =>
+  row.getByRole("radio", { name, exact: true });
+
+async function finishPatch(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  config: Record<string, unknown>,
+  hash: string,
+  ok = false,
+) {
+  const response = configResponse(config, hash);
+  await gateway.setMethodResponse("config.get", response);
+  await gateway.resolveDeferred("config.patch", ok ? { ok: true, ...response } : response);
 }
 
 function settingsRow(page: Page, title: string): Locator {
@@ -80,7 +87,7 @@ async function expectDefaultInfo(row: Locator, explanation: string) {
   await expect.poll(() => info.locator("svg").count()).toBe(1);
   const tooltip = info.locator("..");
   const tooltipIsOpen = () =>
-    tooltip.locator("wa-tooltip").evaluate((node) => Boolean(Reflect.get(node, "open")));
+    tooltip.locator(".tooltip-surface[popover]").evaluate((node) => node.matches(":popover-open"));
   await info.click();
   await expect.poll(tooltipIsOpen).toBe(true);
   await expect.poll(() => tooltip.textContent()).toContain(explanation);
@@ -88,11 +95,20 @@ async function expectDefaultInfo(row: Locator, explanation: string) {
   await expect.poll(tooltipIsOpen).toBe(false);
 }
 
-async function selectDefault(row: Locator) {
-  await row.locator("wa-radio-group").evaluate((element) => {
-    const group = element as HTMLElement & { value: string };
-    group.value = "";
-    group.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+async function expectModelPatch(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  after: number,
+  fastModeDefault: true | null,
+) {
+  expect(requestRaw(await gateway.waitForRequest("config.patch", { after }))).toEqual({
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        utilityModel: null,
+        thinkingDefault: null,
+        fastModeDefault,
+      },
+    },
   });
 }
 
@@ -146,71 +162,42 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("true");
+        expect(await codeModeSwitch.isChecked()).toBe(true);
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
 
-        if (captureUiProofEnabled) {
-          await codeModeRow.screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "01-labs-explicit-override.png"),
-          });
-        }
+        await capture(page, "01-labs-explicit-override", codeModeRow);
 
         const configGetsBeforeLabsReset = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
-        await codeModeRow.locator("wa-switch").click();
+        await codeModeSwitch.click();
         const labsPatch = requestRaw(await gateway.waitForRequest("config.patch"));
         expect(labsPatch).toEqual({ tools: { codeMode: { enabled: null } } });
 
-        const afterLabsResponse = configResponse(afterLabsReset, "curated-defaults-2");
-        await gateway.setMethodResponse("config.get", afterLabsResponse);
-        await gateway.resolveDeferred("config.patch", afterLabsResponse);
+        await finishPatch(gateway, afterLabsReset, "curated-defaults-2");
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBe(configGetsBeforeLabsReset + 1);
         await expectQuietDefault(codeModeRow);
-        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
+        expect(await codeModeSwitch.isChecked()).toBe(false);
 
-        if (captureUiProofEnabled) {
-          await codeModeRow.screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "02-labs-inherited-default.png"),
-          });
-        }
+        await capture(page, "02-labs-inherited-default", codeModeRow);
 
         expect((await page.goto(`${suite.server.baseUrl}settings/security`))?.status()).toBe(200);
+        const securitySection = page.locator(".security-page .settings-section").first();
         const browserRow = settingsRow(page, "Browser enabled");
         const profileRow = settingsRow(page, "Available tools");
         await browserRow.getByRole("switch", { name: "Browser enabled", exact: true }).waitFor();
         await expect.poll(() => browserRow.textContent()).toContain("Default: Enabled");
-        expect(
-          await profileRow
-            .getByRole("radio", { name: "Minimal", exact: true })
-            .getAttribute("aria-checked"),
-        ).toBe("true");
+        expect(await radio(profileRow, "Minimal").isChecked()).toBe(true);
         expect(await profileRow.textContent()).not.toContain("Default: Full");
 
-        if (captureUiProofEnabled) {
-          await page
-            .locator(".security-page .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "03-security-explicit-overrides.png"),
-            });
-        }
+        await capture(page, "03-security-explicit-overrides", securitySection);
 
         const securitySavesBefore = (await gateway.getRequests("config.set")).length;
         await browserRow.locator(".settings-row__title").click();
-        await profileRow.getByRole("radio", { name: "Full", exact: true }).click();
+        await radio(profileRow, "Full").click();
         await expectQuietDefault(browserRow);
-        await expect
-          .poll(() =>
-            profileRow
-              .getByRole("radio", { name: "Full", exact: true })
-              .getAttribute("aria-checked"),
-          )
-          .toBe("true");
+        await expect.poll(() => radio(profileRow, "Full").isChecked()).toBe(true);
         expect(await profileRow.textContent()).not.toContain("Using default: Full");
         await expect
           .poll(async () => {
@@ -221,7 +208,11 @@ suite.define(() => {
             }
             const raw = requestRaw(latest);
             return {
-              browserEnabledOverridden: hasOwnPath(raw, ["browser", "enabled"]),
+              browserEnabledOverridden:
+                typeof raw.browser === "object" &&
+                raw.browser !== null &&
+                !Array.isArray(raw.browser) &&
+                Object.hasOwn(raw.browser, "enabled"),
               tools: raw.tools,
             };
           })
@@ -230,134 +221,60 @@ suite.define(() => {
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
 
-        if (captureUiProofEnabled) {
-          await page
-            .locator(".security-page .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "04-security-full-tools-default-browser.png"),
-            });
-        }
+        await capture(page, "04-security-full-tools-default-browser", securitySection);
 
         expect((await page.reload())?.status()).toBe(200);
         await expectQuietDefault(settingsRow(page, "Browser enabled"));
         const reloadedProfileRow = settingsRow(page, "Available tools");
-        await expect
-          .poll(() =>
-            reloadedProfileRow
-              .getByRole("radio", { name: "Full", exact: true })
-              .getAttribute("aria-checked"),
-          )
-          .toBe("true");
+        await expect.poll(() => radio(reloadedProfileRow, "Full").isChecked()).toBe(true);
         expect(await reloadedProfileRow.textContent()).not.toContain("Using default: Full");
 
         expect((await page.goto(`${suite.server.baseUrl}settings/model-providers`))?.status()).toBe(
           200,
         );
+        const modelBehavior = page.locator("#settings-model-behavior");
         const thinkingRow = settingsRow(page, "Thinking");
         const fastModeRow = settingsRow(page, "Fast Mode");
-        await thinkingRow.getByRole("radio", { name: "High", exact: true }).waitFor();
-        expect(
-          await thinkingRow
-            .getByRole("radio", { name: "High", exact: true })
-            .getAttribute("aria-checked"),
-        ).toBe("true");
+        await radio(thinkingRow, "High").waitFor();
+        expect(await radio(thinkingRow, "High").isChecked()).toBe(true);
         await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
         await expectDefaultInfo(fastModeRow, fastModeDefaultExplanation);
 
-        if (captureUiProofEnabled) {
-          await page.locator("#settings-model-behavior").screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "05-models-explicit-overrides.png"),
-          });
-        }
+        await capture(page, "05-models-explicit-overrides", modelBehavior);
 
         const modelSavesBefore = (await gateway.getRequests("config.patch")).length;
         await gateway.deferNext("config.patch");
-        await selectDefault(thinkingRow);
-        expect(
-          requestRaw(await gateway.waitForRequest("config.patch", { after: modelSavesBefore })),
-        ).toEqual({
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.5",
-              utilityModel: null,
-              thinkingDefault: null,
-              fastModeDefault: true,
-            },
-          },
-        });
-        const afterThinkingResponse = configResponse(
+        await radio(thinkingRow, /^Default/u).click();
+        await expectModelPatch(gateway, modelSavesBefore, true);
+        await finishPatch(
+          gateway,
           afterThinkingReset,
           "curated-defaults-model-thinking-reset",
+          true,
         );
-        await gateway.setMethodResponse("config.get", afterThinkingResponse);
-        await gateway.resolveDeferred("config.patch", { ok: true, ...afterThinkingResponse });
-        await expect
-          .poll(() => thinkingRow.locator("wa-radio-group").getAttribute("disabled"))
-          .toBeNull();
-        await expect
-          .poll(() =>
-            thinkingRow.getByRole("radio", { name: /^Default/u }).getAttribute("aria-checked"),
-          )
-          .toBe("true");
+        await expect.poll(() => radio(thinkingRow, /^Default/u).isEnabled()).toBe(true);
+        await expect.poll(() => radio(thinkingRow, /^Default/u).isChecked()).toBe(true);
         expect(await page.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
         const fastModeSavesBefore = (await gateway.getRequests("config.patch")).length;
         await gateway.deferNext("config.patch");
-        await selectDefault(fastModeRow);
-        expect(
-          requestRaw(await gateway.waitForRequest("config.patch", { after: fastModeSavesBefore })),
-        ).toEqual({
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.5",
-              utilityModel: null,
-              thinkingDefault: null,
-              fastModeDefault: null,
-            },
-          },
-        });
-        const afterModelResponse = configResponse(
-          afterModelResets,
-          "curated-defaults-model-resets",
-        );
-        await gateway.setMethodResponse("config.get", afterModelResponse);
-        await gateway.resolveDeferred("config.patch", { ok: true, ...afterModelResponse });
+        await radio(fastModeRow, /^Default/u).click();
+        await expectModelPatch(gateway, fastModeSavesBefore, null);
+        await finishPatch(gateway, afterModelResets, "curated-defaults-model-resets", true);
         await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
         await expectDefaultInfo(fastModeRow, fastModeDefaultExplanation);
-        await expect
-          .poll(() => fastModeRow.locator("wa-radio-group").getAttribute("disabled"))
-          .toBeNull();
-        await expect
-          .poll(() =>
-            fastModeRow.getByRole("radio", { name: /^Default/u }).getAttribute("aria-checked"),
-          )
-          .toBe("true");
+        await expect.poll(() => radio(fastModeRow, /^Default/u).isEnabled()).toBe(true);
+        await expect.poll(() => radio(fastModeRow, /^Default/u).isChecked()).toBe(true);
         expect(await page.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
 
-        if (captureUiProofEnabled) {
-          await page.locator("#settings-model-behavior").screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "06-models-inherited-defaults.png"),
-          });
-        }
+        await capture(page, "06-models-inherited-defaults", modelBehavior);
 
         expect((await page.reload())?.status()).toBe(200);
         const reloadedThinkingRow = settingsRow(page, "Thinking");
         const reloadedFastModeRow = settingsRow(page, "Fast Mode");
         await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
         await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
-        expect(
-          await reloadedThinkingRow
-            .getByRole("radio", { name: /^Default/u })
-            .getAttribute("aria-checked"),
-        ).toBe("true");
-        expect(
-          await reloadedFastModeRow
-            .getByRole("radio", { name: /^Default/u })
-            .getAttribute("aria-checked"),
-        ).toBe("true");
+        expect(await radio(reloadedThinkingRow, /^Default/u).isChecked()).toBe(true);
+        expect(await radio(reloadedFastModeRow, /^Default/u).isChecked()).toBe(true);
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
         const reloadedCodeModeRow = settingsRow(page, "Code Mode");
@@ -365,16 +282,10 @@ suite.define(() => {
         expect(
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
-            .getAttribute("aria-checked"),
-        ).toBe("true");
+            .isChecked(),
+        ).toBe(true);
 
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(uiProofArtifactDir, "07-reload-inherited-defaults.png"),
-          });
-        }
+        await capture(page, "07-reload-inherited-defaults");
       },
     );
   });

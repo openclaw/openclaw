@@ -1,10 +1,10 @@
-/**
- * Spawn requester origin resolver.
- *
- * Normalizes delivery targets and route bindings so spawned runs can attribute the requesting account/channel.
- */
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { McpCurrentConversationOrigin } from "../gateway/mcp-grant-store.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 
@@ -13,37 +13,22 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 // `match.peer.id`. Peel wrappers for those lookups, and separately pass the
 // original target as an exact-match alias for channels whose canonical peer ids
 // intentionally include prefixes such as `channel:` or `thread:`.
-const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
-  "room:": "channel",
-  "channel:": "channel",
-  "conversation:": "channel",
-  "chat:": "channel",
-  "thread:": "channel",
-  "topic:": "channel",
-  "group:": "group",
-  "team:": "group",
-  "user:": "direct",
-  "dm:": "direct",
-  "pm:": "direct",
-};
+const KIND_PREFIX_TO_CHAT_TYPE: ReadonlyMap<string, ChatType> = new Map([
+  ["room:", "channel"],
+  ["channel:", "channel"],
+  ["conversation:", "channel"],
+  ["chat:", "channel"],
+  ["thread:", "channel"],
+  ["topic:", "channel"],
+  ["group:", "group"],
+  ["team:", "group"],
+  ["user:", "direct"],
+  ["dm:", "direct"],
+  ["pm:", "direct"],
+]);
 
 // Matches one leading `<alpha-token>:` wrapper at a time.
 const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
-
-function getKindForRequesterPrefix(prefix: string): ChatType | undefined {
-  return Object.hasOwn(KIND_PREFIX_TO_CHAT_TYPE, prefix)
-    ? KIND_PREFIX_TO_CHAT_TYPE[prefix]
-    : undefined;
-}
-
-function normalizeChannelPrefix(channelId: string | undefined): string | undefined {
-  const normalized = channelId?.trim().toLowerCase();
-  return normalized ? `${normalized}:` : undefined;
-}
-
-function shouldPeelRequesterPrefix(prefix: string, channelPrefix: string | undefined): boolean {
-  return Boolean(getKindForRequesterPrefix(prefix) || prefix === channelPrefix);
-}
 
 function inferPeerKindFromBareId(value: string): ChatType | undefined {
   if (value.startsWith("@")) {
@@ -66,7 +51,8 @@ function extractRequesterPeer(
   if (!raw) {
     return {};
   }
-  const channelPrefix = normalizeChannelPrefix(channelId);
+  const normalizedChannel = channelId?.trim().toLowerCase();
+  const channelPrefix = normalizedChannel ? `${normalizedChannel}:` : undefined;
   let inferredKind: ChatType | undefined;
   let allowBareIdKindOverride = false;
   let value = raw;
@@ -76,13 +62,11 @@ function extractRequesterPeer(
       break;
     }
     const prefix = match[0].toLowerCase();
-    if (!shouldPeelRequesterPrefix(prefix, channelPrefix)) {
+    const kindFromPrefix = KIND_PREFIX_TO_CHAT_TYPE.get(prefix);
+    if (!kindFromPrefix && prefix !== channelPrefix) {
       break;
     }
-    const kindFromPrefix = getKindForRequesterPrefix(prefix);
-    if (kindFromPrefix) {
-      inferredKind ??= kindFromPrefix;
-    }
+    inferredKind ??= kindFromPrefix;
     allowBareIdKindOverride ||= prefix === channelPrefix || prefix === "room:";
     value = value.slice(prefix.length).trim();
   }
@@ -135,4 +119,35 @@ export function resolveRequesterOriginForChild(params: {
     to: params.requesterTo,
     threadId: params.requesterThreadId,
   });
+}
+
+export type SpawnRequesterConversationSource = {
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string | number;
+  currentConversationOrigin?: McpCurrentConversationOrigin;
+};
+
+/** Keep each requester destination paired with its own thread. */
+export function resolveSpawnRequesterConversationTarget(source: SpawnRequesterConversationSource): {
+  to?: string;
+  threadId?: string | number;
+} {
+  const to = normalizeOptionalString(source.agentTo);
+  const threadId = normalizeOptionalThreadValue(source.agentThreadId);
+  if (to || threadId !== undefined) {
+    return { to, threadId };
+  }
+  // Generic MCP bearer headers can guide delivery, but cannot authorize a binding target.
+  if (source.currentConversationOrigin === "caller-token") {
+    return {};
+  }
+  return {
+    to:
+      normalizeOptionalString(source.currentMessagingTarget) ??
+      normalizeOptionalString(source.currentChannelId),
+    threadId: normalizeOptionalThreadValue(source.currentThreadTs),
+  };
 }

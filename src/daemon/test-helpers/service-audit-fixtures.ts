@@ -20,7 +20,7 @@ export function resetServiceAuditMocks() {
   });
   resolveBunRuntimeInfoMock.mockReset();
   resolveBunRuntimeInfoMock.mockResolvedValue({
-    version: "1.4.0",
+    version: "1.4.3",
     sqliteVersion: "3.51.3",
     sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
     nodeSharedSqlite: false,

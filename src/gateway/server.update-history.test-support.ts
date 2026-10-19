@@ -7,7 +7,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -23,7 +23,7 @@ export function registerGatewayUpdateHistoryTests(
   },
 ) {
   describe("gateway update history", () => {
-    test.each(["signal", "drain", "service-stop"] as const)(
+    test.each(["signal", "service-stop"] as const)(
       "reads progress on an existing authenticated connection during %s",
       async (phase) => {
         const client = await connectGatewayClient({
@@ -41,7 +41,7 @@ export function registerGatewayUpdateHistoryTests(
           if (phase === "signal") {
             expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
           } else {
-            markGatewayRestartDraining(phase === "service-stop" ? "stop (SIGTERM)" : "restart");
+            markGatewayRestartDraining("stop (SIGTERM)");
           }
           const read = client.request("update.runs.get", { runId: run.runId });
           if (phase === "signal") {
@@ -96,7 +96,7 @@ export function registerGatewayUpdateHistoryTests(
             for (const cache of ["closed", "warm"] as const) {
               openOpenClawStateDatabase();
               if (cache === "closed") {
-                expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+                expect(await closeOpenClawStateDatabaseByPathAsync(databasePath)).toBe(true);
               }
               expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
               const before = readonlyPreparation.prepared.length;

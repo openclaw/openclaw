@@ -1,8 +1,16 @@
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+import {
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
+import {
+  assistantVisibleTextFilters,
+  toolCallXmlTextFilter,
+} from "../shared/text/assistant-visible-text.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
+import { applyTextFilters } from "../shared/text/text-projection.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   resolveAssistantStreamBlockIndex,
   resolveAssistantStreamItemId,
@@ -12,8 +20,8 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
+  createAssistantStreamBlockState,
   prepareAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 
@@ -41,37 +49,70 @@ export function extractAssistantStreamSnapshot(
   } else if (options?.observedText !== undefined) {
     observedMessage = { ...message, content: [{ type: "text", text: options.observedText }] };
   }
-  const state: EmbeddedAgentSubscribeState["partialBlockState"] = {
-    thinking: false,
-    final: false,
-    inlineCode: createInlineCodeState(),
-  };
+  const state: EmbeddedAgentSubscribeState["partialBlockState"] = createAssistantStreamBlockState();
   let rawText = "";
-  let blockSource = "";
-  let finalAnswer = true;
+  const protocol = createStreamingDirectiveAccumulator();
+  const blockSources: { text: string; separator: string; finalAnswer: boolean }[] = [];
   const parts: { separator: string; index?: number }[] = [];
   const renderText = prepareAssistantVisibleText(observedMessage, (part, final, phase, index) => {
     // Native blocks can divide a tag or fence; only complete visible parts get a separator.
     const separator =
-      rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+      protocol.sourceText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+    const previousIndex = parts.at(-1)?.index;
     parts.push({ separator, index });
-    rawText += `${separator}${part}`;
+    rawText += part;
+    const preparedStart = protocol.sourceText.length;
+    protocol.consume(part, { final: final && options?.final !== false });
+    const preparedPart = protocol.sourceText.slice(preparedStart);
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
-    finalAnswer &&= preparedFinal;
     const visible = preparedFinal
-      ? `${separator}${part}`
-      : ctx.stripBlockTags(`${separator}${part}`, state, {
+      ? `${separator}${preparedPart}`
+      : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
           final: final && options?.final !== false,
         });
-    blockSource += visible;
-    return preparedFinal ? part : visible;
+    const previous = blockSources.at(-1);
+    if (
+      previous &&
+      previousIndex !== undefined &&
+      index === previousIndex + 1 &&
+      previous.finalAnswer === preparedFinal
+    ) {
+      previous.text += visible;
+    } else {
+      blockSources.push({
+        text: visible.startsWith(separator) ? visible.slice(separator.length) : visible,
+        separator,
+        finalAnswer: preparedFinal,
+      });
+    }
+    return preparedFinal ? preparedPart : visible;
   });
-  const visibleBlockSource = finalAnswer
-    ? sanitizeAssistantVisibleStreamText(blockSource, "final_answer", {
-        preserveTrailingWhitespace: true,
-      })
-    : stripDowngradedToolCallText(blockSource, { preserveTrailingWhitespace: true });
+  const visibleBlockSource = blockSources
+    .map(({ text, separator, finalAnswer }) => ({
+      separator,
+      text: finalAnswer
+        ? sanitizeUserFacingText(
+            applyTextFilters(
+              text,
+              assistantVisibleTextFilters("final-answer-delivery", options?.final === false, {
+                preserveTrailingWhitespace: true,
+              }),
+            ),
+            { streaming: options?.final === false },
+          )
+        : toolCallXmlTextFilter(
+            { stripFunctionCallsXmlPayloads: true },
+            options?.final === false,
+          ).transform(stripDowngradedToolCallText(text, { preserveTrailingWhitespace: true })),
+    }))
+    // An empty observed tail still marks a native boundary for prefix reconciliation.
+    .filter(
+      ({ text }, index) =>
+        text.trim() || (options?.observedText === "" && index === blockSources.length - 1),
+    )
+    .map(({ text, separator }, index) => `${index > 0 ? separator : ""}${text}`)
+    .join("");
   const blockReply = parseReplyDirectives(
     options?.final === false
       ? splitTrailingDirective(visibleBlockSource, { preserveTrailingWhitespace: true }).text
@@ -104,11 +145,11 @@ export function reconcileBlockReplySnapshot(
     if (index > (snapshot.parts.at(-1)?.index ?? 0)) {
       return snapshot.blockText;
     }
-    return extractAssistantStreamSnapshot(ctx, snapshot.message, {
-      throughIndex: index,
-      observedText: "",
+    const prefix = extractAssistantStreamSnapshot(ctx, snapshot.message, {
+      throughIndex: index - 1,
       final: false,
     }).blockText;
+    return prefix + (snapshot.parts.find((part) => part.index === index)?.separator ?? "");
   };
   const scope = ctx.state.blockReplyScopeStart;
   const scopePosition = (snapshot: typeof next) => {
@@ -145,22 +186,15 @@ export function reconcileBlockReplySnapshot(
   const consumed = ctx.blockChunker.consumedLength;
   let oldCode: ReturnType<typeof findCodeRegions> | undefined;
   let nextCode: ReturnType<typeof findCodeRegions> | undefined;
-  const crossesCode = (snapshot: typeof next, offset: number, includeCodeEnd = false) => {
-    if (
-      offset <= 0 ||
-      offset > snapshot.blockText.length ||
-      (offset === snapshot.blockText.length && !includeCodeEnd)
-    ) {
+  const crossesCode = (snapshot: typeof next, offset: number) => {
+    if (offset <= 0 || offset >= snapshot.blockText.length) {
       return false;
     }
     const regions =
       snapshot === previous
         ? (oldCode ??= findCodeRegions(previous.blockText))
         : (nextCode ??= findCodeRegions(next.blockText));
-    return regions.some(
-      (region) =>
-        region.start < offset && (offset < region.end || (includeCodeEnd && offset === region.end)),
-    );
+    return regions.some((region) => region.start < offset && offset < region.end);
   };
   const scopeRetained =
     oldScope.valid &&
@@ -233,54 +267,10 @@ export function reconcileBlockReplySnapshot(
     ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
-  const sourceBreaks: number[] = [];
-  if (
-    scopeRetained &&
-    oldScope.index === nextScope.index &&
-    oldPrefix === nextPrefix &&
-    consumed > 0
-  ) {
-    const limit = Math.min(oldText.length, nextText.length);
-    let prefixLength = 0;
-    while (
-      prefixLength < limit &&
-      oldText.charCodeAt(prefixLength) === nextText.charCodeAt(prefixLength)
-    ) {
-      prefixLength += 1;
-    }
-    let suffixLength = 0;
-    while (
-      suffixLength < limit - prefixLength &&
-      oldText.charCodeAt(oldText.length - suffixLength - 1) ===
-        nextText.charCodeAt(nextText.length - suffixLength - 1)
-    ) {
-      suffixLength += 1;
-    }
-    const suffixStart = oldText.length - suffixLength;
-    const shift = next.blockText.length - previous.blockText.length;
-    // Preserve chunk boundaries, not delivery claims: repeated source still
-    // passes through the existing payload/custody decision at the recipient.
-    // Include code ends because a later append can continue an unfinished fence.
-    for (const end of ctx.blockChunker.preparedSourceBreaks) {
-      const unchangedPrefix = end <= prefixLength;
-      const oldBoundary = oldPrefix.length + end;
-      const nextBoundary = oldBoundary + (unchangedPrefix ? 0 : shift);
-      if (
-        (!unchangedPrefix && (suffixLength === 0 || end < suffixStart)) ||
-        end > Math.min(consumed, oldText.length) ||
-        nextBoundary <= restartPrefix.length ||
-        crossesCode(previous, oldBoundary, true) ||
-        crossesCode(next, nextBoundary, true)
-      ) {
-        continue;
-      }
-      sourceBreaks.push(nextBoundary - restartPrefix.length);
-    }
-  }
   ctx.state.blockReplyScopeStart = {
     contentIndex: restartIndex,
     itemId: resolveAssistantStreamItemId({ contentIndex: restartIndex, message: next.message }),
   };
-  ctx.blockChunker.reset(sourceBreaks, restartPrefix.length);
+  ctx.blockChunker.reset([], restartPrefix.length);
   ctx.blockChunker.append(next.blockText.slice(restartPrefix.length));
 }

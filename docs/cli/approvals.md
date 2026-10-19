@@ -4,12 +4,29 @@ read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
   - You need to list or resolve a pending approval without a chat surface
+  - An agent cannot run commands and you need to distinguish tool access from approvals
 title: "Approvals"
 ---
 
 # `openclaw approvals`
 
-Manage exec approvals for the **local host**, **gateway host**, or a **node host**. With no target flag, commands read/write the local approvals document in shared SQLite state. Use `--gateway` to target the gateway, or `--node <id|name|ip>` to target a specific node.
+Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
+With no target flag, `get`, `set`, and allowlist edits select the local approvals
+document in shared SQLite state. If a Gateway owns that state directory, the CLI
+uses its authenticated approvals RPCs; otherwise it holds exclusive offline
+ownership through the operation. `get` participates because it can initialize
+missing state. Use `--gateway` to explicitly target the configured Gateway, or
+`--node <id|name|ip>` to target a specific node; those target contracts are unchanged.
+
+Default local routing requires the operation's
+[owner capability](/gateway/protocol/versioning#local-state-owner-routing) and
+`operator.admin`. Missing credentials, an older Gateway, or an uncertain reply
+never falls back to a direct local write. Update or stop the owner through its
+service owner before retrying offline. After an uncertain save, inspect
+`openclaw approvals get --json` before retrying. Saves retain their snapshot-hash
+compare-and-set check; a stale hash requires reloading and reapplying the edit.
+Routing changes only the mutation transport, not what any policy or grant
+authorizes to execute.
 
 Alias: `openclaw exec-approvals`
 
@@ -91,8 +108,8 @@ openclaw approvals grants revoke <grant-id>
 
 The list shows the owning automation, the exact command, the use count, and
 each grant's state (until revoked, expires in N days, expired, or revoked).
-Revocation is idempotent and takes effect at the next occurrence's spawn
-boundary — that occurrence prompts again. Editing or deleting the automation
+Repeating a revocation has no additional effect. It takes effect at the next
+occurrence's spawn boundary — that occurrence prompts again. Editing or deleting the automation
 invalidates its grants without needing an explicit revoke.
 
 The CLI reads the unified approval record to select its kind, checks the requested decision against the record's allowed decisions, and then calls the unified resolver. A first successful decision exits `0`. Repeating the recorded decision also exits `0` and reports `already resolved (same decision)`. A conflicting decision, missing approval, expired approval, or decision unavailable for that approval kind prints a clear error and exits non-zero.
@@ -190,11 +207,17 @@ No target flag means the local approvals row in the shared state database.
 
 ## `openclaw exec-policy`
 
-`openclaw exec-policy` is the **local-only** convenience command that keeps requested `tools.exec.*` config and the local host approvals document in sync in one step:
+`openclaw exec-policy show` explains an agent's terminal tool policies and shows
+command approvals separately. Inspection never changes permissions. `preset`
+and `set` synchronize requested `tools.exec.*` config with the local host
+approvals document.
 
 ```bash
 openclaw exec-policy show
-openclaw exec-policy show --json
+openclaw exec-policy show --agent main
+openclaw exec-policy show --session agent:main:main
+openclaw exec-policy show --agent main --verbose
+openclaw exec-policy show --agent main --json
 
 openclaw exec-policy preset yolo
 openclaw exec-policy preset cautious --json
@@ -202,10 +225,84 @@ openclaw exec-policy preset cautious --json
 openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full --json
 ```
 
+### Inspect terminal access
+
+Without `--session`, `show` works offline. It reports definitive exclusions from
+local tool profiles and policies. A locally allowed tool's execution access is
+**unverified**; model, channel, sandbox, session, and runtime restrictions may
+still affect availability.
+
+The report leads with the agent and terminal-access status, followed by profile
+inheritance, findings for `exec` and `process`, local command approvals, and a
+next step. An agent profile overrides the global profile. For example,
+`agents.entries.main.tools.profile: "messaging"` excludes terminal tools even if
+`tools.profile` is `"full"`. Command approval settings do not grant tool access.
+Intentionally restrictive profiles are valid configuration.
+
+- `--agent <id>` selects the agent to inspect. Without `--session`, the agent
+  must be configured locally. With a single configured
+  agent, selection is automatic. With multiple agents, an untargeted report
+  asks you to select an agent or an agent-qualified session key before inspecting
+  tool availability. With no configured agents, it explains how to add one.
+  Both cases still show a compact summary of all local command approval scopes.
+- `--session <key>` fetches a read-only tool preview for an **existing** session
+  from its saved settings through the Gateway. Use the full session key; for a
+  shared key such as `global`, the Gateway resolves its agent; pass `--agent`
+  when the Gateway needs an explicit selection. The agent need not exist in the
+  CLI machine's configuration. Conflicting agent and session targets are rejected.
+- `--verbose` adds policy sources and the complete requested/host/effective
+  approval tables for all scopes.
+- `--json` preserves all approval fields and scopes. With a selected agent, it
+  adds `toolAccess`, separating `local` findings from the optional `live` result.
+  `local` is omitted when the agent is not configured on the CLI machine. If a
+  failed session inspection could not resolve an agent, `agentId` is also omitted.
+  An untargeted multi-agent or empty-roster report instead adds
+  `toolAccessSelectionRequired` with `agentIds` and a `hint`; it makes no tool
+  availability claim.
+
+The session preview supports the shared Gateway connection options (`--url`,
+`--port`, `--token`, `--password`, `--timeout`). If the Gateway or session cannot
+be inspected, the report says **UNVERIFIED** and retains any available local
+findings. Missing local tool policy is labeled unavailable, never allowed. An
+unavailable inspection is not evidence that tools are allowed or denied.
+
+A successful fetch reports **PREVIEW** unless the checked policies establish
+an exclusion. Included tools are not guaranteed to execute, and a tool missing
+from the preview is not necessarily disabled. The preview may be cached; saved
+changes can take time to appear, and an active run can use different authority,
+credentials, discovery, or policy. Verify execution in a run; command approvals
+still apply.
+
+JSON retains the wire names `live`, `checked: "live-session"`, and tool statuses
+`available`/`unavailable`. These describe the fetched session preview.
+`live.status: "verified"` means the preview was retrieved successfully, not that
+execution was verified. `excluded` identifies a checked policy exclusion;
+`unavailable` alone does not establish one. The CLI translates an older Gateway's
+explicit `deniedBySession` flag to `excluded` with a `session` reason.
+
+Command approvals remain labeled **local**, including during session inspection.
+They do not describe remote host approvals or per-session `/exec` overrides.
+Use `openclaw approvals get --gateway` or `--node <id|name|ip>` for those host
+policies, and `/exec` in the session for its current defaults.
+
+When adding terminal tools to `alsoAllow` would address the checked restrictions,
+the report suggests the exact configuration path and tool names. Append them to
+existing entries; preserve command approval requirements. When another policy
+still blocks access, review the reported exclusions before enabling tools. A
+tool merely missing from the preview does not prompt an `alsoAllow` recipe.
+Changes use the existing config commands or the agent's Tools panel and Save
+controls. Check the updated preview and verify execution in a run.
+
+### Synchronize local command approvals
+
 Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
 
-`show`, `preset`, and `set` accept `--json` and return the same requested,
-host, and effective policy facts as one JSON object.
+These commands retain their local config/policy synchronization owner. The
+automatic owner routing of `openclaw approvals` does not apply to `exec-policy`.
+
+`show`, `preset`, and `set` accept `--json` and return the requested, host, and
+effective command approval facts as one JSON object. `preset` and `set` do not
+change tool profiles or tool allow/deny rules.
 
 Scope:
 

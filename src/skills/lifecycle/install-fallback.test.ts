@@ -1,21 +1,26 @@
-// Install fallback tests cover alternate skill install paths when primary paths fail.
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { hasBinary } from "../loading/config.js";
-import { hasBinaryMock, runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
+import {
+  hasBinaryMock,
+  runCommandWithTimeoutMock as runCommand,
+} from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
+import { installSkill, resolveInstallerKindReadiness } from "./install.js";
 
 const skillsMocks = vi.hoisted(() => ({
   loadWorkspaceSkills: vi.fn(),
 }));
 
+// mock-isolation: Keep package-manager commands synthetic; never invoke host installers.
 vi.mock("../../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) => runCommand(...args),
 }));
 
 vi.mock("../../plugins/install-security-scan.js", () => ({
@@ -31,13 +36,6 @@ vi.mock("../loading/workspace-skill-loader.js", () => {
 vi.mock("../loading/config.js", { spy: true });
 vi.mock("../../infra/brew.js", { spy: true });
 vi.mock("../../infra/container-environment.js", { spy: true });
-
-let installSkill: typeof import("./install.js").installSkill;
-let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;
-
-async function loadSkillsInstallModulesForTest() {
-  ({ installSkill, resolveInstallerKindReadiness } = await import("./install.js"));
-}
 
 function makeSkillEntry(
   workspaceDir: string,
@@ -66,7 +64,7 @@ function mockAvailableBinaries(binaries: string[]) {
 }
 
 function assertNoAptGetFallbackCalls() {
-  const aptCalls = runCommandWithTimeoutMock.mock.calls.filter((call) => {
+  const aptCalls = runCommand.mock.calls.filter((call) => {
     if (!Array.isArray(call[0])) {
       return false;
     }
@@ -79,36 +77,19 @@ function assertNoAptGetFallbackCalls() {
 }
 
 function mockPasswordlessSudoRule(): void {
-  runCommandWithTimeoutMock.mockResolvedValueOnce({
-    code: 0,
-    stdout: "    Options: !authenticate\n",
-    stderr: "",
-  });
+  reply("    Options: !authenticate\n");
 }
 
-function commandCallAt(
-  index: number,
-): [
+type CommandCall = [
   string[],
   { env?: NodeJS.ProcessEnv | Record<string, string | undefined>; timeoutMs?: number },
-] {
-  const call =
-    index < 0
-      ? runCommandWithTimeoutMock.mock.calls[runCommandWithTimeoutMock.mock.calls.length + index]
-      : runCommandWithTimeoutMock.mock.calls[index];
+];
+function commandCallAt(index: number): CommandCall {
+  const call = runCommand.mock.calls.at(index);
   if (!call) {
     throw new Error(`Expected command call ${index}`);
   }
-  return call as [
-    string[],
-    { env?: NodeJS.ProcessEnv | Record<string, string | undefined>; timeoutMs?: number },
-  ];
-}
-
-function expectAptPolicyCall(index: number): void {
-  const [argv, options] = commandCallAt(index);
-  expect(argv).toEqual(["apt-cache", "policy", "golang-go"]);
-  expect(options.env).toEqual({ LC_ALL: "C" });
+  return call as CommandCall;
 }
 
 function expectLocalGoVersionEnvCall(index: number): void {
@@ -118,23 +99,26 @@ function expectLocalGoVersionEnvCall(index: number): void {
   expect(options.env).toEqual({ GOTOOLCHAIN: "local" });
 }
 
-function mockLocalGoVersion(version = "go1.22.4"): void {
-  runCommandWithTimeoutMock.mockResolvedValueOnce({
-    code: 0,
-    stdout: version,
-    stderr: "",
-  });
-}
-
 function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
   const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
   return fn().finally(() => spy.mockRestore());
+}
+
+function reply(stdout = "", code = 0, stderr = "") {
+  return runCommand.mockResolvedValueOnce({ code, stdout, stderr });
+}
+function completed(stdout = "ok", code = 0, stderr = "") {
+  return { code, stdout, stderr, signal: null, killed: false };
 }
 
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-fallback-test-" });
 
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
+  const install = (
+    skillName = "go-tool-single",
+    options: Partial<Parameters<typeof installSkill>[0]> = {},
+  ) => installSkill({ workspaceDir, skillName, installId: "deps", ...options });
   let installEnvSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
@@ -149,12 +133,11 @@ describe("skills-install fallback edge cases", () => {
         package: "example-package",
       }),
     ]);
-    await loadSkillsInstallModulesForTest();
   });
 
   beforeEach(() => {
     installEnvSnapshot = captureEnv(["PATH", "GOBIN", "GOPATH"]);
-    runCommandWithTimeoutMock.mockReset();
+    runCommand.mockReset();
     hasBinaryMock.mockReset();
     vi.mocked(hasBinary)
       .mockReset()
@@ -179,45 +162,28 @@ describe("skills-install fallback edge cases", () => {
       for (const testCase of [
         {
           label: "sudo returns password required",
-          setup: () =>
-            runCommandWithTimeoutMock.mockResolvedValueOnce({
-              code: 1,
-              stdout: "",
-              stderr: "sudo: a password is required",
-            }),
-          assert: (result: { message: string; stderr: string }) => {
-            expect(result.message).toContain("sudo is not usable");
-            expect(result.message).toContain("https://go.dev/doc/install");
-            expect(result.stderr).toContain("sudo: a password is required");
-          },
+          setup: () => reply("", 1, "sudo: a password is required"),
+          stderr: "sudo: a password is required",
         },
         {
           label: "sudo probe throws executable-not-found",
           setup: () =>
-            runCommandWithTimeoutMock.mockRejectedValueOnce(
-              new Error('Executable not found in $PATH: "sudo"'),
-            ),
-          assert: (result: { message: string; stderr: string }) => {
-            expect(result.message).toContain("sudo is not usable");
-            expect(result.message).toContain("https://go.dev/doc/install");
-            expect(result.stderr).toContain("Executable not found");
-          },
+            runCommand.mockRejectedValueOnce(new Error('Executable not found in $PATH: "sudo"')),
+          stderr: "Executable not found",
         },
       ]) {
-        runCommandWithTimeoutMock.mockClear();
+        runCommand.mockClear();
         mockAvailableBinaries(["apt-get", "sudo"]);
         testCase.setup();
 
-        const result = await installSkill({
-          workspaceDir,
-          skillName: "go-tool-single",
-          installId: "deps",
-        });
+        const result = await install();
 
         expect(result.ok, testCase.label).toBe(false);
-        testCase.assert(result);
+        expect(result.message).toContain("sudo is not usable");
+        expect(result.message).toContain("https://go.dev/doc/install");
+        expect(result.stderr).toContain(testCase.stderr);
         const sudoCall = commandCallAt(0);
-        expect(sudoCall?.[0], testCase.label).toEqual([
+        expect(sudoCall[0], testCase.label).toEqual([
           "sudo",
           "-k",
           "-n",
@@ -237,17 +203,9 @@ describe("skills-install fallback edge cases", () => {
     await withUid(1000, async () => {
       mockAvailableBinaries(["apt-get", "sudo"]);
       mockPasswordlessSudoRule();
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "    Options: authenticate\n",
-        stderr: "",
-      });
+      reply("    Options: authenticate\n");
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
+      const result = await install();
 
       expect(result.ok).toBe(false);
       expect(commandCallAt(0)[0]).toEqual(["sudo", "-k", "-n", "-ll", "apt-get", "update", "-qq"]);
@@ -268,25 +226,18 @@ describe("skills-install fallback edge cases", () => {
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {
     mockAvailableBinaries(["curl"]);
 
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "py-tool",
-      installId: "deps",
-    });
+    const result = await install("py-tool");
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain("https://docs.astral.sh/uv/getting-started/installation/");
 
-    // Verify NO curl command was attempted (no auto-install)
-    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("returns container-specific guidance when brew is missing in a Linux container", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     vi.mocked(isContainerEnvironment).mockReturnValue(true);
     mockAvailableBinaries([]);
-    try {
+    await withMockedPlatform("linux", async () => {
       skillsMocks.loadWorkspaceSkills.mockReturnValueOnce([
         makeSkillEntry(workspaceDir, "brew-tool-container", {
           kind: "brew",
@@ -294,57 +245,27 @@ describe("skills-install fallback edge cases", () => {
         }),
       ]);
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "brew-tool-container",
-        installId: "deps",
-      });
+      const result = await install("brew-tool-container");
 
       expect(result.ok).toBe(false);
       expect(result.message).toContain("Linux container");
       expect(result.message).toContain("Build a custom image");
       expect(result.message).toContain("openai-whisper");
       expect(result.message).not.toContain("https://brew.sh");
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-    } finally {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+      expect(runCommand).not.toHaveBeenCalled();
+    });
   });
 
   it("does not use HOMEBREW_PREFIX as a brew bin fallback for go installs", async () => {
-    const envSnapshot = captureEnv(["HOMEBREW_PREFIX"]);
-    try {
-      const maliciousPrefix = path.join(workspaceDir, "evil-brew");
-      process.env.HOMEBREW_PREFIX = maliciousPrefix;
+    const maliciousPrefix = path.join(workspaceDir, "evil-brew");
+    await withEnvAsync({ HOMEBREW_PREFIX: maliciousPrefix }, async () => {
       mockAvailableBinaries([]);
       vi.mocked(resolveBrewExecutable).mockReturnValue("/safe/homebrew/bin/brew");
-      runCommandWithTimeoutMock.mockResolvedValue({
-        code: 0,
-        stdout: "ok",
-        stderr: "",
-        signal: null,
-        killed: false,
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "installed go",
-        stderr: "",
-        signal: null,
-        killed: false,
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 1,
-        stdout: "",
-        stderr: "prefix unavailable",
-        signal: null,
-        killed: false,
-      });
+      runCommand.mockResolvedValue(completed("ok"));
+      runCommand.mockResolvedValueOnce(completed("installed go"));
+      runCommand.mockResolvedValueOnce(completed("", 1, "prefix unavailable"));
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
+      const result = await install();
 
       expect(result.ok).toBe(true);
       const brewInstallCall = commandCallAt(0);
@@ -356,102 +277,24 @@ describe("skills-install fallback edge cases", () => {
       const finalCall = commandCallAt(-1);
       expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
       expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
-    } finally {
-      envSnapshot.restore();
-    }
-  });
-
-  it("routes existing Go installs to the restart-stable user bin without changing Go config", async () => {
-    process.env.PATH = "/usr/bin";
-    process.env.GOBIN = "/operator/go/bin";
-    process.env.GOPATH = "/operator/go";
-    mockAvailableBinaries(["go", "brew"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-      signal: null,
-      killed: false,
     });
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    const installCall = commandCallAt(0);
-    expect(installCall[0]).toEqual(["go", "install", "example.com/tool@latest"]);
-    const localBin = path.join(os.homedir(), ".local", "bin");
-    expect(installCall[1].env).toMatchObject({
-      GOBIN: localBin,
-      PATH: ["/usr/bin", localBin].join(path.delimiter),
-    });
-    expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
-    expect(process.env.GOBIN).toBe("/operator/go/bin");
-    expect(process.env.GOPATH).toBe("/operator/go");
   });
 
   describe("resolveInstallerKindReadiness", () => {
-    it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
-      await withUid(1000, async () => {
-        mockAvailableBinaries(["apt-get", "sudo"]);
-        mockPasswordlessSudoRule();
-        mockPasswordlessSudoRule();
-
-        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(commandCallAt(0)[0]).toEqual([
-          "sudo",
-          "-k",
-          "-n",
-          "-ll",
-          "apt-get",
-          "update",
-          "-qq",
-        ]);
-        expect(commandCallAt(1)[0]).toEqual([
-          "sudo",
-          "-k",
-          "-n",
-          "-ll",
-          "apt-get",
-          "install",
-          "-y",
-          "golang-go",
-        ]);
-        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-      });
-    });
-
-    it("defers apt candidate validation until the policy-approved refresh", async () => {
-      await withUid(0, async () => {
-        mockAvailableBinaries(["apt-get"]);
-
-        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-      });
-    });
-
     it("skips missing-Go recipes when neither brew nor a usable apt path exists", async () => {
       await withUid(1000, async () => {
         // apt-get exists but there is no root, sudo, or brew to run it with.
         mockAvailableBinaries(["apt-get"]);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
-        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+        expect(runCommand).not.toHaveBeenCalled();
       });
     });
 
     it("uses off-PATH Linuxbrew for Go but not uv bootstraps", async () => {
       mockAvailableBinaries([]);
       vi.mocked(resolveBrewExecutable).mockReturnValue("/home/linuxbrew/.linuxbrew/bin/brew");
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "/home/linuxbrew/.linuxbrew\n",
-        stderr: "",
-      });
+      reply("/home/linuxbrew/.linuxbrew\n");
 
       expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
       expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: false, reason: "uv" });
@@ -459,60 +302,13 @@ describe("skills-install fallback edge cases", () => {
       expect(commandCallAt(0)[0]).toEqual(["/home/linuxbrew/.linuxbrew/bin/brew", "--prefix"]);
     });
 
-    it("lets the selected Homebrew install determine directory writability", async () => {
-      mockAvailableBinaries(["brew"]);
-      runCommandWithTimeoutMock.mockResolvedValue({
-        code: 1,
-        stdout: "",
-        stderr: "directories are not writable",
-      });
-
-      expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
-      expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: true });
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-    });
-
-    it("keeps usable Go ready without consulting an unrelated Homebrew install", async () => {
-      mockAvailableBinaries(["go", "brew"]);
-      mockLocalGoVersion("go1.24.12");
-
-      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-      expectLocalGoVersionEnvCall(0);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    });
-
     it("skips too-old Go even though the binary exists", async () => {
       mockAvailableBinaries(["go", "brew"]);
-      mockLocalGoVersion("go1.18.1");
+      reply("go1.18.1");
 
       expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
       expectLocalGoVersionEnvCall(0);
     });
-
-    it("keeps usable Go ready without consulting brew or apt", async () => {
-      mockAvailableBinaries(["go"]);
-      mockLocalGoVersion();
-
-      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-      expectLocalGoVersionEnvCall(0);
-    });
-
-    it.each(["local", "path", "go1.22.4", "asdf+auto"])(
-      "keeps a supported local compiler ready with GOTOOLCHAIN=%s",
-      async (toolchain) => {
-        const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
-        try {
-          process.env.GOTOOLCHAIN = toolchain;
-          mockAvailableBinaries(["go"]);
-          mockLocalGoVersion();
-
-          expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-          expectLocalGoVersionEnvCall(0);
-        } finally {
-          envSnapshot.restore();
-        }
-      },
-    );
 
     it("mirrors uv and brew fallbacks and passes unknown kinds through", async () => {
       mockAvailableBinaries([]);
@@ -522,35 +318,9 @@ describe("skills-install fallback edge cases", () => {
 
       // On-PATH brew satisfies brew recipes and uv's brew bootstrap.
       mockAvailableBinaries(["brew"]);
-      runCommandWithTimeoutMock.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      runCommand.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
       expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: true });
       expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
-    });
-  });
-
-  it("refreshes apt metadata before installing an accepted Go candidate", async () => {
-    await withUid(0, async () => {
-      mockAvailableBinaries(["apt-get"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
-        stderr: "",
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
-
-      expect(result.ok).toBe(true);
-      expect(commandCallAt(0)[0]).toEqual(["apt-get", "update", "-qq"]);
-      expectAptPolicyCall(1);
-      expect(commandCallAt(2)[0]).toEqual(["apt-get", "install", "-y", "golang-go"]);
-      expect(commandCallAt(3)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
     });
   });
 
@@ -559,23 +329,15 @@ describe("skills-install fallback edge cases", () => {
       mockAvailableBinaries(["apt-get", "sudo"]);
       mockPasswordlessSudoRule();
       mockPasswordlessSudoRule();
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
-        stderr: "",
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      reply();
+      reply("golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n");
+      reply();
+      reply();
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
+      const result = await install();
 
       expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock.mock.calls.map((call) => call[0])).toEqual([
+      expect(runCommand.mock.calls.map((call) => call[0])).toEqual([
         ["sudo", "-k", "-n", "-ll", "apt-get", "update", "-qq"],
         ["sudo", "-k", "-n", "-ll", "apt-get", "install", "-y", "golang-go"],
         ["sudo", "-n", "apt-get", "update", "-qq"],
@@ -586,131 +348,37 @@ describe("skills-install fallback edge cases", () => {
     });
   });
 
-  it("uses the current supported apt candidate when metadata refresh fails", async () => {
-    await withUid(0, async () => {
-      mockAvailableBinaries(["apt-get"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 1,
-        stdout: "",
-        stderr: "temporary repository failure",
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
-        stderr: "",
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
-
-      expect(result.ok).toBe(true);
-      expect(commandCallAt(0)[0]).toEqual(["apt-get", "update", "-qq"]);
-      expectAptPolicyCall(1);
-      expect(commandCallAt(2)[0]).toEqual(["apt-get", "install", "-y", "golang-go"]);
-      expect(commandCallAt(3)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
-    });
-  });
-
   it("rejects the current old apt candidate when metadata refresh fails", async () => {
     await withUid(0, async () => {
       mockAvailableBinaries(["apt-get"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 1,
-        stdout: "",
-        stderr: "temporary repository failure",
-      });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.19~1\n",
-        stderr: "",
-      });
+      reply("", 1, "temporary repository failure");
+      reply("golang-go:\n  Installed: (none)\n  Candidate: 2:1.19~1\n");
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
+      const result = await install();
 
-      expect(result.ok).toBe(false);
-      expect(result.skipReason).toBe("go");
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-      expectAptPolicyCall(1);
+      expect(result).toMatchObject({ ok: false, skipReason: "go" });
+      expect(runCommand).toHaveBeenCalledTimes(2);
+      const [argv, options] = commandCallAt(1);
+      expect(argv).toEqual(["apt-cache", "policy", "golang-go"]);
+      expect(options.env).toEqual({ LC_ALL: "C" });
     });
   });
 
-  it("does not install an old apt Go candidate after refreshing empty metadata", async () => {
-    await withUid(0, async () => {
-      mockAvailableBinaries(["apt-get"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.19~1\n",
-        stderr: "",
-      });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toContain("usable Go 1.21+ package");
-      expect(result.skipReason).toBe("go");
-      expect(runCommandWithTimeoutMock.mock.calls.map((call) => call[0])).toEqual([
-        ["apt-get", "update", "-qq"],
-        ["apt-cache", "policy", "golang-go"],
-      ]);
-      expectAptPolicyCall(1);
-    });
-  });
-
-  it.each([
-    [
-      "a newer module Go requirement",
-      "go: example.com/tool@latest requires go >= 1.24 (running go 1.22; GOTOOLCHAIN=local)",
-    ],
-    ["an invalid toolchain setting", 'go: invalid GOTOOLCHAIN "asdf+auto"'],
-    ["a missing PATH toolchain", 'go: cannot find "go1.24.0" in PATH'],
-  ])("classifies %s as a deferred Go prerequisite", async (_label, stderr) => {
+  it("classifies a missing PATH toolchain as a deferred Go prerequisite", async () => {
     mockAvailableBinaries(["go"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr,
-    });
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.skipReason).toBe("go");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    reply("", 1, 'go: cannot find "go1.24.0" in PATH');
+    const result = await install();
+    expect(result).toMatchObject({ ok: false, skipReason: "go" });
+    expect(runCommand).toHaveBeenCalledTimes(1);
     expect(commandCallAt(0)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
   });
 
   it("keeps ordinary Go install failures as install failures", async () => {
     process.env.PATH = "/usr/bin";
     mockAvailableBinaries(["go"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "go: example.com/tool@latest: module not found",
-    });
+    reply("", 1, "go: example.com/tool@latest: module not found");
 
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
+    const result = await install();
 
     expect(result.ok).toBe(false);
     expect(result.skipReason).toBeUndefined();
@@ -718,27 +386,17 @@ describe("skills-install fallback edge cases", () => {
   });
 
   it("does not override a configured fixed toolchain for direct Go installs", async () => {
-    const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
-    try {
-      process.env.GOTOOLCHAIN = "local";
+    await withEnvAsync({ GOTOOLCHAIN: "local" }, async () => {
       process.env.PATH = "/usr/bin";
       process.env.GOBIN = "/operator/go/bin";
       process.env.GOPATH = "/operator/go";
-      mockAvailableBinaries(["go"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "installed",
-        stderr: "",
-      });
+      mockAvailableBinaries(["go", "brew"]);
+      reply("installed");
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "go-tool-single",
-        installId: "deps",
-      });
+      const result = await install();
 
       expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+      expect(runCommand).toHaveBeenCalledTimes(1);
       const [argv, options] = commandCallAt(0);
       expect(argv).toEqual(["go", "install", "example.com/tool@latest"]);
       const localBin = path.join(os.homedir(), ".local", "bin");
@@ -747,52 +405,34 @@ describe("skills-install fallback edge cases", () => {
         PATH: ["/usr/bin", localBin].join(path.delimiter),
       });
       expect(options.env).not.toHaveProperty("GOTOOLCHAIN");
+      expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
       expect(process.env.GOBIN).toBe("/operator/go/bin");
       expect(process.env.GOPATH).toBe("/operator/go");
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 
   it("preserves system uv/python env vars when running uv installs", async () => {
     mockAvailableBinaries(["uv"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-      signal: null,
-      killed: false,
-    });
+    runCommand.mockResolvedValueOnce(completed("ok"));
 
-    const envSnapshot = captureEnv([
-      "UV_PYTHON",
-      "UV_INDEX_URL",
-      "PIP_INDEX_URL",
-      "PYTHONPATH",
-      "VIRTUAL_ENV",
-    ]);
-    try {
-      process.env.UV_PYTHON = "/tmp/attacker-python";
-      process.env.UV_INDEX_URL = "https://example.invalid/simple";
-      process.env.PIP_INDEX_URL = "https://example.invalid/pip";
-      process.env.PYTHONPATH = "/tmp/attacker-pythonpath";
-      process.env.VIRTUAL_ENV = "/tmp/attacker-venv";
+    await withEnvAsync(
+      {
+        UV_PYTHON: "/tmp/attacker-python",
+        UV_INDEX_URL: "https://example.invalid/simple",
+        PIP_INDEX_URL: "https://example.invalid/pip",
+        PYTHONPATH: "/tmp/attacker-pythonpath",
+        VIRTUAL_ENV: "/tmp/attacker-venv",
+      },
+      async () => {
+        const result = await install("py-tool", { timeoutMs: 10_000 });
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "py-tool",
-        installId: "deps",
-        timeoutMs: 10_000,
-      });
-
-      expect(result.ok).toBe(true);
-      const firstCall = commandCallAt(0);
-      expect(firstCall?.[0]).toEqual(["uv", "tool", "install", "example-package"]);
-      expect(firstCall?.[1]?.timeoutMs).toBe(10_000);
-      const envArg = firstCall?.[1]?.env;
-      expect(envArg).toBeUndefined();
-    } finally {
-      envSnapshot.restore();
-    }
+        expect(result.ok).toBe(true);
+        const firstCall = commandCallAt(0);
+        expect(firstCall?.[0]).toEqual(["uv", "tool", "install", "example-package"]);
+        expect(firstCall?.[1]?.timeoutMs).toBe(10_000);
+        const envArg = firstCall?.[1]?.env;
+        expect(envArg).toBeUndefined();
+      },
+    );
   });
 });

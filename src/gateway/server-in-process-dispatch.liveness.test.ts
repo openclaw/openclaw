@@ -47,7 +47,7 @@ function startNestedTool(execute: () => Promise<void>, runId = "current-run", ow
     await execute();
     return result;
   });
-  const outer = wrap("tool_call", () => inner.execute("inner", {}));
+  const outer = wrap("dispatch_action", () => inner.execute("inner", {}));
   const execution = outer.execute("outer", {});
   pendingWork.push(execution);
   return execution;
@@ -122,34 +122,48 @@ afterEach(async () => {
 });
 
 describe("nested tool Gateway response deadlines", () => {
-  it.each([false, true])(
-    "honors a nested 20-minute wait beyond the recovery floor (expectFinal: %s)",
-    async (expectFinal) => {
-      const startedAt = Date.now();
-      const request = pendingRequest("environments.create", 20 * 60_000, undefined, expectFinal);
-      handleGatewayRequest.mockImplementation(request.execute);
-      const execution = startNestedTool(async () => {
+  it.each([
+    { name: "bounded first response", timeoutMs: 20 * 60_000, owned: true, expectFinal: false },
+    { name: "bounded final response", timeoutMs: 20 * 60_000, owned: true, expectFinal: true },
+    {
+      name: "unbounded current-run request",
+      timeoutMs: undefined,
+      owned: true,
+      expectFinal: false,
+    },
+    { name: "bounded ownerless request", timeoutMs: 20 * 60_000, owned: false, expectFinal: false },
+  ])("tracks recovery allowance for a $name", async ({ timeoutMs, owned, expectFinal }) => {
+    const startedAt = Date.now();
+    const request = pendingRequest("environments.create", timeoutMs, undefined, expectFinal);
+    handleGatewayRequest.mockImplementation(request.execute);
+    const execution = startNestedTool(
+      async () => {
         await request.call();
-      });
-      await request.entered.promise;
-      await waitForDiagnosticEventsDrained();
-      await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
-
-      const snapshot = getDiagnosticSessionActivitySnapshot(ref);
+      },
+      "current-run",
+      owned,
+    );
+    await request.entered.promise;
+    await waitForDiagnosticEventsDrained();
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
+    const snapshot = getDiagnosticSessionActivitySnapshot(ref);
+    if (owned && timeoutMs !== undefined) {
       expect(snapshot).toMatchObject({
-        activeToolName: "tool_call",
+        activeToolName: "dispatch_action",
         activeToolCallId: "outer",
         activeToolAgeMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1,
-        activeToolDeadlineAtMs: startedAt + 20 * 60_000 + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+        activeToolDeadlineAtMs: startedAt + timeoutMs + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
       });
       expect(snapshot.lastProgressAgeMs).toBeLessThan(resolveRunStaleThresholdMs(snapshot));
-
-      request.completed.resolve();
-      await execution;
-      await waitForDiagnosticEventsDrained();
-      expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBeUndefined();
-    },
-  );
+    } else {
+      expect(snapshot.activeToolDeadlineAtMs).toBeUndefined();
+      expect(snapshot.lastProgressAgeMs).toBeGreaterThan(resolveRunStaleThresholdMs(snapshot));
+    }
+    request.completed.resolve();
+    await execution;
+    await waitForDiagnosticEventsDrained();
+    expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBeUndefined();
+  });
 
   it.each(["long", "short"] as const)(
     "releases only the %s response allowance while an overlapping wait is still pending",
@@ -192,7 +206,7 @@ describe("nested tool Gateway response deadlines", () => {
       requests[first === "long" ? "short" : "long"].completed.resolve();
       await finishedWaits.promise;
       expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-        activeToolName: "tool_call",
+        activeToolName: "dispatch_action",
         activeToolDeadlineAtMs: undefined,
       });
       finishTool.resolve();
@@ -274,28 +288,5 @@ describe("nested tool Gateway response deadlines", () => {
     previous.completed.resolve();
     finishTool.resolve();
     await Promise.all([oldExecution, execution]);
-  });
-
-  it.each([
-    { name: "unbounded current-run request", timeoutMs: undefined, owned: true },
-    { name: "bounded ownerless request", timeoutMs: 20 * 60_000, owned: false },
-  ])("preserves recoverability for a $name", async ({ timeoutMs, owned }) => {
-    const request = pendingRequest("fallback", timeoutMs);
-    handleGatewayRequest.mockImplementation(request.execute);
-    const execution = startNestedTool(
-      async () => {
-        await request.call();
-      },
-      "current-run",
-      owned,
-    );
-    await request.entered.promise;
-    await waitForDiagnosticEventsDrained();
-    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
-    const snapshot = getDiagnosticSessionActivitySnapshot(ref);
-    expect(snapshot.activeToolDeadlineAtMs).toBeUndefined();
-    expect(snapshot.lastProgressAgeMs).toBeGreaterThan(resolveRunStaleThresholdMs(snapshot));
-    request.completed.resolve();
-    await execution;
   });
 });

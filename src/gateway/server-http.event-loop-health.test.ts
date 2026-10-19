@@ -1,8 +1,30 @@
 import { get } from "node:http";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { AUTH_NONE, withGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
+
+const nativeDelay = vi.hoisted(() => ({ max: 20_000_000 }));
+vi.mock("node:perf_hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:perf_hooks")>()),
+  monitorEventLoopDelay: () => ({
+    get max() {
+      return nativeDelay.max;
+    },
+    percentile: () => nativeDelay.max,
+    reset: () => {
+      nativeDelay.max = 20_000_000;
+    },
+    enable: () => true,
+    disable: () => true,
+  }),
+}));
+
+afterEach(() => vi.restoreAllMocks());
 
 async function readJson(url: string): Promise<Record<string, unknown>> {
   const { statusCode, body: responseBody } = await new Promise<{
@@ -25,17 +47,14 @@ async function readJson(url: string): Promise<Record<string, unknown>> {
   return JSON.parse(responseBody);
 }
 
-const delay = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
 describe("Gateway HTTP event-loop sampling", () => {
   it("retains a blocked request interval when readiness is read before the sampler resumes", async () => {
-    const monitor = createGatewayEventLoopHealthMonitor();
-    const startedAt = Date.now();
+    const clock = createGatewaySchedulerClock();
+    vi.spyOn(performance, "now").mockImplementation(clock.clock.now);
+    const monitor = createGatewayEventLoopHealthMonitor({
+      scheduler: createTestGatewayScheduler(clock.clock),
+    });
     let blockNextRead = false;
-    let blockedMs = 0;
     try {
       await withGatewayServer({
         prefix: "event-loop-http-owner",
@@ -44,11 +63,8 @@ describe("Gateway HTTP event-loop sampling", () => {
           getReadiness: () => {
             if (blockNextRead) {
               blockNextRead = false;
-              const start = performance.now();
-              while (performance.now() - start < 1_200) {
-                // Reproduce synchronous request work before the overdue timer can run.
-              }
-              blockedMs = performance.now() - start;
+              nativeDelay.max = 1_200_000_000;
+              clock.setTime(clock.clock.now() + 1_200);
               const beforePendingSample = monitor.snapshot();
               for (let index = 0; index < 100; index++) {
                 expect(monitor.snapshot()).toBe(beforePendingSample);
@@ -57,7 +73,7 @@ describe("Gateway HTTP event-loop sampling", () => {
             return {
               ready: true,
               failing: [],
-              uptimeMs: Date.now() - startedAt,
+              uptimeMs: clock.clock.now(),
               eventLoop: monitor.snapshot(),
             };
           },
@@ -72,13 +88,14 @@ describe("Gateway HTTP event-loop sampling", () => {
               throw new Error("expected a TCP listener");
             }
             const url = `http://127.0.0.1:${address.port}/readyz`;
-            await delay(1_100);
+            for (let index = 0; index < 50; index++) {
+              await clock.advanceBy(20);
+            }
             const initial = await readJson(url);
             expect(initial.ready).toBe(true);
             blockNextRead = true;
             await readJson(url);
-            expect(blockedMs).toBeGreaterThanOrEqual(1_200);
-            await delay(100);
+            await clock.wake();
             const after = await readJson(url);
             expect(after).toMatchObject({
               ready: true,

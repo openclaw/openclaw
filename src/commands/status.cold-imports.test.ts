@@ -1,5 +1,6 @@
 // Default status imports must not pull in the broad plugin diagnostics/runtime graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 describe("status cold imports", () => {
   afterEach(() => {
@@ -59,6 +60,6 @@ describe("status cold imports", () => {
     ]);
 
     expect(scan.scanStatus).toBeTypeOf("function");
-    expect(textRuntime.buildStatusCommandReportData).toBeTypeOf("function");
+    expect(textRuntime.buildStatusCommandReportLines).toBeTypeOf("function");
   });
 });

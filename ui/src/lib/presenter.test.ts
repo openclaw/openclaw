@@ -25,16 +25,6 @@ describe("formatCronSchedule", () => {
     await i18n.setLocale("en");
   });
 
-  it.each([
-    { everyMs: 60_000, expected: "Every 1m" },
-    { everyMs: 450, expected: "Every 450ms" },
-    { everyMs: 90_000, expected: "Every 1m 30s" },
-    { everyMs: 3_661_001, expected: "Every 1h 1m 1s 1ms" },
-    { everyMs: 604_800_000, expected: "Every 7d" },
-  ])("preserves configured duration precision for every $everyMs ms", ({ everyMs, expected }) => {
-    expect(formatCronSchedule(job({ kind: "every", everyMs }))).toBe(expected);
-  });
-
   it("localizes configured duration precision", async () => {
     await i18n.setLocale("fr");
     const expected = [

@@ -1,0 +1,81 @@
+/* @vitest-environment jsdom */
+import { expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { useSessionMenuAppearance } from "./session-icon-picker-solid.tsx";
+
+it("keeps custom icon entry focused and ignores Enter while an IME composition is active", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const runAction = vi.fn();
+  const mounted = mountSolid(
+    () => {
+      const appearance = useSessionMenuAppearance(
+        () => ({ session: { icon: null, color: null }, actionDisabledReasons: {} }),
+        () => false,
+        runAction,
+      );
+      return appearance.render();
+    },
+    { container: host },
+  );
+  const custom = mounted.container.querySelector<HTMLButtonElement>(
+    ".session-menu__icon-choice--custom",
+  )!;
+  custom.click();
+  flush();
+  const input = mounted.container.querySelector<HTMLTextAreaElement>(
+    ".session-menu__icon-custom-input",
+  )!;
+  expect(document.activeElement).toBe(input);
+  input.value = "🦀";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+  );
+  expect(runAction).not.toHaveBeenCalled();
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(runAction).toHaveBeenCalledExactlyOnceWith({ kind: "set-icon", icon: "🦀" });
+  mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-back")!.click();
+  flush();
+  expect(document.activeElement).toBe(custom);
+  expect(custom.tabIndex).toBe(0);
+  expect(
+    [...host.querySelectorAll(".session-menu__icon-choice")].filter(
+      (choice) => choice.getAttribute("tabindex") === "0",
+    ),
+  ).toEqual([custom]);
+  expect(input.value).toBe("");
+  mounted.unmount();
+  host.remove();
+});
+
+it("moves the icon grid tab stop and sends appearance actions through the menu owner", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const runAction = vi.fn();
+  const mounted = mountSolid(
+    () =>
+      useSessionMenuAppearance(
+        () => ({ session: { icon: "🦞", color: null }, actionDisabledReasons: {} }),
+        () => false,
+        runAction,
+      ).render(),
+    { container: host },
+  );
+  const choices = mounted.container.querySelectorAll<HTMLButtonElement>(
+    ".session-menu__icon-choice",
+  );
+  choices[0]!.focus();
+  choices[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  expect(document.activeElement).toBe(choices[1]);
+  expect(choices[0]!.tabIndex).toBe(-1);
+  expect(choices[1]!.tabIndex).toBe(0);
+  choices[1]!.click();
+  expect(runAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "🚀" });
+  mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-remove")!.click();
+  expect(runAction).toHaveBeenLastCalledWith({ kind: "reset-appearance" });
+  mounted.unmount();
+  host.remove();
+});

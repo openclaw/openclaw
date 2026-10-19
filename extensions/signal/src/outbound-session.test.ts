@@ -16,7 +16,7 @@ describe("resolveSignalOutboundTarget", () => {
     expect(resolveSignalOutboundTarget("signal:u:ALICE.42")).toEqual(expected);
   });
 
-  it("still resolves group and phone targets", () => {
+  it("still resolves group, phone, and UUID targets", () => {
     expect(resolveSignalOutboundTarget("group:abc==")).toMatchObject({
       peer: { kind: "group", id: "abc==" },
       chatType: "group",
@@ -26,5 +26,13 @@ describe("resolveSignalOutboundTarget", () => {
       chatType: "direct",
       to: "signal:+15551234567",
     });
+    expect(resolveSignalOutboundTarget("signal:UUID:AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")).toEqual(
+      {
+        peer: { kind: "direct", id: "uuid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" },
+        chatType: "direct",
+        from: "signal:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        to: "signal:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      },
+    );
   });
 });

@@ -1,191 +1,222 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
+import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
-  type SessionHistoryWorkerInput,
   type SessionHistoryWorkerPreparedInput,
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-export type SessionHistoryWorkerRequestRunner = <TResult>(
-  prepare: () => SessionHistoryWorkerPreparedInput,
+export type SessionHistoryWorkerRequestRunner = <
+  Kind extends SessionHistoryWorkerPreparedInput["kind"],
+  TResult,
+>(
+  prepare: () => Extract<SessionHistoryWorkerPreparedInput, { kind: Kind }>,
   inputBytes: number,
-  receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
+  receive: (value: SessionTranscriptWorkerValues[Kind]) => TResult,
   signal?: AbortSignal,
-  onRequest?: (value: unknown) => void,
+  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+  timeoutMs?: number,
 ) => Promise<TResult>;
 
 /** Decode domain results; database custody remains with the enclosing history owner. */
 export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
+  function reader<K extends SessionHistoryWorkerPreparedInput["kind"], T>(
+    kind: K,
+    project: (value: SessionTranscriptWorkerValues[K]) => T,
+  ): (
+    input: Omit<Extract<SessionHistoryWorkerPreparedInput, { kind: K }>, "kind">,
+    signal?: AbortSignal,
+  ) => Promise<T>;
+  function reader<K extends SessionHistoryWorkerPreparedInput["kind"], Input extends object, T>(
+    kind: K,
+    project: (value: SessionTranscriptWorkerValues[K]) => T,
+    prepare: (input: Input) => Extract<SessionHistoryWorkerPreparedInput, { kind: K }>,
+  ): (input: Input, signal?: AbortSignal) => Promise<T>;
+  function reader<K extends SessionHistoryWorkerPreparedInput["kind"], Input extends object, T>(
+    kind: K,
+    project: (value: SessionTranscriptWorkerValues[K]) => T,
+    prepare?: (input: Input) => Extract<SessionHistoryWorkerPreparedInput, { kind: K }>,
+  ): (input: Input, signal?: AbortSignal) => Promise<T> {
+    return async (input, signal) =>
+      runRequest(
+        () => {
+          const request =
+            prepare?.(input) ??
+            // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
+            ({ kind, ...input } as Extract<SessionHistoryWorkerPreparedInput, { kind: K }>);
+          // Windows environments can be Proxies; only plain snapshots cross the worker boundary.
+          if ("scope" in request && request.scope.env) {
+            return { ...request, scope: { ...request.scope, env: { ...request.scope.env } } };
+          }
+          return "env" in request && request.env
+            ? { ...request, env: { ...request.env } }
+            : request;
+        },
+        JSON.stringify(input).length * 2,
+        project,
+        signal,
+      );
+  }
   return {
-    readHistoricalEvictionCandidates: async (input) =>
-      await runRequest(
-        () => ({ kind: "historical-eviction-candidates", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "historical-eviction-candidates"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of eviction candidates",
-            );
-          }
-          return value.sessionIds;
+    readTrajectoryEvents: reader("trajectory-events", (value) => value.events),
+    readTrajectoryRetention: (input, options) => {
+      const captured = {
+        ...input,
+        input: { ...input.input },
+        expectedIdentity: { ...input.expectedIdentity },
+        env: captureSessionTranscriptStorageEnvironment(input.env),
+      };
+      return runRequest(
+        () => ({ kind: "trajectory-retention", ...captured }),
+        JSON.stringify(captured).length * 2,
+        (value) => value.plan,
+        options.signal,
+        undefined,
+        options.timeoutMs,
+      );
+    },
+    readCleanup: reader("session-cleanup", (value) => value),
+    readRawDelta: reader("transcript-raw-delta", (value) => value.result),
+    readLatestAssistant: reader("transcript-latest-assistant", (value) => value.result),
+    readVisibleDelta: reader("transcript-visible-delta", (value) => value.result),
+    readSessionMemoryCapture: reader("session-memory-capture", (value) => value.result),
+    readBoardSnapshot: reader("board-snapshot", (result) => result.value),
+    readBoardWidgetDocument: reader("board-widget-document", (result) => result.value),
+    readBranchSummaries: reader("branch-summaries", (value) => value.result),
+    readMessagePresence: reader("transcript-message-presence", (value) => value.present),
+    readAnchors: reader("transcript-anchors", (value) => value.facts),
+    readRuntimeTarget: reader("session-runtime-target", (value) => value.target),
+    readConversations: reader("conversation-rows", (value) => value.rows),
+    prewarm: reader("prewarm", () => undefined),
+    readRetirement: reader("session-retirement-read", (value) => value.result),
+    readPendingArchives: reader("session-pending-archives", (value) => value.pending),
+    readLifecycleArtifactPlan: reader("lifecycle-artifact-plan", (value) => value),
+    readTranscriptStatsBatch: reader("transcript-stats-batch", (value) => value.stats),
+    readTranscriptInstances: reader(
+      "session-transcript-instances",
+      (value) => value.instances,
+      (input) => ({
+        kind: "session-transcript-instances",
+        ...input,
+        scope: {
+          ...input.scope,
+          env: captureSessionTranscriptStorageEnvironment(input.scope.env ?? process.env),
         },
-      ),
-    readArchivePruning: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-archive-pruning", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-archive-pruning"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of archive pruning",
-            );
-          }
-          return value.result;
+      }),
+    ),
+    readMemorySessionTargets: reader(
+      "memory-session-targets",
+      (value) => value.targets,
+      (input) => ({
+        kind: "memory-session-targets",
+        ...input,
+        params: {
+          ...input.params,
+          env: captureSessionTranscriptStorageEnvironment(input.params.env),
         },
-      ),
-    readColdMetadata: async (input) =>
-      await runRequest(
-        () => ({ kind: "cold-metadata", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "cold-metadata"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of cold metadata",
-            );
-          }
-          return value;
-        },
-      ),
-    searchTranscripts: async (params) =>
-      await runRequest(
+      }),
+    ),
+    readArchiveInventory: reader(
+      "session-archive-inventory",
+      (value) => value.archives,
+      (input) => ({
+        kind: "session-archive-inventory",
+        ...input,
+        env: captureSessionTranscriptStorageEnvironment(input.env ?? process.env),
+      }),
+    ),
+    readCorpusInventory: reader(
+      "session-corpus-inventory",
+      (value) => value.entries,
+      (input) => ({
+        kind: "session-corpus-inventory",
+        ...input,
+        scope: { ...input.scope, env: captureSessionTranscriptStorageEnvironment(input.scope.env) },
+      }),
+    ),
+    readArchivePresence: reader("session-archive-presence", (value) => value.registered),
+    findTranscriptEvent: reader(
+      "transcript-match",
+      (value) => value.result,
+      (request) => ({ kind: "transcript-match", request }),
+    ),
+    readHistoricalEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      (value) => {
+        if (!("sessionIds" in value)) {
+          throw new Error(
+            "Session history worker returned archived instead of historical candidates",
+          );
+        }
+        return value.sessionIds;
+      },
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+    ),
+    readArchivedEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      (value) => {
+        if (!("batch" in value)) {
+          throw new Error(
+            "Session history worker returned historical instead of archived candidates",
+          );
+        }
+        return value.batch;
+      },
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+    ),
+    readArchivePruning: reader("session-archive-pruning", (value) => value.result),
+    readColdMetadata: reader("cold-metadata", (value) => value),
+    readColdStorageInventory: reader("cold-storage-inventory", (value) => value),
+    searchTranscripts: (params, readIndexStatus) =>
+      runRequest(
         () => ({ kind: "transcript-search", params }),
         JSON.stringify(params).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "transcript-search"
-          ) {
-            throw new Error("Session history worker returned another result instead of search");
+        (value) => value.result,
+        undefined,
+        async (request, signal) => {
+          if (request !== "transcript-index-status") {
+            throw new Error("Unexpected transcript search status request");
           }
-          return value.result;
+          return { input: await readIndexStatus(signal), timeoutMs: 60_000 };
         },
       ),
-    readPreview: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-preview", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-preview"
-          ) {
-            throw new Error("Session history worker returned another result instead of a preview");
-          }
-          return value.items;
-        },
-      ),
-    readTitleFields: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-title-fields", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-title-fields"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of title fields",
-            );
-          }
-          return value.fields;
-        },
-      ),
-    readRowBackfill: async (params) =>
-      await runRequest(
-        () => ({ kind: "session-row-backfill", params }),
-        JSON.stringify(params).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-row-backfill"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of transcript fields",
-            );
-          }
-          return value.fields;
-        },
-      ),
-    run: async (prepare, inputBytes) =>
-      await runRequest(prepare, inputBytes, (value) => {
-        if (
-          typeof value === "boolean" ||
-          Array.isArray(value) ||
-          (value.kind !== "rpc" &&
-            value.kind !== "http" &&
-            value.kind !== "delta" &&
-            value.kind !== "recent" &&
-            value.kind !== "message-lookup")
-        ) {
-          throw new Error("Session history worker returned metadata instead of history");
-        }
-        return value;
-      }),
+    readPreview: reader("session-preview", (value) => value.items),
+    readTitleFields: reader("session-title-fields", (value) => value.fields),
+    readWatermark: reader("transcript-watermark", (value) => value.watermark),
+    readStats: reader("transcript-stats", (value) => value.stats),
+    readActivitySummarySource: reader("session-activity-summary-source", (value) => value.source),
+    run: async (prepare, inputBytes) => await runRequest(prepare, inputBytes, (value) => value),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
-      let parts: string[] = [];
-      let text: { encoding: string; decoder: TextDecoder } | undefined;
-      const receiveChunk = (value: unknown) => {
-        if (
-          !isRecord(value) ||
-          value.kind !== "transcript-hydration-chunk" ||
-          typeof value.encoding !== "string" ||
-          !Array.isArray(value.frames)
-        ) {
-          throw new Error("Session history worker returned an invalid transcript chunk");
-        }
-        if (!text) {
-          text = {
-            encoding: value.encoding,
-            decoder: new TextDecoder(value.encoding, { ignoreBOM: true }),
-          };
-        } else if (text.encoding !== value.encoding) {
-          throw new Error("Session history worker changed transcript encoding during transfer");
-        }
+      const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
+      const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
+      const parts: Uint8Array[] = [];
+      let decoder: TextDecoder | undefined;
+      const receiveChunk = (raw: unknown) => {
+        // SAFETY: The paired local hydration worker constructs this typed envelope.
+        const value = raw as SessionTranscriptHydrationChunk;
+        // The worker holds one storage encoding for the entire read snapshot.
+        decoder ??= new TextDecoder(value.encoding, { ignoreBOM: true });
         for (const frame of value.frames) {
-          if (
-            !isRecord(frame) ||
-            !(frame.data instanceof Uint8Array) ||
-            typeof frame.endOfEvent !== "boolean"
-          ) {
-            throw new Error("Session history worker returned an invalid transcript frame");
-          }
-          parts.push(text.decoder.decode(frame.data, { stream: !frame.endOfEvent }));
+          parts.push(frame.data);
           if (frame.endOfEvent) {
-            events.push(JSON.parse(parts.join("")));
-            parts = [];
+            const json = decoder.decode(parts.length === 1 ? parts[0] : Buffer.concat(parts));
+            events.push(JSON.parse(json));
+            eventJson?.push(json);
+            if (eventSeqs) {
+              if (typeof frame.seq !== "number" || !Number.isSafeInteger(frame.seq)) {
+                throw new Error("Transcript snapshot omitted its row sequence");
+              }
+              eventSeqs.push(frame.seq);
+            }
+            parts.length = 0;
           }
         }
       };
@@ -193,208 +224,100 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "transcript-hydration", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            (value.kind !== "full" && value.kind !== "bounded")
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of a transcript",
-            );
-          }
           if (value.kind === "bounded") {
             return value;
           }
           if (parts.length !== 0 || events.length !== value.eventCount) {
             throw new Error("Session history worker returned an incomplete transcript");
           }
-          return { kind: "full", snapshot: { events, version: value.version } };
+          return {
+            kind: "full",
+            ...(value.compaction ? { compaction: value.compaction } : {}),
+            snapshot: {
+              events,
+              version: value.version,
+              ...(eventJson ? { eventJson, eventSeqs } : {}),
+            },
+          };
         },
         signal,
         input.limits ? undefined : receiveChunk,
       );
     },
-    readCurrentTurnEntry: async (input, signal) =>
-      await runRequest(
-        () => ({ kind: "current-turn-entry", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "current-turn-entry"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of a current-turn entry",
-            );
-          }
-          return value;
-        },
+    readMaintenance: reader("transcript-maintenance", (value) => value),
+    readCurrentTurnEntry: reader("current-turn-entry", (value) => value),
+    readRecentActiveEvents: reader("recent-active-events", (value) => value.events),
+    readLatestActiveMessage: reader("latest-active-message", (value) => value.message),
+    readVoiceSessions: reader("voice-sessions", (value) => value),
+    readMembershipFacts: reader("session-membership-facts", (value) => value),
+    readMembers: reader("session-members", (value) => value),
+    readSuggestions: reader("session-suggestions", (value) => value.suggestions),
+    readReactions: reader("session-reactions", (value) => value.reactions),
+    readExactEntries: async (input, signal) => {
+      const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
+      return runRequest(
+        () => ({ kind: "session-exact-entries", ...captured }),
+        JSON.stringify(captured).length * 2,
+        (value) => value,
         signal,
-      ),
-    readUsageCache: async (input) =>
-      await runRequest(
-        () => ({ kind: "usage-cache", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "usage-refresh-lock"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of usage cache",
-            );
-          }
-          return value;
-        },
-      ),
-    readMembershipFacts: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-membership-facts", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-membership-facts"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of membership facts",
-            );
-          }
-          return value;
-        },
-      ),
-    readMembers: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-members", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (!Array.isArray(value)) {
-            throw new Error("Session history worker returned another result instead of members");
-          }
-          return value;
-        },
-      ),
-    readExactEntries: async (input, signal) =>
-      await runRequest(
-        () => ({ kind: "session-exact-entries", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-exact-entries"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of exact entries",
-            );
-          }
-          return value;
-        },
-        signal,
-      ),
+      );
+    },
     readRowFacts: async (input) => {
       if (input.sessionKeys.length > MAX_SESSION_ROW_FACTS_KEYS) {
         throw new Error(`Session row facts support at most ${MAX_SESSION_ROW_FACTS_KEYS} keys`);
       }
       const captured = {
-        env: { ...input.env },
+        env: captureSessionTranscriptStorageEnvironment(input.env),
         sessionKeys: [...input.sessionKeys],
         continuation: input.continuation ? { ...input.continuation } : undefined,
       };
       return await runRequest(
         () => ({ kind: "session-row-facts", ...captured }),
         JSON.stringify(captured).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-row-facts"
-          ) {
-            throw new Error("Session history worker returned another result instead of row facts");
-          }
-          return value;
-        },
+        (value) => value,
       );
     },
-    readProgressCard: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-progress-card", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-progress-card"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of a progress card",
-            );
-          }
-          return value.card;
-        },
-      ),
-    readEntryResult: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-entry-read", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-entry-read"
-          ) {
-            throw new Error("Session history worker returned another result instead of an entry");
-          }
-          return value.readError
-            ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-            : ok(value.entry);
-        },
-      ),
-    readEntries: async (scope) =>
-      await runRequest(
-        () => ({ kind: "session-entry-list", scope }),
-        JSON.stringify(scope).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-entry-list"
-          ) {
-            throw new Error("Session history worker returned another result instead of entries");
-          }
-          return value.entries;
-        },
-      ),
-    readIdentityEvidence: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-identity-evidence", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-identity-evidence"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of identity evidence",
-            );
-          }
-          return value.evidence;
-        },
-      ),
-    readEntryPresence: async (scope) =>
-      await runRequest(
-        () => ({ kind: "session-row-presence", scope }),
-        JSON.stringify(scope).length * 2,
-        (value) => {
-          if (typeof value !== "boolean") {
-            throw new Error("Session history worker returned history instead of metadata presence");
-          }
-          return value;
-        },
-      ),
+    readProgressCard: reader("session-progress-card", (value) => value.card),
+    readPendingInputHistory: reader("session-pending-input-history", (value) => value.snapshot),
+    readPendingInputReceipts: reader("session-pending-input-receipts", (value) => value.receipts),
+    readHarnessCompletionSource: reader(
+      "session-harness-completion-source",
+      (value) => value.snapshot,
+    ),
+    readPendingInputSource: reader("session-pending-input-source", (value) => value.snapshot),
+    readConversationDelivery: reader("conversation-delivery", (value) => value.record),
+    readGoalOperationReceipt: reader("goal-operation-receipt", (value) => value.result),
+    readEntryResult: reader("session-entry-read", (value) => ({
+      ...(value.readError
+        ? err(decodeSessionTranscriptWorkerReadError(value.readError))
+        : ok(value.entry)),
+      source: value.source,
+      facts: value.facts,
+    })),
+    readEntryCurrent: reader("session-entry-current", (value) => value.entry),
+    // The native reader validates the selected file. Replacement after that read is best effort.
+    readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
+      const captured = expectedIdentity && { ...expectedIdentity };
+      return runRequest(
+        () => ({
+          kind: "session-entry-list",
+          scope,
+          continuation,
+          expectedIdentity: captured,
+          ifRevision,
+        }),
+        JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
+        (value) => value,
+      );
+    },
+    readStoreProjection: reader("session-store-projection", (value) => value),
+    readStoreSummary: reader("session-store-summary", (value) => value.summary),
+    readIdentityEvidence: reader("session-identity-evidence", (value) => value.evidence),
+    readProjectionStatus: reader("projection-status", (value) => value),
+    readEntryPresence: reader(
+      "session-row-presence",
+      (value) => value,
+      (scope) => ({ kind: "session-row-presence", scope }),
+    ),
   };
 }

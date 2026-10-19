@@ -1,4 +1,3 @@
-// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -16,20 +15,11 @@ import {
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
   isOpenClawAgentModelId,
-  resolveAgentIdFromModel,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
-type OpenAiModelObject = {
-  id: string;
-  object: "model";
-  created: number;
-  owned_by: string;
-  permission: [];
-};
-
-function toOpenAiModel(id: string): OpenAiModelObject {
+function toOpenAiModel(id: string) {
   return {
     id,
     object: "model",
@@ -52,17 +42,13 @@ function loadAgentModelIds(): string[] {
   return Array.from(ids);
 }
 
-function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", "http://localhost").pathname;
-}
-
 /** Handle OpenAI-compatible model list/detail requests, returning false for unrelated paths. */
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
-  const requestPath = resolveRequestPath(req);
+  const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
   if (requestPath !== "/v1/models" && !requestPath.startsWith("/v1/models/")) {
     return false;
   }
@@ -114,21 +100,6 @@ export async function handleOpenAiModelsHttpRequest(
   if (!isOpenClawAgentModelId(decodedId)) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
-  }
-
-  const normalizedModelId = decodedId.trim().toLowerCase();
-  if (normalizedModelId !== OPENCLAW_MODEL_ID && normalizedModelId !== OPENCLAW_DEFAULT_MODEL_ID) {
-    const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromModel(decodedId, cfg);
-    if (!agentId || !listAgentIds(cfg).includes(agentId)) {
-      sendJson(res, 404, {
-        error: {
-          message: `Model '${decodedId}' not found.`,
-          type: "invalid_request_error",
-        },
-      });
-      return true;
-    }
   }
 
   if (!ids.includes(decodedId)) {

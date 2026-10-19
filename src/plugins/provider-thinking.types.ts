@@ -1,3 +1,4 @@
+import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 
@@ -8,10 +9,7 @@ import type { ThinkingLevelMap } from "../llm/types.js";
  * provider whether a model supports special reasoning UX such as adaptive,
  * xhigh, max, or a binary on/off toggle.
  */
-export type ProviderThinkingPolicyContext = {
-  provider: string;
-  modelId: string;
-};
+export type ProviderThinkingPolicyContext = ModelCatalogRef;
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
@@ -36,6 +34,8 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   agentRuntime?: string | null;
   /** API adapter id from the selected catalog route, when known. */
   api?: string | null;
+  /** Base URL from the selected catalog route, when known. */
+  baseUrl?: string | null;
   reasoning?: boolean;
   /** Thinking-to-wire mapping from the selected model route. */
   thinkingLevelMap?: ThinkingLevelMap;
@@ -54,8 +54,8 @@ type ProviderThinkingLevel = {
    */
   label?: string;
   /**
-   * Relative strength used when downgrading a stored level that the selected
-   * model no longer supports.
+   * Relative strength used to clamp execution when the selected model does not
+   * support the requested level. The stored preference remains unchanged.
    */
   rank?: number;
 };

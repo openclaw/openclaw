@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -21,12 +22,8 @@ import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
-import {
-  callGatewayTool,
-  fetchBrowserJson,
-  persistBrowserProxyResultFiles,
-} from "./browser-tool.runtime.js";
-import { BrowserServiceError } from "./browser/client-fetch.js";
+import { BrowserServiceError, fetchBrowserJson } from "./browser/client-fetch.js";
+import { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 import {
   parseBrowserSessionTabCloseResult,
   type BrowserSessionTabRoute,
@@ -70,20 +67,15 @@ function unwrapBrowserProxyPayload(
   }
 }
 
-async function callBrowserProxy(params: {
-  nodeId: string;
-  nodeLabel?: string;
-  declaredCommands: readonly string[];
-  pendingDeclaredCommands: readonly string[];
-  allowAutomaticHostFallback: boolean;
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}): Promise<BrowserProxyEnvelope> {
+async function callBrowserProxy(
+  params: Parameters<BrowserProxyRequest>[0] & {
+    nodeId: string;
+    nodeLabel?: string;
+    declaredCommands: readonly string[];
+    pendingDeclaredCommands: readonly string[];
+    allowAutomaticHostFallback: boolean;
+  },
+): Promise<BrowserProxyEnvelope> {
   const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
     params.timeoutMs,
   );

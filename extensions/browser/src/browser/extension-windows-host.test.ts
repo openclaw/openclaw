@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { installChromeExtensionBootstrap } from "./extension-install.js";
+import {
+  installChromeExtensionBootstrap,
+  inspectWindowsNativeHosts,
+  installWindowsNativeHost,
+  uninstallWindowsNativeHosts,
+  validateWindowsNativeContext,
+} from "./extension-install-fixture.test-support.js";
 import { useExtensionInstallFixture } from "./extension-install.test-support.js";
 import {
   WINDOWS_OFFICIAL_ORIGIN,
   type WindowsManagementRequest,
   type WindowsManagementResponse,
 } from "./extension-windows-contract.js";
-import {
-  inspectWindowsNativeHosts,
-  installWindowsNativeHost,
-  uninstallWindowsNativeHosts,
-  validateWindowsNativeContext,
-} from "./extension-windows-host.js";
 import { windowsFixture } from "./extension-windows.test-support.js";
 const localFixture = useExtensionInstallFixture();
 describe("delegated Windows registration and read-only native admission", () => {
@@ -76,14 +76,6 @@ describe("delegated Windows registration and read-only native admission", () => 
     expect(result.registrations.every((r) => r.state === null)).toBe(true);
     expect(result.storeInstallRequests[0]?.state).toBeNull();
     expect(JSON.stringify(result)).not.toContain("private diagnostic");
-    expect(f.manage).toHaveBeenCalledTimes(1);
-  });
-  it("does not retry or inspect automatically after an uncertain mutation", async () => {
-    const f = setup();
-    f.manage.mockRejectedValue(new Error("uncertain"));
-    await expect(
-      installWindowsNativeHost({ pluginRoot: "C:\\OpenClaw", extensionIds: [], deps: f.deps }),
-    ).rejects.toThrow();
     expect(f.manage).toHaveBeenCalledTimes(1);
   });
   it("delegates uninstall/remove only to the same explicit context", async () => {

@@ -19,7 +19,7 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
     storePath: path.join(state.sessionsDir(), "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = SessionManager.open(scope, state.workspaceDir);
+  const manager = await SessionManager.openAsync(scope, state.workspaceDir);
   manager.appendMessage({ role: "user", content: "Explain this code", timestamp: 1 });
   const { db } = openOpenClawAgentDatabase({
     agentId: scope.agentId,

@@ -1,6 +1,12 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { prepareGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -8,16 +14,20 @@ import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
-import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
-import { persistAgentSession } from "./attempt-execution.shared.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
+import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
+import { prepareCommandConversationContext } from "./conversation-context.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -31,6 +41,7 @@ export function prepareCommandSessionRecoveryEntry(
   > & {
     deliveryContext?: DeliveryContext;
     now: number;
+    lifecycleGeneration: string;
     isSessionRollover: boolean;
   },
 ) {
@@ -40,6 +51,37 @@ export function prepareCommandSessionRecoveryEntry(
       ...params,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
+  const operatorSource =
+    entry.restartRecoveryDeliveryRunId !== runId
+      ? createRestartRecoveryOperatorSource({
+          authority: opts.operatorAuthority,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: sourceOptions.sourceRunId ?? runId,
+          inputProvenance: opts.inputProvenance,
+          requesterOrigin: opts.requesterOrigin,
+        })
+      : undefined;
+  const requesterSource =
+    entry.restartRecoveryDeliveryRunId !== runId
+      ? createRestartRecoveryRequesterSource({
+          requesterOrigin: opts.requesterOrigin,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: sourceOptions.sourceRunId ?? runId,
+        })
+      : undefined;
+  const sourceIngress =
+    sourceOptions.sourceIngress ??
+    (opts.inputProvenance && opts.inputProvenance.kind !== "external_user"
+      ? ("internal" as const)
+      : (operatorSource?.snapshot.sourceIngress ??
+        (requesterSource?.requesterOrigin.messageProvider &&
+        !isInternalMessageChannel(requesterSource.requesterOrigin.messageProvider)
+          ? ("channel" as const)
+          : ("internal" as const))));
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -47,18 +89,40 @@ export function prepareCommandSessionRecoveryEntry(
       ...entry,
       sessionId,
       updatedAt: now,
+      status: undefined,
+      abortedLastRun: false,
+      endedAt: undefined,
+      lastRunError: undefined,
+      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
+        ? normalizeMainSessionRecoveryRunFences([
+            ...(entry.restartRecoveryRuns ?? []),
+            { runId, lifecycleGeneration: params.lifecycleGeneration },
+          ])
+        : entry.restartRecoveryRuns,
       sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({
         deliveryContext: params.deliveryContext,
-        deliveryMediaUrls: opts.internalDeliveryMediaUrls,
         disableMessageTool: opts.disableMessageTool,
         entry,
         forceRestartSafeTools: opts.forceRestartSafeTools,
         runId,
         harnessCompletion,
         ...sourceOptions,
-        suppressTextDelivery: opts.internalDeliverySuppressText,
+        ...(requesterSource
+          ? {
+              requesterSource,
+              sourceRunId: requesterSource.sourceRunId,
+              sourceIngress,
+            }
+          : {}),
+        ...(operatorSource
+          ? {
+              operatorSource,
+              sourceRunId: operatorSource.sourceRunId,
+              sourceIngress,
+            }
+          : {}),
       }),
     },
   };
@@ -97,7 +161,6 @@ export async function prepareEmbeddedSessionState(params: {
   sessionAgentId: string;
   lifecycleGeneration: string;
   runId: string;
-  workspaceDir: string;
   executionWorkspaceDir: string;
   watchSkills: boolean;
   isNewSession: boolean;
@@ -136,17 +199,20 @@ export async function prepareEmbeddedSessionState(params: {
   const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
   const [
     { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-    { resolveNodeExecEligibility },
+    { resolveNodeExecEligibilityAsync },
   ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
-  const nodeSkillsEligibility = resolveNodeExecEligibility({
+  const nodeSkillsEligibility = await resolveNodeExecEligibilityAsync({
     cfg: params.cfg,
-    sessionEntry,
+    sessionEntry: sessionEntry ?? null,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
-    workspaceDir: params.workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
+    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
+    ...resolveSessionSkillExecutionWorkspace(
+      sessionEntry?.worktree?.canonicalWorkspaceDir,
+      params.executionWorkspaceDir,
+    ),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
@@ -170,66 +236,55 @@ export async function prepareEmbeddedSessionState(params: {
     params.isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
   const skillsSnapshot = skillSnapshotState.snapshot;
 
+  const { sessionStore, sessionKey } = params;
+  const updateSkills = skillsSnapshot !== undefined && needsSkillsSnapshot;
+  const touchSession =
+    params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride);
   if (
-    skillsSnapshot &&
-    params.sessionStore &&
-    params.sessionKey &&
-    needsSkillsSnapshot &&
-    !params.suppressVisibleSessionEffects
+    sessionStore &&
+    sessionKey &&
+    !params.suppressVisibleSessionEffects &&
+    (updateSkills || touchSession)
   ) {
     const now = Date.now();
-    const current = sessionEntry ?? {
+    const entry = (updateSkills ? sessionEntry : (sessionStore[sessionKey] ?? sessionEntry)) ?? {
       sessionId: params.sessionId,
       updatedAt: now,
       sessionStartedAt: now,
     };
-    const next: SessionEntry = {
-      ...current,
+    const patch: Partial<SessionEntry> = {
       sessionId: params.sessionId,
       updatedAt: now,
-      sessionStartedAt: current.sessionStartedAt ?? now,
-      skillsSnapshot,
+      ...(entry.sessionStartedAt === undefined ? { sessionStartedAt: now } : {}),
     };
-    sessionEntry = await persistAgentSession({
-      agentId: params.sessionAgentId,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      initialEntry: current,
-      entry: next,
-    });
-  }
-
-  // Persist non-model-dependent command state before provider/model resolution.
-  // Thinking is written only after the selected runtime validates it.
-  const shouldPersistInitialSessionTouch =
-    params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride);
-  if (
-    params.sessionStore &&
-    params.sessionKey &&
-    !params.suppressVisibleSessionEffects &&
-    shouldPersistInitialSessionTouch
-  ) {
-    const now = Date.now();
-    const entry = params.sessionStore[params.sessionKey] ??
-      sessionEntry ?? { sessionId: params.sessionId, updatedAt: now, sessionStartedAt: now };
-    const next: SessionEntry = {
-      ...entry,
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: entry.sessionStartedAt ?? now,
-      lastInteractionAt: now,
-      agentStatus: undefined,
-    };
-    applyVerboseOverride(next, params.verboseOverride);
-    sessionEntry = await persistAgentSession({
-      agentId: params.sessionAgentId,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      initialEntry: entry,
-      entry: next,
-    });
+    if (updateSkills) {
+      patch.skillsSnapshot = skillsSnapshot;
+    }
+    // Persist non-model-dependent state first; thinking waits for runtime validation.
+    if (touchSession) {
+      patch.lastInteractionAt = now;
+      patch.agentStatus = undefined;
+      if (params.verboseOverride !== undefined) {
+        patch.verboseLevel = params.verboseOverride;
+      }
+    }
+    let published = false;
+    const persisted = await applySessionEntryOperation(
+      { agentId: params.sessionAgentId, sessionKey, storePath: params.storePath },
+      { kind: "fields", expected: { sessionId: entry.sessionId }, patch },
+      {
+        onCommitted: (current) => {
+          published = true;
+          sessionStore[sessionKey] = current;
+        },
+      },
+    );
+    sessionEntry = persisted ?? undefined;
+    if (!sessionEntry) {
+      delete sessionStore[sessionKey];
+    } else if (!published) {
+      sessionStore[sessionKey] = sessionEntry;
+    }
   }
   if (params.sessionKey && !params.isSubagentLaneTurn) {
     const assertSignalCurrent = () => {
@@ -254,13 +309,20 @@ export async function prepareEmbeddedSessionState(params: {
     assertSignalCurrent();
   }
 
+  const runContext = resolveAgentRunContext(params.opts);
+  const opts = await prepareCommandConversationContext({ ...params, sessionEntry, runContext });
+  prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
-    runContext: resolveAgentRunContext(params.opts),
+    runContext,
+    opts,
   };
 }
 
-export type EmbeddedSessionState = Awaited<ReturnType<typeof prepareEmbeddedSessionState>>;
+export type EmbeddedSessionState = Omit<
+  Awaited<ReturnType<typeof prepareEmbeddedSessionState>>,
+  "opts"
+>;

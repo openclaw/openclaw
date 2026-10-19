@@ -4,13 +4,12 @@ import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
+import { createLifecycleArtifactReclamationPlan } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -19,12 +18,14 @@ import {
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
+  retainOpenClawStateDatabaseForIndependentRead,
 } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReader from "../state/openclaw-state-read-worker.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -47,8 +48,8 @@ afterAll(async () => {
 installGatewayTestHooks();
 
 test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
+  setRuntimeConfigSnapshot({});
   const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };
-  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   const shared = openOpenClawStateDatabase();
   const context = createDirectChatContext();
   await initializeSessionReadContext(context);
@@ -56,24 +57,30 @@ test("joins a direct history projection's accepted read before retiring the Gate
   await projection.ensureMaterialized();
   const entered = createDeferred();
   const release = createDeferred();
-  const createTransport = stateReader.createOpenClawStateReadTransport;
-  const reader = vi
-    .spyOn(stateReader, "createOpenClawStateReadTransport")
-    .mockImplementation((command) => {
-      const transport = createTransport(command);
-      if (command.type !== "acpSessions.metadata") {
-        return transport;
-      }
-      return {
-        ...transport,
-        async read(...args) {
-          const reply = await transport.read(...args);
-          entered.resolve();
-          await release.promise;
-          return reply;
-        },
-      };
-    });
+  const captureSource = stateReader.captureOpenClawStateReadSource;
+  const reader = vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
+    const source = captureSource();
+    return {
+      ...source,
+      createTransport(command) {
+        const transport = source.createTransport(command);
+        if (command.type !== "sessionRows.sharedFacts") {
+          return transport;
+        }
+        return {
+          ...transport,
+          startRead(...args) {
+            return startAwaitedReadMock(async () => {
+              const reply = await transport.startRead(...args).result;
+              entered.resolve();
+              await release.promise;
+              return reply;
+            });
+          },
+        };
+      },
+    };
+  });
   const dispose = projection.dispose;
   const disposing = vi.spyOn(projection, "dispose").mockImplementation(() => {
     dispose();
@@ -91,6 +98,8 @@ test("joins a direct history projection's accepted read before retiring the Gate
       disposing.mockRestore();
     }
   });
+  // A new identity forces a native read instead of reusing an absent-ACP receipt.
+  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   sessionChanges.emit(scope);
   await withTestTimeout(entered.promise, 5_000, "Projection did not retain its shared-state read");
   expect(shared.db.isOpen).toBe(true);
@@ -130,9 +139,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
       return worker;
     });
   try {
-    await expect(
-      runSqliteSessionReclamation({ plan, forceInProcess: false }),
-    ).resolves.toMatchObject({
+    await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
       kind: "lifecycle-artifacts",
       value: { removedEntries: 1 },
     });
@@ -146,10 +153,19 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   const otherState = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: otherStateDir } });
   externalStatePath = otherState.path;
   const identity = captureOpenClawStateDatabaseReadAdmission(sharedStatePath).identity;
+  const sharedState = openOpenClawStateDatabase({ env });
+  let retained = retainOpenClawStateDatabaseForIndependentRead(sharedState.path);
+  if (!retained) {
+    throw new Error("Expected the fixture shared-state owner to be open");
+  }
   const closedOwners: Array<string | undefined> = [];
   const unregister = registerOpenClawStateDatabaseAsyncResource({
     close: async (closedIdentity) => {
       closedOwners.push(closedIdentity?.key);
+      if (closedIdentity?.key === identity.key) {
+        retained?.release();
+        retained = undefined;
+      }
     },
   });
   setTestEnvValue("OPENCLAW_STATE_DIR", otherStateDir);
@@ -159,6 +175,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
       expect(fs.existsSync(sharedStatePath)).toBe(false);
       expect(closedOwners[0]).toBe(identity.key);
     } finally {
+      retained?.release();
       unregister();
     }
   });

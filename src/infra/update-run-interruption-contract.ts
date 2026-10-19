@@ -1,7 +1,4 @@
-import type { z } from "zod";
-import type { UpdateRunRecordSchema } from "./update-run-schema.js";
-
-type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type InterruptedUpdateSettlement = {
   expected: UpdateRunRecord;

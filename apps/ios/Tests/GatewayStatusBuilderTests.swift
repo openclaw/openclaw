@@ -3,6 +3,16 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayStatusBuilderTests {
+    @Test @MainActor func `connected node does not report disconnected operator chat as connected`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        appModel.gatewayServerName = "gateway.example.com"
+        appModel.gatewayStatusText = "Connected"
+
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .connected)
+        #expect(GatewayStatusBuilder.buildChat(appModel: appModel) == .disconnected)
+    }
+
     @Test(arguments: [nil, "gateway.example.com"] as [String?])
     func `paused problem keeps error status`(_ gatewayServerName: String?) {
         let state = GatewayStatusBuilder.build(
@@ -76,11 +86,10 @@ struct GatewayStatusBuilderTests {
     }
 
     @Test func `chat agent badge rejects placeholder question mark`() {
-        #expect(ChatProTab.normalizedBadgeEmoji(" 🦞 ") == "🦞")
-        #expect(ChatProTab.normalizedBadgeEmoji("?") == nil)
-        #expect(ChatProTab.normalizedBadgeEmoji("   ") == nil)
-        #expect(ChatProTab.normalizedBadgeEmoji(nil) == nil)
-        #expect(ChatProTab.initialsBadge(for: "Agent Smith") == "AS")
+        #expect(AgentIdentityPresentation.badge(avatarText: " 🦞 ", displayName: "Agent Smith") == "🦞")
+        #expect(AgentIdentityPresentation.badge(avatarText: "?", displayName: "Agent Smith") == "AS")
+        #expect(AgentIdentityPresentation.badge(avatarText: "   ", displayName: "Agent Smith") == "AS")
+        #expect(AgentIdentityPresentation.badge(avatarText: nil, displayName: "Agent Smith") == "AS")
     }
 
     @Test func `pinned attachment displays its captured gateway owner`() {

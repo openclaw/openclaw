@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
+import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
 import type { GroupAdmissionResult } from "./sessions-patch-types.js";
 import { sessionLog } from "./sessions-shared.js";
@@ -18,6 +19,7 @@ export async function publishSessionPatchEffects(params: {
   context: GatewayRequestContext;
   callerScopes: readonly string[];
   callerCanManageCron: boolean;
+  diagnostics?: SessionPatchDiagnostics;
   targets: Array<{
     accessChanged: boolean;
     entry: SessionEntry;
@@ -28,7 +30,7 @@ export async function publishSessionPatchEffects(params: {
       targetAgentId: string;
     };
   }>;
-}): Promise<void> {
+}): Promise<boolean> {
   const archivedSessionKeys = new Set<string>();
   for (const { target, entry, accessChanged } of params.targets) {
     triggerSessionPatchHook({
@@ -70,6 +72,7 @@ export async function publishSessionPatchEffects(params: {
   }
 
   if (params.callerCanManageCron && archivedSessionKeys.size > 0) {
+    const timing = params.diagnostics?.scope("cronEffects");
     try {
       const disabledBySession = await disableCronJobsBoundToSessions({
         cron: params.context.cron,
@@ -87,8 +90,11 @@ export async function publishSessionPatchEffects(params: {
       sessionLog.warn(
         `sessions.patch: failed to disable cron jobs for archived sessions: ${formatErrorMessage(error)}`,
       );
+    } finally {
+      timing?.finish();
     }
   }
+  return archivedSessionKeys.size > 0;
 }
 
 /** Only applied assignments may repair the catalog; detached and status-model no-ops cannot. */

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, test } from "vitest";
+import { describe, expect, onTestFailed, test } from "vitest";
 import {
   createQaBusState,
   startQaBusServer,
@@ -19,8 +19,20 @@ async function startOtlpReceiver(disallowedBodyNeedles: string[] = []) {
   return { ...receiver, baseUrl: `http://127.0.0.1:${port}` };
 }
 
-async function settleCleanup(...cleanups: Array<() => Promise<void>>): Promise<void> {
-  const results = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
+async function settleCleanup(
+  cleanups: Record<string, () => Promise<void>>,
+  pending: Set<string>,
+): Promise<void> {
+  const results = await Promise.allSettled(
+    Object.entries(cleanups).map(async ([name, cleanup]) => {
+      pending.add(name);
+      try {
+        await cleanup();
+      } finally {
+        pending.delete(name);
+      }
+    }),
+  );
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
@@ -94,12 +106,32 @@ describe("diagnostics-otel gateway runtime", () => {
     let receiver: Awaited<ReturnType<typeof startOtlpReceiver>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
     const gatewayOwner = createQaGatewayChild();
+    const startedAt = performance.now();
+    let phase = "fixture setup";
+    let cleanupStartedAfterMs: number | undefined;
+    const pendingCleanupOwners = new Set<string>();
+    let gatewayLogs: (() => string) | undefined;
+    onTestFailed(() => {
+      process.stderr.write(
+        JSON.stringify({
+          phase,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          cleanupStartedAfterMs,
+          pendingCleanupOwners: [...pendingCleanupOwners],
+          capturedSpanCount: receiver?.capturedSpans.length,
+        }) + "\n",
+      );
+      if (gatewayLogs) {
+        process.stderr.write(gatewayLogs().slice(-12_000) + "\n");
+      }
+    });
 
     try {
       bus = await startQaBusServer({ state });
       const activeReceiver = await startOtlpReceiver(["qa-plugin-usage-secret-sentinel"]);
       receiver = activeReceiver;
       mock = await startQaMockOpenAiServer();
+      phase = "gateway startup";
       const gateway = await gatewayOwner.start({
         repoRoot,
         useRepoCli: true,
@@ -139,12 +171,14 @@ describe("diagnostics-otel gateway runtime", () => {
           },
         }),
       });
+      gatewayLogs = gateway.logs;
       const conversation = { id: "qa-operator", kind: "direct" as const };
       const send = async (
         text: string,
         expectedText: string,
         targetConversation = conversation,
       ) => {
+        phase = `send ${expectedText}`;
         const cursor = state.getSnapshot().messages.length;
         state.addInboundMessage({
           conversation: targetConversation,
@@ -182,9 +216,9 @@ describe("diagnostics-otel gateway runtime", () => {
                 toolOutputStructuredError: request.toolOutputStructuredError,
                 toolOutputLength:
                   typeof request.toolOutput === "string" ? request.toolOutput.length : undefined,
-                reconciliation: String(request.allInputText ?? "").includes(
-                  CODE_MODE_RECONCILIATION_NEEDLE,
-                ),
+                reconciliation:
+                  typeof request.allInputText === "string" &&
+                  request.allInputText.includes(CODE_MODE_RECONCILIATION_NEEDLE),
               }));
             } catch {
               requests = { unavailable: true };
@@ -229,6 +263,7 @@ describe("diagnostics-otel gateway runtime", () => {
       expect(recovered.text).toContain("The requested file could not be read: ENOENT.");
       expect(recovered.text).toContain("QA-FAILED-TOOL-FINALIZED-OK");
 
+      phase = "failed-read provider transcript";
       const scenarioRequests = (await fetch(
         `${mock.baseUrl}/debug/requests?after=${requestCursor.cursor}`,
       ).then((response) => response.json())) as Array<{
@@ -260,6 +295,7 @@ describe("diagnostics-otel gateway runtime", () => {
           ),
         ).toHaveLength(1);
       }
+      phase = "failed-read spans";
       const failureEvidence = await waitFor(
         () => {
           const toolError = activeReceiver.capturedSpans.find(
@@ -297,6 +333,7 @@ describe("diagnostics-otel gateway runtime", () => {
         }),
       );
 
+      phase = "failed-read span assertions";
       expect(failureEvidence.runs).toHaveLength(1);
       expect(failureEvidence.harnesses).toHaveLength(1);
       expect(failureEvidence.modelCalls).toHaveLength(2);
@@ -364,6 +401,7 @@ describe("diagnostics-otel gateway runtime", () => {
       );
       expect(llmTaskReply.text).toContain("OTEL-PLUGIN-USAGE-OK");
 
+      phase = "plugin provider transcript";
       const llmTaskRequests = (await fetch(
         `${mock.baseUrl}/debug/requests?after=${llmTaskCursor.cursor}`,
       ).then((response) => response.json())) as Array<{
@@ -379,6 +417,7 @@ describe("diagnostics-otel gateway runtime", () => {
         ),
       ).toBe(true);
 
+      phase = "plugin usage spans";
       const llmTaskUsage = await waitFor(
         () =>
           activeReceiver.capturedSpans.find(
@@ -389,6 +428,7 @@ describe("diagnostics-otel gateway runtime", () => {
         45_000,
         () => activeReceiver.capturedSpans,
       );
+      phase = "plugin usage assertions";
       expect(llmTaskUsage.attributes).toMatchObject({
         "openclaw.tokens.input": 64,
         "openclaw.tokens.output": 24,
@@ -430,20 +470,25 @@ describe("diagnostics-otel gateway runtime", () => {
           requestContentPresent: exportedBodies.includes("qa-plugin-usage-secret-sentinel"),
         })}`,
       );
+      phase = "fixture cleanup";
     } finally {
+      cleanupStartedAfterMs = Math.round(performance.now() - startedAt);
       await settleCleanup(
-        async () => {
-          await stopQaGatewayFixture(gatewayOwner);
+        {
+          gateway: async () => {
+            await stopQaGatewayFixture(gatewayOwner);
+          },
+          provider: async () => {
+            await mock?.stop();
+          },
+          receiver: async () => {
+            await receiver?.close();
+          },
+          bus: async () => {
+            await bus?.stop();
+          },
         },
-        async () => {
-          await mock?.stop();
-        },
-        async () => {
-          await receiver?.close();
-        },
-        async () => {
-          await bus?.stop();
-        },
+        pendingCleanupOwners,
       );
     }
   }, 120_000);

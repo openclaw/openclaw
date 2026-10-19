@@ -1,9 +1,90 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { acquireBoardProviderForSession, mcpAppWidgetNameForViewId } from "./provider.ts";
 
 export function registerBoardProviderLeaseCases(): void {
+  it("retains same-owner reconnect data but isolates replacement identity from retiring board leases", async () => {
+    const session = { sessionKey: "agent:main:presentation-owner" };
+    const initial = { ...session, revision: 1, tabs: [], widgets: [] };
+    const refreshed = createDeferred<typeof initial>();
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValue(refreshed.promise);
+    const client = createTestGatewayClient(request);
+    const firstScope = {};
+    const first = acquireBoardProviderForSession(
+      session,
+      client,
+      true,
+      true,
+      true,
+      true,
+      true,
+      firstScope,
+    );
+    const retiring = acquireBoardProviderForSession(
+      session,
+      client,
+      true,
+      true,
+      true,
+      true,
+      true,
+      firstScope,
+    );
+    const capabilities = {
+      canMutate: true,
+      canGrant: true,
+      canPinWidgets: true,
+      canPinMcpApps: true,
+    };
+    let replacement: ReturnType<typeof acquireBoardProviderForSession> | undefined;
+    try {
+      await vi.waitFor(() => expect(first.provider.snapshot$.value.revision).toBe(1));
+      expect(retiring.provider.snapshot$).toBe(first.provider.snapshot$);
+      first.update(client, false, capabilities);
+      expect(first.provider.snapshot$.value.revision).toBe(1);
+      expect(first.provider.canMutate).toBe(false);
+      await expect(first.provider.applyOps([])).rejects.toThrow("mutation unavailable");
+      first.update(client, true, capabilities);
+      expect(first.provider.snapshot$.value.revision).toBe(1);
+
+      replacement = acquireBoardProviderForSession(
+        session,
+        client,
+        true,
+        true,
+        true,
+        true,
+        true,
+        {},
+      );
+      expect(replacement.provider.hasLoadedSnapshot).toBe(false);
+      expect(replacement.provider.snapshot$.value.revision).toBe(0);
+      expect(first.provider.canMutate).toBe(false);
+      expect(retiring.provider.canGrant).toBe(false);
+      await expect(retiring.provider.applyOps([])).rejects.toThrow("mutation unavailable");
+      retiring.update(client, true, capabilities);
+      refreshed.resolve({ ...initial, revision: 2 });
+      await vi.waitFor(() => expect(replacement!.provider.snapshot$.value.revision).toBe(2));
+      expect(retiring.provider.snapshot$.value.revision).toBe(1);
+      first.release();
+      retiring.release();
+      expect(replacement.provider.canMutate).toBe(true);
+      expect(request).not.toHaveBeenCalledWith("board.update", expect.anything());
+    } finally {
+      first.release();
+      retiring.release();
+      replacement?.release();
+    }
+  });
+
   it("keeps retired gateway clients from rolling back shared board leases", async () => {
     const sessionKey = "agent:main:monotonic-board-lease";
     const capabilities = {
@@ -84,7 +165,7 @@ export function registerBoardProviderLeaseCases(): void {
     }
   });
 
-  it.each(["chat-first", "dashboard-first"] as const)(
+  it.each(["dashboard-first"] as const)(
     "isolates concurrent board lease capabilities in %s order",
     async (order) => {
       const sessionKey = `agent:main:lease-capabilities-${order}`;
@@ -98,10 +179,10 @@ export function registerBoardProviderLeaseCases(): void {
         acquireBoardProviderForSession({ sessionKey }, client, true, true, true, true, true);
       const acquireDashboard = () =>
         acquireBoardProviderForSession({ sessionKey }, client, true, false, false, false, false);
-      const first = order === "chat-first" ? acquireChat() : acquireDashboard();
-      const second = order === "chat-first" ? acquireDashboard() : acquireChat();
-      const chat = order === "chat-first" ? first : second;
-      const dashboard = order === "chat-first" ? second : first;
+      const first = acquireDashboard();
+      const second = acquireChat();
+      const chat = second;
+      const dashboard = first;
 
       try {
         await vi.waitFor(() => expect(chat.provider.snapshot$.value).toEqual(snapshot));

@@ -7,7 +7,6 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,
@@ -99,7 +98,6 @@ describe("durable Discord delivery", () => {
         replies: [{ text: "first chunk\nsecond chunk" }],
         target: "channel:123456",
         token: "test-token",
-        runtime: {} as RuntimeEnv,
         textLimit: 2000,
         maxLinesPerMessage: 1,
         chunkMode: "newline",

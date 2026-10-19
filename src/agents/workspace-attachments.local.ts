@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
@@ -59,7 +60,8 @@ export async function prepareLocalWorkspaceAttachments(params: {
       }
       const opened = await openLocalFileSafely({ filePath });
       let classification: Awaited<ReturnType<typeof classifyAttachmentBytes>>;
-      try {
+      {
+        await using handle = opened.handle;
         assertCurrent();
         if (
           opened.stat.nlink > 1 ||
@@ -69,7 +71,7 @@ export async function prepareLocalWorkspaceAttachments(params: {
           continue;
         }
         const header = Buffer.alloc(Math.min(opened.stat.size, ATTACHMENT_HEADER_BYTES));
-        const { bytesRead } = await opened.handle.read(header, 0, header.length, 0);
+        const bytesRead = await readFileWindowFully(handle, header, 0);
         assertCurrent();
         classification = await classifyAttachmentBytes({
           buffer: header.subarray(0, bytesRead),
@@ -77,8 +79,6 @@ export async function prepareLocalWorkspaceAttachments(params: {
           name: path.basename(opened.realPath),
         });
         assertCurrent();
-      } finally {
-        await opened.handle.close();
       }
       assertCurrent();
       if (

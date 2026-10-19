@@ -105,52 +105,61 @@ function fixture(profileText = unrelated + legacy + "\n", repair = true) {
 }
 
 describe("Testbox command working directory", () => {
-  it("preserves the exact selected checkout, patch, and explicit subdirectory across login shells", () => {
-    const f = fixture();
-    const prepared = f.run();
-    expect(prepared.status, prepared.stderr).toBe(0);
-    const syncRoot = readFileSync(f.state, "utf8").trim();
-    expect(syncRoot).not.toBe(f.workspace);
-    expect(realpathSync(join(syncRoot, ".git/crabbox-artifact-root"))).toBe(f.workspace);
-    // Both checkouts have the same HEAD during hydration: readiness must compare
-    // physical paths, not commit IDs. Then simulate native task source sync.
-    expect(f.git(syncRoot, "rev-parse", "HEAD")).toBe(f.git(f.workspace, "rev-parse", "HEAD"));
-    writeFileSync(join(syncRoot, "marker"), "task base\n");
-    f.git(syncRoot, "commit", "-qam", "task base");
-    const taskHead = f.git(syncRoot, "rev-parse", "HEAD");
-    writeFileSync(join(syncRoot, "marker"), "task patch\n");
-    writeFileSync(join(syncRoot, "task-untracked"), "synchronized\n");
-    const result = f.command(syncRoot, [
-      "-lc",
-      'pwd -P; git rev-parse HEAD; cat marker task-untracked; printf "%s\\n" "$TESTBOX_FIXTURE_ENV"',
-    ]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      syncRoot + "\n" + taskHead + "\ntask patch\nsynchronized\npreserved\n",
-    );
-    const subdir = join(syncRoot, "task subdir");
-    mkdirSync(subdir);
-    for (const cwd of [subdir, f.workspace]) {
-      const selected = f.command(cwd, ["-lc", "bash -lc 'pwd -P'"]);
-      expect(selected.status, selected.stderr).toBe(0);
-      expect(selected.stdout.trim()).toBe(cwd);
-    }
-    expect(readFileSync(join(f.workspace, "marker"), "utf8")).toBe("hydrated\n");
-    const repaired = readFileSync(f.profile, "utf8");
-    expect(repaired).toBe(
-      unrelated +
-        legacy.replace(
+  it.each([
+    { name: "legacy", profile: unrelated + legacy + "\n" },
+    { name: "upstream", profile: unrelated },
+  ])(
+    "preserves selected checkout, patch, and subdirectory with the $name profile",
+    ({ name, profile }) => {
+      const f = fixture(profile);
+      const prepared = f.run();
+      expect(prepared.status, prepared.stderr).toBe(0);
+      const syncRoot = readFileSync(f.state, "utf8").trim();
+      expect(syncRoot).not.toBe(f.workspace);
+      expect(realpathSync(join(syncRoot, ".git/crabbox-artifact-root"))).toBe(f.workspace);
+      // Both checkouts have the same HEAD during hydration: readiness must compare
+      // physical paths, not commit IDs. Then simulate native task source sync.
+      expect(f.git(syncRoot, "rev-parse", "HEAD")).toBe(f.git(f.workspace, "rev-parse", "HEAD"));
+      writeFileSync(join(syncRoot, "marker"), "task base\n");
+      f.git(syncRoot, "commit", "-qam", "task base");
+      const taskHead = f.git(syncRoot, "rev-parse", "HEAD");
+      writeFileSync(join(syncRoot, "marker"), "task patch\n");
+      writeFileSync(join(syncRoot, "task-untracked"), "synchronized\n");
+      const result = f.command(syncRoot, [
+        "-lc",
+        'pwd -P; git rev-parse HEAD; cat marker task-untracked; printf "%s\\n" "$TESTBOX_FIXTURE_ENV"',
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        syncRoot +
+          "\n" +
+          taskHead +
+          "\ntask patch\nsynchronized\n" +
+          (name === "legacy" ? "preserved" : "") +
+          "\n",
+      );
+      const subdir = join(syncRoot, "task subdir");
+      mkdirSync(subdir);
+      for (const cwd of [subdir, f.workspace]) {
+        const selected = f.command(cwd, ["-lc", "bash -lc 'pwd -P'"]);
+        expect(selected.status, selected.stderr).toBe(0);
+        expect(selected.stdout.trim()).toBe(cwd);
+      }
+      expect(readFileSync(join(f.workspace, "marker"), "utf8")).toBe("hydrated\n");
+      const repaired = readFileSync(f.profile, "utf8");
+      expect(repaired).toBe(
+        profile.replace(
           '    [ -d "${GITHUB_WORKSPACE:-}" ] && cd "${GITHUB_WORKSPACE}"',
           '    case $- in *i*) [ -d "${GITHUB_WORKSPACE:-}" ] && cd "${GITHUB_WORKSPACE}" ;; esac',
-        ) +
-        "\n",
-    );
-    execFileSync("python3", ["-I", "-S", join(actionPath, "preserve-command-cwd.py"), f.profile]);
-    expect(readFileSync(f.profile, "utf8")).toBe(repaired);
-    const interactive = f.command(subdir, ["-ic", '. "$BASH_ENV"; pwd -P']);
-    expect(interactive.status, interactive.stderr).toBe(0);
-    expect(interactive.stdout.trim()).toBe(f.workspace);
-  });
+        ),
+      );
+      execFileSync("python3", ["-I", "-S", join(actionPath, "preserve-command-cwd.py"), f.profile]);
+      expect(readFileSync(f.profile, "utf8")).toBe(repaired);
+      const interactive = f.command(subdir, ["-ic", '. "$BASH_ENV"; pwd -P']);
+      expect(interactive.status, interactive.stderr).toBe(0);
+      expect(interactive.stdout.trim()).toBe(name === "legacy" ? f.workspace : subdir);
+    },
+  );
 
   it.each([
     { name: "unadapted image", profile: unrelated + legacy + "\n", repair: false },
@@ -162,12 +171,5 @@ describe("Testbox command working directory", () => {
     expect(result.stderr).toContain("Testbox login shell changed checkout: expected");
     expect(readFileSync(f.state, "utf8")).toBe(f.workspace + "\n");
     expect(readFileSync(f.profile, "utf8")).toBe(profile);
-  });
-
-  it("accepts an upstream profile that already preserves command cwd without rewriting it", () => {
-    const f = fixture(unrelated);
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(f.profile, "utf8")).toBe(unrelated);
   });
 });

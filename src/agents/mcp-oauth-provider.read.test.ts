@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   operatorMcpOAuthIdentity,
@@ -21,9 +22,49 @@ import { countMcpOAuthPrincipals } from "./mcp-oauth.js";
 import { seedMcpOAuthStoreForTest, withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 describe("MCP OAuth worker reads", () => {
+  it("only ignores the port for portless HTTP loopback registrations", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-registered-redirect-" }, async () => {
+      const identity = operatorMcpOAuthIdentity("redirects", "https://mcp.example.test/rpc");
+      const cases: [string, string, boolean][] = [
+        ["http://127.0.0.1:8989/callback", "http://127.0.0.1:8989/callback", true],
+        ["http://127.0.0.1/oauth/callback", "http://127.0.0.1:8989/oauth/callback", true],
+        ["http://[::1]/oauth/callback", "http://[::1]:8989/oauth/callback", true],
+        ["http://localhost/oauth/callback", "http://localhost:8989/oauth/callback", true],
+        ["http://localhost", "http://localhost:8989", true],
+        ["http://LOCALHOST/callback", "http://LOCALHOST:80/callback", true],
+        ["http://localhost/callback", "http://LOCALHOST:8989/callback", false],
+        ["http://[::1]/callback", "http://[0:0:0:0:0:0:0:1]:8989/callback", false],
+        ["http://127.0.0.1/callback", "http://127.0.0.1:8989/a/../callback", false],
+        ["https://example.test:8989/callback", "https://example.test:8989/callback", true],
+        ["https://example.test/callback", "https://example.test:8989/callback", false],
+        ["http://example.test/callback", "http://example.test:8989/callback", false],
+        ["https://localhost/callback", "https://localhost:8989/callback", false],
+        ["http://localhost/callback", "http://127.0.0.1:8989/callback", false],
+        ["http://127.0.0.1/callback", "http://127.0.0.1:8989/other", false],
+        ["http://127.0.0.1/callback?a=1", "http://127.0.0.1:8989/callback?a=2", false],
+        ["http://127.0.0.1/callback#one", "http://127.0.0.1:8989/callback#two", false],
+        ["http://127.0.0.1/callback", "http://user@127.0.0.1:8989/callback", false],
+        ["http://127.0.0.1:9000/callback", "http://127.0.0.1:8989/callback", false],
+        ["invalid-url", "another-invalid-url", false],
+      ];
+      for (const [registered, redirectUrl, matches] of cases) {
+        const clientInformation = { client_id: "fixture-client", redirect_uris: [registered] };
+        seedMcpOAuthStoreForTest(identity.storeKey, { clientInformation });
+        await withMcpOAuthProviderForTest(
+          { identity, config: { redirectUrl } },
+          async (provider) => {
+            expect(await provider.clientInformation(), `${registered} -> ${redirectUrl}`).toEqual(
+              matches ? clientInformation : undefined,
+            );
+          },
+        );
+      }
+    });
+  });
+
   it("prepares provider facts and reopens persisted reads without parent SQL", async () => {
     await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-worker-read-" }, async () => {
-      const { DatabaseSync, StatementSync } = requireNodeSqlite();
+      requireNodeSqlite();
       const operator = operatorMcpOAuthIdentity("worker-read", "https://mcp.example.test/rpc");
       const first = requesterMcpOAuthIdentity(operator.serverName, operator.serverUrl, {
         requesterSenderId: "first",
@@ -36,7 +77,10 @@ describe("MCP OAuth worker reads", () => {
       });
       const prefix = requesterMcpOAuthStoreKeyPrefix(operator.serverName, operator.serverUrl);
       const store: McpOAuthStore = {
-        clientInformation: { client_id: "fixture-client" },
+        clientInformation: {
+          client_id: "fixture-client",
+          redirect_uris: ["http://127.0.0.1:8989/oauth/callback"],
+        },
         tokens: {
           access_token: "fixture-access",
           refresh_token: "fixture-refresh",
@@ -58,14 +102,7 @@ describe("MCP OAuth worker reads", () => {
       await closeOpenClawStateDatabaseAsync();
 
       // Capability checks and native fixture writes precede the measured read lifecycle.
-      const sql = {
-        prepare: vi.spyOn(DatabaseSync.prototype, "prepare"),
-        exec: vi.spyOn(DatabaseSync.prototype, "exec"),
-        get: vi.spyOn(StatementSync.prototype, "get"),
-        all: vi.spyOn(StatementSync.prototype, "all"),
-        run: vi.spyOn(StatementSync.prototype, "run"),
-        iterate: vi.spyOn(StatementSync.prototype, "iterate"),
-      };
+      const sql = observeMainThreadSql();
       try {
         for (let pass = 0; pass < 2; pass++) {
           await withMcpOAuthProviderForTest(
@@ -96,18 +133,12 @@ describe("MCP OAuth worker reads", () => {
           expect(await countMcpOAuthPrincipals(operator)).toBe(2);
           await closeOpenClawStateDatabaseAsync();
         }
-        expect(
-          Object.fromEntries(
-            Object.entries(sql).map(([name, spy]) => [name, spy.mock.calls.length]),
-          ),
-        ).toEqual({ prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 });
+        sql.expectIdle();
       } finally {
         try {
           await closeOpenClawStateDatabaseAsync();
         } finally {
-          for (const spy of Object.values(sql)) {
-            spy.mockRestore();
-          }
+          sql.restore();
         }
       }
     });

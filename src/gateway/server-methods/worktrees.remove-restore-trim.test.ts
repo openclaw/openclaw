@@ -2,9 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
@@ -12,6 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 async function call(
@@ -26,6 +31,7 @@ async function call(
 
 describe("worktrees.remove/restore padded ids on live registry", () => {
   it("removes and restores through real Git + registry when ids are padded", async () => {
+    setRuntimeConfigSnapshot({});
     const root = tempDirs.make("openclaw-worktrees-gateway-trim-");
     const repoRoot = await initializeManagedWorktreeTestRepository(root);
     const stateDir = path.join(root, "state");
@@ -46,7 +52,7 @@ describe("worktrees.remove/restore padded ids on live registry", () => {
       expect(await call(handlers, "worktrees.remove", { id })).toEqual([
         false,
         undefined,
-        { code: "UNAVAILABLE", message: `Error: unknown active worktree: ${id}` },
+        { code: "UNAVAILABLE", message: `Error: unknown active worktree: ${id}`, retryable: false },
       ]);
       await expect(call(handlers, "worktrees.restore", { id })).rejects.toThrow(
         `worktree ${id} is not restorable`,

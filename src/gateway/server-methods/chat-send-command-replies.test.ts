@@ -13,8 +13,9 @@ import {
   createOutboundPayloadPlan,
   createStructuredOutboundPayloadPlan,
 } from "../../infra/outbound/payloads.js";
-import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   selectChatSendFinalReplyInputs,
   readChatSendReplyPayload,
 } from "./chat-send-command-replies.js";
@@ -150,95 +151,10 @@ describe("selectChatSendFinalReplyInputs", () => {
     ).toEqual([]);
   });
 
-  it("folds duplicate command media and semantics into the block reply", () => {
-    const deliveredReplies = [
-      {
-        kind: "block" as const,
-        payload: {
-          text: "done",
-          mediaUrl: "file:///tmp/result.png",
-          trustedLocalMedia: true,
-        },
-      },
-      {
-        kind: "final" as const,
-        payload: {
-          text: "done",
-          mediaUrls: ["/tmp/result.png"],
-          sensitiveMedia: true,
-          replyToId: "message-1",
-          attachments: [
-            { path: "/tmp/result.png", name: "Result chart.png", mimeType: "image/png" },
-          ],
-        },
-      },
-    ];
-    const originalReplies = structuredClone(deliveredReplies);
-    const replies = selectRawReplies({
-      deliveredReplies,
-      foldCommandBlocks: true,
-      suppressReplies: false,
-    });
-
-    expect(replies.map(({ attachments: _attachments, ...payload }) => payload)).toEqual([
-      {
-        text: "done",
-        mediaUrl: undefined,
-        mediaUrls: ["file:///tmp/result.png"],
-        trustedLocalMedia: true,
-        sensitiveMedia: true,
-        replyToId: "message-1",
-      },
-    ]);
-    expect(replies.flatMap((payload) => collectReplyMediaEntries(payload))).toMatchObject([
-      {
-        url: "file:///tmp/result.png",
-        attachment: { name: "Result chart.png", mimeType: "image/png" },
-      },
-    ]);
-    expect(deliveredReplies).toEqual(originalReplies);
-  });
-
-  it("keeps unmatched final text while deduplicating its media", () => {
-    expect(
-      selectRawReplies({
-        deliveredReplies: [
-          {
-            kind: "block",
-            payload: { text: "progress", mediaUrl: "/tmp/result.png" },
-          },
-          {
-            kind: "final",
-            payload: {
-              text: "done",
-              mediaUrl: "file:///tmp/result.png",
-              audioAsVoice: true,
-            },
-          },
-        ],
-        foldCommandBlocks: true,
-        suppressReplies: false,
-      }),
-    ).toEqual([
-      {
-        text: "progress",
-        mediaUrl: undefined,
-        mediaUrls: ["/tmp/result.png"],
-        audioAsVoice: true,
-      },
-      {
-        text: "done",
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-        audioAsVoice: true,
-      },
-    ]);
-  });
-
   it.each([
-    { caption: "matching", blockText: "done", expectedTexts: ["done"] },
-    { caption: "different", blockText: "preview", expectedTexts: ["preview", "done"] },
-  ])("retains duplicate command image metadata with $caption captions", (testCase) => {
+    { caption: "matching", blockText: "done" },
+    { caption: "different", blockText: "preview" },
+  ])("merges attachment metadata with $caption captions", ({ caption, blockText }) => {
     const mediaPath = path.resolve("media", "chart-01.png");
     const mediaUrl = pathToFileURL(mediaPath).href;
     const attachment = {
@@ -251,14 +167,22 @@ describe("selectChatSendFinalReplyInputs", () => {
       {
         kind: "block" as const,
         payload: {
-          text: testCase.blockText,
+          text: blockText,
           mediaUrl,
+          ...(caption === "matching" ? { trustedLocalMedia: true } : {}),
           attachments: [{ path: mediaPath, height: 480 }],
         },
       },
       {
         kind: "final" as const,
-        payload: { text: "done", mediaUrls: [mediaPath], attachments: [attachment] },
+        payload: {
+          text: "done",
+          mediaUrls: [mediaPath],
+          attachments: [attachment],
+          ...(caption === "matching"
+            ? { sensitiveMedia: true, replyToId: "message-1" }
+            : { audioAsVoice: true }),
+        },
       },
     ];
     const originalReplies = structuredClone(deliveredReplies);
@@ -268,13 +192,79 @@ describe("selectChatSendFinalReplyInputs", () => {
       foldCommandBlocks: true,
       suppressReplies: false,
     });
-
-    expect(replies.map((payload) => payload.text)).toEqual(testCase.expectedTexts);
-    expect(replies.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([mediaUrl]);
-    expect(replies[0]).toMatchObject({
+    const merged = {
+      text: blockText,
+      mediaUrl: undefined,
       mediaUrls: [mediaUrl],
       attachments: [{ ...attachment, path: mediaUrl, height: 480 }],
-    });
+      ...(caption === "matching"
+        ? { trustedLocalMedia: true, sensitiveMedia: true, replyToId: "message-1" }
+        : { audioAsVoice: true }),
+    };
+    expect(replies).toEqual(
+      caption === "matching"
+        ? [merged]
+        : [
+            merged,
+            {
+              text: "done",
+              mediaUrl: undefined,
+              mediaUrls: undefined,
+              audioAsVoice: true,
+              attachments: [attachment],
+            },
+          ],
+    );
     expect(deliveredReplies).toEqual(originalReplies);
+  });
+});
+
+function buildRawTranscriptReplyText(payloads: ReplyPayload[]): string {
+  return buildTranscriptReplyTextFromInputs(payloads.map((payload) => ({ kind: "raw", payload })));
+}
+
+describe("buildTranscriptReplyTextFromInputs", () => {
+  it.each([
+    ...["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"].map((controlText) => ({
+      name: `literal ${controlText}`,
+      payloads: [{ text: "First instruction" }, { text: controlText }, { text: "Done" }],
+      expected: `First instruction\n\n${controlText}\n\nDone`,
+      project: true,
+    })),
+    {
+      name: "CRLF boundaries and whitespace-only chunks",
+      payloads: [
+        { text: "```yaml\r\nroot:\r\n" },
+        { text: "  \t\n" },
+        { text: "  nested: true\r\n```" },
+      ],
+      expected: "```yaml\r\nroot:\r\n  nested: true\r\n```",
+      project: false,
+    },
+    {
+      name: "reply directives and safe media without reasoning",
+      payloads: [
+        { text: "hidden", isReasoning: true },
+        { text: "Hello", replyToId: "message-1", mediaUrls: ["https://example.test/photo.png"] },
+        { text: "Listen", audioAsVoice: true, mediaUrl: "https://example.test/clip.mp3" },
+        { text: "private", sensitiveMedia: true, mediaUrl: "https://example.test/private.png" },
+      ],
+      expected: [
+        "[[reply_to:message-1]]\nHello\nAttachment: https://example.test/photo.png",
+        "Listen\nAttachment: https://example.test/clip.mp3\n[[audio_as_voice]]",
+        "private",
+      ].join("\n\n"),
+      project: false,
+    },
+  ])("preserves $name in transcript reply text", async ({ payloads, expected, project }) => {
+    expect(buildRawTranscriptReplyText(payloads)).toBe(expected);
+    if (project) {
+      const { assistantContent } = await buildAssistantReplyContent({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        payloads,
+      });
+      expect(assistantContent).toEqual([{ type: "text", text: expected }]);
+    }
   });
 });

@@ -1,4 +1,3 @@
-// Bundled directory helpers locate bundled skill roots across package layouts.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,25 +5,17 @@ import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 
 function looksLikeSkillsDir(dir: string): boolean {
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name.endsWith(".md")) {
-        return true;
-      }
-      if (entry.isDirectory()) {
-        if (fs.existsSync(path.join(fullPath, "SKILL.md"))) {
-          return true;
-        }
-      }
-    }
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .some(
+        (entry) =>
+          !entry.name.startsWith(".") &&
+          ((entry.isFile() && entry.name.endsWith(".md")) ||
+            (entry.isDirectory() && fs.existsSync(path.join(dir, entry.name, "SKILL.md")))),
+      );
   } catch {
     return false;
   }
-  return false;
 }
 
 export type BundledSkillsResolveOptions = {

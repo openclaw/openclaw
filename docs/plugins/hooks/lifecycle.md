@@ -15,7 +15,7 @@ projection. Part of the [Plugin hooks](/plugins/hooks) guide.
 
 Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
-fails closed when enabled but unavailable.
+blocks installation when enabled but unavailable.
 
 `before_install` is a plugin-runtime lifecycle hook. It can run after
 `security.installPolicy` in a process where plugin hooks have already been
@@ -29,7 +29,7 @@ is an empty `ok` result. Return additional findings or
 `{ block: true, blockReason }` to stop the install in that process.
 
 `block: true` is terminal. `block: false` is treated as no decision. Handler
-failures block the install fail-closed.
+failures block the install.
 
 ## Gateway lifecycle
 
@@ -93,7 +93,7 @@ Keep OpenClaw as the source of truth for due checks and execution.
 ### Safe external cron projection
 
 Project a complete wake snapshot instead of forwarding cron event deltas. The
-external adapter's `replaceAll` operation must be atomic and idempotent, and it
+external adapter's `replaceAll` operation must be atomic and safe to repeat, and it
 must resolve only after the host has durably accepted the snapshot. It must
 also honor the supplied abort signal: if the signal aborts before durable
 acceptance, the adapter must not accept that snapshot.

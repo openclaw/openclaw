@@ -1,14 +1,29 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  createChatFlowE2eSuite,
-  installMockGateway,
-  waitForChatScrollIdle,
-} from "./chat-flow.test-support.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+async function waitForHomeScrollIdle(thread: Locator) {
+  await expect
+    .poll(() =>
+      thread.evaluate(async (element) => {
+        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
+        return before.every((value, index) => value === after[index]);
+      }),
+    )
+    .toBe(true);
+}
+
 const sessionKey = "agent:main:main";
 const progress = {
   card: {
@@ -30,7 +45,7 @@ const message = (index: number) => ({
 
 suite.define(() => {
   it.each(["nested output", "canceled wheel"] as const)(
-    "preserves manually reopened progress and its session choice after %s",
+    "preserves compact Home progress and its session choice after %s",
     async (target) => {
       const artifactDir = createControlUiE2eArtifactDir(
         `session-progress-${target.replaceAll(" ", "-")}`,
@@ -38,6 +53,7 @@ suite.define(() => {
       const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
       const page = await context.newPage();
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
         sessionKey,
         sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["progress-run"] },
         inFlightRun: { runId: "progress-run", startedAt: 1_800_000_001_000 },
@@ -84,18 +100,22 @@ suite.define(() => {
         ],
         methodResponses: { "progressCard.get": progress },
       });
-      const thread = page.locator(".chat-thread");
-      const card = page.locator(".session-progress-card--composer");
+      const home = page.locator("openclaw-home-session");
+      const thread = home.locator(".chat-thread");
+      const card = home.locator('[data-progress-card-placement="composer"]');
       const isOpen = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        // The same Home conversation cannot own both the page and its dock.
+        await page.goto(`${suite.server.baseUrl}new`);
+        await openProgressHomeDock(page);
+        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
         await card.waitFor();
-        await waitForChatScrollIdle(page);
-        await page
+        await waitForHomeScrollIdle(thread);
+        await home
           .locator(".chat-tool-msg-summary")
           .filter({ hasText: "cat scroll-evidence.txt" })
           .click();
-        const outputScroller = page.locator(".chat-tool-term__out").last();
+        const outputScroller = home.locator(".chat-tool-term__out").last();
         await outputScroller.waitFor({ state: "visible" });
         expect(
           await outputScroller.evaluate((element) => element.scrollHeight - element.clientHeight),
@@ -107,7 +127,7 @@ suite.define(() => {
         await thread.evaluate((element) => {
           element.scrollTop -= 120;
         });
-        await waitForChatScrollIdle(page);
+        await waitForHomeScrollIdle(thread);
         expect(
           await thread.evaluate(
             (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
@@ -138,7 +158,7 @@ suite.define(() => {
           // These are three separate gestures under the disclosure's 200 ms boundary.
           await page.waitForTimeout(220);
         }
-        await waitForChatScrollIdle(page);
+        await waitForHomeScrollIdle(thread);
         await page.waitForTimeout(300);
         const after = {
           thread: await thread.evaluate((element) => element.scrollTop),
@@ -156,8 +176,7 @@ suite.define(() => {
           expect(after.output).toBe(before.output);
         }
         expect(await isOpen()).toBe(true);
-        // A completed card defaults closed on a new visit. Remaining open then
-        // distinguishes the remembered manual choice from the active-run default.
+        // Completion and remount must not discard the manual disclosure choice.
         await gateway.setMethodResponse("progressCard.get", {
           card: {
             ...progress.card,
@@ -167,24 +186,26 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         await expect.poll(() => card.getAttribute("data-complete")).toBe("true");
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-identity-card").click();
-        await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
-          .getByRole("menuitem", { exact: true, name: "Settings" })
-          .click();
-        await page.locator("openclaw-chat-pane").waitFor({ state: "hidden" });
-        await page.goBack();
-        await card.waitFor({ state: "visible" });
-        await waitForChatScrollIdle(page);
+        await page.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+        await home.waitFor({ state: "hidden" });
+        await openProgressHomeDock(page);
+        await card.waitFor();
+        await waitForHomeScrollIdle(thread);
         expect(await isOpen()).toBe(true);
+        // Closed differs from the desktop default and proves remembered choice.
+        await card.locator("summary").click();
+        await page.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+        await home.waitFor({ state: "hidden" });
+        await openProgressHomeDock(page);
+        await card.waitFor();
+        expect(await isOpen()).toBe(false);
       } finally {
         await suite.closeBrowserContext(context);
       }
     },
   );
 
-  it("counts native touch inertia in transcript movement", async () => {
+  it("counts native touch inertia toward a manually reopened compact Home card", async () => {
     const artifactDir = createControlUiE2eArtifactDir("session-progress-touch-inertia");
     const context = await suite.newBrowserContext({
       hasTouch: true,
@@ -192,19 +213,27 @@ suite.define(() => {
       viewport: { width: 390, height: 844 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
       sessionKey,
       sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["progress-run"] },
       inFlightRun: { runId: "progress-run", startedAt: 1_800_000_001_000 },
       historyMessages: Array.from({ length: 80 }, (_, index) => message(index)),
       methodResponses: { "progressCard.get": progress },
     });
-    const thread = page.locator(".chat-thread");
-    const card = page.locator(".session-progress-card--composer");
+    const home = page.locator("openclaw-home-session");
+    const thread = home.locator(".chat-thread");
+    const card = home.locator('[data-progress-card-placement="composer"]');
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      // The same Home conversation cannot own both the page and its dock.
+      await page.goto(`${suite.server.baseUrl}new`);
+      await openProgressHomeDock(page);
+      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
       await card.waitFor();
-      await waitForChatScrollIdle(page);
+      expect(await card.getAttribute("open")).toBeNull();
+      await card.locator("summary").click();
+      expect(await card.getAttribute("open")).not.toBeNull();
+      await waitForHomeScrollIdle(thread);
       const cdp = await context.newCDPSession(page);
       const point = await thread.evaluate((element) => {
         const rect = element.getBoundingClientRect();
@@ -221,7 +250,7 @@ suite.define(() => {
       });
       const offsets: Array<{ before: number; released: number; settled: number }> = [];
       await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
-      for (let index = 0; index < 2; index++) {
+      for (let index = 0; index < 3; index++) {
         const before = await thread.evaluate((element) => element.scrollTop);
         const timestamp = Date.now() / 1000;
         await cdp.send("Input.dispatchTouchEvent", {
@@ -242,7 +271,7 @@ suite.define(() => {
           touchPoints: [],
           timestamp: timestamp + 0.057,
         });
-        await waitForChatScrollIdle(page);
+        await waitForHomeScrollIdle(thread);
         offsets.push(
           await thread.evaluate(
             (element, beforeOffset) => ({
@@ -259,11 +288,11 @@ suite.define(() => {
         path.join(artifactDir, "touch-offsets.json"),
         JSON.stringify(offsets, null, 2),
       );
-      // The fingers travel only 280 px. Crossing 320 px therefore requires the
-      // transcript's native inertia, which raw touch-coordinate counting omits.
+      // The fingers travel only 420 px. Crossing the reopened 640 px threshold
+      // requires native inertia, which raw touch-coordinate counting omits.
       expect(
         offsets.reduce((distance, offset) => distance + offset.before - offset.settled, 0),
-      ).toBeGreaterThan(320);
+      ).toBeGreaterThan(640);
       for (const offset of offsets) {
         expect(offset.released - offset.settled).toBeGreaterThan(1);
       }
@@ -276,12 +305,13 @@ suite.define(() => {
     }
   });
 
-  it("does not count scroll-to-end or a deferred history prepend as reader gestures", async () => {
+  it("does not count compact Home scroll-to-end or deferred history prepend as reader gestures", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const recent = Array.from({ length: 80 }, (_, index) => message(index + 80));
     const older = Array.from({ length: 80 }, (_, index) => message(index));
     const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
       sessionKey,
       sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["progress-run"] },
       inFlightRun: { runId: "progress-run", startedAt: 1_800_000_001_000 },
@@ -303,18 +333,22 @@ suite.define(() => {
         },
       },
     });
-    const thread = page.locator(".chat-thread");
-    const card = page.locator(".session-progress-card--composer");
+    const home = page.locator("openclaw-home-session");
+    const thread = home.locator(".chat-thread");
+    const card = home.locator('[data-progress-card-placement="composer"]');
     const isOpen = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      // The same Home conversation cannot own both the page and its dock.
+      await page.goto(`${suite.server.baseUrl}new`);
+      await openProgressHomeDock(page);
+      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
       await card.waitFor();
-      await waitForChatScrollIdle(page);
+      await waitForHomeScrollIdle(thread);
       await gateway.deferNext("chat.history");
       await thread.hover();
       await page.mouse.wheel(0, -100_000);
       await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
-      await waitForChatScrollIdle(page);
+      await waitForHomeScrollIdle(thread);
       await card.locator("summary").click();
       await card.locator("summary").click();
       expect(await isOpen()).toBe(true);
@@ -323,10 +357,10 @@ suite.define(() => {
       await expect
         .poll(() => thread.evaluate((element) => element.scrollTop))
         .toBeGreaterThan(beforePrepend + 1000);
-      await waitForChatScrollIdle(page);
+      await waitForHomeScrollIdle(thread);
       expect(await isOpen()).toBe(true);
-      await page.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
-      await waitForChatScrollIdle(page);
+      await home.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
+      await waitForHomeScrollIdle(thread);
       expect(await isOpen()).toBe(true);
       // Two genuine gestures exceed the default 320 px threshold, but not the
       // three-gesture threshold belonging to the retained manual reopen.
@@ -335,7 +369,7 @@ suite.define(() => {
         await page.mouse.wheel(0, -240);
         await page.waitForTimeout(220);
       }
-      await waitForChatScrollIdle(page);
+      await waitForHomeScrollIdle(thread);
       await page.waitForTimeout(300);
       expect(await isOpen()).toBe(true);
     } finally {

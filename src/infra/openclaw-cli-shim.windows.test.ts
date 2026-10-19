@@ -87,7 +87,9 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
           source: "gateway",
           args: ["--profile", "work", "probe"],
           cwd: fixture.callerCwd,
-          tsconfigPath: path.join(fixture.checkout, "tsconfig.json"),
+          ...(process.versions.bun
+            ? {}
+            : { tsconfigPath: path.join(fixture.checkout, "tsconfig.json") }),
         });
       });
     },

@@ -1,50 +1,78 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import {
   projectCodexCatalogNativeResponse,
   projectCodexCatalogNativeThread,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
-import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
-import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
+import type { CodexCatalogNativeThread } from "../session-catalog-types.js";
+import { codexCatalogResponseRoute, type CodexCatalogDecodeRoute } from "./client-catalog-route.js";
 import {
-  codexCatalogResponseRoute,
-  type CodexCatalogDecodeRoute,
-} from "./client-message-frames.js";
+  parseCodexAppServerMessage,
+  type CodexAppServerParseFailure,
+} from "./client-message-decoder.js";
 import { isJsonObject, isRpcResponse } from "./protocol.js";
+import type { CodexRequestAttempt } from "./request-attempt.js";
+
+export type CodexClientRequestAttempt = CodexRequestAttempt & {
+  catalogProjection?: {
+    preview?: CodexCatalogPreviewCache;
+    remainingRows?: number;
+    singleThread?: boolean;
+  };
+};
 
 export type CodexCatalogDecodeInput = {
   bytes: Uint8Array<ArrayBuffer>;
   route: CodexCatalogDecodeRoute;
   remainingRows?: number;
-  catalogRows?: Map<number, number | undefined>;
+  oversizedSingleton?: boolean;
 };
 export type CodexCatalogDecodeResult = {
   message?: unknown;
-  previewStates?: (boolean | undefined)[];
+  preview?: { rows: CodexCatalogNativeThread[]; states: (boolean | undefined)[] };
   projectionError?: { id: number; error: Error };
-  pending: boolean;
-  failures: { value: string; error: unknown; fragmentCount: number }[];
+  failures: CodexAppServerParseFailure[];
 };
 
-/** The worker retains recovery fragments, but never a completed native page. */
-export function createCodexCatalogDecoder() {
-  let failures: CodexCatalogDecodeResult["failures"] = [];
-  const decoder = new CodexAppServerMessageDecoder((value, error, fragmentCount) => {
-    // Redact before bounding: cutting a quoted token first loses its closing quote.
-    failures.push({ value: redactCodexAppServerLinePreview(value), error, fragmentCount });
-  });
-  return (input: CodexCatalogDecodeInput): CodexCatalogDecodeResult => {
-    failures = [];
-    const parsed = decoder.parse(
-      Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString(
-        "utf8",
-      ),
-    );
-    const result = projectCodexCatalogMessage(parsed, input);
-    result.pending = decoder.hasPending;
-    result.failures = failures;
-    return result;
-  };
+/** Each worker invocation parses and projects one complete transport frame. */
+export function decodeCodexCatalogFrame(input: CodexCatalogDecodeInput): CodexCatalogDecodeResult {
+  const failures: CodexCatalogDecodeResult["failures"] = [];
+  const parsed = parseCodexAppServerMessage(
+    Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString(
+      "utf8",
+    ),
+    (failure) => failures.push(failure),
+  );
+  if (input.oversizedSingleton) {
+    try {
+      if (
+        input.route === "unresolved" ||
+        !isRpcResponse(parsed) ||
+        parsed.id !== input.route.id ||
+        parsed.error ||
+        !isJsonObject(parsed.result) ||
+        !Array.isArray(parsed.result.data) ||
+        parsed.result.data.length !== 1 ||
+        parsed.result.nextCursor === undefined
+      ) {
+        return { failures };
+      }
+      const page = projectCodexCatalogNativeResponse(
+        parsed.result,
+        sanitizeTerminalText,
+        undefined,
+        1,
+      );
+      page.data[0]!.catalogError = "oversized-thread";
+      if (input.remainingRows === 0) {
+        page.data = [];
+      }
+      return { message: { id: parsed.id, result: page }, failures };
+    } catch {
+      return { failures };
+    }
+  }
+  return { ...projectCodexCatalogMessage(parsed, input), failures };
 }
 
 export function projectCodexCatalogMessage(
@@ -52,7 +80,7 @@ export function projectCodexCatalogMessage(
   input: Omit<CodexCatalogDecodeInput, "bytes">,
   cachedPreview?: CodexCatalogPreviewCache,
 ): CodexCatalogDecodeResult {
-  const result: CodexCatalogDecodeResult = { pending: false, failures: [] };
+  const result: CodexCatalogDecodeResult = { failures: [] };
   if (!isJsonObject(parsed)) {
     return result;
   }
@@ -65,34 +93,31 @@ export function projectCodexCatalogMessage(
   if (message.error || !route) {
     return result;
   }
-  const remainingRows =
-    input.route === "unresolved"
-      ? input.catalogRows?.has(route.id)
-        ? input.catalogRows.get(route.id)
-        : 0
-      : input.remainingRows;
+  const remainingRows = input.route === "unresolved" ? 0 : input.remainingRows;
   try {
     if (!isJsonObject(message.result)) {
       throw new Error("Codex catalog response contains an invalid result");
     }
     if (route.kind === "list") {
       const raw = message.result;
-      message.result = projectCodexCatalogNativeResponse(
+      const page = projectCodexCatalogNativeResponse(
         raw,
         sanitizeTerminalText,
         cachedPreview,
         remainingRows,
       );
+      message.result = page;
       if (!cachedPreview) {
-        result.previewStates = Array.isArray(raw.data)
+        const states = Array.isArray(raw.data)
           ? raw.data
-              .slice(0, Array.isArray(message.result.data) ? message.result.data.length : 0)
+              .slice(0, page.data.length)
               .map((row) =>
                 isJsonObject(row) && typeof row.preview === "string"
                   ? Boolean(row.preview)
                   : undefined,
               )
           : [];
+        result.preview = { rows: page.data, states };
       }
     } else {
       const thread = message.result.thread;

@@ -2,11 +2,10 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-r
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSessionBackfillGatewayMethods } from "./session-backfill-gateway.js";
-import { executeSessionBackfill, executeSessionBackfillBatch } from "./session-backfill.js";
+import { executeSessionBackfillBatch } from "./session-backfill.js";
 
 vi.mock("./session-backfill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-backfill.js")>()),
-  executeSessionBackfill: vi.fn(),
   executeSessionBackfillBatch: vi.fn(),
 }));
 
@@ -15,24 +14,38 @@ type RegisteredMethod = {
   scope: string | undefined;
 };
 
-const executeMock = vi.mocked(executeSessionBackfill);
 const executeBatchMock = vi.mocked(executeSessionBackfillBatch);
-const SESSION_BACKFILL_GATEWAY_METHODS = {
-  preview: "memory.sessionBackfill.preview",
-  apply: "memory.sessionBackfill.apply",
-  rollback: "memory.sessionBackfill.rollback",
-} as const;
+type Execution = Awaited<ReturnType<typeof executeSessionBackfillBatch>>;
+
+function mockBatch(
+  topCandidates: string[] = [],
+  result: Partial<Execution["result"]> = {},
+  continuation = { advanced: false, hasMore: false },
+) {
+  executeBatchMock.mockResolvedValueOnce({
+    result: {
+      agentId: "main",
+      workspaceDir: "/tmp/main-workspace",
+      applied: false,
+      rem: false,
+      days: topCandidates.length
+        ? [{ day: "2026-07-01", candidateCount: topCandidates.length, topCandidates }]
+        : [],
+      candidateCount: topCandidates.length,
+      stagedEntries: 0,
+      writtenDiaryEntries: 0,
+      replacedDiaryEntries: 0,
+      ...result,
+    },
+    continuation,
+  });
+}
 
 function createHarness(config?: Record<string, unknown>) {
   const methods = new Map<string, RegisteredMethod>();
-  const runtimeConfig =
-    config !== undefined
-      ? config
-      : {
-          agents: {
-            entries: { main: { default: true, workspace: "/tmp/main-workspace" } },
-          },
-        };
+  const runtimeConfig = config ?? {
+    agents: { entries: { main: { workspace: "/tmp/main-workspace" } } },
+  };
   const api = {
     runtime: {
       config: { current: () => runtimeConfig },
@@ -54,24 +67,32 @@ function createHarness(config?: Record<string, unknown>) {
   return { api, methods };
 }
 
-async function invoke(method: RegisteredMethod, params: unknown) {
+async function invoke(methods: Map<string, RegisteredMethod>, operation: string, params: unknown) {
   const respond = vi.fn();
-  await method.handler({ params, respond } as unknown as GatewayRequestHandlerOptions);
+  await methods
+    .get(`memory.sessionBackfill.${operation}`)!
+    .handler({ params, respond } as unknown as GatewayRequestHandlerOptions);
   return respond;
+}
+
+function expectInvalid(respond: Awaited<ReturnType<typeof invoke>>, message: string) {
+  expect(respond.mock.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST", message });
 }
 
 describe("session backfill gateway methods", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    executeBatchMock.mockReset();
   });
 
-  it("registers read preview and admin mutation methods", () => {
+  it("keeps legacy preview read-only and all owner operations admin-only", () => {
     const { methods } = createHarness();
-    expect([...methods.entries()].map(([name, value]) => [name, value.scope])).toEqual([
-      [SESSION_BACKFILL_GATEWAY_METHODS.preview, "operator.read"],
-      [SESSION_BACKFILL_GATEWAY_METHODS.apply, "operator.admin"],
-      [SESSION_BACKFILL_GATEWAY_METHODS.rollback, "operator.admin"],
-    ]);
+    for (const operation of ["preview", "apply", "rollback"]) {
+      const method = `memory.sessionBackfill.${operation}`;
+      const expectedScope = operation === "preview" ? "operator.read" : "operator.admin";
+      expect(methods.get(method)?.scope).toBe(expectedScope);
+      expect(methods.get(`${method}.owner`)?.scope).toBe("operator.admin");
+    }
   });
 
   it("validates preview params and returns at most three samples per day", async () => {
@@ -79,28 +100,8 @@ describe("session backfill gateway methods", () => {
     const { methods } = createHarness({
       plugins: { entries: { "memory-core": { config: pluginConfig } } },
     });
-    executeBatchMock.mockResolvedValueOnce({
-      result: {
-        agentId: "main",
-        workspaceDir: "/tmp/main-workspace",
-        applied: false,
-        rem: false,
-        days: [
-          {
-            day: "2026-07-01",
-            candidateCount: 4,
-            topCandidates: ["one", "two", "three", "four"],
-          },
-        ],
-        candidateCount: 4,
-        stagedEntries: 0,
-        writtenDiaryEntries: 0,
-        replacedDiaryEntries: 0,
-      },
-      continuation: { advanced: false, hasMore: true },
-    });
-    const preview = methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!;
-    const respond = await invoke(preview, {
+    mockBatch(["one", "two", "three", "four"], {}, { advanced: false, hasMore: true });
+    const respond = await invoke(methods, "preview", {
       agentId: "main",
       from: "2026-07-01",
       to: "2026-07-31",
@@ -126,65 +127,32 @@ describe("session backfill gateway methods", () => {
 
   it("rejects invalid ranges and unknown params before executing", async () => {
     const { methods } = createHarness();
-    const preview = methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!;
-    const invalidRange = await invoke(preview, {
+    const invalidRange = await invoke(methods, "preview", {
       agentId: "main",
       from: "2026-08-01",
       to: "2026-07-01",
     });
-    const unexpected = await invoke(preview, { agentId: "main", archiveFiles: [] });
+    const unexpected = await invoke(methods, "preview", { agentId: "main", archiveFiles: [] });
+    const rollback = await invoke(methods, "rollback", { agentId: "main", from: "2026-07-01" });
 
-    expect(executeMock).not.toHaveBeenCalled();
-    expect(invalidRange.mock.calls[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "from must not be after to.",
-    });
-    expect(unexpected.mock.calls[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "unexpected parameter: archiveFiles",
-    });
+    expect(executeBatchMock).not.toHaveBeenCalled();
+    expectInvalid(invalidRange, "from must not be after to.");
+    expectInvalid(unexpected, "unexpected parameter: archiveFiles");
+    expectInvalid(rollback, "unexpected parameter: from");
   });
 
-  it("rejects unknown agents as invalid requests", async () => {
+  it("rejects unknown agents in preview", async () => {
     const { methods } = createHarness();
-    const respond = await invoke(methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!, {
-      agentId: "missing",
-    });
-
-    expect(executeMock).not.toHaveBeenCalled();
-    expect(respond.mock.calls[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: 'Unknown agent id "missing".',
-    });
+    const respond = await invoke(methods, "preview", { agentId: "missing" });
+    expect(executeBatchMock).not.toHaveBeenCalled();
+    expectInvalid(respond, 'Unknown agent id "missing".');
   });
 
   it("accepts a keyed non-default agent", async () => {
-    const { methods } = createHarness({
-      agents: {
-        entries: {
-          main: { default: true },
-          tester: {},
-        },
-      },
-    });
-    executeBatchMock.mockResolvedValueOnce({
-      result: {
-        agentId: "tester",
-        workspaceDir: "/tmp/tester-workspace",
-        applied: false,
-        rem: false,
-        days: [],
-        candidateCount: 0,
-        stagedEntries: 0,
-        writtenDiaryEntries: 0,
-        replacedDiaryEntries: 0,
-      },
-      continuation: { advanced: false, hasMore: false },
-    });
+    const { methods } = createHarness({ agents: { entries: { main: {}, tester: {} } } });
+    mockBatch([], { agentId: "tester", workspaceDir: "/tmp/tester-workspace" });
 
-    const respond = await invoke(methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!, {
-      agentId: "tester",
-    });
+    const respond = await invoke(methods, "preview", { agentId: "tester" });
 
     expect(executeBatchMock).toHaveBeenCalledWith({
       agentId: "tester",
@@ -194,53 +162,19 @@ describe("session backfill gateway methods", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
 
-  it("allows only the implicit default agent when no roster is configured", async () => {
-    const { methods } = createHarness({});
-    const preview = methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!;
-    const missing = await invoke(preview, { agentId: "missing" });
-
-    expect(missing.mock.calls[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: 'Unknown agent id "missing".',
-    });
-  });
-
   it("applies a chunk with cursor progress and rolls back by agent", async () => {
     const pluginConfig = { memoryPolicy: { excludeSessions: { chatTypes: ["group"] } } };
     const { methods } = createHarness({
       plugins: { entries: { "memory-core": { config: pluginConfig } } },
     });
-    executeBatchMock.mockResolvedValueOnce({
-      result: {
-        agentId: "main",
-        workspaceDir: "/tmp/main-workspace",
-        applied: true,
-        rem: false,
-        days: [{ day: "2026-07-01", candidateCount: 2, topCandidates: ["one", "two"] }],
-        candidateCount: 2,
-        stagedEntries: 1,
-        writtenDiaryEntries: 1,
-        replacedDiaryEntries: 0,
-      },
-      continuation: { advanced: true, hasMore: false },
-    });
-    executeMock.mockResolvedValueOnce({
-      agentId: "main",
-      workspaceDir: "/tmp/main-workspace",
-      applied: false,
-      rem: false,
-      days: [],
-      candidateCount: 0,
-      stagedEntries: 0,
-      writtenDiaryEntries: 0,
-      replacedDiaryEntries: 0,
-      rollback: { removedDiaryEntries: 3, removedStagedEntries: 2 },
-    });
+    mockBatch(
+      ["one", "two"],
+      { applied: true, stagedEntries: 1, writtenDiaryEntries: 1 },
+      { advanced: true, hasMore: false },
+    );
+    mockBatch([], { rollback: { removedDiaryEntries: 3, removedStagedEntries: 2 } });
 
-    const applyRespond = await invoke(methods.get(SESSION_BACKFILL_GATEWAY_METHODS.apply)!, {
-      agentId: "main",
-      limitDays: 14,
-    });
+    const applyRespond = await invoke(methods, "apply", { agentId: "main", limitDays: 14 });
     expect(executeBatchMock).toHaveBeenCalledWith(expect.objectContaining({ pluginConfig }));
     expect(applyRespond).toHaveBeenCalledWith(
       true,
@@ -251,12 +185,33 @@ describe("session backfill gateway methods", () => {
         cursor: { advanced: true, exhausted: false, hasMore: false },
       }),
     );
-    const rollbackRespond = await invoke(methods.get(SESSION_BACKFILL_GATEWAY_METHODS.rollback)!, {
-      agentId: "main",
-    });
+    const rollbackRespond = await invoke(methods, "rollback", { agentId: "main" });
     expect(rollbackRespond).toHaveBeenCalledWith(true, {
       removedDiaryEntries: 3,
       removedStagedEntries: 2,
     });
   });
+
+  it.each([
+    [{ cliResult: true }, "expectedOwnerId must be a non-empty string"],
+    [
+      { cliResult: true, expectedOwnerId: "current", operationOwnerId: "previous" },
+      "Gateway owner changed during session backfill",
+    ],
+  ])(
+    "refuses unbound or replaced CLI ownership before opening a backfill (%j)",
+    async (params, message) => {
+      const { methods } = createHarness();
+      const respond = await invoke(methods, "apply.owner", params);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining(message),
+        }),
+      );
+      expect(executeBatchMock).not.toHaveBeenCalled();
+    },
+  );
 });

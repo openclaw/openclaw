@@ -1,4 +1,5 @@
-import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
+import { resolveCurrentDiagnosticRun } from "./diagnostic-embedded-run-index.js";
 
 // A semantic-stall clock remains continuous across short model/tool handoffs,
 // but later model progress wins once no churn observation refreshes this lease.
@@ -18,16 +19,12 @@ export type DiagnosticArgumentChurnActivity = {
 // same-millisecond ties between progress, churn observations, and merged refs.
 let diagnosticActivitySequence = 0;
 
-function nextDiagnosticActivitySequence(): number {
-  diagnosticActivitySequence += 1;
-  return diagnosticActivitySequence;
-}
-
 export function recordDiagnosticActivityProgress(activity: DiagnosticArgumentChurnActivity): void {
-  activity.lastProgressSequence = nextDiagnosticActivitySequence();
+  activity.lastProgressSequence = ++diagnosticActivitySequence;
 }
 
 export type DiagnosticArgumentChurnObservationParams = {
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -77,13 +74,7 @@ export function resolveArgumentChurnProgress(
   const startedAt = activity.argumentChurnStartedAt;
   const belongsToOwner =
     startedAt !== undefined && currentOwnerRunId === activity.argumentChurnRunId;
-  if (!belongsToOwner) {
-    return {
-      lastProgressAt: activity.lastProgressAt,
-      lastProgressReason: activity.lastProgressReason,
-    };
-  }
-  if (hasArgumentChurnContinuityExpired(activity, now)) {
+  if (!belongsToOwner || hasArgumentChurnContinuityExpired(activity, now)) {
     return {
       lastProgressAt: activity.lastProgressAt,
       lastProgressReason: activity.lastProgressReason,
@@ -126,7 +117,7 @@ function recordArgumentChurnActivityObservation(
     activity.argumentChurnRunId = params.runId;
   }
   activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnObservationSequence = nextDiagnosticActivitySequence();
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
 }
 
 function updateArgumentChurnPolicyWait(
@@ -175,7 +166,7 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
 ): void {
   const now = params.now ?? Date.now();
   const runId = params.runId?.trim() || undefined;
-  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
+  const currentOwnerRunId = resolveCurrentDiagnosticRun(owners)?.runId;
   if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
     return;
   }
@@ -268,7 +259,7 @@ export function clearArgumentChurnActivity(
   const cleared = activity.argumentChurnStartedAt !== undefined;
   activity.argumentChurnStartedAt = undefined;
   activity.argumentChurnObservationAt = params.now ?? Date.now();
-  activity.argumentChurnObservationSequence = nextDiagnosticActivitySequence();
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
   activity.argumentChurnRunId = params.runId;
   return cleared;
 }

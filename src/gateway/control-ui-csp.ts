@@ -1,8 +1,37 @@
-// Control UI content-security-policy helpers.
-// Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { RemoteControlUiIngressContext } from "./server/client-identity-types.js";
+
+/** The contextual host policy admits explicit secure origins and the supported embedding scheme. */
+export function validateRemoteControlUiFrameAncestors(
+  values: readonly string[],
+): readonly string[] {
+  if (!Array.isArray(values) || values.length > 16 || values.join(" ").length > 4096) {
+    throw new Error("Remote Control UI frame ancestors must contain at most 16 bounded origins");
+  }
+  for (const value of values) {
+    if (value === "codex-sandbox:") {
+      continue;
+    }
+    const origin = typeof value === "string" ? URL.parse(value) : null;
+    if (
+      !origin ||
+      origin.protocol !== "https:" ||
+      origin.origin !== value ||
+      (origin.hostname.includes("*") &&
+        !/^https:\/\/\*\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(
+          value,
+        )) ||
+      origin.username ||
+      origin.password
+    ) {
+      throw new Error(
+        "Remote Control UI frame ancestors must be exact HTTPS origins, https://*.<domain>, or codex-sandbox:",
+      );
+    }
+  }
+  return Object.freeze([...new Set(values)]);
+}
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -16,7 +45,11 @@ export function computeInlineScriptHashes(html: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
     const openTag = match[0].slice(0, match[0].indexOf(">") + 1);
-    if (hasScriptSrcAttribute(openTag)) {
+    if (
+      Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
+        (attribute) => attribute[1]?.toLowerCase() === "src",
+      )
+    ) {
       continue;
     }
     const content = match[1];
@@ -27,12 +60,6 @@ export function computeInlineScriptHashes(html: string): string[] {
     hashes.push(`sha256-${hash}`);
   }
   return hashes;
-}
-
-function hasScriptSrcAttribute(openTag: string): boolean {
-  return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
-    (match) => normalizeLowercaseStringOrEmpty(match[1]) === "src",
-  );
 }
 
 /** Build the CSP header applied to Gateway-served Control UI HTML. */
@@ -46,6 +73,7 @@ export function buildControlUiCspHeader(opts?: {
    * being enabled so the baseline Control UI CSP stays tight otherwise.
    */
   allowWasm?: boolean;
+  frameAncestors?: readonly string[];
 }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptTokens = ["'self'"];
@@ -56,39 +84,37 @@ export function buildControlUiCspHeader(opts?: {
     scriptTokens.push("'wasm-unsafe-eval'");
   }
   // Web Awesome resolves its bundled system icons to data: SVGs, then fetches
-  // them before rendering. This allows local bytes only, not another origin.
+  // them before rendering. Attachment previews fetch browser-owned Blob URLs.
   const connectTokens = [
     "'self'",
     "ws:",
     "wss:",
     "data:",
+    "blob:",
     "https://api.openai.com",
     "https://tweakcn.com",
   ];
   if (opts?.portalHost) {
-    try {
-      const parsed = new URL(`http://${opts.portalHost}`);
-      const isHostOnly =
-        !parsed.username &&
-        !parsed.password &&
-        parsed.pathname === "/" &&
-        !parsed.search &&
-        !parsed.hash;
-      if (isHostOnly && parsed.hostname) {
-        connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
-      }
-    } catch {
-      // Invalid Host headers do not relax the baseline policy.
+    const parsed = URL.parse(`http://${opts.portalHost}`);
+    if (
+      parsed?.hostname &&
+      !parsed.username &&
+      !parsed.password &&
+      parsed.pathname === "/" &&
+      !parsed.search &&
+      !parsed.hash
+    ) {
+      connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
     }
   }
   return [
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    `frame-ancestors ${opts?.frameAncestors?.length ? opts.frameAncestors.join(" ") : "'none'"}`,
     // Gateway selection can move to a remote dedicated MCP Apps origin after
     // this document loads. The component still validates the exact endpoint.
-    "frame-src 'self' http: https:",
+    "frame-src 'self' blob: http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob: https:",
@@ -99,9 +125,21 @@ export function buildControlUiCspHeader(opts?: {
   ].join("; ");
 }
 
-export function applyControlUiSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+export function applyControlUiSecurityHeaders(
+  res: ServerResponse,
+  remote?: RemoteControlUiIngressContext,
+) {
+  remote?.signal.throwIfAborted();
+  remote?.assertCurrent();
+  if (remote?.frameAncestors.length) {
+    res.removeHeader("X-Frame-Options");
+  } else {
+    res.setHeader("X-Frame-Options", "DENY");
+  }
+  res.setHeader(
+    "Content-Security-Policy",
+    buildControlUiCspHeader({ frameAncestors: remote?.frameAncestors }),
+  );
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   // Browser Talk is owned by this same-origin Control UI document. Keep camera

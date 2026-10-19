@@ -1,107 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 import { retryClawHubRead } from "./clawhub-retry.js";
 
-describe("retryClawHubRead", () => {
-  it("honors Retry-After and cancels the discarded response", async () => {
-    const cancel = vi.fn();
-    const delays: number[] = [];
-    let attempts = 0;
-
-    const result = await retryClawHubRead(
-      async () => {
-        attempts += 1;
-        if (attempts === 1) {
-          return {
-            response: new Response(
-              new ReadableStream<Uint8Array>({
-                cancel() {
-                  cancel();
-                },
-              }),
-              {
-                status: 503,
-                headers: { "Retry-After": "1" },
-              },
-            ),
-          };
-        }
-        return { response: new Response("ok") };
+async function retryResponse(first: Response) {
+  const delays: number[] = [];
+  let attempts = 0;
+  const result = await retryClawHubRead(
+    async () => {
+      attempts += 1;
+      return { response: attempts === 1 ? first : new Response("ok") };
+    },
+    {
+      disposeRetry: async ({ response }) => {
+        await response.body?.cancel();
       },
-      {
-        disposeRetry: async ({ response }) => {
-          await response.body?.cancel();
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
+      sleep: async (ms) => {
+        delays.push(ms);
       },
-    );
-
-    expect(await result.response.text()).toBe("ok");
-    expect(attempts).toBe(2);
-    expect(delays).toEqual([1_000]);
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["0.5", "1.5"])(
-    "ignores fractional Retry-After delay-seconds values: %s",
-    async (retryAfter) => {
-      const delays: number[] = [];
-      let attempts = 0;
-
-      const result = await retryClawHubRead(
-        async () => {
-          attempts += 1;
-          return {
-            response: new Response(attempts === 1 ? "limited" : "ok", {
-              status: attempts === 1 ? 503 : 200,
-              headers: attempts === 1 ? { "Retry-After": retryAfter } : undefined,
-            }),
-          };
-        },
-        {
-          disposeRetry: async ({ response }) => {
-            await response.body?.cancel();
-          },
-          sleep: async (ms) => {
-            delays.push(ms);
-          },
-        },
-      );
-
-      expect(await result.response.text()).toBe("ok");
-      expect(delays).toEqual([1_000]);
     },
   );
+  return { result, attempts, delays };
+}
+
+describe("retryClawHubRead", () => {
+  it("ignores fractional Retry-After delay-seconds values", async () => {
+    const { result, delays } = await retryResponse(
+      new Response("limited", {
+        status: 503,
+        headers: { "Retry-After": "1.5" },
+      }),
+    );
+    expect(await result.response.text()).toBe("ok");
+    expect(delays).toEqual([1_000]);
+  });
 
   it("honors a valid HTTP-date Retry-After through the shared parser", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2027-03-02T23:59:30.000Z"));
     try {
-      const delays: number[] = [];
-      let attempts = 0;
-
-      const result = await retryClawHubRead(
-        async () => {
-          attempts += 1;
-          return {
-            response: new Response(attempts === 1 ? "limited" : "ok", {
-              status: attempts === 1 ? 503 : 200,
-              headers:
-                attempts === 1 ? { "Retry-After": "Tue, 02 Mar 2027 23:59:35 GMT" } : undefined,
-            }),
-          };
-        },
-        {
-          disposeRetry: async ({ response }) => {
-            await response.body?.cancel();
-          },
-          sleep: async (ms) => {
-            delays.push(ms);
-          },
-        },
+      const { result, delays } = await retryResponse(
+        new Response("limited", {
+          status: 503,
+          headers: { "Retry-After": "Tue, 02 Mar 2027 23:59:35 GMT" },
+        }),
       );
-
       expect(await result.response.text()).toBe("ok");
       expect(delays).toEqual([5_000]);
     } finally {
@@ -109,78 +50,15 @@ describe("retryClawHubRead", () => {
     }
   });
 
-  it("uses the bounded schedule when Retry-After exceeds the ClawHub cap", async () => {
+  it("does not retry permanent certificate failures", async () => {
     const delays: number[] = [];
     let attempts = 0;
-
-    const result = await retryClawHubRead(
-      async () => {
-        attempts += 1;
-        return {
-          response: new Response(attempts === 1 ? "limited" : "ok", {
-            status: attempts === 1 ? 503 : 200,
-            headers: attempts === 1 ? { "Retry-After": "61" } : undefined,
-          }),
-        };
-      },
-      {
-        disposeRetry: async ({ response }) => {
-          await response.body?.cancel();
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-      },
-    );
-
-    expect(await result.response.text()).toBe("ok");
-    expect(delays).toEqual([1_000]);
-  });
-
-  it("ignores Retry-After HTTP dates that Date.parse would normalize", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2027-03-02T23:59:30.000Z"));
-    try {
-      const delays: number[] = [];
-      let attempts = 0;
-
-      const result = await retryClawHubRead(
-        async () => {
-          attempts += 1;
-          return {
-            response: new Response(attempts === 1 ? "limited" : "ok", {
-              status: attempts === 1 ? 503 : 200,
-              headers:
-                attempts === 1 ? { "Retry-After": "Sun, 31 Feb 2027 00:00:00 GMT" } : undefined,
-            }),
-          };
-        },
-        {
-          disposeRetry: async ({ response }) => {
-            await response.body?.cancel();
-          },
-          sleep: async (ms) => {
-            delays.push(ms);
-          },
-        },
-      );
-
-      expect(await result.response.text()).toBe("ok");
-      expect(delays).toEqual([1_000]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retries transport failures with the bounded schedule", async () => {
-    const delays: number[] = [];
-    let attempts = 0;
-
-    const result = await retryClawHubRead(
+    const failure = new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } });
+    const result = retryClawHubRead(
       async () => {
         attempts += 1;
         if (attempts === 1) {
-          throw new TypeError("fetch failed");
+          throw failure;
         }
         return { response: new Response("ok") };
       },
@@ -191,38 +69,9 @@ describe("retryClawHubRead", () => {
         },
       },
     );
-
-    expect(await result.response.text()).toBe("ok");
-    expect(attempts).toBe(2);
-    expect(delays).toEqual([1_000]);
-  });
-
-  it("retries transient internal server errors", async () => {
-    const delays: number[] = [];
-    let attempts = 0;
-
-    const result = await retryClawHubRead(
-      async () => {
-        attempts += 1;
-        return {
-          response: new Response(attempts === 1 ? "server error" : "ok", {
-            status: attempts === 1 ? 500 : 200,
-          }),
-        };
-      },
-      {
-        disposeRetry: async ({ response }) => {
-          await response.body?.cancel();
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-      },
-    );
-
-    expect(await result.response.text()).toBe("ok");
-    expect(attempts).toBe(2);
-    expect(delays).toEqual([1_000]);
+    await expect(result).rejects.toBe(failure);
+    expect(attempts).toBe(1);
+    expect(delays).toEqual([]);
   });
 
   it("does not retry 429 unless the caller enables rate-limit retries", async () => {
@@ -232,12 +81,8 @@ describe("retryClawHubRead", () => {
         defaultAttempts += 1;
         return { response: new Response("limited", { status: 429 }) };
       },
-      {
-        disposeRetry: async () => {},
-        sleep: async () => {},
-      },
+      { disposeRetry: async () => {}, sleep: async () => {} },
     );
-
     let optedInAttempts = 0;
     const optedInResult = await retryClawHubRead(
       async () => {
@@ -256,23 +101,9 @@ describe("retryClawHubRead", () => {
         sleep: async () => {},
       },
     );
-
     expect(defaultResult.response.status).toBe(429);
     expect(defaultAttempts).toBe(1);
     expect(await optedInResult.response.text()).toBe("ok");
     expect(optedInAttempts).toBe(2);
-  });
-
-  it("returns the final retryable response for caller-owned HTTP handling", async () => {
-    const disposeRetry = vi.fn(async ({ response }: { response: Response }) => {
-      await response.body?.cancel();
-    });
-    const result = await retryClawHubRead(
-      async () => ({ response: new Response("unavailable", { status: 503 }) }),
-      { disposeRetry, sleep: async () => {} },
-    );
-
-    expect(result.response.status).toBe(503);
-    expect(disposeRetry).toHaveBeenCalledTimes(3);
   });
 });

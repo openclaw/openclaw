@@ -1,12 +1,14 @@
-// Resolution helpers derive media-understanding timeouts, prompts, byte/char
-// caps, scope decisions, model entries, and concurrency.
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
@@ -23,7 +25,6 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 export type ResolvedMediaModelEntry = {
@@ -67,7 +68,6 @@ export function resolveCliModelEntry(
   return ok({ command, args });
 }
 
-/** Default per-provider media-understanding runtime timeout in milliseconds. */
 const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
 const MIN_MEDIA_TIMEOUT_MS = 1000;
 
@@ -90,26 +90,14 @@ export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): num
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS);
 }
 
-/** Resolves the provider prompt and appends length guidance for non-audio outputs. */
-function resolvePrompt(
-  capability: MediaUnderstandingCapability,
-  prompt?: string,
-  maxChars?: number,
-): string {
-  const base = prompt?.trim() || DEFAULT_PROMPT[capability];
-  if (!maxChars || capability === "audio") {
-    return base;
-  }
-  return `${base} Respond in at most ${maxChars} characters.`;
-}
-
-/** Resolves the effective max response characters for a model entry and capability. */
-function resolveMaxChars(params: {
+type MediaEntryRunParams = {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
-}): number | undefined {
+};
+
+function resolveMaxChars(params: MediaEntryRunParams): number | undefined {
   const { capability, entry, cfg } = params;
   const configured =
     entry.maxChars ?? params.config?.maxChars ?? cfg.tools?.media?.[capability]?.maxChars;
@@ -119,13 +107,7 @@ function resolveMaxChars(params: {
   return DEFAULT_MAX_CHARS_BY_CAPABILITY[capability];
 }
 
-/** Resolves the effective input byte cap for a model entry and capability. */
-export function resolveMaxBytes(params: {
-  capability: MediaUnderstandingCapability;
-  entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
-  config?: MediaUnderstandingConfig;
-}): number {
+export function resolveMaxBytes(params: MediaEntryRunParams): number {
   const configured =
     params.entry.maxBytes ??
     params.config?.maxBytes ??
@@ -136,12 +118,7 @@ export function resolveMaxBytes(params: {
   return DEFAULT_MAX_BYTES[params.capability];
 }
 
-export function resolveEntryRunOptions(params: {
-  capability: MediaUnderstandingCapability;
-  entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
-  config?: MediaUnderstandingConfig;
-}): {
+export function resolveEntryRunOptions(params: MediaEntryRunParams): {
   maxBytes: number;
   maxChars?: number;
   timeoutMs: number;
@@ -149,40 +126,85 @@ export function resolveEntryRunOptions(params: {
   hasConfiguredPrompt: boolean;
 } {
   const { capability, entry, cfg } = params;
-  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
-  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const maxBytes = resolveMaxBytes(params);
+  const maxChars = resolveMaxChars(params);
   const timeoutMs = resolveTimeoutMs(
     entry.timeoutSeconds ??
       params.config?.timeoutSeconds ??
       cfg.tools?.media?.[capability]?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS[capability],
   );
-  const configuredPrompt =
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
-  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  const configuredPrompt = (
+    entry.prompt ??
+    params.config?.prompt ??
+    cfg.tools?.media?.[capability]?.prompt
+  )?.trim();
+  const basePrompt = configuredPrompt || DEFAULT_PROMPT[capability];
   return {
     maxBytes,
     maxChars,
     timeoutMs,
-    prompt,
-    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
+    prompt:
+      maxChars && capability !== "audio"
+        ? `${basePrompt} Respond in at most ${maxChars} characters.`
+        : basePrompt,
+    hasConfiguredPrompt: Boolean(configuredPrompt),
   };
 }
 
-/** Maps the message context to an allow/deny decision for configured media scope rules. */
+type MediaUnderstandingScopeDecision = "allow" | "deny";
+
+function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "allow") {
+    return "allow";
+  }
+  if (normalized === "deny") {
+    return "deny";
+  }
+  return undefined;
+}
+
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
 }): "allow" | "deny" {
-  return resolveMediaUnderstandingScope({
-    scope: params.scope,
-    sessionKey: params.ctx.SessionKey,
-    channel: params.ctx.Surface ?? params.ctx.Provider,
-    chatType: normalizeMediaUnderstandingChatType(params.ctx.ChatType),
-  });
+  const scope = params.scope;
+  if (!scope) {
+    return "allow";
+  }
+
+  const channel = normalizeOptionalLowercaseString(params.ctx.Surface ?? params.ctx.Provider);
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  const sessionKey = normalizeOptionalLowercaseString(params.ctx.SessionKey) ?? "";
+
+  for (const rule of scope.rules ?? []) {
+    // Rules are first-match-wins so operators can place specific denials before
+    // broader default allow rules.
+    if (!rule) {
+      continue;
+    }
+    const action = normalizeDecision(rule.action) ?? "allow";
+    const match = rule.match ?? {};
+    const matchChannel = normalizeOptionalLowercaseString(match.channel);
+    const matchChatType = normalizeChatType(match.chatType);
+    const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+
+    if (matchChannel && matchChannel !== channel) {
+      continue;
+    }
+    if (matchChatType && matchChatType !== chatType) {
+      continue;
+    }
+    if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
+      continue;
+    }
+    return action;
+  }
+
+  return normalizeDecision(scope.default) ?? "allow";
 }
 
-/** Resolves configured model entries that can handle the requested media capability. */
 export function resolveModelEntries(params: {
   cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
@@ -234,7 +256,6 @@ function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred
   return preferred === model ? 1 : 0;
 }
 
-/** Resolves the bounded media-understanding task concurrency from config. */
 export function resolveConcurrency(cfg: OpenClawConfig): number {
   const configured = cfg.tools?.media?.concurrency;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {

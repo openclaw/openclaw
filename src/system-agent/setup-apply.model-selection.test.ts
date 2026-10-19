@@ -1,13 +1,140 @@
 import { describe, expect, it } from "vitest";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import {
+  applySystemAgentModelSelection,
+  projectSetupInferenceConfig,
+} from "./setup-model-selection.js";
+
+describe("projectSetupInferenceConfig", () => {
+  const profileId = "omlx:setup-proof";
+
+  it.each<{
+    name: string;
+    credential: Extract<AuthProfileCredential, { type: "api_key" | "token" }>;
+    providerApiKey?: SecretInput;
+    expectedApiKey: SecretInput;
+  }>([
+    {
+      name: "core no-auth marker",
+      credential: { type: "api_key", provider: "custom-studio", key: "custom-local" },
+      expectedApiKey: "custom-local",
+    },
+    {
+      name: "bundled oMLX no-auth marker",
+      credential: { type: "api_key", provider: "omlx", key: "omlx-local" },
+      expectedApiKey: "omlx-local",
+    },
+    {
+      name: "literal API key",
+      credential: { type: "api_key", provider: "omlx", key: "synthetic-api-key" },
+      expectedApiKey: profileId,
+    },
+    {
+      name: "real token",
+      credential: { type: "token", provider: "omlx", token: "synthetic-token" },
+      expectedApiKey: profileId,
+    },
+    {
+      name: "environment marker",
+      credential: { type: "api_key", provider: "omlx", key: "OMLX_API_KEY" },
+      expectedApiKey: profileId,
+    },
+    {
+      name: "environment SecretRef",
+      credential: {
+        type: "api_key",
+        provider: "omlx",
+        keyRef: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+      },
+      expectedApiKey: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+    },
+    {
+      name: "environment template reference",
+      credential: {
+        type: "api_key",
+        provider: "omlx",
+        keyRef: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+      },
+      providerApiKey: "${OMLX_API_KEY}",
+      expectedApiKey: "${OMLX_API_KEY}",
+    },
+    {
+      name: "profile binding backed by a SecretRef",
+      credential: {
+        type: "api_key",
+        provider: "omlx",
+        keyRef: { source: "env", provider: "default", id: "OMLX_API_KEY" },
+      },
+      providerApiKey: profileId,
+      expectedApiKey: profileId,
+    },
+  ])(
+    "preserves credential semantics for $name",
+    ({ credential, providerApiKey, expectedApiKey }) => {
+      const provider = credential.provider;
+      const prepared: OpenClawConfig = {
+        models: {
+          providers: {
+            [provider.toUpperCase()]: {
+              baseUrl: "http://127.0.0.1:8003/v1",
+              apiKey: "stale-prepared-alias",
+              models: [],
+            },
+            [provider]: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              apiKey:
+                providerApiKey ??
+                (credential.type === "token"
+                  ? credential.token
+                  : (credential.key ?? credential.keyRef)),
+              models: [],
+            },
+          },
+        },
+      };
+
+      const projected = projectSetupInferenceConfig({
+        base: {
+          models: {
+            providers: {
+              [provider.toUpperCase()]: {
+                baseUrl: "http://127.0.0.1:8001/v1",
+                apiKey: "old-alias-key",
+                models: [],
+              },
+              [provider]: {
+                baseUrl: "http://127.0.0.1:8002/v1",
+                apiKey: "old-canonical-key",
+                models: [],
+              },
+              sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
+            },
+          },
+        },
+        prepared,
+        modelRef: `${provider}/local-model`,
+        agentId: "main",
+        profileId,
+        credential,
+      });
+
+      expect(projected.models?.providers).toEqual({
+        sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
+        [provider]: { ...prepared.models?.providers?.[provider], apiKey: expectedApiKey },
+      });
+    },
+  );
+});
 
 describe("applySystemAgentModelSelection", () => {
-  it("adds a utility without replacing primary, fallback, runtime, or credential bindings", async () => {
+  it("adds a utility without changing other bindings", async () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
+          systemAgent: { agentId: "main" },
           model: {
             primary: "openai/gpt-5.5@openai:primary",
             fallbacks: ["openai/gpt-5.4@openai:backup"],
@@ -15,7 +142,7 @@ describe("applySystemAgentModelSelection", () => {
           models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
         },
         entries: {
-          main: { default: true, agentDir: "/tmp/main-auth" },
+          main: { agentDir: "/tmp/main-auth" },
           ops: { model: "openai/gpt-5.4" },
         },
       },
@@ -45,26 +172,19 @@ describe("applySystemAgentModelSelection", () => {
     expect(config).toEqual(original);
   });
 
-  it.each([
-    { targetAgentId: "ops", priorUtility: undefined },
-    { targetAgentId: undefined, priorUtility: "" },
-    { targetAgentId: undefined, priorUtility: "local-utility/old" },
-    { targetAgentId: undefined, priorUtility: undefined, ownership: "explicit" as const },
-  ])("writes a utility selection only to its agent owner: %j", async (scenario) => {
+  it("writes a utility selection only to its agent owner", async () => {
     const config: OpenClawConfig = {
       agents: {
-        ...(scenario.ownership ? { ownership: scenario.ownership } : {}),
         defaults: {
           systemAgent: { agentId: "ops" },
           model: "openai/gpt-5.5",
           utilityModel: "local-utility/shared",
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: {
             model: { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.5"] },
             agentDir: "/tmp/ops-auth",
-            ...(scenario.priorUtility !== undefined ? { utilityModel: scenario.priorUtility } : {}),
           },
         },
       },
@@ -74,7 +194,7 @@ describe("applySystemAgentModelSelection", () => {
       config,
       model: "local-utility/tiny",
       modelTarget: "utility",
-      targetAgentId: scenario.targetAgentId,
+      targetAgentId: "ops",
     });
 
     expect(result.agents?.defaults).toEqual(config.agents?.defaults);
@@ -86,19 +206,28 @@ describe("applySystemAgentModelSelection", () => {
     });
   });
 
-  it("can configure first-run utility inference without authoring a primary or agent roster", async () => {
-    const result = await applySystemAgentModelSelection({
-      config: {},
-      model: "local-utility/tiny",
-      modelTarget: "utility",
-    });
-
-    expect(result.agents?.defaults?.utilityModel).toBe("local-utility/tiny");
-    expect(result.agents?.defaults?.model).toBeUndefined();
-    expect(result.agents?.entries).toBeUndefined();
-    expect(result.agents?.list).toBeUndefined();
-    expect(result.meta?.migrations?.utilityModelSeparation).toBe(true);
-  });
+  it.each(["defaults", "agent"] as const)(
+    "keeps %s utility fallbacks when setup replaces the primary",
+    async (owner) => {
+      const utilityModel = { primary: "local/old", fallbacks: ["local/backup"] };
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { utilityModel },
+          entries: { main: owner === "agent" ? { utilityModel } : {} },
+        },
+      };
+      const result = await applySystemAgentModelSelection({
+        config,
+        model: "local/new",
+        modelTarget: "utility",
+      });
+      expect(
+        owner === "agent"
+          ? result.agents?.entries?.main?.utilityModel
+          : result.agents?.defaults?.utilityModel,
+      ).toEqual({ primary: "local/new", fallbacks: ["local/backup"] });
+    },
+  );
 
   it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
     const cfg = await applySystemAgentModelSelection({
@@ -113,27 +242,10 @@ describe("applySystemAgentModelSelection", () => {
     expect(allowed.allows({ provider: "fixture", model: "unapproved" })).toBe(false);
   });
 
-  it("updates the configured system owner without changing the legacy owner", async () => {
-    const config = {
-      agents: {
-        defaults: { systemAgent: { agentId: "beta" } },
-        entries: {
-          alpha: { default: true, model: "openai/gpt-5.5" },
-          beta: { model: "openai/gpt-5.6-sol" },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await applySystemAgentModelSelection({ config, model: "openai/gpt-5.6-luna" });
-
-    expect(result.agents?.entries?.alpha?.model).toBe("openai/gpt-5.5");
-    expect(result.agents?.entries?.beta?.model).toBe("openai/gpt-5.6-luna");
-  });
-
   it("rejects an unrepresentable explicit agent instead of updating main", async () => {
     const config = {
       agents: {
-        entries: { main: { default: true }, ops: {} },
+        entries: { main: {}, ops: {} },
       },
     } satisfies OpenClawConfig;
 
@@ -144,50 +256,31 @@ describe("applySystemAgentModelSelection", () => {
         targetAgentId: "агент✨",
       }),
     ).rejects.toThrow('Could not resolve configured agent "агент✨".');
-    expect(config.agents.entries.main).toEqual({ default: true });
+    expect(config.agents.entries.main).toEqual({});
   });
 
-  it("clears stale harness pins in both model scopes for a native route", async () => {
-    const config = {
+  it("updates the primary selection to the native runtime without changing unrelated bindings", async () => {
+    const config: OpenClawConfig = {
       agents: {
-        defaults: {
-          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-        },
+        defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
         entries: {
           work: {
-            default: true,
             model: "openai/gpt-5.5",
             models: {
-              "openai/gpt-5.5": {
-                alias: "primary",
-                agentRuntime: { id: "codex" },
-              },
+              "openai/gpt-5.5": { alias: "primary", agentRuntime: { id: "codex" } },
             },
           },
         },
       },
-    } satisfies OpenClawConfig;
-
-    const result = await applySystemAgentModelSelection({ config, model: "openai/gpt-5.5" });
-
-    expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
-    expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
-    expect(result.agents?.entries?.work?.model).toBe("openai/gpt-5.5");
-  });
-
-  it("pins the verified credential without creating a global visibility map", async () => {
+    };
     const result = await applySystemAgentModelSelection({
-      config: {
-        agents: {
-          defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
-        },
-      },
+      config,
       model: "openai/gpt-5.5",
-      authProfileId: "openai:verified",
     });
-
-    expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
-    expect(result.agents?.defaults?.models).toBeUndefined();
+    expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
+    expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({
+      alias: "primary",
+    });
+    expect(result.agents?.entries?.work?.model).toBe("openai/gpt-5.5");
   });
 });

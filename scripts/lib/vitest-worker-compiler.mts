@@ -4,13 +4,16 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
-import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
-import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
+import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
+import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
+import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
 } from "./runtime-process-core-build-entries.mts";
+import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -38,19 +41,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       console.error(`[vitest-workers] ${phase} after ${Math.round(performance.now() - started)}ms`);
     }
   };
-  const compilerInputs = collectRuntimeImportClosure(
-    root,
-    [
-      "scripts/lib/vitest-worker-compiler.mts",
-      "scripts/lib/vitest-worker-run.mts",
-      "scripts/lib/vitest-cli-mode.mts",
-    ],
-    { includeDynamicImports: true },
-  );
   const cache = useVitestWorkerCache(process.env, process.execArgv)
-    ? await (
-        await import("./vitest-worker-cache.mts")
-      ).createVitestWorkerCache(root, directory, compilerInputs)
+    ? await (await import("./vitest-worker-cache.mts")).createVitestWorkerCache(root, directory)
     : undefined;
   const restored = await cache?.restore();
   if (cache) {
@@ -66,6 +58,21 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     console.error("[vitest-workers] reused local compiler outputs");
     return;
   }
+  const { collectRuntimeImportClosure } = await import("./runtime-import-closure.mts");
+  const { readNativeTypeScriptConfig } = await import("./native-typescript-config.mts");
+  const compilerInputs = collectRuntimeImportClosure(
+    root,
+    [
+      "scripts/lib/vitest-worker-compiler.mts",
+      "scripts/lib/vitest-worker-run.mts",
+      "scripts/lib/vitest-cli-mode.mts",
+    ],
+    { includeDynamicImports: true },
+  );
+  const { configFiles } = readNativeTypeScriptConfig({
+    cwd: root,
+    configFileName: "tsconfig.json",
+  });
   // The native child owns the compiler module graph for this one preparation.
   const { build }: typeof import("tsdown") = require("tsdown");
   const inputs: Record<string, string> = {};
@@ -93,13 +100,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     }
   };
   for (const name of [
-    "tsconfig.json",
+    ...configFiles,
     "package.json",
     "pnpm-lock.yaml",
     // Pin compiler, lifetime, and source-versus-compiled selection code, including lazy platforms.
     ...compilerInputs,
   ]) {
-    recordInput(path.join(root, name));
+    recordInput(path.resolve(root, name));
   }
   const entry = {
     ...vitestWorkerBuildEntries,
@@ -109,10 +116,14 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
     id !== "@openclaw/fs-safe" &&
-    !id.startsWith("@openclaw/fs-safe/");
+    !id.startsWith("@openclaw/fs-safe/") &&
+    id !== "@openclaw/proc-safe" &&
+    !id.startsWith("@openclaw/proc-safe/");
   const createInputPlugins = (outputPrefix: string) => {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
+      createPublicSessionCardAssetsPlugin(root, recordInput),
+      createSqliteSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",
@@ -155,6 +166,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
+  const maintenanceModuleBoundaries = new Map([
+    [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
+    [
+      path.join(root, "src/daemon/service-process-membership.ts"),
+      "daemon/service-process-membership.js",
+    ],
+    [path.join(root, "src/daemon/systemd-maintenance.ts"), "daemon/systemd-maintenance.js"],
+    [
+      path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
+      "cli/update-cli/update-command-service-drain.js",
+    ],
+  ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
@@ -177,6 +200,37 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     logLevel: "warn",
     plugins: [
       {
+        name: "openclaw:message-command-boundary",
+        resolveId: {
+          filter: [
+            {
+              kind: "include",
+              expr: {
+                kind: "importerId",
+                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]register\.message\.ts$/,
+                params: { cleanUrl: false },
+              },
+            },
+          ],
+          handler(id, importer) {
+            // Preserve the broadcast fixture's exact native command substitution.
+            if (
+              importer &&
+              path.normalize(importer) === path.join(root, "src/cli/program/register.message.ts") &&
+              id.startsWith(".") &&
+              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
+                path.join(root, "src/commands/message.ts")
+            ) {
+              return {
+                id: pathToFileURL(path.join(outDir, "commands/message.js")).href,
+                external: "absolute",
+              };
+            }
+            return null;
+          },
+        },
+      },
+      {
         name: "openclaw:maintenance-service-boundary",
         resolveId: {
           // Keep normalization aliases: the target component can come from either operand.
@@ -186,25 +240,34 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               expr: {
                 kind: "or",
                 args: [
-                  { kind: "id", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
-                  { kind: "importerId", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
+                  {
+                    kind: "id",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
+                  {
+                    kind: "importerId",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
                 ],
               },
             },
           ],
           handler(id, importer) {
-            if (
-              importer &&
-              id.startsWith(".") &&
-              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
-                path.join(root, "src/daemon/service.ts")
-            ) {
-              return {
-                id: pathToFileURL(path.join(outDir, "triage-maintenance/service.js")).href,
-                external: "absolute",
-              };
+            if (!importer || !id.startsWith(".")) {
+              return null;
             }
-            return null;
+            const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+            const boundary = maintenanceModuleBoundaries.get(source);
+            return boundary
+              ? {
+                  id: pathToFileURL(path.join(outDir, boundary)).href,
+                  external: "absolute",
+                }
+              : null;
           },
         },
       },
@@ -254,19 +317,26 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       await build({
         ...config,
         entry: { [name]: source },
-        outputOptions: { codeSplitting: false },
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
       });
     }
     reportPhase("standalone workers compiled");
-    await build({
-      ...createManagedHandoffBuildConfig(),
-      config: false,
-      cwd: root,
-      outDir,
-      clean: false,
-      logLevel: config.logLevel,
-      plugins: config.plugins,
-    });
+    for (const sealedConfig of createManagedHandoffBuildConfigs()) {
+      await build({
+        ...sealedConfig,
+        config: false,
+        cwd: root,
+        outDir,
+        clean: false,
+        logLevel: config.logLevel,
+        // Keep the invocation's loader boundaries while recording the binary
+        // input and output alongside its sealed JavaScript consumers.
+        plugins: [
+          createFsSafeWindowsHelperAssetPlugin(root, undefined, recordInput),
+          config.plugins,
+        ],
+      });
+    }
     reportPhase("managed handoff compiled");
   };
   const compilePreservedModules = async () => {
@@ -350,9 +420,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started, {
-    inputsChangedAfter: cache?.startedAt,
-  });
+  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
@@ -367,11 +435,7 @@ async function writeVitestWorkerManifest(
   inputs: Record<string, string>,
   outputs: Record<string, string>,
   started: number,
-  {
-    restored = false,
-    inputsChangedAfter,
-    cacheSignature,
-  }: { restored?: boolean; inputsChangedAfter?: number; cacheSignature?: string } = {},
+  { restored = false, cacheSignature }: { restored?: boolean; cacheSignature?: string } = {},
 ): Promise<VitestWorkerManifest> {
   const outDir = path.join(directory, "dist");
   // Version consumers need the built source identity without making this
@@ -395,7 +459,7 @@ async function writeVitestWorkerManifest(
   // Restoration verified these bytes before transferring exclusive ownership.
   // The borrower boundary still verifies the refreshed manifest before lending.
   if (!restored) {
-    await verifyVitestWorkerArtifacts(directory, manifest, { inputsChangedAfter });
+    await verifyVitestWorkerArtifacts(directory, manifest);
   }
   manifest.durationMs = performance.now() - started;
   fs.writeFileSync(

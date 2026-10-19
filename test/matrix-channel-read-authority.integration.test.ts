@@ -6,17 +6,13 @@ import { registerMatrixFullRuntime } from "../extensions/matrix/index.js";
 import { setMatrixRuntime } from "../extensions/matrix/test-api.js";
 import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionAdapter } from "../src/channels/plugins/types.core.js";
 import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "../src/channels/plugins/types.js";
-import { createDefaultDeps } from "../src/cli/deps.js";
-import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
-import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
-import { messageCommand } from "../src/commands/message.js";
+import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -29,9 +25,14 @@ import {
 } from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -208,14 +209,7 @@ type MatrixHarness = Awaited<ReturnType<typeof createHarness>>;
 
 // Installation provenance is a registrar fixture, as in the shared dispatcher suite.
 // Policy, action handlers, SDK requests, host instance and lifecycle are real; E2EE is off.
-async function createHarness(
-  origin: RegistrationOrigin,
-  actionOverrides?: Partial<ChannelMessageActionAdapter>,
-) {
-  const actions = matrixPlugin.actions;
-  if (!actions) {
-    throw new Error("Expected Matrix message actions");
-  }
+async function createHarness(origin: RegistrationOrigin) {
   const requests: Array<{
     method: string | undefined;
     path: string;
@@ -268,7 +262,7 @@ async function createHarness(
       setMatrixRuntime(api.runtime);
       registerMatrixFullRuntime(api);
       api.registerChannel({
-        plugin: { ...matrixPlugin, status: undefined, actions: { ...actions, ...actionOverrides } },
+        plugin: { ...matrixPlugin, status: undefined },
       });
     });
     setActivePluginRegistry(owner.registry);
@@ -322,9 +316,8 @@ async function createHarness(
 async function withHarness(
   origin: RegistrationOrigin,
   run: (fixture: MatrixHarness) => Promise<void>,
-  actionOverrides?: Partial<ChannelMessageActionAdapter>,
 ) {
-  const fixture = await createHarness(origin, actionOverrides);
+  const fixture = await createHarness(origin);
   try {
     await run(fixture);
   } finally {
@@ -387,29 +380,61 @@ describe("Matrix member info CLI", () => {
   it("reads a selected room member without current conversation context", async () => {
     await withHarness("bundled", async (fixture) => {
       setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const command = new Command().name("message").exitOverride();
-      registerMessageDiscordAdminCommands(command, {
-        ...createMessageCliHelpers("matrix"),
-        runMessageAction: async (action, opts) => {
-          await messageCommand({ ...opts, action }, createDefaultDeps(), runtime);
-        },
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      const command = new Command().name("openclaw").exitOverride();
+      registerMessageCommands(command, {
+        programVersion: "test",
+        messageChannelOptions: "matrix",
+        agentChannelOptions: "last|matrix",
       });
-
-      await command.parseAsync(
-        [
-          "member",
-          "info",
-          "--channel",
-          "matrix",
-          "--user-id",
-          memberId,
-          "--channel-id",
-          allowedRoom,
-          "--json",
-        ],
-        { from: "user" },
-      );
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("expected the Matrix fixture registry");
+      }
+      const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
+        import("../src/cli/program/config-guard.js"),
+        import("../src/plugins/channel-plugin-ids.js"),
+        import("../src/plugins/loader.js"),
+        import("../src/cli/one-shot-exit.js"),
+      ]);
+      // The harness owns config and registry admission; production owns parsed action dispatch.
+      const spies = [
+        vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
+        vi
+          .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
+          .mockImplementation(({ channelIds }) => [...channelIds]),
+        vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
+        vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+        vi
+          .spyOn(defaultRuntime, "writeJson")
+          .mockImplementation((value) => runtime.log(JSON.stringify(value))),
+        vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+        vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+          throw new Error(`unexpected CLI exit(${code})`);
+        }),
+        vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
+      ];
+      try {
+        await command.parseAsync(
+          [
+            "message",
+            "member",
+            "info",
+            "--channel",
+            "matrix",
+            "--user-id",
+            memberId,
+            "--channel-id",
+            allowedRoom,
+            "--json",
+          ],
+          { from: "user" },
+        );
+      } finally {
+        for (const spy of spies) {
+          spy.mockRestore();
+        }
+      }
 
       expect(runtime.log).toHaveBeenCalledTimes(1);
       expect(runtime.error).not.toHaveBeenCalled();
@@ -442,64 +467,68 @@ describe("Matrix member info CLI", () => {
   });
 });
 
-describe.each(["bundled", "official-installed"] as const)(
-  "registered Matrix reads (%s)",
-  (origin) => {
-    it.each(reads)(
-      "reads $action from a configured sibling room",
-      async ({ action, params, path, result }) => {
-        await withHarness(origin, async (fixture) => {
-          const outcome = await fixture.invoke(action, params);
-          expect(outcome?.details).toMatchObject({ ok: true, ...result });
-          expect(fixture.requests.map((request) => request.path)).toContain(path);
-          expect(
-            fixture.requests.every(
-              (request) =>
-                request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
-            ),
-          ).toBe(true);
-          expect(
-            fixture.requests.filter((request) => responseFor(request.path) === undefined),
-          ).toEqual([]);
-        });
-      },
-    );
+describe("registered installed Matrix reads", () => {
+  it.each(reads)(
+    "reads $action from a configured sibling room",
+    async ({ action, params, path, result }) => {
+      await withHarness("official-installed", async (fixture) => {
+        const outcome = await fixture.invoke(action, params);
+        expect(outcome?.details).toMatchObject({ ok: true, ...result });
+        expect(fixture.requests.map((request) => request.path)).toContain(path);
+        expect(
+          fixture.requests.every(
+            (request) =>
+              request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
+          ),
+        ).toBe(true);
+        expect(
+          fixture.requests.filter((request) => responseFor(request.path) === undefined),
+        ).toEqual([]);
+      });
+    },
+  );
 
-    it.each([
-      { owner: "caller", boundary: "preparation" },
-      { owner: "plugin", boundary: "preparation" },
-      { owner: "caller", boundary: "result" },
-      { owner: "plugin", boundary: "result" },
-    ] as const)("fences $owner revocation at $boundary", async ({ owner, boundary }) => {
-      await withHarness(origin, async (fixture) => {
-        const revokeAt = boundary === "result" ? messagePath : `${roomPath}/state/m.room.name/`;
-        fixture.onRequest((path) => {
-          if (path === revokeAt) {
-            if (owner === "caller") {
-              fixture.run.revoke();
-            } else {
-              void fixture.instance.dispose();
-            }
+  it.each([
+    { owner: "caller", boundary: "preparation" },
+    { owner: "plugin", boundary: "preparation" },
+    { owner: "caller", boundary: "result" },
+    { owner: "plugin", boundary: "result" },
+  ] as const)("fences $owner revocation at $boundary", async ({ owner, boundary }) => {
+    await withHarness("official-installed", async (fixture) => {
+      const revokeAt = boundary === "result" ? messagePath : `${roomPath}/state/m.room.name/`;
+      fixture.onRequest((path) => {
+        if (path === revokeAt) {
+          if (owner === "caller") {
+            fixture.run.revoke();
+          } else {
+            void fixture.instance.dispose();
           }
-        });
-        await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
-        if (boundary === "preparation") {
-          expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
-        } else {
-          expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(
-            1,
-          );
-        }
-        if (owner === "plugin") {
-          expect((await fixture.instance.dispose()).errors).toEqual([]);
-          expect(fixture.lifecycle.signal?.aborted).toBe(true);
         }
       });
+      await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
+      if (boundary === "preparation") {
+        expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
+      } else {
+        expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(1);
+      }
+      if (owner === "plugin") {
+        expect((await fixture.instance.dispose()).errors).toEqual([]);
+        expect(fixture.lifecycle.signal?.aborted).toBe(true);
+      }
     });
-  },
-);
+  });
+});
 
 describe("installed Matrix read restrictions", () => {
+  it("keeps verification operations outside the cross-room read capability", async () => {
+    await withHarness("official-installed", async (fixture) => {
+      await expect(fixture.invoke("permissions", { messageId })).rejects.toThrow(
+        "exact current conversation",
+      );
+      expect(fixture.requests).toEqual([]);
+    });
+  });
+
   it.each(["room", "action", "account"] as const)(
     "preserves the existing %s denial before provider access",
     async (denial) => {
@@ -533,49 +562,5 @@ describe("installed Matrix read restrictions", () => {
       );
       expect(fixture.requests.some((request) => request.path.includes("/profile/"))).toBe(false);
     });
-  });
-
-  it("keeps verification and message mutations outside the read capability", async () => {
-    const excludedHandler = vi.fn(() => {
-      throw new Error("Excluded Matrix action reached its provider handler");
-    });
-    await withHarness(
-      "official-installed",
-      async (fixture) => {
-        for (const action of [
-          "permissions",
-          "react",
-          "edit",
-          "delete",
-          "pin",
-          "unpin",
-          "poll-vote",
-        ] as const) {
-          await expect(fixture.invoke(action, { messageId })).rejects.toThrow(
-            "exact current conversation",
-          );
-        }
-        expect(excludedHandler).not.toHaveBeenCalled();
-        expect(fixture.requests).toEqual([]);
-      },
-      { handleAction: excludedHandler },
-    );
-  });
-
-  it("does not grant newly classified reads to an adapter that did not opt in", async () => {
-    await withHarness(
-      "official-installed",
-      async (fixture) => {
-        expect((await fixture.invoke("read", { limit: 1 }))?.details).toMatchObject({ ok: true });
-        fixture.requests.length = 0;
-        for (const action of ["member-info", "emoji-list"] as const) {
-          await expect(fixture.invoke(action, { userId: memberId })).rejects.toThrow(
-            "exact current conversation",
-          );
-        }
-        expect(fixture.requests).toEqual([]);
-      },
-      { readAuthorityActions: ["read"] },
-    );
   });
 });

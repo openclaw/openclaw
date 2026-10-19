@@ -9,12 +9,14 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/core";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { shellEscape } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveJidToE164 } from "./targets-runtime.js";
@@ -52,22 +54,7 @@ const WhatsAppCallToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type WhatsAppCallToolParams = {
-  action: "status" | "call";
-  message?: string;
-};
-
-async function isRegularFile(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function quotePosixShellArg(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
+type WhatsAppCallToolParams = Static<typeof WhatsAppCallToolSchema>;
 
 function quotePowerShellArg(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
@@ -81,8 +68,8 @@ function resolveSetupCommand(
   if (platform === "win32") {
     return `meowcaller pair --store ${quotePowerShellArg(sessionStorePath)}`;
   }
-  const quotedStateDir = quotePosixShellArg(stateDir);
-  const quotedStorePath = quotePosixShellArg(sessionStorePath);
+  const quotedStateDir = shellEscape(stateDir);
+  const quotedStorePath = shellEscape(sessionStorePath);
   return `mkdir -p ${quotedStateDir} && chmod 700 ${quotedStateDir} && meowcaller pair --store ${quotedStorePath}`;
 }
 
@@ -137,11 +124,7 @@ async function resolveRequesterE164(params: {
 }): Promise<string | null> {
   const senderId = params.requesterSenderId.trim();
   if (!senderId.includes("@")) {
-    try {
-      return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
-    } catch {
-      return null;
-    }
+    return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
   }
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
@@ -163,7 +146,7 @@ async function resolveLinkedWhatsAppSelfE164(params: {
     return null;
   }
   if (identity.e164) {
-    return normalizeE164(identity.e164);
+    return identity.e164;
   }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
   const lidLookup = controller.getCurrentSock()?.signalRepository.lidMapping;
@@ -205,7 +188,7 @@ function createWhatsAppCallTool(
     async execute(_toolCallId, rawParams, signal) {
       const params = rawParams as WhatsAppCallToolParams;
       const binaryFound = await detectBinary(MEOWCALLER_COMMAND);
-      const sessionStoreFound = await isRegularFile(sessionStorePath);
+      const sessionStoreFound = (await safeStat(sessionStorePath))?.isFile() === true;
       if (params.action === "status") {
         return jsonResult({
           binaryFound,

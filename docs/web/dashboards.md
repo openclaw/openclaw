@@ -85,6 +85,10 @@ side-panel tabs when the panes are side by side. In a stacked layout, each
 header stays above its own pane. Side-panel tabs appear only when there are
 views to switch between.
 
+When a tab has one full-width widget, its title and controls live in the task
+menu instead of a pill over the widget, in both split and fullscreen views.
+Smaller widgets and multi-widget tabs keep their individual controls.
+
 ## Build a dashboard by asking
 
 For a pinned data summary, ask for a **native report** with text, metrics, tables,
@@ -144,8 +148,10 @@ never needs the agent.
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
   the side panel back. A tab with one full-width widget fills the focused
-  dashboard edge to edge, using all available width and height without a card
-  border or surrounding padding. Embedded MCP apps follow the available space
+  dashboard, using all available width and height without a card border.
+  Standard HTML widgets keep their content padding when maximized; widgets
+  explicitly set to full-bleed or frameless remain edge to edge.
+  Embedded MCP apps follow the available space
   when you resize the window or restore the split.
   Its widget controls move into the task toolbar’s **…** menu, leaving no
   hover pill or drag and resize handles over the page. Granted permissions
@@ -207,6 +213,10 @@ never needs the agent.
   `set_presentation` after focusing the tab: `presentation: "expanded"` makes
   the dashboard main and focuses it; `"split"` reveals it using the current
   arrangement, bringing chat alongside when Dashboard is main.
+
+If a widget change fails, its error stays visible when the dashboard refreshes
+without any saved changes. You can retry from the widget menu. A new action or
+updated dashboard state clears the previous error.
 
 ## Show a website fullscreen
 
@@ -349,6 +359,10 @@ mode. An isolated Gateway browser context is not a sandbox backend. The existing
 administrator browser path remains available under its existing rules.
 
 ## What widgets are allowed to do
+
+Revoking session access denies new dashboard writes. A write already in progress
+when access is revoked may still finish saving its widget or layout. Reading
+private content and using a widget's tools still require current access.
 
 Custom HTML and registered-source widgets that only render need no approval —
 they appear instantly, exactly like inline chat widgets, and their network access

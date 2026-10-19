@@ -33,6 +33,28 @@ describe("quoted message metadata cache", () => {
     });
   });
 
+  it("evicts the oldest quote before replacing an entry in a full cache", () => {
+    const accountId = "quote-capacity";
+    const remoteJid = "15555550123@s.whatsapp.net";
+    for (let index = 0; index < 500; index += 1) {
+      cacheInboundMessageMeta(accountId, remoteJid, `message-${index}`, {
+        body: `Quote ${index}`,
+      });
+    }
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-0")?.body).toBe("Quote 0");
+
+    cacheInboundMessageMeta(accountId, remoteJid, "message-250", { body: "Updated quote" });
+
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-0")).toBeUndefined();
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-1")?.body).toBe("Quote 1");
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-250")?.body).toBe(
+      "Updated quote",
+    );
+
+    cacheInboundMessageMeta(accountId, remoteJid, "message-500", { body: "New quote" });
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-1")?.body).toBe("Quote 1");
+  });
+
   it("can recover the original remoteJid for a matching direct-chat target", () => {
     cacheInboundMessageMeta("account-c", "277038292303944@lid", "msg-2", {
       participant: "5511976136970@s.whatsapp.net",

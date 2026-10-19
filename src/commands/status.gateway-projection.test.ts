@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
@@ -29,7 +27,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("./status.agent-local.js", () => ({
   collectStatusLocalSnapshot: mocks.localAgents,
 }));
-vi.mock("../status/summary.js", () => ({ getStatusSummary: mocks.localSummary }));
+// mock-isolation: Gateway projection tests must not read local session databases.
+vi.mock("../status/summary.js", () => ({
+  getStatusSummary: mocks.localSummary,
+  prepareStatusSummary: async (...args: unknown[]) => {
+    const summary = await mocks.localSummary(...args);
+    return { publish: () => ({ summary, sessionStores: undefined }) };
+  },
+}));
 vi.mock("../gateway/call.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/call.js")>();
   return {
@@ -119,8 +124,6 @@ it.each([
           heartbeat: { defaultAgentId: "alpha", agents: [] },
           channelSummary: withChannelSummary ? ["Telegram: configured"] : [],
           queuedSystemEvents: [],
-          tasks: createEmptyTaskRegistrySummary(),
-          taskAudit: createEmptyTaskAuditSummary(),
           sessions: {
             paths: [],
             count: 7,
@@ -134,14 +137,15 @@ it.each([
         };
         mocks.callGateway.mockResolvedValue(summary);
         mocks.localAgents.mockResolvedValue({
-          agentStatus: {
+          defaultId: null,
+          publish: () => ({
             defaultId: null,
             ownership: "explicit",
             selectionRequired: true,
             agents: [],
             totalSessions: 99,
             bootstrapPendingCount: 0,
-          },
+          }),
           sessionStores: undefined,
         });
         mocks.localSummary.mockResolvedValue({
@@ -249,7 +253,11 @@ it("keeps offline config diagnostics and local collection", async () => {
         totalSessions: 4,
         bootstrapPendingCount: 0,
       };
-      mocks.localAgents.mockResolvedValue({ agentStatus: local, sessionStores: undefined });
+      mocks.localAgents.mockResolvedValue({
+        defaultId: local.defaultId,
+        publish: () => local,
+        sessionStores: undefined,
+      });
       mocks.localSummary.mockResolvedValue({ sessions: { count: 4 }, heartbeat: { agents: [] } });
 
       const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {

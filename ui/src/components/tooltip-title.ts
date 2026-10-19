@@ -1,7 +1,14 @@
 import "./tooltip.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
-import { ownsHoverPreview } from "./link-reader-hovercard-registration.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { showToast } from "../lib/toast.ts";
+import {
+  HOVER_PREVIEW_UNAVAILABLE_EVENT,
+  ownsHoverPreview,
+} from "./link-reader-hovercard-registration.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
+import { resolveTransientContainer } from "./transient-container.ts";
 
 function titleNamesElement(element: Element) {
   if (
@@ -32,6 +39,9 @@ export function installTitleTooltips(ownerDocument: Document) {
     anchor: HTMLElement | SVGElement;
     link: HTMLAnchorElement | null;
     previewOwned: boolean;
+    filePath: string | null;
+    disposeFileContent?: () => void;
+    stopListeners: (() => void)[];
     title: string | null;
     label: string | null;
     pointer: boolean;
@@ -42,11 +52,11 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (!active) {
       return;
     }
-    const { anchor, title, label } = active;
+    const { anchor, title, label, disposeFileContent, stopListeners } = active;
     active = null;
+    disposeFileContent?.();
     observer.disconnect();
-    anchor.removeEventListener("pointerleave", handlePointerLeave);
-    anchor.removeEventListener("focusout", handleFocusOut);
+    stopListeners.forEach((stop) => stop());
     if (title !== null && anchor.getAttribute("title") === "") {
       anchor.setAttribute("title", title);
     }
@@ -56,6 +66,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (tooltip) {
       tooltip.anchor = null;
       tooltip.remove();
+      tooltip = null;
     }
   };
 
@@ -63,11 +74,13 @@ export function installTitleTooltips(ownerDocument: Document) {
   // Title suppression and accessible naming still use the normal restoration lifecycle.
   const ownsPreview = (link: HTMLAnchorElement | null | undefined) =>
     Boolean(link && ownsHoverPreview(link));
+  const dialogExpanded = () =>
+    active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]') === true;
   const content = () => {
     if (ownsPreview(active?.link)) {
       return "";
     }
-    return active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]')
+    return dialogExpanded()
       ? ""
       : (active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "");
   };
@@ -75,7 +88,10 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (!active) {
       return;
     }
-    if (!active.anchor.isConnected) {
+    if (
+      !active.anchor.isConnected ||
+      active.anchor.getAttribute("data-file-path") !== active.filePath
+    ) {
       restore();
       return;
     }
@@ -113,9 +129,13 @@ export function installTitleTooltips(ownerDocument: Document) {
       active.anchor.setAttribute("aria-label", active.label);
     }
     if (tooltip) {
-      // Updates refresh an open hint, never reopen a dismissed action. Reentry
-      // or keyboard focus supplies new intent after an empty title clears it.
-      tooltip.content = content();
+      // Rich file-path content also yields to the trigger's expanded dialog.
+      tooltip.disabled = dialogExpanded();
+      if (!active.filePath) {
+        // Updates refresh an open hint, never reopen a dismissed action. Reentry
+        // or keyboard focus supplies new intent after an empty title clears it.
+        tooltip.content = content();
+      }
     }
   };
   const observer = new MutationObserver(update);
@@ -124,7 +144,7 @@ export function installTitleTooltips(ownerDocument: Document) {
       return;
     }
     active.pointer = false;
-    if (!active.focus) {
+    if (!active.focus && !active.filePath) {
       restore();
     }
   };
@@ -138,12 +158,16 @@ export function installTitleTooltips(ownerDocument: Document) {
       return;
     }
     active.focus = false;
-    if (!active.pointer) {
+    if (!active.pointer && !active.filePath) {
       restore();
     }
   };
   const discover = (event: Event) => {
     if ("pointerType" in event && event.pointerType === "touch") {
+      return;
+    }
+    // Rich content stays under the shared tooltip lifecycle, not title discovery.
+    if (active?.filePath && event.composedPath().includes(tooltip!)) {
       return;
     }
     const elements = event.composedPath().filter(isTooltipTriggerElement);
@@ -157,13 +181,20 @@ export function installTitleTooltips(ownerDocument: Document) {
         break;
       }
       const title = element === active?.anchor ? active.title : element.getAttribute("title");
-      const hint = element.getAttribute("data-tooltip") ?? title;
+      const hint =
+        element.getAttribute("data-file-path") ?? element.getAttribute("data-tooltip") ?? title;
       if (hint !== null) {
         anchor = hint ? element : undefined;
         break;
       }
     }
-    const input = event.type === "focusin" ? "focus" : "pointer";
+    const input =
+      event.type === "focusin" ||
+      (event.type === HOVER_PREVIEW_UNAVAILABLE_EVENT &&
+        event instanceof CustomEvent &&
+        event.detail === "focus")
+        ? "focus"
+        : "pointer";
     const previewOwned = ownsPreview(link);
     if (anchor === active?.anchor && previewOwned === active?.previewOwned) {
       if (active) {
@@ -175,7 +206,7 @@ export function installTitleTooltips(ownerDocument: Document) {
       }
       return;
     }
-    if (!anchor && active?.focus && input === "pointer") {
+    if (!anchor && (active?.filePath || (active?.focus && input === "pointer"))) {
       return;
     }
     restore();
@@ -188,6 +219,8 @@ export function installTitleTooltips(ownerDocument: Document) {
       anchor,
       link,
       previewOwned,
+      filePath: anchor.getAttribute("data-file-path"),
+      stopListeners: [],
       title,
       label,
       pointer: input === "pointer",
@@ -200,13 +233,16 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (label !== null) {
       anchor.setAttribute("aria-label", label);
     }
-    anchor.addEventListener("pointerleave", handlePointerLeave);
-    anchor.addEventListener("focusout", handleFocusOut);
+    active.stopListeners = [
+      listen(anchor, "pointerleave", handlePointerLeave),
+      listen(anchor, "focusout", handleFocusOut),
+    ];
     observer.observe(anchor, {
       attributes: true,
       attributeFilter: [
         "title",
         "data-tooltip",
+        "data-file-path",
         "aria-hidden",
         "aria-haspopup",
         "aria-expanded",
@@ -223,21 +259,51 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (root instanceof ShadowRoot) {
       observer.observe(root, { childList: true, subtree: true });
     }
-    const tooltipContent = content();
+    const tooltipContent = active.filePath ?? content();
     if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
-      const mount =
-        elements.find((element) => element.localName === "openclaw-modal-dialog") ??
-        ownerDocument.body;
+      tooltip.disabled = dialogExpanded();
+      if (active.filePath) {
+        const current = active;
+        const path = active.filePath;
+        const slot = ownerDocument.createElement("span");
+        slot.slot = "content";
+        slot.className = "markdown-file-tooltip";
+        slot.textContent = path;
+        tooltip.append(slot);
+        // Inline ownership preserves native Tab order without moving the file link.
+        anchor.after(tooltip);
+        tooltip.previewForAnchor(anchor, "", input);
+        void import("./markdown-file-tooltip.ts")
+          .then(({ renderMarkdownFileTooltip }) => {
+            if (active === current && slot.isConnected) {
+              current.disposeFileContent = renderMarkdownFileTooltip(slot, path);
+            }
+          })
+          .catch((error: unknown) => {
+            if (active === current) {
+              restore();
+              showToast({ message: formatUiError(error) });
+            }
+          });
+        return;
+      }
+      const mount = resolveTransientContainer(event.composedPath(), ownerDocument);
+      if (!mount) {
+        restore();
+        return;
+      }
       mount.append(tooltip);
       tooltip.previewForAnchor(anchor, tooltipContent, input);
     }
   };
-  ownerDocument.addEventListener("pointerover", discover, true);
-  ownerDocument.addEventListener("focusin", discover, true);
+  const stopListeners = [
+    listen(ownerDocument, "pointerover", discover, true),
+    listen(ownerDocument, "focusin", discover, true),
+    listen(ownerDocument, HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true),
+  ];
   return () => {
-    ownerDocument.removeEventListener("pointerover", discover, true);
-    ownerDocument.removeEventListener("focusin", discover, true);
+    stopListeners.forEach((stop) => stop());
     restore();
   };
 }

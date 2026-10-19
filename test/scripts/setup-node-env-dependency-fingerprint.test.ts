@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -20,18 +20,18 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     ).trim();
 
   execFileSync("git", ["init", "-q"], { cwd: root });
-  writeManifest({
+  const lifecycleScripts = {
+    "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
+    postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+    preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+    prepare: "node scripts/prepare-git-hooks.mjs",
+  };
+  const manifest = {
     name: "fixture",
-    openclaw: { schemaVersions: { agent: 17, state: 6 } },
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
+    scripts: { ...lifecycleScripts, test: "vitest run" },
     devDependencies: { vitest: "1.0.0" },
-  });
+  };
+  writeManifest({ ...manifest, openclaw: { schemaVersions: { agent: 17, state: 6 } } });
   const frozenLock =
     "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/worker: {}\n" +
     "snapshots:\n  example@1.0.0:\n    dependencies:\n      get-caller-file: 2.0.5\n";
@@ -125,6 +125,8 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     ".github/actions/setup-node-env/install-dependencies.sh",
     "scripts/check-install-dependency-ownership.mjs",
     "scripts/prepare-git-hooks.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/pnpm-lockfile-documents.mjs",
   ]) {
@@ -151,53 +153,21 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   });
   expect(fingerprint()).toBe(baseline);
 
-  // Repository-owned package metadata does not affect pnpm's install tree
-  // or any audited install hook, so schema churn must stay warm.
-  writeManifest({
-    name: "fixture",
-    openclaw: { schemaVersions: { agent: 17, state: 7 } },
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
-    devDependencies: { vitest: "1.0.0" },
-  });
+  // Repository-owned metadata does not change the dependency tree.
+  writeManifest({ ...manifest, openclaw: { schemaVersions: { agent: 17, state: 7 } } });
   expect(fingerprint()).toBe(baseline);
 
-  writeManifest({
-    name: "fixture",
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
-    devDependencies: { vitest: "2.0.0" },
-  });
+  writeManifest({ ...manifest, devDependencies: { vitest: "2.0.0" } });
   expect(fingerprint()).not.toBe(baseline);
 
   writeManifest({
-    name: "fixture",
+    ...manifest,
     scripts: { postinstall: "node install-v2.mjs", test: "vitest run" },
-    devDependencies: { vitest: "1.0.0" },
   });
   expect(() => fingerprint()).toThrow(/unaudited install lifecycle scripts in package\.json/);
 
   mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
-  writeManifest({
-    name: "fixture",
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-    },
-    devDependencies: { vitest: "1.0.0" },
-  });
+  writeManifest({ ...manifest, scripts: lifecycleScripts });
   const workerManifest = path.join(root, "packages", "worker", "package.json");
   writeFileSync(
     workerManifest,
@@ -219,18 +189,177 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     `${JSON.stringify({ name: "worker", scripts: { build: "node build.mjs" } })}\n`,
   );
 
-  writeManifest({
-    name: "fixture",
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
-    devDependencies: { vitest: "1.0.0" },
-  });
+  writeManifest(manifest);
   writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.1'\n");
   expect(fingerprint()).not.toBe(baseline);
   expect(fingerprint(false)).not.toBe(baseline);
 });
+
+it.each([false, true])("preserves sparse install inputs with sparse-index=%s", (sparseIndex) => {
+  const fixture = createSparseFingerprintFixture();
+  const { root, git, write, fingerprint } = fixture;
+  const initial = fingerprint();
+  const stagedManifest = '{"name":"worker","version":"2.0.0"}\n';
+  write("packages/worker/package.json", stagedManifest);
+  git(["add", "packages/worker/package.json"]);
+  const staged = fingerprint();
+  expect(staged).not.toBe(initial);
+  expect(git(["show", "HEAD:packages/worker/package.json"])).not.toBe(stagedManifest.trim());
+
+  git(["sparse-checkout", "init", "--cone", sparseIndex ? "--sparse-index" : "--no-sparse-index"]);
+  git(["sparse-checkout", "set", ".github"]);
+  if (sparseIndex) {
+    expect(git(["ls-files", "--sparse", "--stage"])).toContain("040000 ");
+  }
+  const worker = path.join(root, "packages/worker/package.json");
+  expect(existsSync(worker)).toBe(false);
+  expect(fingerprint()).toBe(staged);
+  expect(existsSync(worker)).toBe(false);
+
+  // Skip-worktree is not permission to ignore a physical edit.
+  write("packages/worker/package.json", '{"name":"worker","version":"3.0.0"}\n');
+  git(["update-index", "--skip-worktree", "packages/worker/package.json"]);
+  expect(fingerprint()).not.toBe(staged);
+  rmSync(worker);
+  expect(fingerprint()).toBe(staged);
+
+  // Cone mode keeps root files present; exercise omitted config, hook and lock
+  // inputs too, using the same authoritative skip-worktree index contract.
+  for (const file of [".npmrc", "pnpm-workspace.yaml", ".pnpmfile.cjs", "pnpm-lock.yaml"]) {
+    git(["update-index", "--skip-worktree", file]);
+    rmSync(path.join(root, file));
+  }
+  expect(fingerprint()).toBe(staged);
+
+  symlinkSync("missing-manifest", worker);
+  expect(() => fingerprint()).toThrow(/ENOENT/);
+  rmSync(path.join(root, "packages"), { recursive: true });
+  symlinkSync("missing-packages", path.join(root, "packages"));
+  expect(() => fingerprint()).toThrow(/non-directory ancestor/);
+  rmSync(path.join(root, "packages"));
+
+  git(["update-index", "--no-skip-worktree", "packages/worker/package.json"]);
+  expect(() => fingerprint()).toThrow(/tracked install input is missing/);
+  git(["update-index", "--skip-worktree", "packages/worker/package.json"]);
+  expect(fingerprint()).toBe(staged);
+
+  // Patches remain byte inputs even when both their directory and manifest
+  // declaration are unchanged or omitted from the physical checkout.
+  write("patches/dependency.patch", "changed patch bytes\n");
+  expect(fingerprint()).not.toBe(staged);
+  rmSync(path.join(root, "patches"), { recursive: true });
+  expect(fingerprint()).toBe(staged);
+});
+
+it("uses staged additions and deletions without reading HEAD as a fallback", () => {
+  const { root, git, write, fingerprint } = createSparseFingerprintFixture();
+  const initial = fingerprint();
+  write("packages/added/package.json", '{"name":"added"}\n');
+  git(["add", "packages/added/package.json"]);
+  const added = fingerprint();
+  expect(added).not.toBe(initial);
+  git(["update-index", "--skip-worktree", "packages/added/package.json"]);
+  rmSync(path.join(root, "packages/added"), { recursive: true });
+  expect(fingerprint()).toBe(added);
+  git(["update-index", "--force-remove", "packages/added/package.json"]);
+  expect(fingerprint()).toBe(initial);
+});
+
+it("keeps physical skip-worktree bytes independent of unavailable index objects", () => {
+  const { root, git, write, fingerprint } = createSparseFingerprintFixture();
+  const original = fingerprint();
+  const present = "packages/worker/package.json";
+  git(["update-index", "--info-only", "--cacheinfo", "100644", "1".repeat(40), present]);
+  git(["update-index", "--skip-worktree", present]);
+  const absent = "scripts/postinstall-bundled-plugins.mjs";
+  git(["update-index", "--skip-worktree", absent]);
+  rmSync(path.join(root, absent));
+  expect(fingerprint()).toBe(original);
+  write(present, '{"name":"worker","version":"2.0.0"}\n');
+  expect(fingerprint()).not.toBe(original);
+  rmSync(path.join(root, present));
+  expect(() => fingerprint()).toThrow(/could not read sparse install input/);
+});
+
+it("rejects unmerged and unavailable sparse index inputs", () => {
+  const { git, fingerprint } = createSparseFingerprintFixture();
+  const file = "packages/worker/package.json";
+  const oid = git(["rev-parse", ":" + file]);
+  git(
+    ["update-index", "--index-info"],
+    "0 " +
+      "0".repeat(40) +
+      "\t" +
+      file +
+      "\n" +
+      "100644 " +
+      oid +
+      " 1\t" +
+      file +
+      "\n" +
+      "100644 " +
+      oid +
+      " 2\t" +
+      file +
+      "\n",
+  );
+  expect(() => fingerprint()).toThrow(/requires resolved file index entries/);
+  git(["update-index", "--force-remove", file]);
+  git(["update-index", "--add", "--info-only", "--cacheinfo", "100644", "1".repeat(40), file]);
+  git(["update-index", "--skip-worktree", file]);
+  rmSync(path.join(git(["rev-parse", "--show-toplevel"]), file));
+  expect(() => fingerprint()).toThrow(/could not read sparse install input/);
+});
+
+function createSparseFingerprintFixture() {
+  const root = tempDirs.make("openclaw-sparse-dependency-fingerprint-");
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      input,
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    }).trim();
+  const write = (file: string, contents: string) => {
+    const absolute = path.join(root, file);
+    mkdirSync(path.dirname(absolute), { recursive: true });
+    writeFileSync(absolute, contents);
+  };
+  git(["init", "-q"]);
+  for (const [file, contents] of [
+    ["package.json", '{"name":"fixture"}\n'],
+    ["packages/worker/package.json", '{"name":"worker","version":"1.0.0"}\n'],
+    ["pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/worker: {}\n"],
+    ["pnpm-workspace.yaml", "packages:\n  - packages/*\n"],
+    [".npmrc", "auto-install-peers=true\n"],
+    [".pnpmfile.cjs", "module.exports = { hooks: {} };\n"],
+    ["scripts/postinstall-bundled-plugins.mjs", "// install owner\n"],
+    ["patches/dependency.patch", "original patch bytes\n"],
+    [".github/keep.txt", "kept directory\n"],
+  ]) {
+    write(file!, contents!);
+  }
+  git(["add", "."]);
+  git([
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "fixture",
+  ]);
+  const fingerprint = () =>
+    execFileSync(
+      process.execPath,
+      [
+        path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs"),
+        "--workspace",
+        root,
+        "--frozen-lockfile",
+        "true",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+  return { root, git, write, fingerprint };
+}

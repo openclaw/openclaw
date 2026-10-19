@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, type RequestClient } from "../internal/discord.js";
@@ -7,11 +6,9 @@ import {
   attachDiscordDeployRequestBody,
   formatDiscordDeployErrorDetails,
   formatDiscordDeployErrorMessage,
-  formatDiscordDeployRateLimitDetails,
   formatDiscordDeployRateLimitWarning,
   isDiscordDeployDailyCreateLimit,
 } from "./provider.deploy-errors.js";
-import { logDiscordStartupPhase } from "./provider.startup-log.js";
 
 type RestMethodName = "get" | "post" | "put" | "patch" | "delete";
 type RestMethod = RequestClient[RestMethodName];
@@ -34,11 +31,7 @@ function isDeployCommandsPath(path: string): boolean {
 function wrapDeployRestMethod(params: {
   method: RestMethodName;
   original: RestMethodMap;
-  runtime: RuntimeEnv;
-  accountId: string;
-  startupStartedAt: number;
   timeoutMs?: number;
-  shouldLogVerbose: () => boolean;
 }) {
   return async (path: string, data?: never, query?: never) => {
     if (!isDeployCommandsPath(path)) {
@@ -46,24 +39,8 @@ function wrapDeployRestMethod(params: {
     }
     const startedAt = Date.now();
     const body = readDeployRequestBody(data);
-    const commandCount = Array.isArray(body) ? body.length : undefined;
-    const bodyBytes =
-      body === undefined
-        ? undefined
-        : Buffer.byteLength(typeof body === "string" ? body : JSON.stringify(body), "utf8");
-    if (params.shouldLogVerbose()) {
-      params.runtime.log?.(
-        `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:start ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
-      );
-    }
     try {
-      const result = await params.original[params.method](path, data, query);
-      if (params.shouldLogVerbose()) {
-        params.runtime.log?.(
-          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:done ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
-        );
-      }
-      return result;
+      return await params.original[params.method](path, data, query);
     } catch (err) {
       const requestMs = Date.now() - startedAt;
       attachDiscordDeployRequestBody(err, body);
@@ -73,35 +50,12 @@ function wrapDeployRestMethod(params: {
         requestMs,
         timeoutMs: params.timeoutMs,
       });
-      const rateLimitDetails = formatDiscordDeployRateLimitDetails(err);
-      if (rateLimitDetails) {
-        if (params.shouldLogVerbose()) {
-          params.runtime.log?.(
-            warn(
-              `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:rate-limited ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs}${rateLimitDetails}`,
-            ),
-          );
-        }
-      } else if (params.shouldLogVerbose()) {
-        // Deploy failures surface once through deployDiscordCommands' warning;
-        // this per-request line is verbose timing diagnostics only.
-        const details = formatDiscordDeployErrorDetails(err);
-        params.runtime.error?.(
-          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs} error=${formatDiscordDeployErrorMessage(err)}${details}`,
-        );
-      }
       throw err;
     }
   };
 }
 
-function installDeployRestLogging(params: {
-  rest: RequestClient;
-  runtime: RuntimeEnv;
-  accountId: string;
-  startupStartedAt: number;
-  shouldLogVerbose: () => boolean;
-}): () => void {
+function installDeployRestErrorContext(params: { rest: RequestClient }): () => void {
   const original: RestMethodMap = {
     get: params.rest.get.bind(params.rest),
     post: params.rest.post.bind(params.rest),
@@ -110,73 +64,49 @@ function installDeployRestLogging(params: {
     delete: params.rest.delete.bind(params.rest),
   };
   for (const method of Object.keys(original) as RestMethodName[]) {
-    const timeout = (params.rest as { options?: { timeout?: unknown } }).options?.timeout;
     params.rest[method] = wrapDeployRestMethod({
       method,
       original,
-      runtime: params.runtime,
-      accountId: params.accountId,
-      startupStartedAt: params.startupStartedAt,
-      timeoutMs: typeof timeout === "number" ? timeout : undefined,
-      shouldLogVerbose: params.shouldLogVerbose,
+      timeoutMs: params.rest.options.timeout,
     }) as RequestClient[typeof method];
   }
   return () => {
-    params.rest.get = original.get;
-    params.rest.post = original.post;
-    params.rest.put = original.put;
-    params.rest.patch = original.patch;
-    params.rest.delete = original.delete;
+    Object.assign(params.rest, original);
   };
 }
 
 async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
-  enabled: boolean;
-  accountId?: string;
-  startupStartedAt?: number;
-  shouldLogVerbose: () => boolean;
+  accountId: string;
 }) {
-  if (!params.enabled) {
-    return;
-  }
-  const startupStartedAt = params.startupStartedAt ?? Date.now();
-  const accountId = params.accountId ?? "default";
-  const restoreDeployRestLogging = installDeployRestLogging({
+  const { accountId } = params;
+  const restoreDeployRestErrorContext = installDeployRestErrorContext({
     rest: params.client.rest,
-    runtime: params.runtime,
-    accountId,
-    startupStartedAt,
-    shouldLogVerbose: params.shouldLogVerbose,
   });
   try {
-    try {
-      await params.client.deployCommands({ mode: "reconcile" });
-    } catch (err) {
-      if (isDiscordDeployDailyCreateLimit(err)) {
-        params.runtime.log?.(
-          warn(
-            `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
-          ),
-        );
-        return;
-      }
-      const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
-      if (rateLimitWarning) {
-        params.runtime.log?.(warn(rateLimitWarning));
-        return;
-      }
-      throw err;
-    }
+    await params.client.deployCommands();
   } catch (err) {
+    if (isDiscordDeployDailyCreateLimit(err)) {
+      params.runtime.log?.(
+        warn(
+          `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
+        ),
+      );
+      return;
+    }
+    const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
+    if (rateLimitWarning) {
+      params.runtime.log?.(warn(rateLimitWarning));
+      return;
+    }
     params.runtime.log?.(
       warn(
         `[${accountId}] slash command deploy failed (message send/receive unaffected): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
       ),
     );
   } finally {
-    restoreDeployRestLogging();
+    restoreDeployRestErrorContext();
   }
 }
 
@@ -185,37 +115,15 @@ export function runDiscordCommandDeployInBackground(params: {
   runtime: RuntimeEnv;
   enabled: boolean;
   accountId: string;
-  startupStartedAt: number;
-  shouldLogVerbose: () => boolean;
-  isVerbose: () => boolean;
 }) {
   if (!params.enabled) {
     return;
   }
-  logDiscordStartupPhase({
-    runtime: params.runtime,
-    accountId: params.accountId,
-    phase: "deploy-commands:scheduled",
-    startAt: params.startupStartedAt,
-    details: "mode=reconcile background=true",
-    isVerbose: params.isVerbose,
+  void deployDiscordCommands(params).catch((err: unknown) => {
+    params.runtime.log?.(
+      warn(
+        `[${params.accountId}] slash command deploy failed in background (message send/receive unaffected): ${formatErrorMessage(err)}`,
+      ),
+    );
   });
-  void deployDiscordCommands(params)
-    .then(() => {
-      logDiscordStartupPhase({
-        runtime: params.runtime,
-        accountId: params.accountId,
-        phase: "deploy-commands:done",
-        startAt: params.startupStartedAt,
-        details: "background=true",
-        isVerbose: params.isVerbose,
-      });
-    })
-    .catch((err: unknown) => {
-      params.runtime.log?.(
-        warn(
-          `[${params.accountId}] slash command deploy failed in background (message send/receive unaffected): ${formatErrorMessage(err)}`,
-        ),
-      );
-    });
 }

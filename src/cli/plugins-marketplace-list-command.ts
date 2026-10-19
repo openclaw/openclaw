@@ -2,16 +2,15 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../runtime.js";
 import { ExpectedCliError } from "./failure-output.js";
 import type { PluginMarketplaceListOptions } from "./plugins-cli.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 import { formatVersionLabel } from "./version-format.js";
 
-/** List plugins from a configured marketplace manifest. */
 export async function runPluginMarketplaceListCommand(
   source: string,
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger, quietPluginJsonLogger } =
-    await import("./plugins-command-helpers.js");
+  const { createPluginInstallLogger } = await import("./plugins-command-helpers.js");
   const result = await listMarketplacePlugins({
     marketplace: source,
     logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),

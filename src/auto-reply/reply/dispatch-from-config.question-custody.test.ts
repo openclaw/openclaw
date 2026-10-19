@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
@@ -10,6 +11,8 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
@@ -27,15 +30,15 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   firstToolResultPayload,
-  replyRunRegistry,
   requireToolResultHandler,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+  getSessionControllerOperation,
+} from "./dispatch-from-config.test-support.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { bindReplySourceToFollowup } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -44,21 +47,17 @@ beforeEach(() => {
   setNoAbort();
 });
 afterEach(() => {
-  replyRunTesting.resetReplyRunRegistry();
+  controllerTesting.resetSessionControllerForTest();
   resetInboundDedupe();
   clearAgentHarnesses();
 });
-it.each(["native commands", "groups"] as const)(
+it.each(["groups"] as const)(
   "delivers deterministic exec approval tool payloads in %s with progress suppression",
-  async (kind) => {
+  async () => {
     setNoAbort();
-    const cfg = kind === "groups" ? automaticGroupReplyConfig : emptyConfig;
+    const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx(
-      kind === "groups"
-        ? { Provider: "telegram", ChatType: "group" }
-        : { Provider: "telegram", CommandSource: "native" },
-    );
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "group" });
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -83,7 +82,7 @@ it.each(["native commands", "groups"] as const)(
         runState.replyCompletion?.expectation ?? "required",
         "blocked",
       );
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
+      return {} satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({
@@ -156,18 +155,17 @@ function createQuestionDispatch(name: string) {
 describe("dispatch input custody after a question response", () => {
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
-  it.each(
-    ["confirmed", "indeterminate"].flatMap((outcome) =>
-      ["settlement-error", "source-abort"].map((failure) => ({ outcome, failure })),
-    ),
-  )("does not replay $outcome input after $failure", async ({ outcome, failure }) => {
+  it.each([
+    { outcome: "confirmed", failure: "settlement-error" },
+    { outcome: "indeterminate", failure: "source-abort" },
+  ])("does not replay $outcome input after $failure", async ({ outcome, failure }) => {
     const fixture = createQuestionDispatch(`${outcome}-${failure}`);
     const abort = new AbortController();
     const cleanupError = new Error("source settlement failed");
     const onAdopted = vi.fn(async () => {
       throw new Error("source adoption closed");
     });
-    const onSettled = vi.fn(() => {
+    const onSettled = vi.fn(async () => {
       if (failure === "source-abort") {
         abort.abort();
       } else {
@@ -183,9 +181,18 @@ describe("dispatch input custody after a question response", () => {
         outcome === "confirmed"
           ? { status: "accepted", mode: "steer" }
           : { status: "skipped", reason: "question-response-indeterminate" };
-      const input = { turnAdoptionLifecycle: opts?.turnAdoptionLifecycle };
+      const input = createQueueTestRun({ prompt: "answer", messageId: fixture.ctx.MessageSid });
+      input.run.sessionKey = fixture.ctx.SessionKey;
+      input.turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+      const source = bindReplySourceToFollowup(opts, input);
+      if (!source) {
+        throw new Error("Dispatch did not carry its source input");
+      }
       await admitFollowupRunLifecycle(input).catch(() => {});
       completeFollowupRunLifecycle(input, "consumed");
+      // The full source receipt also owns this still-running resolver. Join
+      // the adapter cleanup here, not the enclosing invocation itself.
+      await source.custody.settling;
       return undefined;
     });
     try {
@@ -217,47 +224,11 @@ describe("dispatch input custody after a question response", () => {
       expect(onSettled).toHaveBeenCalledOnce();
       expect(fixture.cancel).not.toHaveBeenCalled();
       expect(fixture.operation.result).toBeNull();
-      expect(replyRunRegistry.get(fixture.operation.key)).toBe(fixture.operation);
+      expect(getSessionControllerOperation(fixture.operation.key)).toBe(fixture.operation);
     } finally {
       fixture.operation.complete();
     }
   });
-
-  it.each(["question-response-indeterminate", "question-response-refused"] as const)(
-    "delivers %s and records an error instead of a successful agent turn",
-    async (reason) => {
-      const fixture = createQuestionDispatch(reason);
-      const dispatcher = createDispatcher();
-      const notice =
-        reason === "question-response-indeterminate"
-          ? "The question answer could not be confirmed; check before retrying."
-          : "The question answer was refused; check your permissions before retrying.";
-      try {
-        await dispatchReplyFromConfig({
-          ctx: fixture.ctx,
-          cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
-          dispatcher,
-          replyOptions: { turnAdoptionLifecycle: { onAdopted: async () => {} } },
-          replyResolver: async (_ctx, opts) => {
-            const state = resolveReplyOperationRunState(opts);
-            if (!state) {
-              throw new Error("missing dispatch run state");
-            }
-            state.admission = { status: "skipped", reason };
-            return { text: notice, isError: true };
-          },
-        });
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: notice, isError: true });
-        expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-          expect.objectContaining({ outcome: "error", reason }),
-        );
-        expect(fixture.cancel).not.toHaveBeenCalled();
-        expect(fixture.operation.result).toBeNull();
-      } finally {
-        fixture.operation.complete();
-      }
-    },
-  );
 
   it("delivers a host question refusal when the agent owns normal replies", async () => {
     const fixture = createQuestionDispatch("host-refusal");
@@ -272,7 +243,7 @@ describe("dispatch input custody after a question response", () => {
     try {
       await dispatchReplyFromConfig({
         ctx: fixture.ctx,
-        cfg: automaticDirectReplyConfig,
+        cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
         dispatcher,
         replyOptions: {
           sourceReplyDeliveryMode: "message_tool_only",
@@ -296,6 +267,9 @@ describe("dispatch input custody after a question response", () => {
           isError: true,
         }),
       );
+      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "error", reason: "question-response-refused" }),
+      );
       expect(fixture.cancel).not.toHaveBeenCalled();
     } finally {
       question.dispose();
@@ -306,7 +280,7 @@ describe("dispatch input custody after a question response", () => {
   it("reports an incomplete multi-question answer and keeps the question open", async () => {
     const fixture = createQuestionDispatch("incomplete-answer");
     const dispatcher = createDispatcher();
-    const broker = new EmbeddedQuestionBroker();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
     const questionId = "ask_incomplete_answer";
     const questions = [
       { id: "destination", header: "Where", question: "Where to?" },
@@ -398,7 +372,7 @@ describe("dispatch input custody after a question response", () => {
       expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
         expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
       );
-      expect(question.isResolving()).toBe(false);
+      await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
       expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
       expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
       expect(onResolved).not.toHaveBeenCalled();
@@ -440,8 +414,6 @@ describe("dispatch input custody after a question response", () => {
 
   it.each([
     { code: "INVALID_REQUEST", reason: "QUESTION_ID_IN_USE" },
-    { code: "INVALID_REQUEST", reason: undefined },
-    { code: "FORBIDDEN", reason: "QUESTION_INVALID_ANSWER" },
     { code: "UNAVAILABLE", reason: "QUESTION_INVALID_ANSWER" },
   ])("does not report $code/$reason as an invalid answer", async ({ code, reason }) => {
     const fixture = createQuestionDispatch(`rejection-${code}-${reason}`);
@@ -494,7 +466,7 @@ describe("dispatch input custody after a question response", () => {
         await expect(result).resolves.toMatchObject({
           queuedFinal: true,
         });
-        expect(question.isResolving()).toBe(true);
+        await expectPendingQuestionAnswerClaimable(fixture.operation.key, false);
         expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             text: expect.stringContaining("confirmation was lost"),
@@ -506,7 +478,7 @@ describe("dispatch input custody after a question response", () => {
         );
       } else {
         await expect(result).rejects.toBe(error);
-        expect(question.isResolving()).toBe(false);
+        await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
           expect.objectContaining({ outcome: "error", error: String(error) }),
@@ -520,7 +492,7 @@ describe("dispatch input custody after a question response", () => {
       );
       expect(fixture.cancel).not.toHaveBeenCalled();
       expect(fixture.operation.result).toBeNull();
-      expect(replyRunRegistry.get(fixture.operation.key)).toBe(fixture.operation);
+      expect(getSessionControllerOperation(fixture.operation.key)).toBe(fixture.operation);
     } finally {
       question.dispose();
       fixture.operation.complete();

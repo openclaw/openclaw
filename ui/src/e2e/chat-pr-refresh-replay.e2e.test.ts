@@ -13,6 +13,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -79,6 +80,7 @@ describe("PR refresh replay through the Control UI", () => {
           .toBe(state);
       };
       await snapshot("open");
+      await openDetailsPullRequests(page);
       const forceRequests = async () =>
         (await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).filter((request) => {
           const params = request.params as { refreshSessionKeys?: string[] } | undefined;
@@ -98,6 +100,7 @@ describe("PR refresh replay through the Control UI", () => {
         runId,
         state: "delta",
         deltaText: text,
+        message: { role: "assistant", content: [{ type: "text", text }] },
       });
       await expect.poll(async () => (await forceRequests()).length).toBe(initialForces + 1);
       const final = {

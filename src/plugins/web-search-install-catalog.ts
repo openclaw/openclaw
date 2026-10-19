@@ -1,4 +1,3 @@
-// Builds web-search install catalog entries from plugin metadata.
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -93,6 +92,9 @@ function buildProviderEntry(params: {
   ) {
     return null;
   }
+  const onboardingScopes = normalizeOnboardingScopes(params.provider.onboardingScopes);
+  const credentialLabel = normalizeString(params.provider.credentialLabel);
+  const docsUrl = normalizeString(params.provider.docsUrl);
   return {
     id: providerId,
     pluginId: params.pluginId,
@@ -102,16 +104,10 @@ function buildProviderEntry(params: {
     placeholder,
     signupUrl,
     credentialPath,
-    ...(normalizeOnboardingScopes(params.provider.onboardingScopes)
-      ? { onboardingScopes: normalizeOnboardingScopes(params.provider.onboardingScopes) }
-      : {}),
+    ...(onboardingScopes ? { onboardingScopes } : {}),
     ...(params.provider.requiresCredential === false ? { requiresCredential: false } : {}),
-    ...(normalizeString(params.provider.credentialLabel)
-      ? { credentialLabel: normalizeString(params.provider.credentialLabel) }
-      : {}),
-    ...(normalizeString(params.provider.docsUrl)
-      ? { docsUrl: normalizeString(params.provider.docsUrl) }
-      : {}),
+    ...(credentialLabel ? { credentialLabel } : {}),
+    ...(docsUrl ? { docsUrl } : {}),
     ...(typeof params.provider.autoDetectOrder === "number"
       ? { autoDetectOrder: params.provider.autoDetectOrder }
       : {}),

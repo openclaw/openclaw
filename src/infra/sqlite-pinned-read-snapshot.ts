@@ -11,8 +11,13 @@ export function getSqlitePinnedReadSnapshot(db: DatabaseSync): object | undefine
   return snapshots.get(db);
 }
 
-/** Pin an implicit read snapshot without requiring transaction-control authorization. */
-export function runSqlitePinnedReadSnapshotSync<T>(db: DatabaseSync, operation: () => T): T {
+export type SqliteSchemaMarkers = { readonly schemaVersion: number; readonly userVersion: number };
+
+/** First schema admission consumes the same cookie that pins its catalog capture. */
+export function runSqliteSchemaReadSnapshotSync<T>(
+  db: DatabaseSync,
+  operation: (schemaVersion: number) => T,
+): T {
   const parent = snapshots.get(db);
   snapshots.set(db, parent ?? {});
   try {
@@ -22,9 +27,9 @@ export function runSqlitePinnedReadSnapshotSync<T>(db: DatabaseSync, operation: 
       try {
         const first = snapshot.next();
         if (first.done) {
-          throw new Error("SQLite schema version query returned no row");
+          throw new Error("SQLite schema_version query returned no row");
         }
-        return operation();
+        return operation(Number(first.value.schema_version));
       } finally {
         snapshot.return?.();
       }

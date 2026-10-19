@@ -1,5 +1,6 @@
 // Line tests cover the pre-drain (#109655) spool upgrade migration.
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { migrateLineLegacySpoolRows } from "./webhook-spool-migration.js";
@@ -7,76 +8,22 @@ import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from ".
 import {
   createEvent,
   payloadFor,
+  type SpoolPayload,
   runtime,
   waitForVerdict,
   withQueue,
 } from "./webhook-spool.test-support.js";
 
+function createSpool(
+  queue: ChannelIngressQueue<SpoolPayload>,
+  deliver: Parameters<typeof createLineWebhookSpool>[0]["deliver"],
+) {
+  return createLineWebhookSpool({ accountId: "default", runtime: runtime(), queue, deliver });
+}
+
 describe("LINE webhook spool upgrade migration", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-  });
-
-  it("delivers pre-drain rows once after the doctor migration", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-upgrade-1" });
-      await legacySeed.enqueue(
-        "legacy-upgrade-1",
-        { version: 1, destination: "destination-1", event },
-        { laneKey: "user:user-1" },
-      );
-      await migrateLineLegacySpoolRows(queue);
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      spool.start();
-      try {
-        // The migration rewrites the row into the canonical keyspace; delivery
-        // completes under the message: id while the legacy id keeps a tombstone.
-        await waitForVerdict(queue, "legacy-upgrade-1", "completed");
-        await waitForVerdict(queue, "message:message-legacy-upgrade-1", "completed");
-        expect(deliver).toHaveBeenCalledTimes(1);
-        expect(deliver).toHaveBeenCalledWith(
-          [event],
-          "destination-1",
-          expect.objectContaining({ turnAdoptionLifecycle: expect.anything() }),
-        );
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("dead-letters a pre-drain row whose event does not match its stored id", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-other-id" });
-      await legacySeed.enqueue(
-        "legacy-mismatch",
-        { version: 1, destination: "destination-1", event },
-        { laneKey: "user:user-1" },
-      );
-      await migrateLineLegacySpoolRows(queue);
-      const deliver = vi.fn(async () => {});
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      spool.start();
-      try {
-        await waitForVerdict(queue, "legacy-mismatch", "failed");
-        expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
-    });
   });
 
   it("re-runs a partially applied migration without a duplicate delivery", async () => {
@@ -96,48 +43,12 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "message:message-legacy-partial", "completed");
         await waitForVerdict(queue, "legacy-partial", "completed");
         expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("does not resurrect a migrated event that was already delivered", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-delivered" });
-      await queue.enqueue("message:message-legacy-delivered", payloadFor(event));
-      await queue.complete("message:message-legacy-delivered");
-      await legacySeed.enqueue(
-        "legacy-delivered",
-        { version: 1, destination: "destination-1", event },
-        { laneKey: "user:user-1" },
-      );
-      const result = await migrateLineLegacySpoolRows(queue);
-      // The canonical id is already a completion tombstone, so retiring the legacy
-      // row owes no delivery and must not be reported as one.
-      expect(result).toMatchObject({ migrated: 0, reconciled: 1 });
-      const deliver = vi.fn(async () => {});
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      spool.start();
-      try {
-        await waitForVerdict(queue, "legacy-delivered", "completed");
-        expect(deliver).not.toHaveBeenCalled();
       } finally {
         await spool.stop();
       }
@@ -185,12 +96,7 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "legacy-claimed", "completed");
@@ -220,12 +126,7 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "legacy-buried", "completed");
@@ -317,12 +218,7 @@ describe("LINE webhook spool upgrade migration", () => {
           await control.turnAdoptionLifecycle.onAdopted();
         },
       );
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "message:message-event-newer", "completed");

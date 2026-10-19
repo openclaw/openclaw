@@ -1,19 +1,11 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
 import { normalizeChatChannelId } from "../channels/registry.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import type { CliDeps } from "./deps.types.js";
+import type { RuntimeSendOpts } from "./send-runtime/channel-outbound-send.js";
 
-/**
- * Lazy-loaded per-channel send functions, keyed by channel ID.
- * Values are proxy functions that dynamically import the real module on first use.
- */
 export type { CliDeps } from "./deps.types.js";
-type RuntimeSend = {
-  sendMessage: (...args: unknown[]) => Promise<unknown>;
-};
-type RuntimeSendModule = {
-  runtimeSend: RuntimeSend;
-};
+const loadSendRuntime = createLazyPromise(() => import("./send-runtime/channel-outbound-send.js"));
 
 const NON_CHANNEL_DEP_KEYS = new Set([
   "__proto__",
@@ -44,47 +36,9 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "valueOf",
 ]);
 
-function resolveKnownChannelId(raw: string): string | undefined {
-  return normalizeChatChannelId(raw) ?? undefined;
-}
-
-// Per-channel module caches for lazy loading.
-const senderCache = new Map<string, Promise<RuntimeSend>>();
-
-/**
- * Create a lazy-loading send function proxy for a channel.
- * The channel's module is loaded on first call and cached for reuse.
- */
-function createLazySender(
-  channelId: string,
-  loader: () => Promise<RuntimeSendModule>,
-): (...args: unknown[]) => Promise<unknown> {
-  return async (...args: unknown[]) => {
-    const runtimeSend = await getOrCreatePromise(
-      senderCache,
-      channelId,
-      async () => (await loader()).runtimeSend,
-      { cacheRejections: false },
-    );
-    return await runtimeSend.sendMessage(...args);
-  };
-}
-
 export function createDefaultDeps(): CliDeps {
   // Proxy lookup preserves the historic deps.channelName shape without eagerly importing plugins.
   const deps: CliDeps = {};
-  const resolveSender = (channelId: string) =>
-    createLazySender(channelId, async () => {
-      const { createChannelOutboundRuntimeSend } =
-        await import("./send-runtime/channel-outbound-send.js");
-      return {
-        runtimeSend: createChannelOutboundRuntimeSend({
-          channelId: channelId as import("../channels/plugins/types.public.js").ChannelId,
-          unavailableMessage: `${channelId} outbound adapter is unavailable.`,
-        }) as RuntimeSend,
-      } satisfies RuntimeSendModule;
-    });
-
   return new Proxy(deps, {
     get(target, property, receiver) {
       if (typeof property !== "string") {
@@ -94,13 +48,14 @@ export function createDefaultDeps(): CliDeps {
       if (existing !== undefined || NON_CHANNEL_DEP_KEYS.has(property)) {
         return existing;
       }
-      const channelId = resolveKnownChannelId(property);
+      const channelId = normalizeChatChannelId(property);
       if (!channelId) {
         return existing;
       }
       // Synthesized senders re-enter the full channel adapter. Keep them off the
       // enumerable target so transport dependency mapping cannot inject them back into it.
-      return resolveSender(channelId);
+      return async (to: string, text: string, opts?: RuntimeSendOpts) =>
+        await (await loadSendRuntime()).sendChannelOutboundMessage(channelId, to, text, opts);
     },
   });
 }

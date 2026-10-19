@@ -14,7 +14,7 @@ import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/t
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
-  buildCodexWatchedSessionsContext,
+  prepareCodexWatchedSessionsContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
@@ -51,6 +51,7 @@ describe("Codex app-server attempt context", () => {
   });
 
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
+    let deferredSchemaReads = 0;
     const tools = [
       {
         type: "function",
@@ -74,8 +75,9 @@ describe("Codex app-server attempt context", () => {
             description: "Search the web.",
             inputSchema: {
               type: "object",
-              properties: {
-                query: { type: "string" },
+              get properties() {
+                deferredSchemaReads += 1;
+                return { query: { type: "string" } };
               },
             },
             deferLoading: true,
@@ -84,7 +86,7 @@ describe("Codex app-server attempt context", () => {
       },
     ] as CodexDynamicToolSpec[];
 
-    const report = buildCodexSystemPromptReport({
+    const reportParams: Parameters<typeof buildCodexSystemPromptReport>[0] = {
       attempt: {
         sessionId: "session-1",
         provider: "codex",
@@ -94,14 +96,23 @@ describe("Codex app-server attempt context", () => {
       workspaceDir: path.join("tmp", "workspace"),
       developerInstructions: "test developer instructions",
       workspaceBootstrapContext: {
-        bootstrapFiles: [],
+        bootstrapFiles: [
+          {
+            name: "AGENTS.md",
+            path: "/workspace/AGENTS.md",
+            content: "native instructions",
+            missing: false,
+            origin: { kind: "agent-workspace", rootPath: "/workspace" },
+          },
+        ],
         contextFiles: [],
         inheritsAgentWorkspace: false,
         promptContextFiles: [],
       },
       skillsPrompt: "",
       tools,
-    });
+    };
+    const report = buildCodexSystemPromptReport(reportParams);
 
     expect(report.source).toBe("run");
     expect(report.provider).toBe("codex");
@@ -111,14 +122,27 @@ describe("Codex app-server attempt context", () => {
     expect(report.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
 
     const message = report.tools.entries.find((tool) => tool.name === "message");
-    const webSearch = report.tools.entries.find((tool) => tool.name === "web_search");
+    const webSearch = report.tools.deferred?.entries.find((tool) => tool.name === "web_search");
     expect(message?.schemaChars).toBeGreaterThan(0);
     expect(message?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(message?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(webSearch?.schemaChars).toBe(0);
-    expect(webSearch?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(webSearch?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report.tools.entries.map((tool) => tool.name)).toEqual(["message"]);
+    expect(webSearch).toMatchObject({ source: "openclaw", sourceName: "core" });
+    expect(webSearch?.schemaChars).toBeGreaterThan(0);
+    expect(report.tools.deferred?.schemaChars).toBe(webSearch?.schemaChars);
     expect(report.tools.schemaChars).toBe(message?.schemaChars);
+    expect(buildCodexSystemPromptReport(reportParams).tools.deferred).toEqual(
+      report.tools.deferred,
+    );
+    expect(deferredSchemaReads).toBe(1);
+    expect(report.injectedWorkspaceFiles).toMatchObject([
+      {
+        origin: { kind: "agent-workspace", rootPath: "/workspace" },
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
+      },
+    ]);
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
@@ -143,7 +167,12 @@ describe("Codex app-server attempt context", () => {
           effectiveWorkspace: sandboxWorkspaceDir,
           sessionKey: "agent:main:session-1",
           sessionAgentId: "main",
-          memoryToolNames: ["memory_search", "memory_get"],
+          tools: ["memory_search", "memory_get"].map((name) => ({
+            type: "function",
+            name,
+            description: name,
+            inputSchema: { type: "object" },
+          })),
           ringZeroActive: false,
         });
 
@@ -154,56 +183,69 @@ describe("Codex app-server attempt context", () => {
     });
   });
 
-  it("passes agent context to Codex memory collaboration guidance", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-memory-"));
-    let observedContext:
-      | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
-      | undefined;
-    registerMemoryCapability("memory-core", {
-      promptBuilder: (context) => {
-        observedContext = context;
-        return [
-          "## Agent Memory",
-          `agent=${context.agentId} session=${context.agentSessionKey}`,
-          "",
-        ];
-      },
-    });
-
-    try {
+  it.each([
+    { name: "deferred native tools", enabled: true, lightweight: false },
+    { name: "lightweight cron", enabled: true, lightweight: true },
+  ])(
+    "filters provider guidance independently of workspace routing: $name",
+    async ({ enabled, lightweight }) => {
+      const workspaceDir = tempDirs.make("codex-provider-prompt-");
+      const promptBuilder = vi.fn(({ availableTools }: { availableTools: Set<string> }) =>
+        availableTools.has("knowledge_lookup") ? ["Recall using knowledge_lookup."] : [],
+      );
+      registerMemoryCapability("knowledge", { promptBuilder });
       const context = await buildCodexWorkspaceBootstrapContext({
         params: {
           sessionId: "session-1",
-          sessionKey: "agent:marketing-agent:session-1",
-          config: {
-            agents: {
-              defaults: { workspace: workspaceDir },
-              list: [{ id: "marketing-agent", default: true, workspace: workspaceDir }],
-            },
-          },
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+          ...(lightweight
+            ? { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" }
+            : {}),
         } as EmbeddedRunAttemptParams,
         resolvedWorkspace: workspaceDir,
-        effectiveWorkspace: workspaceDir,
-        sessionKey: "agent:marketing-agent:session-1",
-        sessionAgentId: "marketing-agent",
-        memoryToolNames: ["memory_search", "memory_get"],
+        effectiveWorkspace: path.join(workspaceDir, "sandbox"),
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        tools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "",
+            tools: enabled
+              ? [
+                  {
+                    type: "function",
+                    name: "knowledge_lookup",
+                    description: "Look up memory",
+                    inputSchema: { type: "object" },
+                    deferLoading: true,
+                  },
+                ]
+              : [],
+          },
+        ],
         ringZeroActive: false,
         sandboxed: true,
       });
-
-      expect(context.memoryToolRouted).toBe(true);
-      expect(observedContext).toMatchObject({
-        agentId: "marketing-agent",
-        agentSessionKey: "agent:marketing-agent:session-1",
-        sandboxed: true,
-      });
-      expect(context.memoryCollaborationInstructions).toContain(
-        "agent=marketing-agent session=agent:marketing-agent:session-1",
+      expect(context.memoryToolRouted).toBe(false);
+      expect(context.memoryToolNames).toEqual([]);
+      expect(context.memoryInstructions).toBe(
+        enabled && !lightweight ? "Recall using knowledge_lookup." : undefined,
       );
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+      if (lightweight) {
+        expect(promptBuilder).not.toHaveBeenCalled();
+      } else {
+        expect(promptBuilder).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "main",
+            agentSessionKey: "agent:main:session-1",
+            sandboxed: true,
+            availableTools: new Set(enabled ? ["knowledge_lookup"] : []),
+          }),
+        );
+      }
+    },
+  );
 
   it("inherits agent workspace instructions when Codex executes in another folder", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
@@ -225,7 +267,12 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: executionDir,
         sessionKey: "agent:main:session-1",
         sessionAgentId: "main",
-        memoryToolNames: ["memory_search", "memory_get"],
+        tools: ["memory_search", "memory_get"].map((name) => ({
+          type: "function",
+          name,
+          description: name,
+          inputSchema: { type: "object" },
+        })),
         ringZeroActive: false,
       });
 
@@ -239,8 +286,8 @@ describe("Codex app-server attempt context", () => {
       expect(context.threadDeveloperInstructions).not.toContain(
         path.join(executionDir, "AGENTS.md"),
       );
-      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
-      expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
+      expect(context.personaInstructions).toContain("Canonical agent soul");
+      expect(context.personaInstructions).not.toContain("Canonical agent instructions");
       expect(context.memoryToolRouted).toBe(true);
       expect(context.promptContext).toBeUndefined();
     } finally {
@@ -269,7 +316,7 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: executionDir,
         sessionKey: "agent:openclaw:session-1",
         sessionAgentId: "openclaw",
-        memoryToolNames: [],
+        tools: [],
         ringZeroActive: true,
       });
 
@@ -289,18 +336,6 @@ describe("Codex app-server attempt context", () => {
       overrides: { toolsAllow: ["openclaw"], pluginHarnessToolPolicyRestricted: true },
     },
     {
-      name: "lightweight cron",
-      ringZeroActive: false,
-      inheritedWorkspace: true,
-      overrides: { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" },
-    },
-    {
-      name: "tool-disabled restricted",
-      ringZeroActive: false,
-      inheritedWorkspace: false,
-      overrides: { pluginHarnessToolPolicyRestricted: true, disableTools: true },
-    },
-    {
       name: "message-only restricted",
       ringZeroActive: false,
       inheritedWorkspace: false,
@@ -316,7 +351,7 @@ describe("Codex app-server attempt context", () => {
       const bootstrapRuntime = await import("openclaw/plugin-sdk/agent-harness-runtime");
       const failure = new Error("synthetic workspace bootstrap failure");
       const load = vi
-        .spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun")
+        .spyOn(bootstrapRuntime, "prepareAgentWorkspaceContext")
         .mockRejectedValueOnce(failure);
       vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
       const workspaceDir = path.join(os.tmpdir(), "codex-suppressed-bootstrap-workspace");
@@ -337,124 +372,13 @@ describe("Codex app-server attempt context", () => {
         effectiveWorkspace: executionDir,
         sessionKey: "agent:main:session-1",
         sessionAgentId: "main",
-        memoryToolNames: [],
+        tools: [],
         ringZeroActive: entry.ringZeroActive,
       });
 
       expect(load).toHaveBeenCalledOnce();
       expect(context.threadDeveloperInstructions).toBeUndefined();
       expect(context.bootstrapFiles).toEqual([]);
-    },
-  );
-
-  it.each(["direct", "inherited", "remapped"] as const)(
-    "keeps a root USER.md under users/arbitrary shared in a %s workspace",
-    async (workspaceMode) => {
-      const rootDir = tempDirs.make("codex-shared-user-");
-      const workspaceDir = path.join(rootDir, "users", "arbitrary");
-      const executionDir =
-        workspaceMode === "inherited" ? path.join(rootDir, "task") : workspaceDir;
-      const effectiveDir =
-        workspaceMode === "remapped"
-          ? path.join(rootDir, "sandbox", "users", "arbitrary")
-          : executionDir;
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
-
-      const context = await buildCodexWorkspaceBootstrapContext({
-        params: { sessionId: "shared-user" } as EmbeddedRunAttemptParams,
-        resolvedWorkspace: workspaceDir,
-        executionWorkspace: executionDir,
-        effectiveWorkspace: effectiveDir,
-        sessionKey: "agent:main:shared-user",
-        sessionAgentId: "main",
-        memoryToolNames: [],
-        ringZeroActive: false,
-      });
-
-      expect(context.turnScopedDeveloperInstructions).toContain("Shared preferences");
-      expect(context.turnScopedDeveloperInstructions).not.toContain("The personal");
-      expect(context.turnScopedDeveloperInstructionFiles).toEqual([
-        {
-          path: path.join(workspaceMode === "inherited" ? workspaceDir : effectiveDir, "USER.md"),
-          content: "Shared preferences",
-        },
-      ]);
-    },
-  );
-
-  it.each(["inherited", "remapped"] as const)(
-    "rebuilds turn-only personal instructions in a %s workspace without capturing them in the thread snapshot",
-    async (workspaceMode) => {
-      const runtime = await import("openclaw/plugin-sdk/agent-harness-runtime");
-      const workspaceDir = path.join(os.tmpdir(), "codex-personal-workspace");
-      const taskDir = path.join(os.tmpdir(), "codex-personal-task");
-      vi.spyOn(runtime, "resolveBootstrapFilesForRun").mockImplementation(async (params) => [
-        {
-          name: "USER.md",
-          path: path.join(workspaceDir, "USER.md"),
-          content: "Shared preferences",
-          missing: false,
-        },
-        ...(params.bootstrapUserProfileId
-          ? [
-              {
-                name: "USER.md" as const,
-                path: path.join(workspaceDir, "users", params.bootstrapUserProfileId, "USER.md"),
-                content:
-                  params.bootstrapUserProfileId === "alice"
-                    ? "Alice preferences"
-                    : "Bob preferences",
-                missing: false,
-                personalUser: true as const,
-              },
-            ]
-          : []),
-      ]);
-      for (const profile of ["alice", "bob", undefined]) {
-        const context = await buildCodexWorkspaceBootstrapContext({
-          params: {
-            sessionId: "shared",
-            sessionKey: "agent:main:shared",
-            bootstrapUserProfileId: profile,
-          } as EmbeddedRunAttemptParams,
-          agentWorkspaceDeveloperInstructions: "Saved project instructions",
-          resolvedWorkspace: workspaceDir,
-          executionWorkspace: workspaceMode === "inherited" ? taskDir : workspaceDir,
-          effectiveWorkspace: taskDir,
-          sessionKey: "agent:main:shared",
-          sessionAgentId: "main",
-          memoryToolNames: [],
-          ringZeroActive: false,
-        });
-        const turn = context.turnScopedDeveloperInstructions ?? "";
-        expect(turn).toContain("Shared preferences");
-        expect(turn.includes("Alice preferences")).toBe(profile === "alice");
-        expect(turn.includes("Bob preferences")).toBe(profile === "bob");
-        expect(turn.includes("belongs to this session")).toBe(Boolean(profile));
-        const promptWorkspace = workspaceMode === "inherited" ? workspaceDir : taskDir;
-        expect(context.turnScopedDeveloperInstructionFiles).toEqual([
-          { path: path.join(promptWorkspace, "USER.md"), content: "Shared preferences" },
-          ...(profile
-            ? [
-                {
-                  path: path.join(promptWorkspace, "users", profile, "USER.md"),
-                  content: profile === "alice" ? "Alice preferences" : "Bob preferences",
-                  personalUser: true,
-                },
-              ]
-            : []),
-        ]);
-        if (profile) {
-          expect(turn.indexOf("Shared preferences")).toBeLessThan(
-            turn.indexOf(profile === "alice" ? "Alice preferences" : "Bob preferences"),
-          );
-        }
-        expect(context.threadDeveloperInstructions).toBe(
-          workspaceMode === "inherited" ? "Saved project instructions" : undefined,
-        );
-        expect(context.promptContext).toBeUndefined();
-      }
     },
   );
 
@@ -489,7 +413,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "same-tools",
       }),
     ).toEqual({
@@ -504,7 +427,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "new-tools",
       }),
     ).toEqual({
@@ -513,7 +435,7 @@ describe("Codex app-server attempt context", () => {
     });
   });
 
-  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", async () => {
     const attempt = { config: {} } as EmbeddedRunAttemptParams;
 
     expect(
@@ -528,7 +450,7 @@ describe("Codex app-server attempt context", () => {
 
     // No ambient watches (and no state) must render nothing, not an empty section.
     expect(
-      buildCodexWatchedSessionsContext({
+      await prepareCodexWatchedSessionsContext({
         attempt,
         dynamicTools: [
           {
@@ -539,19 +461,7 @@ describe("Codex app-server attempt context", () => {
           },
         ],
         sessionKey: "agent:codex-test:main",
-      }),
-    ).toBe(undefined);
-
-    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
-    expect(
-      buildCodexWatchedSessionsContext({
-        attempt: {
-          config: {},
-          bootstrapContextMode: "lightweight",
-          bootstrapContextRunKind: "cron",
-        } as EmbeddedRunAttemptParams,
-        dynamicTools: [],
-        sessionKey: "agent:codex-test:main",
+        assertCurrent: () => {},
       }),
     ).toBe(undefined);
   });

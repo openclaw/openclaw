@@ -27,6 +27,6 @@ export function formatSqliteWalHealthWarning(
     `${health.consecutiveBlocked} consecutive blocked observations`,
     `observed ${new Date(health.observedAtMs).toISOString()}`,
     ...(health.error ? [sanitizeTerminalText(health.error)] : []),
-    "Restart the Gateway gracefully with openclaw gateway restart; report with openclaw status --deep output.",
+    "Restart the Gateway with openclaw gateway restart; report with openclaw status --deep output.",
   ].join(" · ");
 }

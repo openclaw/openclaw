@@ -1,17 +1,15 @@
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
 import type { FollowupRun } from "./types.js";
 
-function hasVerifiedAdmissionParticipant(run: FollowupRun): boolean {
-  return compareChannelAdmissionParticipants([run.channelAdmissionEvidence]) === "same";
-}
-
 export function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun["run"]) {
   const participantComparison = compareChannelAdmissionParticipants(
     items.map((item) => item.channelAdmissionEvidence),
   );
   if (
     participantComparison === "same" ||
-    !items.every((item) => hasVerifiedAdmissionParticipant(item))
+    !items.every(
+      (item) => compareChannelAdmissionParticipants([item.channelAdmissionEvidence]) === "same",
+    )
   ) {
     return source;
   }

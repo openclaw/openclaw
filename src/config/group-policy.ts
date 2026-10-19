@@ -21,8 +21,6 @@ import type { GroupToolPolicyConfig } from "./types.tools.js";
 export { resolveChannelGroups } from "./channel-groups.js";
 export { resolveToolsBySender } from "./tools-by-sender.js";
 
-type GroupPolicyChannel = ChannelId;
-
 export type ChannelGroupPolicy = {
   allowlistEnabled: boolean;
   allowed: boolean;
@@ -58,7 +56,7 @@ function resolveChannelGroupConfig(
 /** Locate the authored map selected by the channel owner without changing its inheritance rules. */
 export function resolveChannelGroupsConfigPath(params: {
   cfg: OpenClawConfig;
-  channel: GroupPolicyChannel;
+  channel: ChannelId;
   accountId?: string | null;
   groups: Readonly<Record<string, unknown>> | undefined;
 }): string {
@@ -88,7 +86,7 @@ type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
 
 function resolveChannelGroupPolicyMode(
   cfg: OpenClawConfig,
-  channel: GroupPolicyChannel,
+  channel: ChannelId,
   accountId?: string | null,
 ): ChannelGroupPolicyMode | undefined {
   const normalizedAccountId = normalizeAccountId(accountId);
@@ -111,7 +109,7 @@ function resolveChannelGroupPolicyMode(
 
 export function resolveChannelGroupPolicy(params: {
   cfg: OpenClawConfig;
-  channel: GroupPolicyChannel;
+  channel: ChannelId;
   groupId?: string | null;
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
@@ -167,7 +165,7 @@ function buildSelectedGroupScope(
 
 export function resolveChannelGroupRequireMention(params: {
   cfg: OpenClawConfig;
-  channel: GroupPolicyChannel;
+  channel: ChannelId;
   groupId?: string | null;
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
@@ -187,7 +185,7 @@ export function resolveChannelGroupRequireMention(params: {
 export function resolveChannelGroupToolsPolicy(
   params: {
     cfg: OpenClawConfig;
-    channel: GroupPolicyChannel;
+    channel: ChannelId;
     groupId?: string | null;
     groupIdCandidates?: Array<string | null | undefined>;
     accountId?: string | null;

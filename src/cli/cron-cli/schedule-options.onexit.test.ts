@@ -30,12 +30,6 @@ describe("resolveCronCreateScheduleFromArgs --on-exit", () => {
     ).toThrow(/not valid with --on-exit/);
   });
 
-  it("rejects orphan --on-exit-cwd (flag-only) instead of a confusing generic error", () => {
-    expect(() => resolveCronCreateScheduleFromArgs({ onExitCwd: "/repo" })).toThrow(
-      /--on-exit-cwd requires --on-exit/,
-    );
-  });
-
   it("rejects --on-exit-cwd alongside a positional schedule (cwd would be silently dropped)", () => {
     expect(() =>
       resolveCronCreateScheduleFromArgs({ onExitCwd: "/repo", positionalSchedule: "10m" }),

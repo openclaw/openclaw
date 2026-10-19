@@ -255,17 +255,7 @@ public enum DeviceAuthStore {
     }
 
     private static func withStore<Value>(
-        profile: GatewayDeviceIdentityProfile,
-        _ body: (Database) throws -> Value) throws -> Value
-    {
-        try self.withStore(
-            stateDirectoryURL: DeviceIdentityPaths.stateDirURL(),
-            profile: profile,
-            body)
-    }
-
-    private static func withStore<Value>(
-        stateDirectoryURL: URL,
+        stateDirectoryURL: URL = DeviceIdentityPaths.stateDirURL(),
         profile: GatewayDeviceIdentityProfile,
         _ body: (Database) throws -> Value) throws -> Value
     {
@@ -274,7 +264,11 @@ public enum DeviceAuthStore {
         if case .invalid = legacy {
             try self.quarantineInvalidLegacyFile(legacyURL)
         }
-        let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
+        let database = try Database(
+            databaseURL: stateDirectoryURL
+                .appendingPathComponent("state", isDirectory: true)
+                .appendingPathComponent("openclaw.sqlite", isDirectory: false),
+            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
         if case let .valid(store) = legacy {
             try database.withImmediateTransaction {
                 try database.ensureCanonicalTable(.deviceAuthTokens)
@@ -287,14 +281,6 @@ public enum DeviceAuthStore {
             try database.ensureCanonicalTable(.deviceAuthTokens)
             return try body(database)
         }
-    }
-
-    private static func openDatabase(stateDirectoryURL: URL) throws -> Database {
-        try Database(
-            databaseURL: stateDirectoryURL
-                .appendingPathComponent("state", isDirectory: true)
-                .appendingPathComponent("openclaw.sqlite", isDirectory: false),
-            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
     }
 
     private static func importLegacyStore(
@@ -343,10 +329,7 @@ public enum DeviceAuthStore {
         storedRole: String,
         entry: DeviceAuthEntry) throws
     {
-        let scopesData = try JSONEncoder().encode(self.normalizeScopes(entry.scopes))
-        guard let scopes = String(bytes: scopesData, encoding: .utf8) else {
-            throw OpenClawNativeStateError("failed to encode device auth scopes as UTF-8")
-        }
+        let scopes = try String(bytes: JSONEncoder().encode(self.normalizeScopes(entry.scopes)), encoding: .utf8)!
         let statement = try database.prepare("""
         INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms)
         VALUES (?, ?, ?, ?, ?)
@@ -409,8 +392,7 @@ public enum DeviceAuthStore {
     }
 
     private static func jsonArray(_ rawJSON: String) -> [Any]? {
-        guard let data = rawJSON.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [Any]
+        try? JSONSerialization.jsonObject(with: Data(rawJSON.utf8)) as? [Any]
     }
 
     private static func decodeTokenKey(_ key: String) -> (role: String, gatewayID: String?) {

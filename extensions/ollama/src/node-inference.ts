@@ -1,6 +1,5 @@
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
@@ -55,25 +54,6 @@ type NodeModel = {
   contextWindow?: number;
   capabilities?: string[];
   loaded: boolean;
-};
-
-type OllamaModelsPayload = {
-  provider: "ollama";
-  models: NodeModel[];
-};
-
-type OllamaChatPayload = {
-  provider: "ollama";
-  model: string;
-  response: string;
-  usage?: {
-    promptTokens?: number;
-    completionTokens?: number;
-  };
-  timings?: {
-    loadMs?: number;
-    totalMs?: number;
-  };
 };
 
 type NodeSummary = Awaited<
@@ -147,10 +127,7 @@ async function requestOllamaJson<T>(params: {
   }
 }
 
-async function discoverOllamaNodeModels(
-  baseUrl = OLLAMA_DEFAULT_BASE_URL,
-  signal?: AbortSignal,
-): Promise<OllamaModelsPayload> {
+async function discoverOllamaNodeModels(baseUrl = OLLAMA_DEFAULT_BASE_URL, signal?: AbortSignal) {
   const apiBase = resolveOllamaApiBase(baseUrl);
   const discovered = await fetchOllamaModels(apiBase, signal ? { signal } : undefined);
   if (!discovered.reachable) {
@@ -220,7 +197,7 @@ async function runOllamaNodeChat(params: {
   maxTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<OllamaChatPayload> {
+}) {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const deadlineMs = performance.now() + params.timeoutMs;
   const remainingTimeoutMs = (): number => {

@@ -7,13 +7,14 @@ import {
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 
 type PluginInstallPreflightResult =
-  | { ok: true; action: "install"; request: PluginInstallRequestContext }
+  | { ok: true; action: "install"; request: PluginInstallRequestContext; installedPath?: string }
   | {
       ok: true;
       action: "reuse";
       request: PluginInstallRequestContext;
       installedId: string;
       installedVersion: string;
+      installedPath?: string;
       installedIntegrity?: string;
       installedAt?: string;
     }
@@ -21,6 +22,7 @@ type PluginInstallPreflightResult =
       ok: false;
       code: "plugin_version_conflict";
       request: PluginInstallRequestContext;
+      installedPath?: string;
       installedVersion: string;
       expectedVersion: string;
     }
@@ -54,11 +56,7 @@ export async function resolveInstalledClawHubPlugin(params: {
   if (matches.length > 1) {
     return { status: "ambiguous", pluginIds: matches.map(([pluginId]) => pluginId).toSorted() };
   }
-  const match = matches[0];
-  if (!match) {
-    return { status: "missing" };
-  }
-  const [pluginId, record] = match;
+  const [pluginId, record] = matches[0]!;
   return {
     status: "found",
     pluginId,
@@ -102,6 +100,7 @@ export async function preflightPluginInstall(params: {
       request: resolved.request,
       installedId,
       installedVersion,
+      ...(installed?.installPath ? { installedPath: installed.installPath } : {}),
       ...(installed?.integrity ? { installedIntegrity: installed.integrity } : {}),
       ...(installed?.installedAt ? { installedAt: installed.installedAt } : {}),
     };
@@ -110,6 +109,7 @@ export async function preflightPluginInstall(params: {
     ok: false,
     code: "plugin_version_conflict",
     request: resolved.request,
+    ...(installed?.installPath ? { installedPath: installed.installPath } : {}),
     installedVersion,
     expectedVersion: params.expectedVersion,
   };

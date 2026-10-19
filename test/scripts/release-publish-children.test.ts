@@ -28,14 +28,25 @@ const previewFailed = job("preview_plugin_pack (featherless, ...)", "failure");
 const previewPassed = job("preview_plugin_pack (featherless, ...)", "success");
 const publish = (conclusion: string | null, status = "completed") =>
   job("Publish plugin npm package (@openclaw/featherless)", conclusion, status);
+const active = (preview: Job, publisherStatus: string): RunState => ({
+  status: "in_progress",
+  jobs: [preview, publish(null, publisherStatus)],
+});
+const terminal = (conclusion: string, ...jobs: Job[]): RunState => ({
+  status: "completed",
+  conclusion,
+  jobs,
+});
 const failedBeforePublish: RunState[] = [
-  { status: "in_progress", jobs: [previewFailed, publish(null, "waiting")] },
-  { status: "completed", conclusion: "failure", jobs: [previewFailed, publish("skipped")] },
+  active(previewFailed, "waiting"),
+  terminal("failure", previewFailed, publish("skipped")),
 ];
 const succeeded: RunState[] = [
-  { status: "in_progress", jobs: [previewPassed, publish(null, "in_progress")] },
-  { status: "completed", conclusion: "success", jobs: [previewPassed, publish("success")] },
+  active(previewPassed, "in_progress"),
+  terminal("success", previewPassed, publish("success")),
 ];
+const sourceHelper =
+  'source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"\n';
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -45,13 +56,16 @@ afterEach(() => {
 
 // Each `gh run view --json status,...` poll advances that run through its
 // states; a workflow dispatch creates the next run id in `runs` order.
-function fixture(runs: Record<string, RunState[]>) {
+function fixture(
+  runs: Record<string, RunState[]>,
+  readFailure?: { count: number; message: string },
+) {
   const root = mkdtempSync(join(tmpdir(), "release-publish-children-"));
   roots.push(root);
   mkdirSync(join(root, "bin"));
-  writeFileSync(join(root, "calls"), "");
-  writeFileSync(join(root, "summary"), "");
-  writeFileSync(join(root, "output"), "");
+  for (const file of ["calls", "summary", "output"]) {
+    writeFileSync(join(root, file), "");
+  }
   writeFileSync(join(root, "state.json"), JSON.stringify({ index: {}, dispatched: 0 }));
   writeFileSync(join(root, "plugin-npm-dispatch-args"), dispatchArgs.join("\0") + "\0");
   const harnessRoot = join(root, ".release-harness/scripts/lib");
@@ -72,6 +86,12 @@ const state = JSON.parse(readFileSync(root + '/state.json', 'utf8'));
 const save = () => writeFileSync(root + '/state.json', JSON.stringify(state));
 const json = args.includes('--json') ? args[args.indexOf('--json') + 1] : '';
 const jq = args.includes('--jq') ? args[args.indexOf('--jq') + 1] : '';
+const readFailure = ${JSON.stringify(readFailure) ?? "null"};
+if (readFailure && json === 'status,url,updatedAt') {
+  state.reads = (state.reads ?? 0) + 1; save();
+  appendFileSync(root + '/calls', 'read ' + state.reads + '\\n');
+  if (state.reads <= readFailure.count) { console.error(readFailure.message); process.exit(7); }
+}
 const url = (id) => 'https://github.com/${repository}/actions/runs/' + id;
 if (args[0] === 'run' && args[1] === 'view') {
   const id = args[args.indexOf('--repo') + 2];
@@ -83,11 +103,17 @@ if (args[0] === 'run' && args[1] === 'view') {
     console.log(JSON.stringify({ status: current.status, url: url(id), updatedAt: 'T' + state.index[id] }));
   }
   else if (json === 'headSha,url') console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: url(id) }));
-  else if (json === 'jobs') console.log(jq === '.jobs' ? JSON.stringify(current.jobs) : '');
+  else if (json === 'jobs') console.log(jq === '.jobs' ? JSON.stringify(current.jobs) : jq ? '' : JSON.stringify({ jobs: current.jobs }));
   else if (json === 'conclusion,url,createdAt,updatedAt') console.log(JSON.stringify({ conclusion: current.conclusion, url: url(id), createdAt: '2026-09-23T20:00:00Z', updatedAt: '2026-09-23T20:05:00Z' }));
   else throw new Error('Unexpected view: ' + JSON.stringify(args));
 } else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/pending_deployments'))) {
+  appendFileSync(root + '/calls', 'pending-deployments ' + JSON.stringify(args) + '\\n');
   console.log('[]');
+} else if (args[0] === 'api' && args[1].includes('/actions/runs/')) {
+  const id = args[1].split('/').at(-1);
+  console.log(JSON.stringify(runs[id][0]));
+} else if (args[0] === 'run' && args[1] === 'cancel') {
+  appendFileSync(root + '/calls', 'cancel ' + args.at(-1) + '\\n');
 } else if (args[0] === 'api' && args.some((arg) => arg.includes('/commits/'))) {
   console.log(${JSON.stringify(workflowSha)});
 } else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/dispatches'))) {
@@ -118,21 +144,21 @@ if (args[0] === 'run' && args[1] === 'view') {
           PUBLISH_OPENCLAW_NPM: "false",
         },
       });
+      const events = readFileSync(join(root, "calls"), "utf8").trim().split("\n");
       return {
         ...result,
-        dispatches: readFileSync(join(root, "calls"), "utf8")
-          .split("\n")
+        dispatches: events
           .filter((line) => line.startsWith("dispatch "))
           .map((line) => JSON.parse(line.slice("dispatch ".length)) as { inputs: unknown }),
         summary: readFileSync(join(root, "summary"), "utf8"),
         outputs: readFileSync(join(root, "output"), "utf8"),
-        events: readFileSync(join(root, "calls"), "utf8").trim().split("\n"),
+        events,
       };
     },
   };
 }
 
-describe("plugin npm child failure propagation", () => {
+describe("plugin npm child lifecycle", () => {
   it.each([
     {
       label: "a pre-publish failure while the child is still running",
@@ -145,34 +171,25 @@ describe("plugin npm child failure propagation", () => {
     {
       label: "a failed job while a sibling publisher is still running",
       states: [
-        { status: "in_progress", jobs: [previewFailed, publish(null, "in_progress")] },
-        { status: "in_progress", jobs: [previewFailed, publish(null, "in_progress")] },
-        { status: "completed", conclusion: "failure", jobs: [previewFailed, publish("success")] },
+        active(previewFailed, "in_progress"),
+        active(previewFailed, "in_progress"),
+        terminal("failure", previewFailed, publish("success")),
       ],
     },
     {
       label: "a failure after publication started",
       states: [
-        {
-          status: "completed",
-          conclusion: "failure",
-          jobs: [
-            previewPassed,
-            publish("success"),
-            job("Publish plugin npm package (@openclaw/x)", "failure"),
-          ],
-        },
+        terminal(
+          "failure",
+          previewPassed,
+          publish("success"),
+          job("Publish plugin npm package (@openclaw/x)", "failure"),
+        ),
       ],
     },
     {
       label: "a cancelled pre-publish job",
-      states: [
-        {
-          status: "completed",
-          conclusion: "cancelled",
-          jobs: [job(previewFailed.name, "cancelled"), publish("skipped")],
-        },
-      ],
+      states: [terminal("cancelled", job(previewFailed.name, "cancelled"), publish("skipped"))],
     },
   ])("fails the publication step without replacing $label", ({ states }) => {
     expect(startCorePublication).toBeDefined();
@@ -180,11 +197,9 @@ describe("plugin npm child failure propagation", () => {
     expect(result.status).toBe(1);
     expect(result.dispatches).toHaveLength(0);
     expect(result.stderr).toContain("Plugin npm publish failed");
-    expect(result.outputs).toBe("cleanup\n");
-    expect(result.events).toEqual([
-      ...states.map(({ status }) => `observed 91 ${status}`),
-      "cleanup",
-    ]);
+    expect(result.outputs).toBe("");
+    expect(result.events).toEqual(states.map(({ status }) => `observed 91 ${status}`));
+    expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
   });
 
   it("records the successful original child before continuing publication", () => {
@@ -194,5 +209,35 @@ describe("plugin npm child failure propagation", () => {
     expect(result.dispatches).toHaveLength(0);
     expect(result.outputs).toBe("plugin_npm_completed=true\nplugin_npm_run_id=91\n");
     expect(result.summary).toContain("plugin-npm-release.yml: success");
+  });
+  it.each([
+    { status: "waiting", jobs: [publish(null, "waiting")], cancelled: true },
+    { status: "in_progress", jobs: [publish(null, "in_progress")], cancelled: false },
+    { status: "completed", jobs: [publish("success")], cancelled: false },
+  ])(
+    "preserves active publishers and cancels only waiting children ($status)",
+    ({ status, jobs, cancelled }) => {
+      const result = fixture({ 91: [{ status, jobs }] }).run(
+        sourceHelper + "cleanup_waiting_npm_children",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.events.filter(Boolean)).toEqual(cancelled ? ["cancel 91"] : []);
+    },
+  );
+  it.each([
+    { count: 2, message: "gh: Server Error (HTTP 502)", calls: 3, succeeds: true },
+    { count: 4, message: "gh: Server Error (HTTP 502)", calls: 4, succeeds: false },
+    { count: 4, message: "gh: Not Found (HTTP 404)", calls: 1, succeeds: false },
+  ])("bounds retries for $message ($count failures)", ({ count, message, calls, succeeds }) => {
+    const result = fixture({ 91: [succeeded[1]!] }, { count, message }).run(
+      sourceHelper + 'wait_for_run plugin-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "" false',
+    );
+    expect(result.status, result.stderr).toBe(succeeds ? 0 : 7);
+    expect(result.events.filter((event) => event.startsWith("read "))).toHaveLength(calls);
+    if (succeeds) {
+      expect(result.summary).toContain("plugin-npm-release.yml: success");
+    } else {
+      expect(result.stderr).toContain(message);
+    }
   });
 });

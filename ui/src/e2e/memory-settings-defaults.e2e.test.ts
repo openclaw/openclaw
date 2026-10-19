@@ -1,8 +1,5 @@
-// Control UI tests cover Memory default provenance and clearing optional overrides.
-import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,32 +10,61 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("memory-settings-defaults");
-  }
-});
+const memoryPlugins = ["memory-core", "memory-lancedb"].map((id) => ({
+  id,
+  name: id === "memory-core" ? id : "Memory LanceDB",
+  installed: true,
+  enabled: true,
+  state: "enabled",
+  kind: ["memory"],
+}));
 
-const memoryPlugins = [
-  {
-    id: "memory-core",
-    name: "memory-core",
-    installed: true,
-    enabled: true,
-    state: "enabled",
-    kind: ["memory"],
-  },
-  {
-    id: "memory-lancedb",
-    name: "Memory LanceDB",
-    installed: true,
-    enabled: true,
-    state: "enabled",
-    kind: ["memory"],
-  },
-];
+function objectSchema<T>(properties: T) {
+  return { type: "object", properties };
+}
+
+function installMemoryGateway(page: Page, config: Record<string, unknown>, configSchema?: unknown) {
+  const hash = configSchema ? "memory-search-e2e" : "memory-defaults-e2e";
+  return installMockGateway(page, {
+    methodResponses: {
+      "config.get": {
+        config,
+        hash,
+        ...(configSchema ? {} : { appliedConfigHash: hash }),
+        raw: JSON.stringify(config),
+        valid: true,
+        issues: [],
+      },
+      ...(configSchema ? { "config.schema": configSchema } : {}),
+      "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
+    },
+  });
+}
+
+function withMemoryPage(run: (page: Page) => Promise<void>) {
+  return suite.withPage(
+    {
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    },
+    ({ page }) => run(page),
+  );
+}
+
+async function expectQuery(advanced: Locator, section: Locator) {
+  await expect
+    .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
+    .toBe(true);
+  await section.locator("summary").filter({ hasText: "Query" }).click();
+  expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
+}
+
+async function expectCollapsed(advanced: Locator) {
+  await advanced.waitFor();
+  expect(await advanced.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+}
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
@@ -54,107 +80,96 @@ function settingsRow(page: Page, title: string): Locator {
   });
 }
 
-function scheduleSection(page: Page): Locator {
-  return page.locator(".settings-section").filter({
-    has: page.locator(".settings-section__heading").getByText("Schedule", { exact: true }),
-  });
-}
-
-async function captureProof(page: Page, name: string, locator?: Locator) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await locator?.scrollIntoViewIfNeeded();
-  await page.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, name),
-  });
-}
-
 suite.define(() => {
-  it("persists a cleared dreaming frequency and preserves the explicit engine across reload", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1440 },
-      },
-      async ({ page }) => {
-        const config = {
-          agents: { defaults: { userTimezone: "Asia/Singapore" } },
-          plugins: {
-            slots: { memory: "memory-core" },
-            entries: {
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    frequency: "0 6 * * *",
-                    verboseLogging: true,
-                  },
-                },
-              },
-            },
-          },
-        };
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config,
-              hash: "memory-defaults-e2e",
-              appliedConfigHash: "memory-defaults-e2e",
-              issues: [],
-              raw: JSON.stringify(config),
-              valid: true,
-            },
-            "plugins.list": {
-              plugins: memoryPlugins,
-              diagnostics: [],
-              mutationAllowed: true,
-            },
-          },
-        });
+  it("reveals advanced Memory search matches across navigation, reload, and legacy links", () =>
+    withMemoryPage(async (page) => {
+      const config = { memory: { search: { enabled: true, query: { maxResults: 6 } } } };
+      await installMemoryGateway(page, config, {
+        schema: objectSchema({
+          memory: objectSchema({
+            search: objectSchema({
+              enabled: { type: "boolean", title: "Enable Memory Search" },
+              query: objectSchema({
+                maxResults: { type: "integer", title: "Memory Search Max Results" },
+              }),
+            }),
+          }),
+        }),
+        uiHints: {
+          "memory.search.enabled": { advanced: false },
+          "memory.search.query.maxResults": { advanced: true },
+        },
+        version: "memory-search-e2e",
+      });
+      await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      const section = page.locator("#config-section-memory");
+      const advanced = section.locator("details.config-advanced-disclosure");
+      await expectCollapsed(advanced);
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        expect(response?.status()).toBe(200);
+      await page
+        .getByRole("searchbox", { name: "Search settings", exact: true })
+        .fill("max results");
+      await page.locator(".settings-sidebar__subitem").filter({ hasText: "Memory" }).click();
+      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-memory");
+      await section.waitFor();
+      await expectQuery(advanced, section);
+      expect(new URL(page.url()).pathname).toBe("/settings/memory/settings");
 
-        const engineRow = settingsRow(page, "Memory engine");
-        const frequencyRow = settingsRow(page, "Dreaming frequency");
-        await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
-        await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
-        await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
+      await page.reload();
+      await expectQuery(advanced, section);
 
-        await captureProof(page, "01-explicit-engine.png");
-        await captureProof(page, "02-explicit-dreaming.png", scheduleSection(page));
+      await page.goto(
+        `${suite.server.baseUrl}settings/memory?section=memory&advanced=1#config-section-memory`,
+      );
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/memory/settings");
+      await expectQuery(advanced, section);
 
-        await frequencyRow.getByRole("textbox").fill("");
-        await frequencyRow.getByRole("textbox").blur();
+      await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      await expectCollapsed(advanced);
+    }));
 
-        const saved = requestRaw(await gateway.waitForRequest("config.set"));
-        expect(saved).toHaveProperty("plugins.slots.memory", "memory-core");
-        expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
-        expect(saved).toHaveProperty(
-          "plugins.entries.memory-core.config.dreaming.verboseLogging",
-          true,
-        );
-        await expect
-          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+  it("persists a cleared dreaming frequency and preserves the explicit engine across reload", () =>
+    withMemoryPage(async (page) => {
+      const dreaming = { frequency: "0 6 * * *", verboseLogging: true };
+      const config = {
+        agents: { defaults: { userTimezone: "Asia/Singapore" } },
+        plugins: {
+          slots: { memory: "memory-core" },
+          entries: { "memory-core": { config: { dreaming } } },
+        },
+      };
+      const gateway = await installMemoryGateway(page, config);
 
-        await page.reload();
-        const reloadedEngineRow = settingsRow(page, "Memory engine");
-        const reloadedFrequencyRow = settingsRow(page, "Dreaming frequency");
-        await expect
-          .poll(() => reloadedEngineRow.textContent())
-          .toContain("Default: OpenClaw Memory");
-        await expect.poll(() => reloadedFrequencyRow.textContent()).not.toContain("Using default:");
-        await expect.poll(() => reloadedFrequencyRow.getByRole("textbox").inputValue()).toBe("");
-        await expect
-          .poll(() => reloadedFrequencyRow.getByRole("textbox").getAttribute("placeholder"))
-          .toBe("0 3 * * *");
-        await captureProof(page, "03-preserved-engine.png");
-        await captureProof(page, "04-inherited-dreaming.png", scheduleSection(page));
-      },
-    );
-  });
+      const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
+
+      const engineRow = settingsRow(page, "Memory engine");
+      const frequencyRow = settingsRow(page, "Dreaming frequency");
+      await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
+      await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
+      await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
+
+      await frequencyRow.getByRole("textbox").fill("");
+      await frequencyRow.getByRole("textbox").blur();
+
+      const saved = requestRaw(await gateway.waitForRequest("config.set"));
+      expect(saved).toMatchObject({
+        plugins: {
+          slots: { memory: "memory-core" },
+          entries: { "memory-core": { config: { dreaming: { verboseLogging: true } } } },
+        },
+      });
+      expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
+      await expect
+        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .toContain("Saved");
+
+      await page.reload();
+      await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
+      await expect.poll(() => frequencyRow.textContent()).not.toContain("Using default:");
+      await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("");
+      await expect
+        .poll(() => frequencyRow.getByRole("textbox").getAttribute("placeholder"))
+        .toBe("0 3 * * *");
+    }));
 });

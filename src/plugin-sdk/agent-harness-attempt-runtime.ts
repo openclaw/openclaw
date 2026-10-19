@@ -13,6 +13,11 @@ export {
   createAgentHarnessAttemptLifecycle,
 } from "../agents/harness/attempt-events.js";
 export { selectSupportedReasoningEffort } from "../agents/harness/reasoning-effort.js";
+export {
+  resolveAgentHarnessHistoryLimits,
+  resolveAgentWorkspaceMemoryRouting,
+  shouldIncludeAgentHarnessRuntimeContext,
+} from "../agents/harness/prompt-context.js";
 
 export {
   createAgentHarnessAssistantMessage,
@@ -31,4 +36,5 @@ export {
 } from "../agents/harness/projection-tool-output.js";
 export { AgentHarnessProjectionSettlement } from "../agents/harness/projection-settlement.js";
 export { makeZeroUsageSnapshot } from "../agents/usage.js";
+export { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
 export { racePromiseWithAbortSignal } from "../infra/abort-signal.js";

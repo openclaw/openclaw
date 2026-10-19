@@ -1,6 +1,4 @@
-// Shared CLI execution wrappers and inherited Commander option lookup.
 import type { Command } from "commander";
-import "../infra/errors.js";
 import { formatCliOperatorError, isExpectedCliError } from "./failure-output.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 export { formatErrorMessage } from "../infra/errors.js";
@@ -70,7 +68,7 @@ export function resolveOptionFromCommand<T>(
     if (opts[key] !== undefined) {
       return opts[key];
     }
-    current = current.parent ?? undefined;
+    current = current.parent;
   }
   return undefined;
 }

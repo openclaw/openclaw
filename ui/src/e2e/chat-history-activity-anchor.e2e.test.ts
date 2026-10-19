@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   captureUiProof,
   createChatFlowE2eSuite,
@@ -69,7 +70,7 @@ suite.define(() => {
         let thread = pane.locator(".chat-thread");
         await thread.getByText(/^Retained message 51\./).waitFor();
         if (split) {
-          await pane.getByRole("button", { name: "Open split view", exact: true }).click();
+          await selectChatLayoutAction(pane, "Open split view");
           const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
           await expect.poll(() => panes.count()).toBe(2);
           pane = panes.nth(1);

@@ -1,46 +1,18 @@
 // Pure plugin config cleanup shared by doctor repair and full uninstall flows.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  isUninstallPathInsideOrEqualInternal,
+  mergePluginConfigUninstallActions,
   removePluginInstallOwnerFromConfig,
   removePluginRuntimePolicyFromConfig,
-  resolveComparableUninstallPathInternal,
-  resolveUninstallChannelConfigKeysInternal,
 } from "./uninstall-package-config.js";
 import type { PluginConfigUninstallActions } from "./uninstall-package-config.js";
 
-export type { PluginConfigUninstallActions } from "./uninstall-package-config.js";
-
-/** Resolve canonically when present, otherwise preserve an absolute lexical path. */
-export function resolveComparableUninstallPath(value: string): string {
-  return resolveComparableUninstallPathInternal(value);
-}
-
-/** Check whether a managed uninstall target stays inside its owning root. */
-export function isUninstallPathInsideOrEqual(parent: string, child: string): boolean {
-  return isUninstallPathInsideOrEqualInternal(parent, child);
-}
-
-/** Resolve channel config keys owned by a plugin during uninstall. */
-export function resolveUninstallChannelConfigKeys(
-  pluginId: string,
-  opts?: { channelIds?: string[] },
-): string[] {
-  return resolveUninstallChannelConfigKeysInternal(pluginId, opts);
-}
-
-function mergeUninstallActions(
-  left: PluginConfigUninstallActions,
-  right: PluginConfigUninstallActions,
-): PluginConfigUninstallActions {
-  return Object.fromEntries(
-    Object.keys(left).map((key) => [
-      key,
-      left[key as keyof PluginConfigUninstallActions] ||
-        right[key as keyof PluginConfigUninstallActions],
-    ]),
-  ) as PluginConfigUninstallActions;
-}
+export {
+  isUninstallPathInsideOrEqual,
+  resolveComparableUninstallPath,
+  resolveUninstallChannelConfigKeys,
+  type PluginConfigUninstallActions,
+} from "./uninstall-package-config.js";
 
 /** Remove plugin references from config without loading uninstall process/runtime dependencies. */
 export function removePluginFromConfig(
@@ -53,5 +25,8 @@ export function removePluginFromConfig(
     ...(hasInstallRecord ? opts : { channelIds: [] }),
   });
   const owner = removePluginInstallOwnerFromConfig(policy.config, pluginId);
-  return { config: owner.config, actions: mergeUninstallActions(policy.actions, owner.actions) };
+  return {
+    config: owner.config,
+    actions: mergePluginConfigUninstallActions(policy.actions, owner.actions),
+  };
 }

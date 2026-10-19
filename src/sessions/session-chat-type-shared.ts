@@ -1,4 +1,3 @@
-// Shared session chat type helpers expose cross-module chat type classification.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
@@ -71,10 +70,6 @@ export function parseCanonicalSessionPeerShape(
   return { ...(channel ? { channel } : {}), chatType };
 }
 
-function deriveCanonicalSessionChatType(scopedSessionKey: string): SessionKeyChatType | undefined {
-  return parseCanonicalSessionPeerShape(scopedSessionKey)?.chatType;
-}
-
 function deriveBuiltInLegacySessionChatType(
   scopedSessionKey: string,
 ): SessionKeyChatType | undefined {
@@ -93,13 +88,19 @@ function deriveBuiltInLegacySessionChatType(
   return undefined;
 }
 
-function deriveSessionChatTypeFromScopedKey(
-  scopedSessionKey: string,
+/** Best-effort classification across canonical and legacy session-key formats. */
+export function deriveSessionChatTypeFromKey(
+  sessionKey: string | undefined | null,
   deriveLegacySessionChatTypes: Array<
     (scopedSessionKey: string) => SessionKeyChatType | undefined
   > = [],
 ): SessionKeyChatType {
-  const canonical = deriveCanonicalSessionChatType(scopedSessionKey);
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!raw) {
+    return "unknown";
+  }
+  const scopedSessionKey = parseAgentSessionKey(raw)?.rest ?? raw;
+  const canonical = parseCanonicalSessionPeerShape(scopedSessionKey)?.chatType;
   if (canonical) {
     return canonical;
   }
@@ -114,21 +115,4 @@ function deriveSessionChatTypeFromScopedKey(
     }
   }
   return "unknown";
-}
-
-/**
- * Best-effort chat-type extraction from session keys across canonical and legacy formats.
- */
-export function deriveSessionChatTypeFromKey(
-  sessionKey: string | undefined | null,
-  deriveLegacySessionChatTypes: Array<
-    (scopedSessionKey: string) => SessionKeyChatType | undefined
-  > = [],
-): SessionKeyChatType {
-  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
-    return "unknown";
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  return deriveSessionChatTypeFromScopedKey(scoped, deriveLegacySessionChatTypes);
 }

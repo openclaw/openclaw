@@ -1,14 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
+import type { QaTestFileScenario } from "./scenario-catalog.js";
 import { readJsonFileIfExists } from "./test-file-scenario-script-evidence.js";
 
-type NativeTestFileScenario = Pick<QaSeedScenarioWithSource, "id"> & {
-  execution: Extract<
-    QaSeedScenarioWithSource["execution"],
-    { kind: "script" | "vitest" | "playwright" }
-  >;
-};
+type NativeTestFileScenario = Pick<QaTestFileScenario, "id" | "execution">;
 
 export function resolveNativeVitestReportPath(
   scenario: Pick<NativeTestFileScenario, "id">,
@@ -112,8 +108,7 @@ export async function readNativeVitestExecutionFailure(params: {
         // Native JSON fullName uses spaces; v5 selection joins the title chain with >.
         return (
           typeof assertion.title === "string" &&
-          Array.isArray(assertion.ancestorTitles) &&
-          assertion.ancestorTitles.every((title) => typeof title === "string") &&
+          isStringArray(assertion.ancestorTitles) &&
           requestedTestName.test([...assertion.ancestorTitles, assertion.title].join(" > "))
         );
       })

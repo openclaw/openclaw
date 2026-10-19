@@ -13,6 +13,21 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
+const models = [
+  {
+    id: "gpt-5.5",
+    name: "gpt-5.5",
+    provider: "openai",
+    reasoning: true,
+    thinkingLevels: [
+      { id: "low", label: "Low" },
+      { id: "high", label: "High" },
+    ],
+    supportsFastMode: true,
+    serviceTiers: ["priority"],
+  },
+];
+
 function configResponse(
   thinkingDefault: "low" | "high",
   hash: string,
@@ -64,6 +79,7 @@ suite.define(() => {
       const initialConfig = configResponse("low", "hash-1");
       const savedConfig = configResponse("high", "hash-2");
       const gateway = await installMockGateway(page, {
+        models,
         methodResponses: {
           "config.get": { sequence: [initialConfig, savedConfig] },
           "config.patch": savedConfig,
@@ -76,7 +92,7 @@ suite.define(() => {
       const modelCard = page.locator("#settings-model-behavior");
       const lowButton = modelCard.getByRole("radio", { name: "Low", exact: true });
       await lowButton.waitFor();
-      expect(await lowButton.getAttribute("aria-checked")).toBe("true");
+      expect(await lowButton.isChecked()).toBe(true);
 
       await modelCard.getByRole("radio", { name: "High", exact: true }).click();
 
@@ -96,6 +112,7 @@ suite.define(() => {
 
       const freshPage = await context.newPage();
       await installMockGateway(freshPage, {
+        models,
         methodResponses: { "config.get": savedConfig },
       });
       await freshPage.goto(`${suite.server.baseUrl}settings/model-providers`);
@@ -103,7 +120,7 @@ suite.define(() => {
         .locator("#settings-model-behavior")
         .getByRole("radio", { name: "High", exact: true });
       await highButton.waitFor();
-      expect(await highButton.getAttribute("aria-checked")).toBe("true");
+      expect(await highButton.isChecked()).toBe(true);
     });
   });
 
@@ -118,6 +135,7 @@ suite.define(() => {
         const initialConfig = configResponse("low", "hash-1", initial);
         const savedConfig = configResponse("low", "hash-2", next);
         const gateway = await installMockGateway(page, {
+          models,
           methodResponses: {
             "config.get": { sequence: [initialConfig, savedConfig] },
             "config.patch": savedConfig,
@@ -128,13 +146,13 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
 
         const modelCard = page.locator("#settings-model-behavior");
-        const fastModeGroup = modelCard.locator("wa-radio-group").nth(1);
+        const fastModeGroup = modelCard.getByRole("radiogroup").nth(1);
         const initialButton = fastModeGroup.getByRole("radio", {
           name: initialLabel,
           exact: true,
         });
         await initialButton.waitFor();
-        expect(await initialButton.getAttribute("aria-checked")).toBe("true");
+        expect(await initialButton.isChecked()).toBe(true);
 
         await fastModeGroup.getByRole("radio", { name: nextLabel, exact: true }).click();
 
@@ -153,6 +171,7 @@ suite.define(() => {
 
         const freshPage = await context.newPage();
         await installMockGateway(freshPage, {
+          models,
           methodResponses: { "config.get": savedConfig },
         });
         const reloadResponse = await freshPage.goto(
@@ -160,14 +179,14 @@ suite.define(() => {
         );
         expect(reloadResponse?.status()).toBe(200);
         const persistedButton = freshPage
-          .locator("#settings-model-behavior wa-radio-group")
+          .locator('#settings-model-behavior [role="radiogroup"]')
           .nth(1)
           .getByRole("radio", {
             name: nextLabel,
             exact: true,
           });
         await persistedButton.waitFor();
-        expect(await persistedButton.getAttribute("aria-checked")).toBe("true");
+        expect(await persistedButton.isChecked()).toBe(true);
       });
     },
   );

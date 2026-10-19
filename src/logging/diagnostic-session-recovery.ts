@@ -1,11 +1,12 @@
-// Diagnostic session recovery types describe session recovery diagnostic payloads.
 import type {
   DiagnosticSessionActiveWorkKind,
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
+  | "model_attempt_recovery"
   | "active_reply_work"
   | "human_input_wait"
   | "runtime_owned_wait"
@@ -18,12 +19,16 @@ type DiagnosticSessionRecoverySkipReason =
   | "stale_session_state";
 
 export type StuckSessionRecoveryRequest = {
+  /** Exact captured controller owner; diagnostic IDs and map absence grant no authority. */
+  operation?: ReplyOperation;
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
+  /** Revalidate semantic no-progress evidence after deferred recovery dispatch. */
+  repeatedRequestNoProgressAbortMs?: number;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**
@@ -38,14 +43,6 @@ export type StuckSessionRecoveryRequest = {
    */
   compactionSafetyTimeoutMs?: number;
 };
-
-export function resolveStuckSessionRecoveryRef(
-  params: Pick<StuckSessionRecoveryRequest, "sessionId" | "sessionKey">,
-): string | undefined {
-  // In-flight recovery gates must key by logical session only; generation is
-  // stale-state evidence, not concurrency identity.
-  return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
-}
 
 type DiagnosticSessionRecoveryBaseOutcome = {
   sessionId?: string;
@@ -91,15 +88,6 @@ export type StuckSessionRecoveryOutcome =
       reason: "terminal_worker";
       error: string;
     });
-
-export function recoveryOutcomeClearsQueuedSessionState(
-  outcome: StuckSessionRecoveryOutcome,
-): boolean {
-  return (
-    (outcome.status === "released" || (outcome.status === "aborted" && outcome.released > 0)) &&
-    (outcome.queuedCount ?? 0) === 0
-  );
-}
 
 export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): string {
   const fields = [

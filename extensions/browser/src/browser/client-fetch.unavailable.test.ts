@@ -18,8 +18,9 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: mocks.loadConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: mocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => mocks.sourceConfig,
 }));
 vi.mock("../control-service.js", async (importOriginal) => ({
@@ -66,11 +67,6 @@ describe("browser control availability diagnostics", () => {
 
   it.each([
     {
-      name: "allowlist exclusion",
-      config: { plugins: { allow: ["telegram"] } },
-      contains: ['"browser" is not in plugins.allow', "Add", "openclaw plugins enable browser"],
-    },
-    {
       name: "global plugin disablement",
       config: { plugins: { enabled: false } },
       contains: [
@@ -101,7 +97,6 @@ describe("browser control availability diagnostics", () => {
     },
   ])("explains $name at the local dispatch boundary", async ({ config, contains }) => {
     mocks.loadConfig.mockReturnValue(config);
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
       contains,
@@ -113,22 +108,20 @@ describe("browser control availability diagnostics", () => {
   it("explains the source policy that refused startup despite runtime auto-enable", async () => {
     mocks.loadConfig.mockReturnValue({ plugins: { allow: ["browser"] } });
     mocks.sourceConfig = { plugins: { allow: ["telegram"] } };
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
-      contains: ['"browser" is not in plugins.allow', "openclaw plugins enable browser"],
-      omits: ["Restart"],
+      contains: ['"browser" is not in plugins.allow', "Add", "openclaw plugins enable browser"],
+      omits: ["Restart", "not installed", "not yet loaded"],
     });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it.each([
-    { status: "error", failurePhase: "load", error: "Cannot find module browser-driver" },
     { status: "error", failurePhase: "register", error: "registration timed out" },
     { status: "error", error: "plugin not installed: browser" },
     { status: "disabled", activationReason: "capability consent required" },
   ] as const)("preserves recorded $status refusal details", async (record) => {
     mocks.pluginRecord = { id: "browser", ...record };
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
       contains: [

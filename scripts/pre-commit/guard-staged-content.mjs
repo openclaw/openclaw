@@ -98,7 +98,7 @@ function scan() {
     const batch = [];
     let bytes = 0;
     // Bound both argv count and bytes, leaving room for Git flags and the environment.
-    while (offset < paths.length && batch.length < 64) {
+    while (offset < paths.length && batch.length < 256) {
       const size = Buffer.byteLength(paths[offset]) + 1;
       if (batch.length && bytes + size > 16 * 1024) {
         break;
@@ -187,6 +187,21 @@ try {
   }
   // Formatting may change bytes or stage entirely new paths; enumerate the index again.
   scan();
+  // Freshness diagnostics can quote working-tree bytes; they share this redaction.
+  const freshness = spawnSync(process.execPath, ["scripts/pre-commit/check-staged-freshness.mts"], {
+    maxBuffer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (freshness.error || freshness.signal || freshness.status === null) {
+    fail("Freshness checks could not complete. Check the reported helper and retry.");
+  }
+  await promisify(process.stdout.write.bind(process.stdout))(
+    redact(freshness.stdout.toString("utf8")),
+  );
+  process.stderr.write(redact(freshness.stderr.toString("utf8")));
+  if (freshness.status !== 0) {
+    fail("Freshness checks failed. Apply the reported fix, restage and retry.", freshness.status);
+  }
 } catch (error) {
   const failure =
     error instanceof GuardFailure

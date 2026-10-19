@@ -1,6 +1,10 @@
 import { findAssistantTranscriptRoleHeaderSpans } from "../../../packages/markdown-core/src/assistant-transcript-headers.js";
 import { applyConstructFallbacks } from "../../../packages/markdown-core/src/construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "../../../packages/markdown-core/src/format-capabilities.js";
+import {
+  applyMarkdownTextEdits,
+  type MarkdownTextEdit,
+} from "../../../packages/markdown-core/src/ir-spans.js";
 import { markdownToIR, type MarkdownIR } from "../../../packages/markdown-core/src/ir.js";
 import { stripHtmlFromMarkdown } from "../../../packages/markdown-core/src/strip-html.js";
 
@@ -17,23 +21,15 @@ type StripMarkdownOptions = {
   stripHtml?: boolean;
 };
 
-type PlainTextInsertion = {
-  position: number;
-  text: string;
-};
-
-function collectLinkInsertions(
-  ir: MarkdownIR,
-  options: StripMarkdownOptions,
-): PlainTextInsertion[] {
-  const insertions: PlainTextInsertion[] = [];
+function collectLinkInsertions(ir: MarkdownIR, options: StripMarkdownOptions): MarkdownTextEdit[] {
+  const insertions: MarkdownTextEdit[] = [];
   if ((options.linkStyle ?? "label-and-url") === "label-and-url") {
     for (const link of ir.links) {
       const href = link.href.trim();
       const label = ir.text.slice(link.start, link.end).trim();
       const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
       if (href && label && label !== href && label !== comparableHref) {
-        insertions.push({ position: link.end, text: ` (${href})` });
+        insertions.push({ start: link.end, end: link.end, text: ` (${href})` });
       }
     }
   }
@@ -41,9 +37,9 @@ function collectLinkInsertions(
 }
 
 function collectAssistantTranscriptRoleInsertions(
-  text: string,
+  source: string | MarkdownIR,
   options: StripMarkdownOptions,
-): PlainTextInsertion[] {
+): MarkdownTextEdit[] {
   if (options.assistantTranscriptRoleHeaders !== true) {
     return [];
   }
@@ -51,42 +47,13 @@ function collectAssistantTranscriptRoleInsertions(
   if (!prefix) {
     return [];
   }
-  return findAssistantTranscriptRoleHeaderSpans(text).map((span) => ({
-    position: span.start,
-    text: prefix,
-  }));
-}
-
-function collectParsedAssistantTranscriptRoleInsertions(
-  ir: MarkdownIR,
-  options: StripMarkdownOptions,
-): PlainTextInsertion[] {
-  if (options.assistantTranscriptRoleHeaders !== true) {
-    return [];
-  }
-  const prefix = options.assistantTranscriptRolePrefix ?? "[assistant-authored transcript] ";
-  if (!prefix) {
-    return [];
-  }
-  return (ir.annotations ?? [])
-    .filter((annotation) => annotation.type === "assistant_transcript_role")
-    .map((annotation) => ({ position: annotation.start, text: prefix }));
-}
-
-function applyPlainTextInsertions(text: string, insertions: PlainTextInsertion[]): string {
-  if (insertions.length === 0) {
-    return text;
-  }
-  const sorted = insertions.toSorted((a, b) => a.position - b.position);
-  let output = "";
-  let cursor = 0;
-  for (const insertion of sorted) {
-    const position = Math.max(cursor, Math.min(insertion.position, text.length));
-    output += text.slice(cursor, position);
-    output += insertion.text;
-    cursor = position;
-  }
-  return output + text.slice(cursor);
+  const spans =
+    typeof source === "string"
+      ? findAssistantTranscriptRoleHeaderSpans(source)
+      : (source.annotations ?? []).filter(
+          (annotation) => annotation.type === "assistant_transcript_role",
+        );
+  return spans.map((span) => ({ start: span.start, end: span.start, text: prefix }));
 }
 
 function cleanSpeechText(text: string): string {
@@ -138,13 +105,13 @@ export function stripMarkdown(
       ? { ...profile, constructs: { ...profile.constructs, linkLabel: "strip" as const } }
       : profile;
   const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
-  const plainText = applyPlainTextInsertions(projectedIr.text, [
+  const plainText = applyMarkdownTextEdits(projectedIr.text, [
     ...collectLinkInsertions(projectedIr, options),
-    ...collectParsedAssistantTranscriptRoleInsertions(projectedIr, options),
-  ]).trim();
-  const projected = applyPlainTextInsertions(
+    ...collectAssistantTranscriptRoleInsertions(projectedIr, options),
+  ]).text.trim();
+  const projected = applyMarkdownTextEdits(
     plainText,
     collectAssistantTranscriptRoleInsertions(plainText, options),
-  ).trim();
+  ).text.trim();
   return options.mode === "speech" ? cleanSpeechText(projected) : projected;
 }

@@ -23,9 +23,8 @@ permissions: {}
 
 jobs:
   label:
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+      ${{ (
         github.event_name == 'pull_request_target' &&
         (
           github.event.action != 'edited' ||
@@ -45,7 +44,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -56,7 +55,7 @@ jobs:
           permission-members: read
           permission-metadata: read
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -527,7 +526,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -537,7 +536,7 @@ jobs:
           permission-members: read
           permission-metadata: read
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -846,9 +845,8 @@ jobs:
             core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name == 'issues' &&
+      ${{ (github.event_name == 'issues' &&
         (github.event.action != 'edited' || !github.event.changes || github.event.changes.title)) }}
     concurrency:
       group: ${{ github.workflow }}-issue-${{ github.event.issue.number }}
@@ -862,7 +860,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -870,7 +868,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           permission-issues: write
           permission-members: read
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:

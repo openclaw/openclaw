@@ -1,20 +1,10 @@
 import fs from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import {
-  getConfigOverrides,
-  resetConfigOverrides,
-  setConfigOverride,
-} from "../config/runtime-overrides.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-} from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
+import * as deviceIdentity from "../infra/device-identity-async.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -22,6 +12,7 @@ import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -37,6 +28,9 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
 import { createMaintenanceHandles } from "./server-runtime-services.test-harness.js";
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
+import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 describe("createGatewayKernel", () => {
   it.each([false, true])(
@@ -45,18 +39,10 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: "gateway-kernel-breaker-recovery-close",
-        layout: "home",
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          ...KERNEL_TEST_ENV,
           OPENCLAW_SKIP_CHANNELS: undefined,
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
           OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
         },
       });
       const originalPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -124,14 +110,14 @@ describe("createGatewayKernel", () => {
           },
           controlUiEnabled: false,
           sidecarStartup: "defer",
-          tryRecoverChannelAutostartSuppression: () => true,
+          tryRecoverChannelAutostartSuppression: async () => undefined,
         });
 
-        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
+        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(startAccount).not.toHaveBeenCalled();
 
         if (closing) {
-          await kernel.beginClosePrelude();
+          await kernel.prepareClose();
         }
         kernel.releaseStartupAccountStarts();
         await (closing ? nextTurn() : started.promise);
@@ -155,19 +141,7 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: `gateway-kernel-${entry}-close-readiness`,
-        layout: "home",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+        env: { ...KERNEL_TEST_ENV },
       });
       const token = "gateway-kernel-close-readiness-token";
       const bootId = `gateway-kernel-${entry}-close`;
@@ -177,6 +151,9 @@ describe("createGatewayKernel", () => {
       const periodicStopped = createDeferred();
       const nativePreparation = createDeferred();
       const preparationStarted = createDeferred();
+      const publicationPreparation = createDeferred();
+      const publicationStarted = createDeferred();
+      const publicationDrainEntered = createDeferred();
       const acceptRequest = vi.fn();
       const hostLifecycle: GatewayHostLifecycle = {
         externalRestart: { isCurrent: () => true },
@@ -201,13 +178,14 @@ describe("createGatewayKernel", () => {
         updateCheckStopped.resolve();
         periodicStopped.resolve();
         nativePreparation.resolve();
+        publicationPreparation.resolve();
       };
       signal.addEventListener("abort", release, { once: true });
       let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
       let server: GatewayServer | undefined;
       let closing: Promise<void> | undefined;
       let pendingStop: Promise<void> | undefined;
-      let maintenanceTimer: ReturnType<typeof setTimeout> | undefined;
+      let pendingPublication: Promise<void> | undefined;
       try {
         await state.writeConfig({
           gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
@@ -246,6 +224,35 @@ describe("createGatewayKernel", () => {
         if (!kernel) {
           throw new Error("Expected the real Gateway kernel to be captured");
         }
+        const projection = getSessionRowProjection(kernel.gatewayRequestContext);
+        if (!projection) {
+          throw new Error("Expected the real session row projection");
+        }
+        const projectionDispose = vi.spyOn(projection, "dispose");
+        const prepareRows = projection.withPreparedExactRows.bind(projection);
+        vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+          async (queries, consume, prepareOptions) => {
+            publicationStarted.resolve();
+            await publicationPreparation.promise;
+            return prepareRows(queries, consume, prepareOptions);
+          },
+        );
+        const publish = vi.fn();
+        pendingPublication = withPreparedSessionEventRow(
+          projection,
+          "agent:main:shutdown-publication",
+          "main",
+          publish,
+        );
+        await publicationStarted.promise;
+        const drainPublications = kernel.shutdownRuntime.drainSessionEventPublications;
+        vi.spyOn(kernel.shutdownRuntime, "drainSessionEventPublications").mockImplementation(
+          async (owner) => {
+            const draining = drainPublications(owner);
+            publicationDrainEntered.resolve();
+            await draining;
+          },
+        );
         const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
         expect(getStartup()).toMatchObject({ ok: true, status: "started" });
         expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
@@ -269,9 +276,11 @@ describe("createGatewayKernel", () => {
             updatedAt: 1,
           },
         } satisfies GatewayClient;
-        expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
-          ok: true,
-          value: { gatewayInstanceId: bootId, items: [] },
+        await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
+          expect(result).toMatchObject({
+            ok: true,
+            value: { gatewayInstanceId: bootId, items: [] },
+          });
         });
         const boundHost = kernel.gatewayRequestContext.hostLifecycle!;
         // Handoff consumption compares the private owner, not a copied predicate.
@@ -296,31 +305,30 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(updateWork);
         const terminalDispose = vi.spyOn(kernel.terminalSessions, "disposeAll");
         const gatewayStop = vi.spyOn(kernel.shutdownRuntime, "runGlobalGatewayStopSafely");
-        const prepareShutdown = vi.spyOn(kernel.shutdownRuntime, "prepareGatewayClose");
         const maintenance = createMaintenanceHandles();
         maintenance.stopPeriodicTasks.mockReturnValue(periodicStopped.promise);
         kernel.kernel.setMaintenanceHandles(maintenance);
         const invalidateCron = vi.spyOn(kernel.cronReconciliation, "invalidate");
         const startMaintenance = vi.fn(() => {});
-        maintenanceTimer = setTimeout(startMaintenance, 0);
-        kernel.postReadyState.maintenanceTimer = maintenanceTimer;
+        kernel.scheduler.schedule({
+          id: "test:post-ready-maintenance",
+          delayMs: 0,
+          run: startMaintenance,
+        });
         closing = server
           ? server.close({ reason: "close ordering test" })
-          : kernel.prepareClose({ reason: "close ordering test" }).then((close) => close());
+          : kernel.closeOnStartupFailure();
 
         expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
         expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
-        expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE" },
+        await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
+          expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
         });
         nativePreparation.resolve();
         await pendingStop;
         await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
         expect(acceptRequest).not.toHaveBeenCalled();
-        expect(kernel.postReadyState.maintenanceTimer).toBeNull();
         expect(invalidateCron).toHaveBeenCalledOnce();
-        expect(stopRecovery).toHaveBeenCalledOnce();
         await nextTurn();
         expect(startMaintenance).not.toHaveBeenCalled();
         expect(reloadStop).toHaveBeenCalledOnce();
@@ -340,9 +348,16 @@ describe("createGatewayKernel", () => {
         expect(closeFirstStop).not.toHaveBeenCalled();
         updateCheckStopped.resolve();
         await nextTurn();
-        expect(prepareShutdown).not.toHaveBeenCalled();
         periodicStopped.resolve();
+        await Promise.race([publicationDrainEntered.promise, closing]);
+        expect(projectionDispose).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+        publicationPreparation.resolve();
+        await pendingPublication;
         await closing;
+        expect(publish).toHaveBeenCalledOnce();
+        expect(publish).toHaveBeenCalledBefore(projectionDispose);
+        expect(projectionDispose).toHaveBeenCalledOnce();
         expect(closeFirstStop).toHaveBeenCalledOnce();
         expect(kernel.runtimeState.discovery).toBeNull();
         if (server) {
@@ -355,9 +370,8 @@ describe("createGatewayKernel", () => {
         }
       } finally {
         release();
-        clearTimeout(maintenanceTimer);
         try {
-          await Promise.all([closing, reloadWork, recoveryWork, updateWork]);
+          await Promise.all([closing, pendingPublication, reloadWork, recoveryWork, updateWork]);
         } finally {
           try {
             await (server?.close() ?? kernel?.closeOnStartupFailure());
@@ -372,188 +386,13 @@ describe("createGatewayKernel", () => {
     },
   );
 
-  it.each(["explicit token", "auth none", "generated token", "tailscale only"] as const)(
-    "prepares source activation with captured runtime and %s startup overrides",
-    async (mode) => {
-      const port = await getFreePort();
-      const state = await createOpenClawTestState({
-        label: "gateway-kernel-reload-candidate",
-        layout: "home",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          VITEST: "1",
-        },
-      });
-      const previousOverrides = getConfigOverrides();
-      const sourceToken = "gateway-reload-source-token";
-      const startupToken = "gateway-reload-startup-token";
-      const sourceAuth =
-        mode === "explicit token"
-          ? { mode: "token" as const, token: sourceToken, rateLimit: { maxAttempts: 3 } }
-          : mode === "generated token"
-            ? undefined
-            : { mode: "none" as const };
-      const startupAuth =
-        mode === "explicit token"
-          ? { mode: "token" as const, token: startupToken, rateLimit: { maxAttempts: 7 } }
-          : mode === "auth none"
-            ? { mode: "none" as const }
-            : undefined;
-      let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-      try {
-        resetConfigOverrides();
-        await state.writeConfig({
-          agents: { defaults: { workspace: state.workspaceDir } },
-          gateway: { auth: sourceAuth, controlUi: { enabled: false }, port },
-          logging: { level: "silent", consoleLevel: "silent" },
-          messages: { visibleReplies: "automatic" },
-          plugins: { allow: [] },
-        });
-        state.applyEnv();
-        kernel = await createGatewayKernel(port, {
-          auth: startupAuth,
-          ...(mode === "tailscale only" ? { tailscale: { mode: "off" } } : {}),
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
-        expect(kernel.minimalTestGateway).toBe(false);
-        expect(kernel.generatedStartupAuthToken).toBe(mode === "generated token");
-        expect(kernel.gatewayPluginConfigAtStart).not.toBe(kernel.cfgAtStart);
-        expect(getRuntimeConfigSnapshot()).toBe(kernel.gatewayPluginConfigAtStart);
-        expect(getRuntimeConfigSourceSnapshot()).toBe(kernel.configSnapshot.sourceConfig);
-        if (startupAuth?.mode === "token") {
-          startupAuth.token = "mutated-caller-token";
-          startupAuth.rateLimit.maxAttempts = 99;
-        }
-        expect(setConfigOverride("messages.visibleReplies", "message_tool").ok).toBe(true);
-        expect(setConfigOverride("gateway.port", port).ok).toBe(true);
-        const previousSourceConfig = kernel.configSnapshot.sourceConfig;
-        const sourcePort = (port % 65_535) + 1;
-        const sourceConfig = {
-          ...previousSourceConfig,
-          gateway: { ...previousSourceConfig.gateway, port: sourcePort },
-          channels: {
-            ...previousSourceConfig.channels,
-            telegram: { botToken: "source-bot-token" },
-          },
-          logging: { ...previousSourceConfig.logging, level: "debug" },
-        } satisfies OpenClawConfig;
-        const originalSource = structuredClone(sourceConfig);
-        const runtimeConfig = {
-          ...sourceConfig,
-          channels: { ...sourceConfig.channels, telegram: { botToken: "materialized-bot-token" } },
-          logging: { ...sourceConfig.logging, consoleLevel: "error" },
-        } satisfies OpenClawConfig;
-        const persistedBefore = await fs.readFile(state.configPath, "utf8");
-        const candidate = await kernel.prepareReloadCandidate({
-          runtimeConfig,
-          sourceConfig,
-          previousSourceConfig,
-        });
-        expect(candidate.compareConfig.channels).toMatchObject({
-          telegram: { enabled: true, botToken: "source-bot-token" },
-        });
-        expect(isDeepStrictEqual(candidate.compareConfig.gateway?.auth, sourceAuth)).toBe(true);
-        expect(candidate.compareConfig.logging).toMatchObject({
-          level: "debug",
-          consoleLevel: "silent",
-        });
-        expect(candidate.compareConfig.messages).toMatchObject({ visibleReplies: "message_tool" });
-        expect(candidate.runtimeConfig.channels).toMatchObject({
-          telegram: { enabled: true, botToken: "materialized-bot-token" },
-        });
-        if (mode === "explicit token") {
-          expect(candidate.runtimeConfig.gateway?.auth?.token === startupToken).toBe(true);
-          expect(candidate.runtimeConfig.gateway?.auth?.rateLimit).toEqual({ maxAttempts: 7 });
-        }
-        expect(candidate.runtimeConfig.logging).toMatchObject({
-          level: "debug",
-          consoleLevel: "error",
-        });
-        expect(candidate.runtimeConfig.messages).toMatchObject({ visibleReplies: "message_tool" });
-        expect(candidate.compareConfig.gateway?.port).toBe(port);
-        expect(sourceConfig.gateway.port).toBe(sourcePort);
-        expect(Object.keys(candidate.runtimeConfig.gateway ?? {}).toSorted()).toEqual(
-          Object.keys(kernel.cfgAtStart.gateway ?? {}).toSorted(),
-        );
-        expect(Object.keys(candidate.runtimeConfig.gateway?.auth ?? {}).toSorted()).toEqual(
-          Object.keys(kernel.cfgAtStart.gateway?.auth ?? {}).toSorted(),
-        );
-        expect(isDeepStrictEqual(candidate.runtimeConfig.gateway, kernel.cfgAtStart.gateway)).toBe(
-          true,
-        );
-        expect(candidate.runtimeEnv.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-        expect(candidate.runtimeEnv.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
-        expect(setConfigOverride("messages.visibleReplies", "automatic").ok).toBe(true);
-        expect(
-          isDeepStrictEqual(
-            candidate.reapplyRuntimeOverlays(runtimeConfig),
-            candidate.runtimeConfig,
-          ),
-        ).toBe(true);
-        expect(
-          isDeepStrictEqual(
-            candidate.reapplyCompareOverlays(sourceConfig),
-            candidate.compareConfig,
-          ),
-        ).toBe(true);
-        expect(isDeepStrictEqual(sourceConfig, originalSource)).toBe(true);
-        expect((await fs.readFile(state.configPath, "utf8")) === persistedBefore).toBe(true);
-        if (mode === "generated token") {
-          const explicitSourceConfig = {
-            ...sourceConfig,
-            gateway: { ...sourceConfig.gateway, auth: { mode: "none" as const } },
-          };
-          const explicitCandidate = await kernel.prepareReloadCandidate({
-            runtimeConfig: explicitSourceConfig,
-            sourceConfig: explicitSourceConfig,
-            previousSourceConfig,
-          });
-          expect(explicitCandidate.runtimeConfig.gateway?.auth?.mode).toBe("none");
-          expect(
-            explicitCandidate.runtimeConfig.gateway?.auth?.token ===
-              kernel.cfgAtStart.gateway?.auth?.token,
-          ).toBe(true);
-        }
-      } finally {
-        try {
-          await kernel?.closeOnStartupFailure();
-        } finally {
-          resetConfigOverrides();
-          for (const [key, value] of Object.entries(previousOverrides)) {
-            setConfigOverride(key, value);
-          }
-          await state.cleanup();
-        }
-      }
-    },
-  );
-
   it("keeps startup readiness and sidecar shutdown at their lifecycle boundaries", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-deferred-readiness",
-      layout: "home",
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
       },
     });
     const token = "gateway-kernel-deferred-readiness-token";
@@ -572,7 +411,11 @@ describe("createGatewayKernel", () => {
           controlUi: { enabled: false },
           port,
         },
-        agents: { entries: { main: { default: true }, worker: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, worker: {} },
+        },
       });
       state.applyEnv();
       kernel = await openKernel();
@@ -610,6 +453,11 @@ describe("createGatewayKernel", () => {
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        failing: ["startup-sidecars"],
+      });
+      kernel.kernel.setDispatchReady(true);
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
@@ -773,24 +621,16 @@ describe("createGatewayKernel", () => {
     }
   });
 
-  it("dispatches health and an agent turn without creating a transport", async () => {
+  it("dispatches without a transport when optional chat identity bootstrap fails", async ({
+    signal,
+  }) => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-no-transport",
-      layout: "home",
       env: {
         OPENCLAW_DIAGNOSTICS: "1",
         OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
+        ...KERNEL_TEST_ENV,
       },
     });
     const originalPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -830,6 +670,9 @@ describe("createGatewayKernel", () => {
       | undefined;
     let prematureCleanupCalls: number | undefined;
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    const loadIdentity = vi
+      .spyOn(deviceIdentity, "loadOrCreateProcessDeviceIdentityAsync")
+      .mockRejectedValueOnce(new Error("synthetic identity read failure"));
     try {
       stageActivePluginRegistry(ambientRegistry, null, "default");
       capturedLoadedPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -852,6 +695,7 @@ describe("createGatewayKernel", () => {
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
+      expect(loadIdentity).toHaveBeenCalledOnce();
       expect(kernel.transportBridge.current()).toBeUndefined();
       await expect(kernel.transportBridge.ensureSandboxHostPort()).rejects.toThrow(
         "Gateway listener must start before the sandbox host",
@@ -888,11 +732,10 @@ describe("createGatewayKernel", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
       flushDiagnosticsTimeline();
-      const timeline = (await fs.readFile(timelinePath, "utf8"))
+      const measureNames = (await fs.readFile(timelinePath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const measureNames = timeline
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
         .filter((event) => event.type === "span.start" && event.phase === "startup")
         .map((event) => {
           const attributes = event.attributes as { traceName?: string } | undefined;
@@ -906,10 +749,10 @@ describe("createGatewayKernel", () => {
         "config.snapshot.read.includes",
         "config.snapshot.read.env",
         "config.snapshot.read.validate",
-        "plugins.metadata.scan",
-        "plugins.metadata.freeze",
         "config.snapshot.read.materialize",
         "config.snapshot.read.observe",
+        "plugins.metadata.scan",
+        "plugins.metadata.freeze",
         "state.ownership",
         "state.runtime-imports",
         "state.schema-preflight",
@@ -929,12 +772,14 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
-        "startup.maintenance",
+        "cron.store-path",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
         "host-desktop.runtime-import",
         "computer.runtime-import",
+        "device-identity",
+        "device-pairing",
         "runtime.config",
         "control-ui.root",
         "terminal.launch-import",
@@ -952,28 +797,36 @@ describe("createGatewayKernel", () => {
         "runtime.early",
         "runtime.early.discovery",
         "gateway.request-runtime",
+        "gateway.chat-metadata-lifecycle",
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "gateway.instance-runtime-import",
+        "gateway.owner-profile",
+        "sessions.materialize",
+        "gateway.lifetime-sidecars",
       ]);
     } finally {
+      loadIdentity.mockRestore();
       try {
         await kernel?.closeOnStartupFailure();
       } finally {
         try {
           flushDiagnosticsTimeline();
-          await state.cleanup();
-        } finally {
           if (capturedLoadedPluginRegistry) {
             restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
           }
           prematureCleanupCalls = capturedRegistryCleanup.mock.calls.length;
           restoreActivePluginRegistrySnapshot(originalPluginRegistry);
+          await waitForPluginRegistryRetirement(ambientRegistry);
+        } finally {
+          await state.cleanup();
         }
       }
     }
     expect(prematureCleanupCalls).toBe(0);
-    await vi.waitFor(() => expect(capturedRegistryCleanup).toHaveBeenCalledOnce());
+    await withinTest(waitForPluginRegistryRetirement(ambientRegistry), signal);
+    expect(capturedRegistryCleanup).toHaveBeenCalledOnce();
     expect(inspectAccount).not.toHaveBeenCalled();
   });
 
@@ -981,19 +834,7 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-tls-failure",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+      env: { ...KERNEL_TEST_ENV },
     });
     const token = "gateway-kernel-tls-failure-token";
     await state.writeConfig({

@@ -45,25 +45,38 @@ it("excludes only the root managed skill namespace in host and serialized invent
   expect(isDerivedWorkspacePath(".openclaw/sandbox-skills/skills/demo/SKILL.md", true)).toBe(true);
 });
 
-it("preserves runtime mounts when a project tries to replace their ancestor", async () => {
-  const root = tempDirs.make("managed-skill-replacement-");
-  await fs.mkdir(path.join(root, ".openclaw"));
-  const base = (await captureWorkspaceSnapshot({ root, baseCommit: null })).manifest;
-  await fs.mkdir(path.join(root, ".openclaw/sandbox-skills/skills"), { recursive: true });
-  const input = tempDirs.make("managed-skill-replacement-input-");
-  await fs.writeFile(path.join(input, ".openclaw"), "replacement");
-  const current = (await captureWorkspaceSnapshot({ root: input, baseCommit: null })).manifest;
-  const preflight = await preflightWorkspaceApplyImpl({ root, base, current });
-  expect(preflight.conflictPaths).toContain(".openclaw");
-  expect(preflight.applyPaths.has(".openclaw")).toBe(false);
-  const deletion = await preflightWorkspaceApplyImpl({
-    root,
-    base,
-    current: { version: 1, baseCommit: null, entries: [], directories: [] },
-  });
-  expect(deletion.conflictPaths).toEqual([]);
-  await prepareNonDirectoryTargets(root, current.entries);
-  expect((await fs.stat(path.join(root, ".openclaw/sandbox-skills/skills"))).isDirectory()).toBe(
-    true,
-  );
-});
+it.each(
+  [
+    { parent: ".openclaw", runtime: ".openclaw/sandbox-skills/skills" },
+    { parent: ".artifacts", runtime: ".artifacts/dist-artifacts.lock" },
+  ].flatMap(({ parent, runtime }) =>
+    [true, false].map((baseParent) => ({ parent, runtime, baseParent })),
+  ),
+)(
+  "preserves runtime ownership when a project replaces $parent (base parent: $baseParent)",
+  async ({ parent, runtime, baseParent }) => {
+    const root = tempDirs.make("managed-skill-replacement-");
+    if (baseParent) {
+      await fs.mkdir(path.join(root, parent));
+    }
+    const base = (await captureWorkspaceSnapshot({ root, baseCommit: null })).manifest;
+    await fs.mkdir(path.join(root, runtime), { recursive: true });
+    await fs.writeFile(path.join(root, runtime, "owner.json"), "runtime ownership");
+    const input = tempDirs.make("managed-skill-replacement-input-");
+    await fs.writeFile(path.join(input, parent), "replacement");
+    const current = (await captureWorkspaceSnapshot({ root: input, baseCommit: null })).manifest;
+    const preflight = await preflightWorkspaceApplyImpl({ root, base, current });
+    expect(preflight.conflictPaths).toContain(parent);
+    expect(preflight.applyPaths.has(parent)).toBe(false);
+    const deletion = await preflightWorkspaceApplyImpl({
+      root,
+      base,
+      current: { version: 1, baseCommit: null, entries: [], directories: [] },
+    });
+    expect(deletion.conflictPaths).toEqual([]);
+    await prepareNonDirectoryTargets(root, current.entries);
+    expect(await fs.readFile(path.join(root, runtime, "owner.json"), "utf8")).toBe(
+      "runtime ownership",
+    );
+  },
+);

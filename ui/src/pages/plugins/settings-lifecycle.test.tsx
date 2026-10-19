@@ -1,0 +1,209 @@
+/* @vitest-environment jsdom */
+
+import { flush } from "solid-js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
+import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
+
+beforeEach(() => i18n.setLocale("en"));
+afterEach(() => {
+  document.body.replaceChildren();
+});
+
+function mount(overrides: Partial<DetailProps>) {
+  const props: DetailProps = {
+    connected: true,
+    loading: false,
+    result: createResult(),
+    error: null,
+    busy: {},
+    messages: {},
+    iconUrls: {},
+    canMutate: true,
+    mutationBlockedReason: null,
+    configBusy: false,
+    configSchemaLoading: false,
+    configError: null,
+    canEditConfig: true,
+    configValue: {},
+    configHints: {},
+    configUnsupportedPaths: [],
+    pluginId: "workboard",
+    inspection: null,
+    inspectionError: null,
+    configSchema: null,
+    hostControlsSchema: null,
+    backHref: "/settings/plugins",
+    backLabel: "Plugins",
+    tab: "readme",
+    onBack: vi.fn(),
+    onRetryInspection: vi.fn(),
+    onTabChange: vi.fn(),
+    onIconError: vi.fn(),
+    onSetEnabled: vi.fn(),
+    onUninstall: vi.fn(),
+    onConfigPatch: vi.fn(),
+    onConfigRemove: vi.fn(),
+    onConfigReload: vi.fn(),
+    onConfigReadRetry: vi.fn(),
+    onConfigWriteRetry: vi.fn(),
+    onRefresh: vi.fn(),
+    ...overrides,
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  mountSolid(() => renderPluginSettingsDetail(props), { container });
+  flush();
+  return container;
+}
+
+async function selectSettingAction(row: Element, value: "ask" | "reset") {
+  // JSDOM has no layout; browser suites own menu scrolling and focus.
+  for (const item of row.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+    item.scrollIntoView = vi.fn();
+  }
+  const trigger = row.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  row.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`)!.click();
+  await Promise.resolve();
+  flush();
+}
+
+it("does not offer enablement or Settings for an uninstalled plugin", () => {
+  const container = mount({
+    result: createResult(createPlugin({ installed: false, state: "not-installed" })),
+  });
+  expect(container.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Settings"]')).toBeNull();
+});
+
+it("does not dispatch enablement when setup is missing", () => {
+  const onSetEnabled = vi.fn();
+  const container = mount({
+    result: createResult(createPlugin({ state: "needs-setup" })),
+    onSetEnabled,
+  });
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
+  expect(button).not.toBeNull();
+  expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
+  button.click();
+  expect(onSetEnabled).not.toHaveBeenCalled();
+});
+
+it("retains disconnected plugin details without dispatching enablement", () => {
+  const onSetEnabled = vi.fn();
+  const container = mount({ connected: false, canMutate: false, onSetEnabled });
+  expect(container.textContent).toContain("Agent work queue and session handoff.");
+  expect(container.querySelector("[inert]")).toBeNull();
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
+  expect(button).not.toBeNull();
+  expect(button.disabled).toBe(true);
+  button.click();
+  expect(onSetEnabled).not.toHaveBeenCalled();
+});
+
+it("gives host permissions the setting menu and preserves configured, inherited, and read-only values", async () => {
+  const onPatch = vi.fn();
+  const onRemove = vi.fn();
+  const onAsk = vi.fn();
+  const props: Partial<DetailProps> = {
+    tab: "configuration",
+    inspection: createInspectResult(),
+    configValue: { plugins: { entries: { workboard: { hooks: { timeoutMs: 5000 } } } } },
+    hostControlsSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        hooks: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            allowPromptInjection: { type: "boolean" },
+            allowConversationAccess: { type: "boolean" },
+            timeoutMs: { type: "integer", title: "Timeout", minimum: 1 },
+          },
+        },
+        llm: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            allowedModels: { type: "array", title: "Allowed models", items: { type: "string" } },
+          },
+        },
+      },
+    },
+    onConfigPatch: onPatch,
+    onConfigRemove: onRemove,
+    onAskSetting: onAsk,
+  };
+  const container = mount(props);
+  await Promise.resolve();
+  flush();
+  const row = container.querySelector('[data-setting="hooks.allowPromptInjection"]')!;
+  expect(row).not.toBeNull();
+  expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
+  expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
+  await selectSettingAction(row, "ask");
+  expect(onAsk).toHaveBeenCalledWith(
+    expect.objectContaining({
+      path: ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
+      value: true,
+      label: "Add context to prompts",
+    }),
+  );
+  row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+  expect(onPatch).toHaveBeenCalledWith(
+    ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
+    false,
+  );
+  await selectSettingAction(container.querySelector('[data-setting="hooks.timeoutMs"]')!, "reset");
+  expect(onRemove).toHaveBeenCalledWith(["plugins", "entries", "workboard", "hooks", "timeoutMs"]);
+  expect(
+    container.querySelector('[data-setting="llm.allowedModels"] .oc-menu-trigger'),
+  ).not.toBeNull();
+  expect(container.textContent).not.toContain("Declared capabilities");
+  expect(container.textContent).not.toContain("Your grants");
+  onPatch.mockClear();
+  const readOnly = mount({ ...props, canEditConfig: false });
+  await Promise.resolve();
+  flush();
+  const readOnlyInput = readOnly.querySelector<HTMLInputElement>(
+    '[data-setting="hooks.allowPromptInjection"] input',
+  )!;
+  expect(readOnlyInput.disabled).toBe(true);
+  readOnlyInput.click();
+  expect(onPatch).not.toHaveBeenCalled();
+});
+
+it("shows selected capabilities without a catalog", () => {
+  const inspection = createInspectResult();
+  inspection.declared = {
+    ...inspection.declared,
+    tools: ["speech_status"],
+    providers: ["local-model", "sibling-model"],
+    channels: ["local-channel", "sibling-channel"],
+    contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
+  };
+  inspection.overview = {
+    capabilities: {
+      providers: ["local-model"],
+      channels: ["local-channel"],
+      contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
+      ui: ["page"],
+    },
+  };
+  const container = mount({ inspection });
+  const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
+    (heading) => heading.textContent,
+  );
+  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(container.textContent).toContain("Text to speech");
+  expect(container.textContent).toContain("Pages");
+  expect(container.textContent).not.toContain("speechProviders:");
+  expect(container.textContent).not.toContain("sibling-");
+  expect(container.textContent).not.toContain("Video generation");
+});

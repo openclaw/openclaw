@@ -1,4 +1,5 @@
 /** Base Vitest mocks for Windows schtasks daemon tests. */
+import fs from "node:fs/promises";
 import { vi } from "vitest";
 import {
   gatewayServiceProbeHostsMock,
@@ -6,13 +7,42 @@ import {
   killProcessTreeMock,
   schtasksCalls,
   schtasksResponses,
+  schtasksRegistration,
 } from "./schtasks-fixtures.js";
 
-// Shared Windows schtasks mocks for daemon tests.
+// mock-isolation: Keep Task Scheduler subprocesses outside the native registration fixture.
 vi.mock("../schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);
+    const registration = schtasksRegistration.response;
+    if (argv[0] === "/Query" && argv.includes("/XML") && registration) {
+      return registration;
+    }
     const response = schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    if (registration && response.code === 0) {
+      if (argv[0] === "/Create") {
+        const xmlPath = argv[argv.indexOf("/XML") + 1];
+        if (!argv.includes("/XML") || !xmlPath) {
+          throw new Error("Scheduled Task fixture requires a registration XML path.");
+        }
+        const raw = await fs.readFile(xmlPath);
+        schtasksRegistration.response = {
+          ...response,
+          stdout: raw.subarray(2).toString("utf16le"),
+        };
+      } else if (argv[0] === "/Delete") {
+        schtasksRegistration.response = { code: 1, stdout: "", stderr: "Task not found" };
+      } else if (argv[0] === "/Change" && argv.includes("/DISABLE")) {
+        schtasksRegistration.response = {
+          ...registration,
+          stdout: registration.stdout.replace(
+            "<Enabled>true</Enabled>",
+            "<Enabled>false</Enabled>",
+          ),
+        };
+      }
+    }
+    schtasksRegistration.onCommand?.(argv, response);
     return argv[0] === "/Query" && argv.includes("/XML") && response.code === 0 && !response.stdout
       ? {
           ...response,

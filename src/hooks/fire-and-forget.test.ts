@@ -29,12 +29,16 @@ describe("fireAndForgetHook", () => {
   it("logs rejection errors as sanitized single-line messages", async () => {
     const logger = vi.fn();
     fireAndForgetHook(
-      Promise.reject(new Error("boom\nforged\tsecret sk-test1234567890")),
+      Promise.reject(
+        new Error(
+          "boom\0\u001f\nforged\tsecret sk-test1234567890\u007f\u2028\u2029tail\u0085\u009f",
+        ),
+      ),
       "hook failed",
       logger,
     );
     await Promise.resolve();
-    expect(logger).toHaveBeenCalledWith("hook failed: boom forged secret ***");
+    expect(logger).toHaveBeenCalledWith("hook failed: boom forged secret *** tail\u0085\u009f");
     const message = requireFirstLog(logger);
     expect(message).not.toContain("\n");
     expect(message).not.toContain("sk-test1234567890");

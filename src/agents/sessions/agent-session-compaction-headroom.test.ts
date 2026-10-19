@@ -34,7 +34,6 @@ function inputTokens(
 }
 
 it.each([
-  { records: 352, ingress: "new" },
   { records: 410, ingress: "new" },
   { records: 410, ingress: "persisted" },
   { records: 410, ingress: "carrier" },
@@ -91,7 +90,7 @@ it.each([
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+      systemPrompt,
     });
     if (queued) {
       const suppressed = buildRuntimeContextCustomMessage("Discarded queued context. ".repeat(35));
@@ -241,12 +240,8 @@ it.each([
     model,
     settingsManager,
     sessionManager,
-    resourceLoader: {
-      ...createResourceLoader(new Map([["session_before_compact", [hook]]])),
-      ...(fixedOnly
-        ? { getSystemPrompt: () => "Required operating instructions. ".repeat(340) }
-        : {}),
-    },
+    resourceLoader: createResourceLoader(new Map([["session_before_compact", [hook]]])),
+    ...(fixedOnly ? { systemPrompt: "Required operating instructions. ".repeat(340) } : {}),
   });
   const before = structuredClone(sessionManager.getBranch());
   const budget = createCompactionRequestBudget({

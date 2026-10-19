@@ -1,4 +1,3 @@
-// Anthropic-family cache wrapper preserves cache-control semantics in tool payloads.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,10 +7,6 @@ type AnthropicCacheRetentionFamily =
   | "anthropic-direct"
   | "anthropic-bedrock"
   | "custom-anthropic-api";
-
-export function isAnthropicModelRef(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith("anthropic/");
-}
 
 /** Matches Application Inference Profile ARNs across all AWS partitions with Bedrock. */
 const BEDROCK_APP_INFERENCE_PROFILE_ARN_RE = /^arn:aws(-cn|-us-gov)?:bedrock:/;
