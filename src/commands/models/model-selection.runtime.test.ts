@@ -30,19 +30,36 @@ describe("model command provider preparation", () => {
   let config: OpenClawConfig;
   let runtime: RuntimeEnv;
 
+  const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+  const defaults = () => readConfig().agents?.defaults;
+  const alias = (name: string, model: string) => modelsAliasesAddCommand(name, model, runtime);
+  const setModel = (model: string, field?: "imageModel") => modelsSetCommand(model, runtime, field);
+  function fallback(
+    action: "add" | "remove",
+    model: string,
+    key: "model" | "imageModel" = "model",
+  ) {
+    const params = { label: "Fallbacks", key };
+    return changeFallbacksCommand(
+      action === "add" ? { ...params, action } : { ...params, action, notFoundLabel: "Fallback" },
+      model,
+      runtime,
+    );
+  }
+  function manifest(dir: string, id: string, providers: string[]) {
+    writeJson(path.join(dir, "openclaw.plugin.json"), {
+      id,
+      providers,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    });
+  }
+
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-command-"));
     configPath = path.join(root, "openclaw.json");
     const pluginDir = path.join(root, "provider");
     fs.mkdirSync(pluginDir);
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "alias-fixture",
-        providers: ["fixture", "custom"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    manifest(pluginDir, "alias-fixture", ["fixture", "custom"]);
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {
@@ -75,7 +92,7 @@ describe("model command provider preparation", () => {
   });
 
   async function isolated(run: () => Promise<void>) {
-    fs.writeFileSync(configPath, JSON.stringify(config));
+    writeJson(configPath, config);
     await withEnvAsync(
       {
         OPENCLAW_STATE_DIR: root,
@@ -94,7 +111,7 @@ describe("model command provider preparation", () => {
   it("rejects unknown providers for alias without changing config bytes", async () => {
     await isolated(async () => {
       const before = fs.readFileSync(configPath, "utf8");
-      await expect(modelsAliasesAddCommand("local", "ollmaa/qwen3:4b", runtime)).rejects.toThrow(
+      await expect(alias("local", "ollmaa/qwen3:4b")).rejects.toThrow(
         'Unknown model provider "ollmaa"',
       );
       expect(fs.readFileSync(configPath, "utf8")).toBe(before);
@@ -124,15 +141,15 @@ describe("model command provider preparation", () => {
       "fixture/legacy": { alias: "friendly", params: { temperature: 0.2 } },
     };
     await isolated(async () => {
-      await modelsSetCommand("fixture/legacy", runtime);
-      await modelsAliasesAddCommand("Friendly", "fixture/legacy", runtime);
-      await modelsAliasesAddCommand("Friendly", "fixture/legacy", runtime);
-      await expect(modelsAliasesAddCommand("friendly", "fixture/current", runtime)).rejects.toThrow(
+      await setModel("fixture/legacy");
+      await alias("Friendly", "fixture/legacy");
+      await alias("Friendly", "fixture/legacy");
+      await expect(alias("friendly", "fixture/current")).rejects.toThrow(
         "Alias friendly already points to fixture/legacy.",
       );
     });
-    expect(readConfig().agents?.defaults?.model).toEqual({ primary: "fixture/legacy" });
-    expect(readConfig().agents?.defaults?.models).toEqual({
+    expect(defaults()?.model).toEqual({ primary: "fixture/legacy" });
+    expect(defaults()?.models).toEqual({
       "fixture/legacy": { alias: "Friendly", params: { temperature: 0.2 } },
     });
   });
@@ -158,14 +175,11 @@ describe("model command provider preparation", () => {
     await withEnvAsync({ MODEL_ALIAS: "friendly", ALIAS_CACHE_RETENTION: "long" }, () =>
       isolated(async () => {
         const agentsPath = path.join(root, "agents.json");
-        fs.writeFileSync(agentsPath, JSON.stringify(config.agents));
-        fs.writeFileSync(
-          configPath,
-          JSON.stringify({ ...config, agents: { $include: "agents.json" } }),
-        );
+        writeJson(agentsPath, config.agents);
+        writeJson(configPath, { ...config, agents: { $include: "agents.json" } });
         const readAgents = (): OpenClawConfig["agents"] =>
           JSON.parse(fs.readFileSync(agentsPath, "utf8"));
-        await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
+        await alias("friendly", "fixture/legacy");
         const expectedModels = {
           "fixture/current": {
             alias: "friendly",
@@ -178,31 +192,20 @@ describe("model command provider preparation", () => {
             streaming: false,
             codeMode: false,
           },
-          "unrelated/legacy": {
-            alias: "other",
-            params: { temperature: 0.9, cacheRetention: "long" },
-          },
+          "unrelated/legacy": config.agents!.defaults!.models!["unrelated/legacy"],
         };
         expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-        await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
+        await alias("friendly", "fixture/legacy");
         expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-        await expect(
-          modelsAliasesAddCommand("FRIENDLY", "fixture/different", runtime),
-        ).rejects.toThrow("Alias FRIENDLY already points to fixture/current.");
-        expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-        await changeFallbacksCommand(
-          { label: "Fallbacks", key: "model", action: "add" },
-          "friendly",
-          runtime,
+        await expect(alias("FRIENDLY", "fixture/different")).rejects.toThrow(
+          "Alias FRIENDLY already points to fixture/current.",
         );
+        expect(readAgents()?.defaults?.models).toEqual(expectedModels);
+        await fallback("add", "friendly");
         expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
           fallbacks: ["fixture/current"],
         });
-        await changeFallbacksCommand(
-          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
-          "fixture/legacy",
-          runtime,
-        );
+        await fallback("remove", "fixture/legacy");
         expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
           fallbacks: [],
         });
@@ -241,12 +244,10 @@ describe("model command provider preparation", () => {
           fs.writeFileSync(modelsPath, modelsRaw);
           fs.writeFileSync(configPath, rootRaw);
           if (siblingOverrides) {
-            await expect(
-              modelsAliasesAddCommand("friendly", "fixture/legacy", runtime),
-            ).rejects.toThrow("$include");
+            await expect(alias("friendly", "fixture/legacy")).rejects.toThrow("$include");
             expect(fs.readFileSync(modelsPath, "utf8")).toBe(modelsRaw);
           } else {
-            await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
+            await alias("friendly", "fixture/legacy");
             expect(JSON.parse(fs.readFileSync(modelsPath, "utf8"))).toEqual({
               "fixture/current": models["fixture/legacy"],
             });
@@ -260,14 +261,7 @@ describe("model command provider preparation", () => {
   it("excludes unrelated hooks when reusing an already-loaded registry", async () => {
     const foreignDir = path.join(root, "aaa-foreign");
     fs.mkdirSync(foreignDir);
-    fs.writeFileSync(
-      path.join(foreignDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "aaa-foreign",
-        providers: ["foreign"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    manifest(foreignDir, "aaa-foreign", ["foreign"]);
     fs.writeFileSync(
       path.join(foreignDir, "index.cjs"),
       `module.exports = { id: "aaa-foreign", register(api) {
@@ -284,7 +278,7 @@ describe("model command provider preparation", () => {
         "aaa-foreign",
         "alias-fixture",
       ]);
-      await modelsSetCommand("fixture/legacy", runtime);
+      await setModel("fixture/legacy");
       expect(readConfig().agents?.defaults?.model).toEqual({ primary: "fixture/current" });
     });
   });
@@ -328,15 +322,11 @@ describe("model command provider preparation", () => {
           ).toBe(registry);
           expect(fs.readFileSync(marker, "utf8")).toBe("registered\n");
           const run = async () => {
-            await modelsAliasesAddCommand("friendly", "compat/legacy", runtime);
-            await modelsSetCommand("friendly", runtime);
-            await modelsSetCommand("friendly", runtime, "imageModel");
+            await alias("friendly", "compat/legacy");
+            await setModel("friendly");
+            await setModel("friendly", "imageModel");
             for (const key of ["model", "imageModel"] as const) {
-              await changeFallbacksCommand(
-                { label: "Fallbacks", key, action: "add" },
-                "friendly",
-                runtime,
-              );
+              await fallback("add", "friendly", key);
             }
           };
           if (scope === "exact") {
@@ -382,14 +372,7 @@ describe("model command provider preparation", () => {
     }
     config.agents!.defaults!.models = { [canonical]: {} };
     const providerDir = path.join(root, "provider");
-    fs.writeFileSync(
-      path.join(providerDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "alias-fixture",
-        providers: ["anthropic"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    manifest(providerDir, "alias-fixture", ["anthropic"]);
     const providerFile = path.join(providerDir, "index.cjs");
     fs.writeFileSync(
       providerFile,
@@ -400,14 +383,7 @@ describe("model command provider preparation", () => {
     const unusedDir = path.join(root, "unused");
     const marker = path.join(root, "unused-imported");
     fs.mkdirSync(unusedDir);
-    fs.writeFileSync(
-      path.join(unusedDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "unused-provider",
-        providers: ["openai"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    manifest(unusedDir, "unused-provider", ["openai"]);
     fs.writeFileSync(
       path.join(unusedDir, "index.cjs"),
       `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");
@@ -419,25 +395,17 @@ describe("model command provider preparation", () => {
     config.plugins!.load!.paths!.push(unusedDir);
 
     await isolated(async () => {
-      await modelsSetCommand("sonnet", runtime);
+      await setModel("sonnet");
       expect(readConfig().agents?.defaults?.model).toEqual({ primary: canonical });
-      await changeFallbacksCommand(
-        { label: "Fallbacks", key: "model", action: "add" },
-        "sonnet",
-        runtime,
-      );
+      await fallback("add", "sonnet");
       expect(readConfig().agents?.defaults?.model).toEqual({
         primary: canonical,
         fallbacks: [canonical],
       });
-      await changeFallbacksCommand(
-        { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
-        "sonnet",
-        runtime,
-      );
+      await fallback("remove", "sonnet");
       expect(readConfig().agents?.defaults?.model).toEqual({ primary: canonical, fallbacks: [] });
-      await modelsAliasesAddCommand("friendly", "sonnet", runtime);
-      await modelsAliasesAddCommand("friendly", canonical, runtime);
+      await alias("friendly", "sonnet");
+      await alias("friendly", canonical);
       expect(readConfig().agents?.defaults?.models?.[canonical]?.alias).toBe("friendly");
     });
     expect(fs.existsSync(marker)).toBe(false);
@@ -449,18 +417,10 @@ describe("model command provider preparation", () => {
     config.agents!.defaults!.models = { "fixture/legacy": entry };
     await withEnvAsync({ FALLBACK_REF: "fixture/legacy" }, () =>
       isolated(async () => {
-        await changeFallbacksCommand(
-          { label: "Fallbacks", key: "model", action: "add" },
-          "fixture/current",
-          runtime,
-        );
+        await fallback("add", "fixture/current");
         expect(readConfig().agents?.defaults?.model).toEqual({ fallbacks: ["${FALLBACK_REF}"] });
         expect(readConfig().agents?.defaults?.models).toEqual({ "fixture/current": entry });
-        await changeFallbacksCommand(
-          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
-          "fixture/current",
-          runtime,
-        );
+        await fallback("remove", "fixture/current");
         expect(readConfig().agents?.defaults?.model).toEqual({ fallbacks: [] });
       }),
     );
@@ -481,9 +441,7 @@ describe("model command provider preparation", () => {
       ),
     );
     await isolated(async () => {
-      await expect(modelsSetCommand("fixture/legacy", runtime)).rejects.toBeInstanceOf(
-        ConfigMutationConflictError,
-      );
+      await expect(setModel("fixture/legacy")).rejects.toBeInstanceOf(ConfigMutationConflictError);
     });
     expect(readConfig().update?.channel).toBe("beta");
     expect(readConfig().agents?.defaults?.model).toBeUndefined();
@@ -499,13 +457,9 @@ describe("model command provider preparation", () => {
         fs.readFileSync(pluginFile, "utf8"),
     );
     await isolated(async () => {
-      await expect(
-        changeFallbacksCommand(
-          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
-          "/invalid",
-          runtime,
-        ),
-      ).rejects.toThrow("Invalid model reference: /invalid");
+      await expect(fallback("remove", "/invalid")).rejects.toThrow(
+        "Invalid model reference: /invalid",
+      );
     });
     expect(fs.existsSync(marker)).toBe(false);
   });

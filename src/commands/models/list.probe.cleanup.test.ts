@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObject } from "../../config/validation.js";
@@ -22,9 +22,30 @@ const runner = vi.hoisted(() =>
 // mock-isolation: Controlled completion tails exercise cleanup without starting inference.
 vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
 
-afterEach(() => {
+let state: OpenClawTestState;
+let signals: EventEmitter;
+let cfg: OpenClawConfig;
+const lockPath = () => state.path("locks", "gateway.state.lock");
+function expectOwnership(held: boolean) {
+  expect(fs.existsSync(lockPath())).toBe(held);
+  expect(signals.listenerCount("SIGTERM")).toBe(held ? 1 : 0);
+}
+beforeEach(async () => {
+  state = await createOpenClawTestState({
+    label: "probe-cleanup",
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
+  signals = new EventEmitter();
+});
+async function prepareProbe() {
+  cfg = createProbeConfig(state.workspaceDir);
+  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+  await state.writeConfig(cfg);
+}
+afterEach(async () => {
   vi.restoreAllMocks();
   runner.mockReset();
+  await state.cleanup();
 });
 
 function createProbeConfig(workspaceDir: string): OpenClawConfig {
@@ -56,7 +77,7 @@ function createProbeConfig(workspaceDir: string): OpenClawConfig {
   };
 }
 
-function stateOwnership(state: OpenClawTestState, signals: EventEmitter) {
+function stateOwnership() {
   return {
     mode: "exclusive" as const,
     process: signals,
@@ -70,12 +91,7 @@ function stateOwnership(state: OpenClawTestState, signals: EventEmitter) {
   };
 }
 
-function probeParams(
-  state: OpenClawTestState,
-  cfg: OpenClawConfig,
-  signals: EventEmitter,
-  concurrency: number,
-) {
+function probeParams(concurrency: number) {
   return {
     cfg,
     agentId: "main",
@@ -90,18 +106,12 @@ function probeParams(
       concurrency,
       maxTokens: 8,
     },
-    stateOwnership: stateOwnership(state, signals),
+    stateOwnership: stateOwnership(),
   };
 }
 
 it("holds state ownership for an in-flight sibling after progress rejects the probe batch", async () => {
-  const state = await createOpenClawTestState({
-    label: "probe-sibling-cleanup",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const cfg = createProbeConfig(state.workspaceDir);
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
-  await state.writeConfig(cfg);
+  await prepareProbe();
   await state.writeAuthProfiles({
     version: 1,
     profiles: {
@@ -112,9 +122,6 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
       },
     },
   });
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
-  const lockPath = path.join(lockDir, "gateway.state.lock");
   const firstStarted = createDeferredCore();
   const finishFirst = createDeferredCore();
   const firstFinished = createDeferredCore();
@@ -135,7 +142,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   try {
     operation = parent.track(() =>
       runAuthProbes({
-        ...probeParams(state, cfg, signals, 2),
+        ...probeParams(2),
         onProgress(update) {
           expect(update.total).toBe(2);
           if (update.label && ++starts === 2) {
@@ -146,16 +153,14 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
     );
     await expect(operation).rejects.toBe(original);
     await firstStarted.promise;
-    expect(fs.existsSync(lockPath)).toBe(true);
-    expect(signals.listenerCount("SIGTERM")).toBe(1);
+    expectOwnership(true);
     signals.emit("SIGTERM");
     expect(firstSignal?.aborted).toBe(true);
-    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(fs.existsSync(lockPath())).toBe(true);
     finishFirst.resolve();
     await firstFinished.promise;
     await parent.drain();
-    expect(fs.existsSync(lockPath)).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expectOwnership(false);
   } finally {
     finishFirst.resolve();
     await operation?.catch(() => {});
@@ -163,20 +168,11 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
       await firstFinished.promise;
     }
     await parent.drain();
-    await state.cleanup();
   }
 });
 
 it("retains the staged directory and releases state ownership when database disposal reports failure", async () => {
-  const state = await createOpenClawTestState({
-    label: "probe-disposal-failure",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const cfg = createProbeConfig(state.workspaceDir);
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
-  await state.writeConfig(cfg);
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
+  await prepareProbe();
   const original = new Error("synthetic database disposal failure");
   let stagedDir: string | undefined;
   runner.mockImplementation(async (params) => {
@@ -195,9 +191,9 @@ it("retains the staged directory and releases state ownership when database disp
     });
   const cleanup = createAgentCleanupScope();
   try {
-    await expect(
-      cleanup.run(() => runAuthProbes(probeParams(state, cfg, signals, 1))),
-    ).rejects.toMatchObject({ cause: original });
+    await expect(cleanup.run(() => runAuthProbes(probeParams(1)))).rejects.toMatchObject({
+      cause: original,
+    });
     expect(stagedDir).toContain("openclaw-auth-probe-");
     expect(fs.existsSync(stagedDir!)).toBe(true);
     expect(
@@ -205,8 +201,7 @@ it("retains the staged directory and releases state ownership when database disp
         .listOpenClawRegisteredAgentDatabases({ env: state.env })
         .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
     ).toBe(false);
-    expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expectOwnership(false);
     expect(cleanup.outcome).toBe("uncertain");
   } finally {
     close.mockRestore();
@@ -214,26 +209,17 @@ it("retains the staged directory and releases state ownership when database disp
       await dispose(path.join(stagedDir, "openclaw-agent.sqlite"), { env: state.env });
       await fs.promises.rm(stagedDir, { recursive: true, force: true });
     }
-    await state.cleanup();
   }
 });
 
 it("does not acquire probe state from a closed caller scope", async () => {
-  const state = await createOpenClawTestState({ label: "probe-closed-caller" });
   const parent = new AsyncWorkScope();
   const inParent = parent.run(() => AsyncLocalStorage.snapshot());
   await parent.drain();
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
   const run = vi.fn(async () => undefined);
-  try {
-    await expect(
-      inParent(() => withAuthProbeStateOwnership(stateOwnership(state, signals), run)),
-    ).rejects.toThrow("Async work scope is closed");
-    expect(run).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
-  } finally {
-    await state.cleanup();
-  }
+  await expect(inParent(() => withAuthProbeStateOwnership(stateOwnership(), run))).rejects.toThrow(
+    "Async work scope is closed",
+  );
+  expect(run).not.toHaveBeenCalled();
+  expectOwnership(false);
 });

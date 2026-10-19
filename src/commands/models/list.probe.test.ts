@@ -1,10 +1,10 @@
-// Model list probe tests cover runtime probing while listing configured models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import type { Mock } from "vitest";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 
@@ -33,16 +33,18 @@ async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<
   }
 }
 
-type RunnerParams = {
-  agentDir?: string;
-  agentHarnessRuntimeOverride?: string;
-  onRequestComplete?: (durationMs: number) => void;
-  thinkLevel?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  preparedModelRuntimeMode?: string;
-};
+type RunnerParams = Parameters<
+  typeof import("../../agents/isolated-completion.js").runIsolatedCompletion
+>[0];
 type ProbeParams = Parameters<typeof probeModule.runAuthProbes>[0];
+const providerConfig = (overrides: Partial<ModelProviderConfig> = {}) => ({
+  baseUrl: "https://api.openai.com/v1",
+  models: [],
+  ...overrides,
+});
+const config = (provider: ReturnType<typeof providerConfig>): OpenClawConfig => ({
+  models: { providers: { openai: provider } },
+});
 function probeInput(
   overrides: Omit<Partial<ProbeParams>, "options"> & { options?: Partial<ProbeParams["options"]> },
 ): ProbeParams {
@@ -89,11 +91,7 @@ async function withProbeRuntime(
         credential === "marker"
           ? {}
           : {
-              "openai:profile": {
-                type: "api_key",
-                provider: "openai",
-                key: "test-profile-key",
-              },
+              "openai:profile": { type: "api_key", provider: "openai", key: "test-profile-key" },
             },
     }),
     listProfilesForProvider: () => profileIds,
@@ -165,19 +163,21 @@ describe("mapFailoverReasonToProbeStatus", () => {
   });
 
   it("maps failover reasons to probe statuses", () => {
-    const { mapFailoverReasonToProbeStatus } = probeModule;
-    expect(mapFailoverReasonToProbeStatus("auth_permanent")).toBe("auth");
-    expect(mapFailoverReasonToProbeStatus("auth")).toBe("auth");
-    expect(mapFailoverReasonToProbeStatus("rate_limit")).toBe("rate_limit");
-    expect(mapFailoverReasonToProbeStatus("overloaded")).toBe("rate_limit");
-    expect(mapFailoverReasonToProbeStatus("billing")).toBe("billing");
-    expect(mapFailoverReasonToProbeStatus("timeout")).toBe("timeout");
-    expect(mapFailoverReasonToProbeStatus("model_not_found")).toBe("format");
-    expect(mapFailoverReasonToProbeStatus("format")).toBe("format");
-
-    expect(mapFailoverReasonToProbeStatus(undefined)).toBe("unknown");
-    expect(mapFailoverReasonToProbeStatus(null)).toBe("unknown");
-    expect(mapFailoverReasonToProbeStatus("something_else")).toBe("unknown");
+    for (const [reason, expected] of [
+      ["auth_permanent", "auth"],
+      ["auth", "auth"],
+      ["rate_limit", "rate_limit"],
+      ["overloaded", "rate_limit"],
+      ["billing", "billing"],
+      ["timeout", "timeout"],
+      ["model_not_found", "format"],
+      ["format", "format"],
+      [undefined, "unknown"],
+      [null, "unknown"],
+      ["something_else", "unknown"],
+    ]) {
+      expect(probeModule.mapFailoverReasonToProbeStatus(reason)).toBe(expected);
+    }
   });
 });
 
@@ -190,10 +190,7 @@ describe("runAuthProbes", () => {
     await withTempState(async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-      expect(gatewayLock).not.toBeNull();
-      if (!gatewayLock) {
-        throw new Error("Expected live Gateway fixture lock");
-      }
+      assert(gatewayLock, "Expected live Gateway fixture lock");
       try {
         await expect(
           probeModule.withAuthProbeStateOwnership(
@@ -227,17 +224,7 @@ describe("runAuthProbes", () => {
   it("keeps the existing raw OpenClaw transport for stored credentials", async () => {
     await withProbeRuntime("profile", async ({ probe, runner }) => {
       const input = probeInput({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                agentRuntime: { id: "codex" },
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: config(providerConfig({ agentRuntime: { id: "codex" } })),
         options: { profileIds: ["openai:profile"] },
       });
       expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("ok");
@@ -247,9 +234,11 @@ describe("runAuthProbes", () => {
           outputTextPolicy: "strict-visible",
         }),
       );
-      expect(runner.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBe("openclaw");
+      expect(runner.mock.calls[0]?.[0]).toMatchObject({
+        agentHarnessRuntimeOverride: "openclaw",
+        thinkLevel: "off",
+      });
       expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
-      expect(runner.mock.calls[0]?.[0].thinkLevel).toBe("off");
       runner.mockRejectedValueOnce(new Error("LLM request timed out."));
       expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({ status: "timeout" });
     });
@@ -257,17 +246,15 @@ describe("runAuthProbes", () => {
 
   it("uses raw OpenClaw for Codex-pinned config keys even with auth: oauth", async () => {
     await withProbeRuntime("literal", async ({ probe, runner, upsert }) => {
-      const providerConfig = {
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-responses" as const,
+      const provider = providerConfig({
+        api: "openai-responses",
         apiKey: "test",
-        auth: "oauth" as const,
+        auth: "oauth",
         agentRuntime: { id: "codex" },
-        models: [],
-      };
+      });
       await probe.runAuthProbes(
         probeInput({
-          cfg: { models: { providers: { openai: providerConfig } } },
+          cfg: config(provider),
           options: { includeDirectKeys: true },
         }),
       );
@@ -276,11 +263,13 @@ describe("runAuthProbes", () => {
       )?.[0];
       assert(call?.agentDir);
       expect(call.agentDir).not.toBe("/tmp/openclaw-probe-agent");
-      expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
-      expect(call.onRequestComplete).toBeTypeOf("function");
-      expect(call.preparedModelRuntimeMode).toBe("isolated-read-only");
+      expect(call).toMatchObject({
+        agentHarnessRuntimeOverride: "openclaw",
+        onRequestComplete: expect.any(Function),
+        preparedModelRuntimeMode: "isolated-read-only",
+      });
       expect(call.config).toMatchObject({
-        models: { providers: { openai: providerConfig } },
+        models: { providers: { openai: provider } },
         auth: { order: { openai: [] } },
       });
       expect(upsert).toHaveBeenCalledWith({
@@ -294,27 +283,19 @@ describe("runAuthProbes", () => {
 
   it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
     await withProbeRuntime("marker", async ({ probe, runner, upsert }) => {
-      const cfg = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              api: "openai-responses" as const,
-              apiKey: ["OPENAI", "API", "KEY"].join("_"),
-              models: [],
-            },
-          },
-        },
-      };
+      const marker = ["OPENAI", "API", "KEY"].join("_");
+      const cfg = config(providerConfig({ api: "openai-responses", apiKey: marker }));
       await probe.runAuthProbes(probeInput({ cfg, options: { includeDirectKeys: true } }));
       const call = runner.mock.calls[0]?.[0];
       expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(call?.agentDir).toContain("openclaw-auth-probe-");
-      expect(call?.preparedModelRuntimeMode).toBe("isolated-read-only");
-      expect(call?.config?.auth?.order?.openai).toEqual([]);
-      expect(call?.config?.models?.providers?.openai?.apiKey).toBe(
-        cfg.models.providers.openai.apiKey,
-      );
+      expect(call).toMatchObject({
+        preparedModelRuntimeMode: "isolated-read-only",
+        config: {
+          auth: { order: { openai: [] } },
+          models: { providers: { openai: { apiKey: marker } } },
+        },
+      });
       expect(call?.authProfileId).toBeUndefined();
       expect(upsert).not.toHaveBeenCalled();
     });
