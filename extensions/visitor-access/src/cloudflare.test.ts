@@ -1,60 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import { VisitorPolicyClient } from "./cloudflare.js";
-import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
+import {
+  visitorConfig as config,
+  githubProvider,
+  githubRule,
+  namedPolicy,
+} from "./visitors.test-support.js";
 
-const config: VisitorAccessConfig = {
-  accountId: "account-id",
-  appId: "app-id",
-  apiToken: "test-token-never-echo",
-  policyName: "Visitors (openclaw-managed)",
-  defaultTtlDays: 14,
-  maxVisitors: 50,
-};
 const collectionUrl =
-  "https://api.cloudflare.com/client/v4/accounts/account-id/access/apps/app-id/policies";
-const githubProvider = {
-  issuer: "https://example.cloudflareaccess.com",
-  providerId: "github-provider",
-  githubAccountIdClaim: "github_account_id",
-};
+  "https://api.cloudflare.com/client/v4/accounts/test-account/access/apps/test-app/policies";
 const oidc = (overrides: Record<string, unknown> = {}) => ({
-  oidc: {
-    identity_provider_id: githubProvider.providerId,
-    claim_name: githubProvider.githubAccountIdClaim,
-    claim_value: "42",
-    ...overrides,
-  },
+  oidc: { ...githubRule.oidc, ...overrides },
 });
-const githubRule = oidc();
-
-function namedPolicy(targets: (string | number)[] = ["first@example.com"]) {
-  return {
-    id: "visitor-policy",
-    name: config.policyName,
-    decision: "allow",
-    include: targets.map((target) =>
-      typeof target === "string"
-        ? { email: { email: target } }
-        : { oidc: { ...githubRule.oidc, claim_value: String(target) } },
-    ),
-  };
-}
 
 function cloudflareResponse(result: unknown, resultInfo?: unknown) {
   return Response.json({ success: true, result, result_info: resultInfo });
 }
 
-function fetchSequence(...responses: Response[]) {
+function fetchSequence(...responses: unknown[]) {
   const fetcher = vi.fn<typeof fetch>();
   for (const response of responses) {
-    fetcher.mockResolvedValueOnce(response);
+    fetcher.mockResolvedValueOnce(
+      response instanceof Response ? response : cloudflareResponse(response),
+    );
   }
   return fetcher;
-}
-
-function fetchResults(...results: unknown[]) {
-  return fetchSequence(...results.map((result) => cloudflareResponse(result)));
 }
 
 function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
@@ -67,45 +38,42 @@ function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
 
 describe("VisitorPolicyClient", () => {
   it.each([
-    { field: "githubAccountIdClaim", afterResponse: false },
-    { field: "issuer", afterResponse: true },
-  ] as const)(
-    "pins the current $field mapping through renewal (after response: $afterResponse)",
-    async ({ field, afterResponse }) => {
-      let provider: typeof githubProvider | undefined;
-      const policy = namedPolicy([42]);
-      const fetcher = fetchResults([], policy, [policy], policy);
-      const client = new VisitorPolicyClient(config, fetcher, undefined, () => provider);
-      const changeMapping = () => {
-        provider = {
-          ...githubProvider,
-          [field]: field === "issuer" ? "https://changed.cloudflareaccess.com" : "changed_claim",
-        };
+    ["githubAccountIdClaim", false],
+    ["issuer", true],
+  ] as const)("pins %s through renewal (after response: %s)", async (field, afterResponse) => {
+    let provider: typeof githubProvider | undefined;
+    const policy = namedPolicy([42]);
+    const fetcher = fetchSequence([], policy, [policy], policy);
+    const client = new VisitorPolicyClient(config, fetcher, undefined, () => provider);
+    const changeMapping = () => {
+      provider = {
+        ...githubProvider,
+        [field]: field === "issuer" ? "https://changed.cloudflareaccess.com" : "changed_claim",
       };
-      fetcher.mockImplementationOnce(async () => {
-        changeMapping();
-        return cloudflareResponse(namedPolicy([42, 43]));
-      });
-      provider = { ...githubProvider };
-      await expect(client.update(() => [42])).resolves.toEqual([42]);
-      expect(requestBody(fetcher, 1)).toMatchObject({ include: [githubRule] });
-      await expect(
-        client.update(() => {
-          if (!afterResponse) {
-            changeMapping();
-          }
-          return afterResponse ? [42, 43] : [42];
-        }),
-      ).rejects.toThrow("mapping changed");
-      expect(fetcher.mock.calls.map(([, request]) => request?.method)).toEqual([
-        "GET",
-        "POST",
-        "GET",
-        "GET",
-        ...(afterResponse ? ["PUT"] : []),
-      ]);
-    },
-  );
+    };
+    fetcher.mockImplementationOnce(async () => {
+      changeMapping();
+      return cloudflareResponse(namedPolicy([42, 43]));
+    });
+    provider = { ...githubProvider };
+    await expect(client.update(() => [42])).resolves.toEqual([42]);
+    expect(requestBody(fetcher, 1)).toMatchObject({ include: [githubRule] });
+    await expect(
+      client.update(() => {
+        if (!afterResponse) {
+          changeMapping();
+        }
+        return afterResponse ? [42, 43] : [42];
+      }),
+    ).rejects.toThrow("mapping changed");
+    expect(fetcher.mock.calls.map(([, request]) => request?.method)).toEqual([
+      "GET",
+      "POST",
+      "GET",
+      "GET",
+      ...(afterResponse ? ["PUT"] : []),
+    ]);
+  });
 
   it("rereads the named policy and preserves mixed dashboard targets and restrictions on update", async () => {
     const original = namedPolicy(["FIRST@example.com", 42]);
@@ -121,7 +89,7 @@ describe("VisitorPolicyClient", () => {
       ...restrictions,
       created_at: "2026-08-28T00:00:00Z",
     };
-    const fetcher = fetchResults([original], original, [updated], updated, updated);
+    const fetcher = fetchSequence([original], original, [updated], updated, updated);
     const client = new VisitorPolicyClient(config, fetcher, undefined, () => githubProvider);
     await expect(client.read()).resolves.toEqual({
       id: original.id,
@@ -171,7 +139,7 @@ describe("VisitorPolicyClient", () => {
     "refuses %s before running a change or writing Cloudflare",
     async (_name, override, provider = githubProvider) => {
       const policy = namedPolicy();
-      const fetcher = fetchResults([policy], { ...policy, ...override });
+      const fetcher = fetchSequence([policy], { ...policy, ...override });
       const change = vi.fn(() => ["next@example.com"]);
       await expect(
         new VisitorPolicyClient(config, fetcher, undefined, () => provider ?? undefined).update(
@@ -207,31 +175,21 @@ describe("VisitorPolicyClient", () => {
     expect(duplicates.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
   });
 
-  it.each(["network", "http", "api", "json"])(
-    "never exposes token-bearing %s failures",
-    async (mode) => {
-      const fetcher = vi.fn<typeof fetch>();
-      if (mode === "network") {
-        fetcher.mockRejectedValueOnce(new Error(config.apiToken));
-      } else if (mode === "http") {
-        fetcher.mockResolvedValueOnce(new Response(config.apiToken, { status: 403 }));
-      } else if (mode === "api") {
-        fetcher.mockResolvedValueOnce(
-          Response.json({ success: false, errors: [{ message: config.apiToken }] }),
-        );
-      } else {
-        fetcher.mockResolvedValueOnce(new Response(config.apiToken));
-      }
-      const error = await new VisitorPolicyClient(config, fetcher)
-        .read()
-        .catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(VisitorAccessError);
-      expect(String(error)).not.toContain(config.apiToken);
-      const options = fetcher.mock.calls[0]?.[1];
-      expect(options?.redirect).toBe("error");
-      expect(options?.signal).toBeInstanceOf(AbortSignal);
-    },
-  );
+  it.each([
+    ["network", () => Promise.reject(new Error(config.apiToken))],
+    ["http", async () => new Response(config.apiToken, { status: 403 })],
+    ["api", async () => Response.json({ success: false, errors: [{ message: config.apiToken }] })],
+    ["json", async () => new Response(config.apiToken)],
+  ] as const)("never exposes token-bearing %s failures", async (_mode, response) => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(response);
+    const error = await new VisitorPolicyClient(config, fetcher)
+      .read()
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(VisitorAccessError);
+    expect(String(error)).not.toContain(config.apiToken);
+    const options = fetcher.mock.calls[0]?.[1];
+    expect(options).toMatchObject({ redirect: "error", signal: expect.any(AbortSignal) });
+  });
 
   it("fences an obsolete service before the durable callback runs", async () => {
     const abort = new AbortController();

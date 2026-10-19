@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { createVisitorAccessReader } from "./access.js";
 import { VisitorPolicyClient, type VisitorTarget } from "./cloudflare.js";
@@ -11,6 +12,34 @@ export const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 export const DAY_MS = 86_400_000;
 const services = new Set<VisitorAccessService>();
 
+const unexpected = async (): Promise<never> => {
+  throw new Error("Unexpected visitor fixture operation");
+};
+
+export function useVisitorFixtures() {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    closeVisitorFixtures();
+    vi.useRealTimers();
+  });
+}
+
+export function visitorGate() {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
+
 export function closeVisitorFixtures(): void {
   for (const service of services) {
     service.close();
@@ -18,7 +47,7 @@ export function closeVisitorFixtures(): void {
   services.clear();
 }
 
-const config: VisitorAccessConfig = {
+export const visitorConfig: VisitorAccessConfig = {
   accountId: "test-account",
   appId: "test-app",
   apiToken: "test-token",
@@ -27,10 +56,17 @@ const config: VisitorAccessConfig = {
   maxVisitors: 50,
 };
 const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
-const githubProvider = {
+export const githubProvider = {
   issuer: "https://example.cloudflareaccess.com",
   providerId: "github-provider",
   githubAccountIdClaim: "github_account_id",
+};
+export const githubRule = {
+  oidc: {
+    identity_provider_id: githubProvider.providerId,
+    claim_name: githubProvider.githubAccountIdClaim,
+    claim_value: "42",
+  },
 };
 export type GatewayRoles = NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
 export const guestRole: GatewayRoles["definitions"][string] = {
@@ -47,7 +83,7 @@ export const staffRole: GatewayRoles["definitions"][string] = {
   scopes: ["operator.admin"],
 };
 
-export function requestUrl(input: Parameters<typeof fetch>[0]): URL {
+function requestUrl(input: Parameters<typeof fetch>[0]): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
@@ -60,6 +96,27 @@ type PolicyFixture = {
     | { oidc: { identity_provider_id: string; claim_name: string; claim_value: string } }
   >;
 };
+
+export function namedPolicy(
+  targets: VisitorTarget[] = ["first@example.com"],
+  name = visitorConfig.policyName,
+  provider = githubProvider,
+): PolicyFixture {
+  const oidc = {
+    identity_provider_id: provider.providerId,
+    claim_name: provider.githubAccountIdClaim,
+  };
+  return {
+    id: "visitors",
+    name,
+    decision: "allow",
+    include: targets.map((target) =>
+      typeof target === "string"
+        ? { email: { email: target } }
+        : { oidc: { ...oidc, claim_value: String(target) } },
+    ),
+  };
+}
 
 type GrantOverrides = Partial<Omit<VisitorGrant, "email" | "githubAccountId">>;
 
@@ -95,9 +152,6 @@ export function visitorProfileFixture(
   initial: ProfileFixture[] = [],
   githubProfiles: Array<{ accountId: number; profileId: string }> = [],
 ) {
-  const unexpected = (operation: string) => async () => {
-    throw new Error(`Unexpected ${operation}`);
-  };
   let profiles = initial;
   const response = async (method: string, params?: Record<string, unknown>) => {
     if (method !== "users.list") {
@@ -136,13 +190,13 @@ export function visitorProfileFixture(
   };
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
-    request: unexpected("Gateway request"),
+    request: unexpected,
     subscribeSessionChanges() {
       throw new Error("Unexpected session change subscription");
     },
-    readSessionFacts: unexpected("session facts request"),
-    withSessionFacts: unexpected("selected session facts request"),
-    openPluginPanel: unexpected("plugin panel request"),
+    readSessionFacts: unexpected,
+    withSessionFacts: unexpected,
+    openPluginPanel: unexpected,
     withUserProfileIdentity,
     resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),
   };
@@ -172,7 +226,7 @@ export function visitorFixture(
     gateway?: PluginRuntime["gateway"];
   } = {},
 ) {
-  const resolved = { ...config, ...options.config };
+  const resolved = { ...visitorConfig, ...options.config };
   const oidcProvider =
     options.gatewayConfig?.gateway?.auth?.trustedProxy?.cloudflareAccessOidc ?? githubProvider;
   const grants = new Map(
@@ -186,19 +240,9 @@ export function visitorFixture(
     async register(key, grant) {
       grants.set(key, structuredClone(grant));
     },
-    async registerIfAbsent(key, grant) {
-      if (grants.has(key)) {
-        return false;
-      }
-      grants.set(key, structuredClone(grant));
-      return true;
-    },
+    registerIfAbsent: unexpected,
     lookup: async (key) => structuredClone(grants.get(key)),
-    async consume(key) {
-      const grant = grants.get(key);
-      grants.delete(key);
-      return structuredClone(grant);
-    },
+    consume: unexpected,
     delete: async (key) => grants.delete(key),
     entries: async () =>
       [...grants].map(([key, value]) => ({
@@ -206,9 +250,7 @@ export function visitorFixture(
         value: structuredClone(value),
         createdAt: value.createdAt,
       })),
-    clear: async () => {
-      grants.clear();
-    },
+    clear: unexpected,
     withCurrent({ assertCurrent }) {
       const bind =
         <Args extends unknown[], Value>(operation: (...args: Args) => Promise<Value>) =>
@@ -216,24 +258,21 @@ export function visitorFixture(
           assertCurrent();
           return operation(...args);
         };
-      const unused = async (): Promise<never> => {
-        throw new Error("Unexpected visitor fixture store operation");
-      };
       return Object.freeze({
         register: bind(store.register.bind(store)),
-        registerIfAbsent: bind(store.registerIfAbsent.bind(store)),
+        registerIfAbsent: unexpected,
         lookup: bind(store.lookup.bind(store)),
-        consume: bind(store.consume.bind(store)),
+        consume: unexpected,
         delete: bind(store.delete.bind(store)),
         entries: bind(store.entries.bind(store)),
-        clear: bind(store.clear.bind(store)),
-        observe: unused,
-        compareAndApply: unused,
-        deleteIfEqual: unused,
-        lookupMany: unused,
-        entriesInKeyRange: unused,
-        moveEntriesFrom: unused,
-        count: unused,
+        clear: unexpected,
+        observe: unexpected,
+        compareAndApply: unexpected,
+        deleteIfEqual: unexpected,
+        lookupMany: unexpected,
+        entriesInKeyRange: unexpected,
+        moveEntriesFrom: unexpected,
+        count: unexpected,
       });
     },
   };
@@ -244,24 +283,7 @@ export function visitorFixture(
     beforeWrite: () => Promise<void>;
     afterWrite: () => void;
   } = {
-    policy: targets.length
-      ? {
-          id: "visitors",
-          name: resolved.policyName,
-          decision: "allow",
-          include: targets.map((target) =>
-            typeof target === "string"
-              ? { email: { email: target } }
-              : {
-                  oidc: {
-                    identity_provider_id: oidcProvider.providerId,
-                    claim_name: oidcProvider.githubAccountIdClaim,
-                    claim_value: String(target),
-                  },
-                },
-          ),
-        }
-      : undefined,
+    policy: targets.length ? namedPolicy(targets, resolved.policyName, oidcProvider) : undefined,
     failWrites: false,
     loseWriteResponse: false,
     beforeWrite: async () => {},
@@ -317,12 +339,8 @@ export function visitorFixture(
     gateway: options.gateway ?? directory.gateway,
     config: {
       current: () => gatewayConfig,
-      async mutateConfigFile() {
-        throw new Error("Visitor operations must not change Gateway configuration");
-      },
-      async replaceConfigFile() {
-        throw new Error("Visitor operations must not replace Gateway configuration");
-      },
+      mutateConfigFile: unexpected,
+      replaceConfigFile: unexpected,
     },
   };
   const resolveGitHubAccount = vi
@@ -352,8 +370,14 @@ export function visitorFixture(
     setProfiles: directory.setProfiles,
     logger,
     service,
+    authorize: service.authorize.bind(service),
+    resume: service.resume.bind(service),
     store,
     authority: { assertCurrent },
+    revokeAuthority: () =>
+      assertCurrent.mockImplementation(() => {
+        throw new Error("Visitor authority is no longer current");
+      }),
     invite: (input: unknown) => service.invite(input, { assertCurrent }),
     revoke: (input: unknown) => service.revoke(input, assertCurrent),
     list: () => service.list(assertCurrent),
