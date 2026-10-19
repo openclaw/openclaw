@@ -119,35 +119,26 @@ export async function mountRunner(
 ) {
   let bootstrap = createBootstrap(selection, controlUiUrl);
   httpMock.getJson.mockImplementation(async (url: string) => {
-    if (url === "/api/ui-version") {
-      return { version: "test" };
-    }
     if (url.startsWith("/api/evidence?")) {
       return { evidence };
     }
-    if (url === "/api/bootstrap") {
-      return bootstrap;
-    }
-    if (url === "/api/state") {
-      return snapshot;
-    }
-    if (url === "/api/report") {
-      return { report: null };
-    }
-    if (url === "/api/outcomes") {
-      return { run: null };
-    }
-    if (url === "/api/capture/sessions") {
-      return { sessions: [] };
-    }
-    if (url === "/api/capture/startup-status") {
-      return {
+    const responses: Record<string, unknown> = {
+      "/api/ui-version": { version: "test" },
+      "/api/bootstrap": bootstrap,
+      "/api/state": snapshot,
+      "/api/report": { report: null },
+      "/api/outcomes": { run: null },
+      "/api/capture/sessions": { sessions: [] },
+      "/api/capture/startup-status": {
         status: {
           gateway: { label: "Gateway", ok: true, url: "http://127.0.0.1:18789" },
           proxy: { label: "Proxy", ok: true, url: "http://127.0.0.1:7799" },
           qaLab: { label: "QA Lab", ok: true, url: bootstrap.baseUrl },
         },
-      };
+      },
+    };
+    if (Object.hasOwn(responses, url)) {
+      return responses[url];
     }
     throw new Error(`unexpected GET ${url}`);
   });

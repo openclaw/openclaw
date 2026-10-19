@@ -61,13 +61,15 @@ async function mountRunningControlUi(controlUiUrl: string | null) {
   return { root, setControlUiUrl };
 }
 
-function selectValue(root: HTMLElement, selector: string, value: string) {
-  const select = root.querySelector<HTMLSelectElement>(selector);
-  if (!select) {
-    throw new Error(`missing select ${selector}`);
+function setValue(root: HTMLElement, selector: string, value: string, event = "change") {
+  const input = root.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+    selector,
+  );
+  if (!input) {
+    throw new Error(`missing control ${selector}`);
   }
-  select.value = value;
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  input.value = value;
+  input.dispatchEvent(new Event(event, { bubbles: true }));
 }
 
 setupAppBrowserTests();
@@ -108,7 +110,7 @@ describe("QA Lab runner browser interactions", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
       root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
-      selectValue(root, "#capture-view-mode", "timeline");
+      setValue(root, "#capture-view-mode", "timeline");
 
       const bins = () =>
         root.querySelectorAll<HTMLButtonElement>("[data-capture-sparkline-window]");
@@ -264,27 +266,18 @@ describe("QA Lab runner browser interactions", () => {
         schemaVersion: 3,
       };
       const root = await mountRunner(createRunnerSelection(), undefined, evidence);
-      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
-        "observed attempt 0",
-      );
+      const inspector = () => root.querySelector(".evidence-inspector")?.textContent;
+      expect(inspector()).toContain("observed attempt 0");
       root.querySelector<HTMLButtonElement>('[data-evidence-entry-key="1"]')!.click();
-      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
-        "observed attempt 1",
-      );
-      expect(root.querySelector(".evidence-inspector")?.textContent).not.toContain(
-        "observed attempt 0",
-      );
+      expect(inspector()).toContain("observed attempt 1");
+      expect(inspector()).not.toContain("observed attempt 0");
       expect(root.querySelectorAll(".evidence-entry-card.selected")).toHaveLength(1);
-      selectValue(root, "#evidence-status-filter", "fail");
-      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
-        "observed attempt 0",
-      );
-      expect(root.querySelector(".evidence-inspector")?.textContent).toContain("not counted");
-      selectValue(root, "#evidence-status-filter", "all");
+      setValue(root, "#evidence-status-filter", "fail");
+      expect(inspector()).toContain("observed attempt 0");
+      expect(inspector()).toContain("not counted");
+      setValue(root, "#evidence-status-filter", "all");
       root.querySelector<HTMLButtonElement>('[data-evidence-entry-key="1"]')!.click();
-      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
-        "observed attempt 1",
-      );
+      expect(inspector()).toContain("observed attempt 1");
       expect(evidence.entries.map((entry) => entry.id)).toEqual(["same-label", "same-label"]);
     } finally {
       window.history.replaceState(null, "", originalUrl);
@@ -311,19 +304,9 @@ describe("QA Lab runner browser interactions", () => {
     httpMock.postJson.mockResolvedValue({ message: { id: "group-message" } });
 
     root.querySelector<HTMLButtonElement>("[data-thread-select='owned-thread']")?.click();
-    selectValue(root, "#conversation-kind", "group");
-    const conversationInput = root.querySelector<HTMLInputElement>("#conversation-id");
-    if (!conversationInput) {
-      throw new Error("missing group conversation input");
-    }
-    conversationInput.value = "qa-group";
-    conversationInput.dispatchEvent(new Event("input", { bubbles: true }));
-    const composer = root.querySelector<HTMLTextAreaElement>("#composer-text");
-    if (!composer) {
-      throw new Error("missing group message composer");
-    }
-    composer.value = "hello group";
-    composer.dispatchEvent(new Event("input", { bubbles: true }));
+    setValue(root, "#conversation-kind", "group");
+    setValue(root, "#conversation-id", "qa-group", "input");
+    setValue(root, "#composer-text", "hello group", "input");
     root.querySelector<HTMLButtonElement>("[data-action='send']")?.click();
 
     await vi.waitFor(() => expect(httpMock.postJson).toHaveBeenCalledTimes(1));
@@ -433,7 +416,7 @@ describe("QA Lab runner browser interactions", () => {
         ),
       ).toEqual(["", "buzz", "matrix", "telegram"]);
       for (const [selector, value] of changes) {
-        selectValue(root, selector, value);
+        setValue(root, selector, value);
       }
       if (action) {
         root.querySelector<HTMLButtonElement>("[data-sidebar-panel='scenarios']")!.click();
@@ -480,7 +463,7 @@ describe("QA Lab runner browser interactions", () => {
     expect(root.textContent).toContain("Explicit QA scenario selection is not runnable");
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
-    selectValue(root, "#evidence-mode", "slim");
+    setValue(root, "#evidence-mode", "slim");
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='run']")?.click();
     expect(root.textContent).not.toContain("Explicit QA scenario selection is not runnable");
     expect(root.textContent).not.toContain("Resolved plan:");
