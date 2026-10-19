@@ -1,7 +1,7 @@
-// Transcript streaming reads large JSONL files forward or backward without whole-file buffering.
 import fs from "node:fs";
 import readline from "node:readline";
-import { hasErrnoCode } from "../../infra/errors.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
+import { statIfExists } from "../../infra/path-existence.js";
 import { readFileRangeAsync } from "./file-range.js";
 
 const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
@@ -18,8 +18,6 @@ type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
 };
 
 /**
- * Stream the non-empty, trimmed JSONL lines of a transcript file in order.
- *
  * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. Honours `options.signal` between lines so long scans can
  * cooperate with abort signals.
@@ -28,16 +26,8 @@ export async function* streamSessionTranscriptLines(
   filePath: string,
   options: TranscriptStreamOptions = {},
 ): AsyncGenerator<string> {
-  let stat: fs.Stats;
-  try {
-    stat = await fs.promises.stat(filePath);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
-  }
-  if (!stat.isFile() || stat.size <= 0) {
+  const stat = await statIfExists(filePath);
+  if (!stat || !stat.isFile() || stat.size <= 0) {
     return;
   }
   if (options.signal?.aborted) {
@@ -63,9 +53,6 @@ export async function* streamSessionTranscriptLines(
 }
 
 /**
- * Stream the non-empty, trimmed JSONL lines of a transcript file in reverse
- * (newest-first) order.
- *
  * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. The implementation splits on newline bytes before UTF-8
  * decoding so multibyte characters survive arbitrary chunk boundaries.
@@ -79,14 +66,9 @@ export async function* streamSessionTranscriptLinesReverse(
     : DEFAULT_REVERSE_CHUNK_BYTES;
   const chunkBytes = Math.min(requestedChunkBytes, MAX_REVERSE_CHUNK_BYTES);
 
-  let fileHandle: Awaited<ReturnType<typeof fs.promises.open>>;
-  try {
-    fileHandle = await fs.promises.open(filePath, "r");
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
+  const fileHandle = await fs.promises.open(filePath, "r").catch(ignoreMissingPath);
+  if (!fileHandle) {
+    return;
   }
   try {
     const stat = await fileHandle.stat();

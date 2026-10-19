@@ -1,8 +1,8 @@
-// Assertions for update-channel switch E2E scenarios.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { readJson } from "../fixtures/common.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 const controlUiHtml = "<!doctype html><title>fixture</title>\n";
@@ -12,10 +12,6 @@ function usage() {
     "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 // Runs inside the bare Docker E2E image, before package dependencies are installed.
@@ -35,10 +31,10 @@ function findTopLevelBlock(lines, key) {
 function parseYamlScalar(raw) {
   const trimmed = raw.trim();
   const withoutComment = trimmed.replace(/\s+#.*$/, "");
-  if (withoutComment.startsWith('"') && withoutComment.endsWith('"')) {
-    return withoutComment.slice(1, -1);
-  }
-  if (withoutComment.startsWith("'") && withoutComment.endsWith("'")) {
+  if (
+    (withoutComment.startsWith('"') && withoutComment.endsWith('"')) ||
+    (withoutComment.startsWith("'") && withoutComment.endsWith("'"))
+  ) {
     return withoutComment.slice(1, -1);
   }
   return withoutComment;
@@ -82,18 +78,17 @@ function writeWorkspacePnpmConfig(file, keptPatches) {
     lines.push(...nextLines);
   }
 
-  const allowUnusedIndex = lines.findIndex((line) => /^allowUnusedPatches:\s*/.test(line));
-  if (allowUnusedIndex === -1) {
-    lines.push("allowUnusedPatches: true");
-  } else {
-    lines[allowUnusedIndex] = "allowUnusedPatches: true";
-  }
-
-  const minimumReleaseAgeIndex = lines.findIndex((line) => /^minimumReleaseAge:\s*/.test(line));
-  if (minimumReleaseAgeIndex === -1) {
-    lines.push("minimumReleaseAge: 0");
-  } else {
-    lines[minimumReleaseAgeIndex] = "minimumReleaseAge: 0";
+  for (const [key, value] of [
+    ["allowUnusedPatches", true],
+    ["minimumReleaseAge", 0],
+  ]) {
+    const index = lines.findIndex((line) => new RegExp(`^${key}:\\s*`).test(line));
+    const setting = `${key}: ${value}`;
+    if (index === -1) {
+      lines.push(setting);
+    } else {
+      lines[index] = setting;
+    }
   }
 
   fs.writeFileSync(file, `${lines.join("\n")}${hadTrailingNewline ? "\n" : ""}`);
@@ -227,21 +222,15 @@ function assertConfigChannel(channel) {
   );
 }
 
-function assertDryRun(kind, channel, selection) {
+function assertDryRun(kind, channel) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
-  const reportedKind =
-    kind === "git" &&
-    selection === "stored" &&
-    process.env.OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT === "1"
-      ? "package"
-      : kind;
   assert.equal(preview.dryRun, true);
   assert.equal(preview.installKind, "package");
   assert.equal(preview.storedChannel, "dev");
   assert.equal(preview.effectiveChannel, channel);
-  assert.equal(preview.updateInstallKind, reportedKind);
-  assert.equal(preview.mode, reportedKind === "git" ? "git" : "npm");
-  assert.equal(preview.switchToGit, reportedKind === "git");
+  assert.equal(preview.updateInstallKind, kind);
+  assert.equal(preview.mode, kind === "git" ? "git" : "npm");
+  assert.equal(preview.switchToGit, kind === "git");
   assert.equal(preview.switchToPackage, false);
 }
 
@@ -261,48 +250,27 @@ function assertInstalledVersion(root, expectedVersion) {
   }
 }
 
-function assertDirtyExit(statusRaw, frozenCompat) {
+function assertDirtyExit(statusRaw) {
   const status = Number(statusRaw);
-  const acceptsZero = frozenCompat === "1";
-  if (status === 1 || (status === 0 && acceptsZero)) {
+  if (status === 1) {
     return;
   }
-  throw new Error(
-    `unexpected dirty-worktree update exit ${statusRaw}; expected ${acceptsZero ? "0 or 1" : "1"}`,
-  );
+  throw new Error(`unexpected dirty-worktree update exit ${statusRaw}; expected 1`);
 }
 
-switch (command) {
-  case "prepare-git-fixture":
-    prepareGitFixture(args[0] ?? "/tmp/openclaw-git");
-    break;
-  case "write-control-ui":
-    writeControlUi(args[0] ?? "/tmp/openclaw-git");
-    break;
-  case "assert-update":
-    assertUpdate(args[0]);
-    break;
-  case "assert-runtime-staging-clean":
-    assertRuntimeStagingClean(args[0]);
-    break;
-  case "assert-dirty-update":
-    assertDirtyUpdate(args[0], args[1]);
-    break;
-  case "assert-dirty-exit":
-    assertDirtyExit(args[0], args[1]);
-    break;
-  case "assert-config-channel":
-    assertConfigChannel(args[0]);
-    break;
-  case "assert-dry-run":
-    assertDryRun(args[0], args[1], args[2]);
-    break;
-  case "assert-status-kind":
-    assertStatusKind(args[0]);
-    break;
-  case "assert-installed-version":
-    assertInstalledVersion(args[0], args[1]);
-    break;
-  default:
-    usage();
+const commands = {
+  "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
+  "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
+  "assert-update": assertUpdate,
+  "assert-runtime-staging-clean": assertRuntimeStagingClean,
+  "assert-dirty-update": assertDirtyUpdate,
+  "assert-dirty-exit": assertDirtyExit,
+  "assert-config-channel": assertConfigChannel,
+  "assert-dry-run": assertDryRun,
+  "assert-status-kind": assertStatusKind,
+  "assert-installed-version": assertInstalledVersion,
+};
+if (!Object.hasOwn(commands, command)) {
+  usage();
 }
+commands[command](...args);

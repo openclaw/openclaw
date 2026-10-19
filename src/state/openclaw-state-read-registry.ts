@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   readSandboxBrowserRegistryInDatabase,
   readSandboxRegistryEntryInDatabase,
@@ -7,58 +6,66 @@ import {
 } from "../agents/sandbox/registry.kernel.js";
 import { listRegistryWorktreesInDatabase } from "../agents/worktrees/registry-read.kernel.js";
 import { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
-import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadReply,
-} from "./openclaw-state-read.types.js";
+import { readPreparedPoolPresenceDemandInDatabase } from "../gateway/worker-environments/prepared-pool-presence-store.worker.js";
+import { readWorkerEnvironmentFacts } from "../gateway/worker-environments/store-row-codec.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 export function readStateRegistryCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<
     OpenClawStateReadCommand,
     {
       type:
+        | "preparedPoolPresence.read"
+        | "workerEnvironments.snapshot"
+        | "agentDeletionJournal.status"
         | "worktrees.cleanupState"
-        | "fleet.list"
-        | "fleet.get"
         | "sandboxRegistry.list"
         | "sandboxRegistry.get"
         | "sandboxRegistry.runtimeIds"
         | "sandboxRegistry.browsers";
     }
   >,
-): OpenClawStateReadReply {
-  const admitted = { ok: true, sourceAdmitted: true } as const;
+) {
+  if (command.type === "preparedPoolPresence.read") {
+    return { type: command.type, demand: readPreparedPoolPresenceDemandInDatabase(db) };
+  }
+  if (command.type === "workerEnvironments.snapshot") {
+    return {
+      type: command.type,
+      facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, command.ids)),
+    };
+  }
+  if (command.type === "agentDeletionJournal.status") {
+    return {
+      type: command.type,
+      status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+    };
+  }
   if (command.type === "sandboxRegistry.list") {
-    return { ...admitted, type: command.type, entries: readSandboxRegistryInDatabase(db) };
+    return { type: command.type, entries: readSandboxRegistryInDatabase(db) };
   }
   if (command.type === "sandboxRegistry.get") {
     return {
-      ...admitted,
       type: command.type,
       entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
     };
   }
   if (command.type === "sandboxRegistry.runtimeIds") {
     return {
-      ...admitted,
       type: command.type,
       runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
     };
   }
   if (command.type === "sandboxRegistry.browsers") {
-    return { ...admitted, type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
+    return { type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
   }
-  if (command.type === "worktrees.cleanupState") {
-    return {
-      ...admitted,
-      type: command.type,
-      records: listRegistryWorktreesInDatabase(db),
-      leases: readWorktreeRunLeaseStateInDatabase(db),
-    };
-  }
-  return command.type === "fleet.list"
-    ? { ...admitted, type: command.type, cells: listFleetCellsInDatabase(db) }
-    : { ...admitted, type: command.type, cell: getFleetCellInDatabase(db, command.tenantId) };
+  return {
+    type: command.type,
+    records: listRegistryWorktreesInDatabase(db),
+    leases: readWorktreeRunLeaseStateInDatabase(db),
+  };
 }

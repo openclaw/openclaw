@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
@@ -15,6 +14,7 @@ import {
   LIVE_TEST_TRIGGER_ENV_KEYS,
   resolveTestHomePolicy,
 } from "./test-home-policy.mts";
+import { isCredentialEnvName } from "./vitest/credential-env-name.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 type InstallTestEnvOptions =
@@ -196,7 +196,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   }
 }
 
-function resolveRestoreEntries(): RestoreEntry[] {
+function resolveRestoreEntries(credentialEnvKeys: readonly string[]): RestoreEntry[] {
   return [
     ...HERMETIC_TEST_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
@@ -230,13 +230,16 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
     { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
-    ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
+    ...[...new Set([...ISOLATED_TEST_CREDENTIAL_ENV_KEYS, ...credentialEnvKeys])].map((key) => ({
+      key,
+      value: process.env[key],
+    })),
     ...ISOLATED_TEST_SERVICE_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 }
 
-function initializeIsolatedTestEnv(tempHome: string): void {
+function initializeIsolatedTestEnv(tempHome: string, credentialEnvKeys: readonly string[]): void {
   // Corepack's installed toolchain is independent of application state. Bind its
   // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
   setTestEnvValue("COREPACK_HOME", resolveTestCorepackHome(process.env));
@@ -265,6 +268,10 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
   // Ambient channel credentials can activate real plugins even with an isolated HOME.
   for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // Fixture env copies spread process.env credentials into assertion output.
+  for (const key of credentialEnvKeys) {
     deleteTestEnvValue(key);
   }
   // A test worker is not the parent Gateway's service. Retaining its identity
@@ -357,10 +364,12 @@ function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
 }
 
 function sanitizeLiveConfig(raw: string): string {
+  const JSON5 = requireFromHere("json5") as typeof import("json5");
   try {
     const parsed: {
       agents?: {
         defaults?: Record<string, unknown>;
+        entries?: Record<string, Record<string, unknown>>;
         list?: Array<Record<string, unknown>>;
       };
       diagnostics?: Record<string, unknown>;
@@ -385,6 +394,16 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
+    }
+
+    if (parsed.agents?.entries && typeof parsed.agents.entries === "object") {
+      for (const entry of Object.values(parsed.agents.entries)) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        delete entry.workspace;
+        delete entry.agentDir;
+      }
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {
@@ -525,9 +544,17 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
       return { cleanup: () => {}, tempHome: realHome };
     }
 
-    const restore = resolveRestoreEntries();
+    // Git config keys and potentially credential-valued entries form one counted tuple.
+    // Removing only KEY_n leaves malformed config and inherited auth values behind.
+    const credentialEnvKeys = live
+      ? []
+      : Object.keys(process.env).filter(
+          (key) =>
+            isCredentialEnvName(key) || /^GIT_CONFIG_(?:COUNT|(?:KEY|VALUE)_\d+)$/u.test(key),
+        );
+    const restore = resolveRestoreEntries(credentialEnvKeys);
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
-    initializeIsolatedTestEnv(tempHome);
+    initializeIsolatedTestEnv(tempHome, credentialEnvKeys);
 
     if (hermetic) {
       for (const key of HERMETIC_TEST_ENV_KEYS) {

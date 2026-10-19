@@ -137,16 +137,17 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           async () =>
             await applyStagedWorkerWorkspace({
               root: row.workspace_dir,
+              assertCurrent: () => params.signal?.throwIfAborted(),
               stagingRoot,
               baseManifestRef,
               currentManifestRef: targetRef,
               base,
               current: target,
               journal: {
-                load: () => undefined,
-                begin: () => {},
-                commit: () => {},
-                abort: () => {
+                load: async () => undefined,
+                begin: async () => {},
+                commit: async () => {},
+                abort: async () => {
                   rolledBack = true;
                 },
               },

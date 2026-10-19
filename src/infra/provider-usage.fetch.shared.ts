@@ -83,7 +83,7 @@ export async function readUsageJson(
 
 export async function fetchUsageJson(
   options: FetchUsageJsonOptions,
-): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
+): ReturnType<typeof readUsageJson> {
   const response = await fetchJson(options.url, options.init, options.timeoutMs, options.fetchFn);
   if (!response.ok) {
     await cancelUnreadResponseBody(response);

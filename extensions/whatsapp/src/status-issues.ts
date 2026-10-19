@@ -3,22 +3,8 @@ import type {
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import {
-  collectIssuesForEnabledAccounts,
-  isRecord,
-  readAccountStatusSnapshot,
-} from "openclaw/plugin-sdk/status-helpers";
+import { collectIssuesForEnabledAccounts, isRecord } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const WHATSAPP_ACCOUNT_STATUS_FIELDS = [
-  "statusState",
-  "linked",
-  "reconnectAttempts",
-  "lastDisconnect",
-  "lastInboundAt",
-  "lastError",
-  "healthState",
-] as const;
 
 const RECENT_DISCONNECT_WARNING_WINDOW_MS = 15 * 60 * 1000;
 
@@ -48,7 +34,7 @@ export function collectWhatsAppStatusIssues(
 ): ChannelStatusIssue[] {
   return collectIssuesForEnabledAccounts({
     accounts,
-    readAccount: (value) => readAccountStatusSnapshot(value, WHATSAPP_ACCOUNT_STATUS_FIELDS),
+    readAccount: (account) => account,
     collectIssues: ({ account, accountId, issues }) => {
       const linked = account.linked === true;
       const statusState = normalizeOptionalString(account.statusState);
@@ -66,6 +52,13 @@ export function collectWhatsAppStatusIssues(
       };
       const relink = `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`;
       const repair = `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`;
+      const linkedRuntimePrefix = linked ? "Linked but " : "";
+      const addRuntimeIssue = (label: string, includeReconnectAttempts = true) =>
+        addIssue(
+          "runtime",
+          `${linkedRuntimePrefix}${label}${includeReconnectAttempts && reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
+          repair,
+        );
 
       if (statusState === "unstable") {
         addIssue(
@@ -73,16 +66,26 @@ export function collectWhatsAppStatusIssues(
           "Auth state is still stabilizing.",
           "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
         );
-        return;
-      }
-
-      if (healthState === "logged-out") {
+      } else if (healthState === "logged-out") {
         addIssue("auth", `Session logged out${lastError ? `: ${lastError}` : "."}`, relink);
+      } else if (!linked) {
+        addIssue("auth", "Not linked (no WhatsApp Web session).", relink);
+      }
+
+      // Preserve the explicit logged-out diagnosis; unstable and unlinked
+      // states can still have a separate runtime problem worth reporting.
+      if (healthState === "logged-out") {
         return;
       }
 
-      if (!linked) {
-        addIssue("auth", "Not linked (no WhatsApp Web session).", relink);
+      // Unlinked accounts default to stopped before a socket has ever run.
+      if (
+        !linked &&
+        healthState === "stopped" &&
+        !lastError &&
+        lastDisconnect?.at == null &&
+        (reconnectAttempts ?? 0) === 0
+      ) {
         return;
       }
 
@@ -91,11 +94,7 @@ export function collectWhatsAppStatusIssues(
           lastInboundAt != null
             ? ` (last inbound ${Math.max(0, Math.floor((Date.now() - lastInboundAt) / 60000))}m ago)`
             : "";
-        addIssue(
-          "runtime",
-          `Linked but stale${staleSuffix}${lastError ? `: ${lastError}` : "."}`,
-          repair,
-        );
+        addRuntimeIssue(`stale${staleSuffix}`, false);
         return;
       }
 
@@ -110,15 +109,12 @@ export function collectWhatsAppStatusIssues(
             : healthState === "reconnecting"
               ? "reconnecting"
               : "stopped";
-        addIssue(
-          "runtime",
-          `Linked but ${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-          repair,
-        );
+        addRuntimeIssue(stateLabel);
         return;
       }
 
       if (
+        linked &&
         running &&
         connected &&
         reconnectAttempts != null &&
@@ -134,11 +130,7 @@ export function collectWhatsAppStatusIssues(
       }
 
       if (running && !connected) {
-        addIssue(
-          "runtime",
-          `Linked but disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-          repair,
-        );
+        addRuntimeIssue("disconnected");
       }
     },
   });

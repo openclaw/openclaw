@@ -55,7 +55,7 @@ describe("captured runtime config source", () => {
     expect(hashRuntimeConfigValue(authored)).toBe(hashRuntimeConfigValue(source));
     expect(Object.isFrozen(captured.agents?.entries)).toBe(true);
     expect(Object.isFrozen(authored.gateway?.auth)).toBe(true);
-    expect(tryGetLegacyDefaultAgentId(captured)).toBe("ops");
+    expect(tryGetLegacyDefaultAgentId(captured)).toBeUndefined();
     expect(getResolvedConfigEnvSecretRef(captured, "gateway.auth.token")?.id).toBe("GATEWAY_TOKEN");
     expect(resolvePluginActivationSourceConfig({ config: captured })).toBe(authored);
     expect(captureRuntimeConfig(authored)).toBe(authored);

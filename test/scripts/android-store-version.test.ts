@@ -137,86 +137,60 @@ describe("Android store version selection", () => {
     });
   });
 
-  it("does not reinterpret a missing v2 upload record as a legacy date code", () => {
-    expect(() =>
-      resolveAndroidStorePlan({
-        ...input,
-        refs: [...input.refs, marker],
-        snapshot: {
-          uploadedVersionCodes: [2026090501, 2026090502],
-          tracks: [],
-        },
-      }),
-    ).toThrow("no v2 source record");
-    expect(() => resolveAndroidStorePlan({ ...input, refs: [...input.refs, candidate] })).toThrow(
-      "no matching legacy cutover",
-    );
-  });
-
-  it("requires a recorded public identity instead of decoding historical inventory codes", () => {
-    for (const code of [2026090301, 202603080, 2026041590]) {
-      expect(() =>
-        resolveAndroidStorePlan({
-          ...input,
-          snapshot: { uploadedVersionCodes: [code], tracks: [track("production", code)] },
-        }),
-      ).toThrow(`Google Play production versionCode ${code} has no recorded source identity`);
-    }
-  });
-
-  it.each([
-    {
-      name: "a newer Gateway already uploaded",
-      changes: { gatewayVersion: "2026.9.3" },
-      error: "precedes",
-    },
-    {
-      name: "an active rollout",
-      changes: {
-        snapshot: { ...input.snapshot, tracks: [track("production", 2026090401, "inProgress")] },
-      },
-      error: "ambiguous public release state",
-    },
-    {
-      name: "the wrong form factor on production",
-      changes: { snapshot: { ...input.snapshot, tracks: [track("production", 2026090451)] } },
-      error: "different form factor",
-    },
-    {
-      name: "conflicting source identities",
-      changes: {
-        refs: [
-          ...input.refs,
-          marker,
-          candidate,
-          { ref: `${prefix}/v2/2026.9.6/1/1/2026090452-2026090453`, sha },
-        ],
-      },
-      error: "Multiple Android source records",
-    },
-    {
-      name: "conflicting cutover markers",
-      changes: { refs: [marker, { ref: `${prefix}/cutover-v2/2026090453`, sha }] },
-      error: "Multiple Android store version cutover",
-    },
-  ])("refuses $name", ({ changes, error }) => {
-    expect(() => resolveAndroidStorePlan({ ...input, ...changes })).toThrow(error);
-  });
-
-  it("refuses public revision and native code exhaustion before selecting an unuploadable pair", () => {
+  it("refuses ambiguous identities, rollouts, downgrades, and exhausted store versions", () => {
     const final = { ref: `${prefix}/v2/2026.9.6/9/1/2099999999-2100000000`, sha };
-    expect(() => resolveAndroidStorePlan({ ...input, refs: [marker, final] })).toThrow(
-      "versionCode space is exhausted",
-    );
-    expect(() =>
-      resolveAndroidStorePlan({
-        ...input,
-        refs: [marker, final],
-        snapshot: {
-          uploadedVersionCodes: [],
-          tracks: [track("production", 2099999999)],
+    const cases: Array<[Partial<Parameters<typeof resolveAndroidStorePlan>[0]>, string]> = [
+      [
+        {
+          refs: [...input.refs, marker],
+          snapshot: { uploadedVersionCodes: [2026090501, 2026090502], tracks: [] },
         },
-      }),
-    ).toThrow("public revisions for 2026.9.6 are exhausted");
+        "no v2 source record",
+      ],
+      [{ refs: [...input.refs, candidate] }, "no matching legacy cutover"],
+      ...[2026090301, 202603080, 2026041590].map(
+        (code): [Partial<Parameters<typeof resolveAndroidStorePlan>[0]>, string] => [
+          { snapshot: { uploadedVersionCodes: [code], tracks: [track("production", code)] } },
+          `Google Play production versionCode ${code} has no recorded source identity`,
+        ],
+      ),
+      [{ gatewayVersion: "2026.9.3" }, "precedes"],
+      [
+        {
+          snapshot: { ...input.snapshot, tracks: [track("production", 2026090401, "inProgress")] },
+        },
+        "ambiguous public release state",
+      ],
+      [
+        { snapshot: { ...input.snapshot, tracks: [track("production", 2026090451)] } },
+        "different form factor",
+      ],
+      [
+        {
+          refs: [
+            ...input.refs,
+            marker,
+            candidate,
+            { ref: `${prefix}/v2/2026.9.6/1/1/2026090452-2026090453`, sha },
+          ],
+        },
+        "Multiple Android source records",
+      ],
+      [
+        { refs: [marker, { ref: `${prefix}/cutover-v2/2026090453`, sha }] },
+        "Multiple Android store version cutover",
+      ],
+      [{ refs: [marker, final] }, "versionCode space is exhausted"],
+      [
+        {
+          refs: [marker, final],
+          snapshot: { uploadedVersionCodes: [], tracks: [track("production", 2099999999)] },
+        },
+        "public revisions for 2026.9.6 are exhausted",
+      ],
+    ];
+    for (const [changes, error] of cases) {
+      expect(() => resolveAndroidStorePlan({ ...input, ...changes }), error).toThrow(error);
+    }
   });
 });

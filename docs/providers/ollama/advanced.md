@@ -10,6 +10,27 @@ sidebarTitle: "Advanced"
 
 ## Advanced configuration
 
+Native Ollama requests keep exact session identities and runtime facts in the
+first user message, after the shared system and tool prefix. This allows local
+prompt caches to reuse that prefix across equivalent subagent spawns while
+preserving earlier message bytes on follow-up turns. Cache reuse still depends
+on the model template, available cache slots, and unchanged instructions/tools.
+
+### Cloud quota in `/status`
+
+Ollama 0.40.1 and later can proxy `GET /api/balance` through a signed-in local
+server. When the `ollama` provider has a configured local `apiKey: "ollama-local"`,
+OpenClaw includes its balance in chat `/status` and `openclaw status --usage`. Legacy
+plans show session and weekly usage with reset times; current plans show the
+included balance and its period reset. Purchased credits appear separately.
+
+The local server must be signed in to Ollama Cloud. Local-only models have no
+cloud quota. Unsigned-in servers and servers without the balance endpoint are
+quietly omitted from usage reports. OpenClaw fetches the balance only during the
+existing usage refresh; it does not poll separately or need your Ollama web
+session cookie. If `plugins.allow` is set, include `ollama` so its usage hook can load.
+Other balance failures include guidance for checking the server or its access permissions.
+
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">
     <Warning>
@@ -36,7 +57,12 @@ sidebarTitle: "Advanced"
     ```
 
     This mode may not support streaming and tool calling simultaneously; you
-    may need `params: { streaming: false }` on the model.
+    may need `params: { streaming: false }` on the model in
+    `models.providers.ollama.models`. You can also set it under
+    `agents.defaults.models["ollama/<model>"].params`. For `openai-completions`,
+    this sends `stream: false` upstream and delivers the completed reply with
+    its usage, reasoning, and tool calls. Streaming remains enabled when unset;
+    this setting does not change native Ollama `/api/chat` requests.
 
     OpenClaw injects `options.num_ctx` by default in this mode so Ollama does
     not silently fall back to a 4096-token context. If your proxy rejects
@@ -105,7 +131,9 @@ sidebarTitle: "Advanced"
     top-level request fields instead of nested `options`. Local native chat
     requests default to `truncate: false` and `shift: false`, so supporting
     servers reject overflowing input instead of silently dropping history.
-    OpenClaw then attempts compaction and retries, or reports the failure.
+    OpenClaw then attempts compaction and retries. If recovery cannot make the
+    request fit, a replay-safe turn can use the configured model fallback chain,
+    preferring candidates with known context headroom; otherwise it reports the failure.
     Generation that fills the window can still produce a labeled partial reply.
     This behavior is verified with Ollama 0.33.3; older servers may ignore the
     fields. Explicit per-model values override these defaults. Hosted models
@@ -157,12 +185,24 @@ sidebarTitle: "Advanced"
     OpenClaw forwards thinking as Ollama expects it: top-level `think`, not
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
-    and `/think max`; non-thinking models expose only `/think off`.
+    and `/think max`; non-thinking models expose only `/think off`. When
+    `/api/show` also reports `thinking.values`, discovery caches a model-specific
+    mapping. Boolean models send `false` or `true`; graded models send their
+    supported effort strings. Advertised `xhigh` is also available through
+    `/think xhigh` and `--thinking xhigh`.
+
+    Existing selections map to the nearest supported tier using OpenClaw's
+    shared thinking ladder. For example, a model advertising `low`, `medium`,
+    and `xhigh` receives `xhigh` for High and Maximum. If the model cannot
+    disable thinking, Off uses its lowest supported tier. OpenClaw keeps its
+    existing Off default rather than adopting `thinking.default`. Discovery
+    caches these mappings with model metadata; turns do not fetch them again.
 
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
-    calls. This lets tool follow-ups reuse reasoning retained by the session's
-    history policy without mixing it into visible answer text.
+    calls, including later tool steps and reopened sessions. Earlier reasoning
+    stays in place so local prompt caches can reuse the prefix. It is not mixed
+    into visible answer text; compaction can still replace older history.
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off
@@ -188,9 +228,11 @@ sidebarTitle: "Advanced"
     Per-model `params.think`/`params.thinking` can disable or force API
     thinking for a specific model. OpenClaw preserves that explicit config
     when the active run only has the implicit `off` default; a non-off
-    runtime command such as `/think medium` still overrides it. A truthy
-    thinking request is never sent to a model explicitly marked
-    `reasoning: false`; a `think: false` request is always sent regardless.
+    runtime command such as `/think medium` still overrides it. A model marked
+    `reasoning: false` suppresses enabled runtime selections. However, a
+    mandatory-thinking model still uses its lowest supported tier for Off or a
+    configured `false`, keeping reasoning out of the answer even when its
+    visibility is disabled.
 
   </Accordion>
 
@@ -215,6 +257,14 @@ sidebarTitle: "Advanced"
     and API key, calls `/api/embed`, and batches multiple memory chunks into
     one `input` request when possible.
 
+    For rootless Podman, a configured Ollama provider at
+    `http://host.containers.internal:11434` can resolve to a canonical IPv4
+    link-local host gateway such as `169.254.1.2`. Memory embeddings allow this
+    exact provider origin, including a remote override that matches it. Other
+    hostnames, cloud metadata addresses, and IPv6-encoded link-local addresses
+    keep their existing restrictions. These requests reject cross-origin
+    redirects, including changes to the scheme or port.
+
     When `proxy.enabled=true`, embedding requests to the exact host-local
     loopback origin derived from the configured `baseUrl` use OpenClaw's
     guarded direct path instead of the managed forward proxy. The configured
@@ -229,8 +279,12 @@ sidebarTitle: "Advanced"
     | Property | Value |
     | --- | --- |
     | Default model | `nomic-embed-text` |
-    | Auto-pull | Yes, if not present locally |
+    | Auto-pull | No; pull the model on the Ollama host first |
     | Embedding concurrency | Provider-owned; no memory-search tuning key is required |
+
+    Before indexing memory, run `ollama pull nomic-embed-text` on the configured
+    Ollama host (or pull the model selected by `memory.search.model`). A missing
+    model returns HTTP 404; OpenClaw does not download it automatically.
 
     Query-time embeddings use retrieval prefixes for models that require or
     recommend them: `nomic-embed-text`, `qwen3-embedding`, and
@@ -263,13 +317,35 @@ sidebarTitle: "Advanced"
     Ollama uses the **native API** (`/api/chat`) by default, which supports
     streaming and tool calling together — no special config needed.
 
-    For native requests, thinking control is forwarded directly: `/think off`
-    and `openclaw agent --thinking off` send top-level `think: false` unless
-    an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string. Verified full-effort
-    Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
+    Native Ollama and ordinary Chat Completions preserve visible model text as
+    it streams. Later tool calls or reasoning do not reclassify earlier text.
+    Durable reply blocks follow the configured streaming boundaries. With
+    block streaming off, the final channel reply uses the assistant text after
+    the last tool call, while live surfaces retain text already shown.
+    Reasoning visibility and private-tag filtering still apply.
+    See [Text phases and final replies](/concepts/streaming#pending-text-phases).
+
+    For native requests, `/think off`, `openclaw agent --thinking off`, and
+    plugin `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level
+    `think: false` unless an explicit `params.think`/`params.thinking` is
+    configured or discovery reports a model that cannot disable thinking.
+    Direct completions that omit `reasoning` keep the model default.
+    Without a discovered thinking descriptor, `/think low|medium|high` send
+    the matching effort string. Verified full-effort
+    Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3,
+    DeepSeek V4, and DeepSeek V4.1 Flash also send native
     `think: "max"` for `/think max`; other models and local servers keep the
     compatible `think: "high"` mapping.
+    Native `max` applies to the `ollama-cloud` provider and to any `ollama`
+    provider whose base URL is `https://ollama.com`. A `:cloud` model reached
+    through a local Ollama server keeps `high`, because Ollama 0.21.2 and
+    earlier reject `max`.
+
+    GLM 5.3 and GLM 5.3 Flash on Ollama Cloud cannot turn thinking off: their
+    `/api/show` thinking values have no `false`, and `think: false` makes them
+    answer with their reasoning inline. For these models, `/think off` and a
+    configured `false` send their lowest level, `think: "low"`, instead, in
+    agent turns and in one-shot completions such as `openclaw infer model run`.
 
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.

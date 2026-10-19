@@ -1,21 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { icons } from "../../components/icons.ts";
+import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { t } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
 
-function iconMarkup(icon: unknown): string | undefined {
+function iconShapes(name: IconName): string[] {
   const container = document.createElement("div");
-  render(icon, container);
-  return container.querySelector("svg")?.innerHTML;
+  const view = mountSolid(() => createComponent(Icon, { name }), { container });
+  try {
+    return Array.from(container.querySelector("svg")?.children ?? [], (shape) => shape.outerHTML);
+  } finally {
+    view.unmount();
+  }
 }
 
 afterEach(async () => {
@@ -58,8 +64,12 @@ describe("renderChatComposer video", () => {
     });
 
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
-    expect(cameraToggle.querySelector("svg")?.innerHTML).toBe(iconMarkup(icons.cameraOff));
-    expect(cameraToggle.querySelector("svg")?.innerHTML).not.toBe(iconMarkup(icons.camera));
+    const shapes = Array.from(
+      cameraToggle.querySelector("svg")?.children ?? [],
+      (shape) => shape.outerHTML,
+    );
+    expect(shapes).toEqual(iconShapes("cameraOff"));
+    expect(shapes).not.toEqual(iconShapes("camera"));
   });
 
   it("offers camera switching only for a live preview with multiple cameras", () => {
@@ -116,12 +126,12 @@ describe("renderChatComposer video", () => {
   it("keeps the same camera stream attached across unrelated rerenders", () => {
     const stream = { getVideoTracks: () => [] } as unknown as MediaStream;
     const replacementStream = { getVideoTracks: () => [] } as unknown as MediaStream;
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const composerProps = props({
       realtimeTalkStatus: "listening",
       realtimeTalkVideoStream: stream,
     });
-    const draw = () => render(renderChatComposer(composerProps), container);
+    const draw = () => renderComposerInto(container, composerProps);
     draw();
 
     const preview = container.querySelector<HTMLVideoElement>(

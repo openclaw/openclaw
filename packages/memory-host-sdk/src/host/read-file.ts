@@ -14,11 +14,7 @@ import {
   normalizeExtraMemoryPathEntries,
 } from "./internal.js";
 import { getAgentWorkspaceAccess } from "./openclaw-runtime-workspace.js";
-import {
-  buildMemoryReadResult,
-  DEFAULT_MEMORY_READ_LINES,
-  type MemoryReadResult,
-} from "./read-file-shared.js";
+import { buildMemoryReadResult, type MemoryReadResult } from "./read-file-shared.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
@@ -96,7 +92,7 @@ export async function readMemoryFile(params: {
       relPath,
       from: params.from,
       lines: params.lines,
-      defaultLines: params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
+      defaultLines: params.defaultLines,
       maxChars: params.maxChars,
       suggestReadFallback: allowedWorkspace,
     });

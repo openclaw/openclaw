@@ -55,6 +55,29 @@ describe("createPublicExporterHealthEventEmitter", () => {
   });
 });
 
+it("keeps the oldest active exporter failure visible until its producer recovers", () => {
+  const events: ExporterHealthUpdate[] = [];
+  const emit = createExporterHealthEventEmitter((event) => events.push(event));
+  const route = {
+    exporter: "diagnostics-otel",
+    signal: "logs",
+    transport: "otlp-http-protobuf",
+  } as const;
+
+  emit({ ...route, status: "failure", reason: "emit_failed" });
+  emit({ ...route, status: "failure", reason: "export_failed" });
+  emit({ ...route, status: "recovered", reason: "export_failed" });
+  emit({ ...route, status: "failure", reason: "export_failed" });
+  emit({ ...route, status: "recovered", reason: "emit_failed" });
+  emit({ ...route, status: "recovered", reason: "export_failed" });
+
+  expect(events.map(({ status, reason }) => ({ status, reason }))).toEqual([
+    { status: "failure", reason: "emit_failed" },
+    { status: "failure", reason: "export_failed" },
+    { status: "recovered", reason: "export_failed" },
+  ]);
+});
+
 describe("observeOtlpExporterHealth", () => {
   it("records a shutdown rejection without exposing its message", async () => {
     const events: ExporterHealthUpdate[] = [];

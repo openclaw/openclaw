@@ -99,21 +99,14 @@ final class ExecApprovalsGatewayPrompter {
         lastInputSeconds: Int?,
         thresholdSeconds: Int = 120) -> Bool
     {
-        let active = activeSession?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requested = requestSession?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let active = activeSession?.nonEmpty
+        let requested = requestSession?.nonEmpty
         let recentlyActive = lastInputSeconds.map { $0 <= thresholdSeconds } ?? (mode == .local)
 
-        if let session = requested, !session.isEmpty {
-            if let active, !active.isEmpty {
-                return active == session
-            }
-            return recentlyActive
+        if let requested {
+            return active.map { $0 == requested } ?? recentlyActive
         }
-
-        if let active, !active.isEmpty {
-            return true
-        }
-        return mode == .local
+        return active != nil || mode == .local
     }
 
     private static func lastInputSeconds() -> Int? {

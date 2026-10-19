@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -24,7 +25,9 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const openAIRealtimeHost = {
   resolveAgentDir,
+  // Retained for public synchronous SDK calls through 2026-12-31.
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
   resolveProviderRequestHeaders,
   createRealtimeTranscriptionWebSocketSession,
@@ -40,7 +43,10 @@ export const openAIRealtimeHost = {
   redactSensitiveText,
 } satisfies Omit<
   PluginCapabilityCatalogHostContext,
-  "isProviderApiKeyConfigured" | "resolveApiKeyForProvider" | "captureWsEvent"
+  | "isProviderApiKeyConfigured"
+  | "isProviderApiKeyConfiguredAsync"
+  | "resolveApiKeyForProvider"
+  | "captureWsEvent"
 >;
 
 export type OpenAIRealtimeHost = typeof openAIRealtimeHost;

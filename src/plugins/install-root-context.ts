@@ -8,12 +8,7 @@ import { resolveConfigDir } from "../utils.js";
 const PLUGIN_INSTALL_ROOT_CONTEXT_KEY = Symbol.for("openclaw.pluginInstallRootContext");
 
 /** Immutable roots that own installed plugin artifacts and their registry. */
-export type PluginInstallRoots = Readonly<{
-  extensionsDir: string;
-  gitDir: string;
-  npmDir: string;
-  stateDir: string;
-}>;
+export type PluginInstallRoots = ReturnType<typeof resolvePluginInstallRoots>;
 
 const pluginInstallRootContext = resolveGlobalSingleton<AsyncLocalStorage<PluginInstallRoots>>(
   PLUGIN_INSTALL_ROOT_CONTEXT_KEY,
@@ -24,7 +19,7 @@ const pluginInstallRootContext = resolveGlobalSingleton<AsyncLocalStorage<Plugin
 export function resolvePluginInstallRoots(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
-): PluginInstallRoots {
+) {
   const configDir = resolveConfigDir(env, homedir);
   return Object.freeze({
     extensionsDir: path.join(configDir, "extensions"),

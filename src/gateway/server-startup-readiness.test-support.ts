@@ -12,7 +12,7 @@ import type { ReadinessChecker } from "./server/readiness.js";
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
 export function registerGatewayStartupReadinessTests(params: {
-  start: typeof startGatewayPostAttachRuntime;
+  start: (params: PostAttachParams) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
 }): void {
   it.each([false, true])(

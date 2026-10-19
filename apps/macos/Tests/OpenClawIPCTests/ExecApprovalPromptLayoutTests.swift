@@ -122,7 +122,6 @@ struct ExecApprovalPromptLayoutTests {
                 allowAlwaysPatterns: patterns,
                 allowlistMatches: [],
                 allowlistAuthorizationSatisfied: false,
-                allowlistSatisfied: false,
                 allowlistMatch: nil,
                 skillTrust: nil,
                 policySnapshot: ExecApprovalPolicySnapshot(

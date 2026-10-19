@@ -1,5 +1,3 @@
-// Defines browser profile configuration types.
-
 import type { z } from "zod";
 import type { SsrFPolicyConfig } from "./types.ssrf.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -10,12 +8,6 @@ export type BrowserProfileConfig = NonNullable<BrowserSchemaInput["profiles"]>[s
   /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
   color?: string;
 };
-
-export type BrowserSnapshotDefaults = NonNullable<BrowserSchemaInput["snapshotDefaults"]>;
-
-export type BrowserTabCleanupConfig = NonNullable<BrowserSchemaInput["tabCleanup"]>;
-
-export type BrowserExtensionRelayConfig = NonNullable<BrowserSchemaInput["extensionRelay"]>;
 
 export type BrowserSsrFPolicyConfig = SsrFPolicyConfig;
 

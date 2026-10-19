@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { narrowIncludePatterns } from "./vitest.include-patterns.ts";
+import { narrowIncludePatterns, resolveNonBrowserTestPattern } from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
@@ -32,6 +32,11 @@ export function isSharedVitestExcludedPath(file: string, scopedDir = ""): boolea
 }
 
 export function matchesVitestGlob(value: string, pattern: string): boolean {
+  // Preserve the original Node/Bun spelling while native discovery uses the full basename.
+  const nonBrowser = resolveNonBrowserTestPattern(pattern);
+  if (nonBrowser) {
+    return matchesVitestGlob(value, nonBrowser);
+  }
   // CI plans tests before installing dependencies; keep Node's matcher dependency-free.
   if (!process.versions.bun) {
     return path.matchesGlob(value, pattern);

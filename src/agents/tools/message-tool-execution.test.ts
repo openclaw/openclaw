@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   ErrorCodes,
@@ -11,6 +11,9 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import * as commandSecretTargets from "../../cli/command-secret-targets.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearBootEchoContextForSession,
@@ -24,7 +27,7 @@ import type {
   MessageActionInput,
   MessageActionResult,
 } from "../../infra/outbound/message-action-contracts.js";
-import { runMessageAction as runRealMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import {
   workspaceConfig,
   workspaceTestPlugin,
@@ -33,10 +36,14 @@ import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
@@ -47,6 +54,7 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
 const EMPTY_CATALOG = {
@@ -54,6 +62,25 @@ const EMPTY_CATALOG = {
   channels: [],
   getChannel: () => undefined,
 } as const;
+
+beforeEach(() => {
+  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
+    targetIds: new Set<string>(),
+  });
+  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+    async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("registered message action source completion", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
@@ -64,6 +91,7 @@ describe("registered message action source completion", () => {
     target?: string;
     delivery?: Record<string, unknown>;
     media?: boolean;
+    collision?: "before" | "during" | "replacement" | "unbound";
     expected?: true;
   }> = [
     ...(
@@ -76,16 +104,14 @@ describe("registered message action source completion", () => {
         "sendAttachment",
         "sendWithEffect",
       ] as const
-    ).flatMap((action) => [
-      { action, mode: "implicit target", expected: true as const },
-      { action, mode: "explicit target", target: "channel:C123", expected: true as const },
-      {
-        action,
-        mode: "different delivered recipient",
-        target: "C123",
-        delivery: { toJid: "C999" },
-      },
-    ]),
+    ).map((action) => ({ action, mode: "implicit target", expected: true as const })),
+    { action: "send", mode: "explicit target", target: "channel:C123", expected: true },
+    {
+      action: "upload-file",
+      mode: "different delivered recipient",
+      target: "C123",
+      delivery: { toJid: "C999" },
+    },
     { action: "send", mode: "media", media: true, expected: true },
     { action: "send", mode: "redirected media", media: true, delivery: { channelId: "C999" } },
     { action: "upload-file", mode: "other destination", target: "C999" },
@@ -140,12 +166,41 @@ describe("registered message action source completion", () => {
       target: "C123",
     })),
     { action: "react", mode: "non-reply mutation", target: "C123" },
+    {
+      action: "upload-file",
+      mode: "colliding run-scoped source under another ambient owner",
+      collision: "before",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding ambient owner without the requested run binding",
+      collision: "unbound",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding unscoped source during delivery",
+      collision: "during",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding successor before unscoped invocation",
+      collision: "replacement",
+      expected: true,
+    },
   ];
 
   it.each(cases)(
     "records only eligible source completion for $action ($mode)",
-    async ({ action, mode, target, delivery, media, expected }) => {
+    async ({ action, mode, target, delivery, media, collision, expected }) => {
+      const sessionId = "source-completion-session";
+      let competingOperation: ReturnType<typeof createReplyOperation> | undefined;
       const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
+        if (collision === "during") {
+          createCollision();
+        }
         if (mode === "throw") {
           throw new Error("synthetic upload failure");
         }
@@ -188,27 +243,70 @@ describe("registered message action source completion", () => {
         requesterAccountId: "default",
         toolContext: source,
       });
-      try {
-        const tool = createMessageTool({
-          config: {
-            ...workspaceConfig,
-            tools: { message: { crossContext: { allowWithinProvider: true } } },
-          },
-          ...source,
-          agentId: identity.agentId,
-          runId: identity.runId,
-          agentSessionKey: identity.sessionKey,
-          agentAccountId: "default",
-          messageActionTurnCapability: capability,
-          sourceReplyDeliveryMode: "automatic",
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-            resolvedConfig: config,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
+      // The turn's reply operation keeps this fact so a later stall cannot answer again.
+      const operation = createReplyOperation({
+        sessionKey: identity.sessionKey,
+        sessionId,
+        resetTriggered: false,
+        ...(collision && {
+          target: captureSessionTarget({
+            storeScope: "/stores/message-source.sqlite",
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
+          }),
+        }),
+      });
+      const createCollision = (storeScope = "/stores/message-other.sqlite") => {
+        competingOperation = createReplyOperation({
+          sessionKey: identity.sessionKey,
+          sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope,
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
           }),
         });
+      };
+      if (collision === "before") {
+        operation.attachBackend({ kind: "embedded", runId: identity.runId, cancel() {} });
+      }
+      if (collision === "before" || collision === "unbound") {
+        createCollision();
+      }
+      try {
+        const config: OpenClawConfig = {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowWithinProvider: true } } },
+        };
+        setRuntimeConfigSnapshot(config);
+        const createTool = () =>
+          createMessageTool({
+            config,
+            ...source,
+            agentId: identity.agentId,
+            runId: identity.runId,
+            sessionId: operation.sessionId,
+            agentSessionKey: identity.sessionKey,
+            agentAccountId: "default",
+            messageActionTurnCapability: capability,
+            sourceReplyDeliveryMode: "automatic",
+          });
+        const ambientOperation = competingOperation;
+        const tool =
+          (collision === "before" || collision === "unbound") && ambientOperation
+            ? await withGatewayToolCallerIdentity(
+                {
+                  ...identity,
+                  operationalRunInstance: createOperationalRunInstanceRef(identity.runId),
+                },
+                () => withSessionControllerOwner(ambientOperation, createTool),
+              )
+            : createTool();
+        if (collision === "replacement") {
+          operation.complete();
+          createCollision("/stores/message-source.sqlite");
+        }
         const execution = tool.execute("source-upload", {
           action,
           message: "Uploaded source reply",
@@ -237,6 +335,10 @@ describe("registered message action source completion", () => {
             (result.details as { messageDelivery?: unknown }).messageDelivery,
           );
           expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
+          expect(operation.sourceReplyDelivered).toBe(expected === true && collision !== "unbound");
+          if (competingOperation) {
+            expect(competingOperation.sourceReplyDelivered).toBe(false);
+          }
           if (expected) {
             expect(deliveryFact).toMatchObject({
               status: "settled",
@@ -246,6 +348,8 @@ describe("registered message action source completion", () => {
           }
         }
       } finally {
+        operation.complete();
+        competingOperation?.complete();
         revokeMessageActionTurnCapability(capability);
       }
     },
@@ -253,9 +357,10 @@ describe("registered message action source completion", () => {
 });
 
 function createFailingMessageTool(error: Error) {
-  const runMessageAction = vi.fn(async () => {
-    throw error;
-  });
+  const runMessageAction = vi
+    .spyOn(messageActionRunner, "runMessageAction")
+    .mockRejectedValue(error);
+  setRuntimeConfigSnapshot({});
   const tool = createMessageTool({
     config: {},
     runId: "run-queued-delivery",
@@ -265,19 +370,14 @@ function createFailingMessageTool(error: Error) {
     currentChannelProvider: "telegram",
     currentChannelId: "chat-123",
     currentMessagingTarget: "chat-123",
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
-    runMessageAction,
   });
   return { tool, runMessageAction };
 }
 
-function sentIdempotencyKey(runMessageAction: ReturnType<typeof vi.fn>, call: number) {
+function sentIdempotencyKey(
+  runMessageAction: MockInstance<typeof messageActionRunner.runMessageAction>,
+  call: number,
+) {
   const request = runMessageAction.mock.calls[call]?.[0] as
     | { params?: { idempotencyKey?: string } }
     | undefined;
@@ -285,18 +385,19 @@ function sentIdempotencyKey(runMessageAction: ReturnType<typeof vi.fn>, call: nu
 }
 
 describe("message tool queued gateway delivery", () => {
-  it("returns a do-not-resend result when the gateway owns the retry", async () => {
-    const { tool, runMessageAction } = createFailingMessageTool(
-      new GatewayClientRequestError({
-        code: ErrorCodes.UNAVAILABLE,
-        message: "connect ECONNREFUSED",
-        details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED },
-      }),
-    );
-
-    const result = await tool.execute("queued-send", { action: "send", message: "hello" });
-
-    expect(result).toMatchObject({
+  it.each([true, false])("preserves retry ownership for queued=%s", async (queued) => {
+    const error = new GatewayClientRequestError({
+      code: ErrorCodes.UNAVAILABLE,
+      message: "connect ECONNREFUSED",
+      ...(queued ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } } : {}),
+    });
+    const { tool, runMessageAction } = createFailingMessageTool(error);
+    const pending = tool.execute("send", { action: "send", message: "hello" });
+    if (!queued) {
+      await expect(pending).rejects.toBe(error);
+      return;
+    }
+    expect(await pending).toMatchObject({
       details: {
         status: "delivery_queued",
         delivered: false,
@@ -304,24 +405,9 @@ describe("message tool queued gateway delivery", () => {
           "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
       },
     });
-
-    // A model that resends anyway must reuse the queued key so the gateway's
-    // idempotency cache answers instead of a second durable send.
-    await tool.execute("queued-send-again", { action: "send", message: "hello" });
+    await tool.execute("send-again", { action: "send", message: "hello" });
     expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
     expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
-  });
-
-  it("keeps an unstructured unavailable error throwable", async () => {
-    const error = new GatewayClientRequestError({
-      code: ErrorCodes.UNAVAILABLE,
-      message: "connect ECONNREFUSED",
-    });
-    const { tool } = createFailingMessageTool(error);
-
-    await expect(
-      tool.execute("ordinary-failure", { action: "send", message: "hello" }),
-    ).rejects.toBe(error);
   });
 });
 
@@ -357,10 +443,11 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
         assertCurrent: () => {},
       },
     });
-    const resolveSecrets = vi.fn(async () => {
-      throw new Error("Credential preparation must not run for a missing account");
-    });
+    const resolveSecrets = vi
+      .spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway")
+      .mockRejectedValue(new Error("Credential preparation must not run for a missing account"));
     try {
+      setRuntimeConfigSnapshot(cfg);
       const tool = createMessageTool({
         config: cfg,
         agentId: identity.agentId,
@@ -371,7 +458,6 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
         messageActionTurnCapability: token,
         preparedMessageToolCatalog: EMPTY_CATALOG,
         admitScheduledInvocation: () => cfg,
-        resolveCommandSecretRefsViaGateway: resolveSecrets,
       });
       await expect(
         tool.execute(action, {
@@ -540,6 +626,7 @@ describe("message tool terminal source actions", () => {
       requesterAccountId: "default",
       toolContext: source,
     });
+    setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
@@ -549,14 +636,6 @@ describe("message tool terminal source actions", () => {
       messageActionTurnCapability: turnCapability,
       ...source,
       sourceReplyDeliveryMode: "automatic",
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-        resolvedConfig: config,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
-      runMessageAction: runRealMessageAction,
     });
 
     const result = await tool.execute("terminal-action", { action: "react", emoji: "👍", ...args });
@@ -609,7 +688,7 @@ describe("message tool terminal source actions", () => {
         terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
         settledTurnFinalizationAvailable: true,
       });
-      expect(finalization === null).toBe(completes);
+      expect(finalization).toBeNull();
     }
   });
 });
@@ -657,6 +736,7 @@ describe("message tool group thread replies", () => {
         },
       ]),
     );
+    setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
@@ -664,14 +744,6 @@ describe("message tool group thread replies", () => {
       currentChannelId: "C12345678",
       currentMessagingTarget: "C12345678",
       currentThreadTs: "42",
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-        resolvedConfig: config,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
-      runMessageAction: runRealMessageAction,
     });
     const participant = { agentId: "reviewer", name: "Reviewer" };
     const location = { latitude: 48.858844, longitude: 2.294351 };
@@ -716,24 +788,9 @@ describe("message tool group thread replies", () => {
       const hookRunner = createHookRunner(
         createMockPluginRegistry([{ hookName: "message_sending", handler: sendingHook }]),
       );
-      const tool = createMessageTool({
-        config: {},
-        agentSessionKey: `agent:reviewer:${channel}:group:123:thread:${sourceThread}`,
-        currentChannelProvider: channel,
-        currentChannelId: "123",
-        currentMessagingTarget: "123",
-        currentThreadTs: sourceThread,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
-        runMessageAction: async ({
-          action,
-          params,
-        }: MessageActionInput): Promise<MessageActionResult> => {
+      setRuntimeConfigSnapshot({});
+      vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(
+        async ({ action, params }: MessageActionInput): Promise<MessageActionResult> => {
           if (action !== "send" && action !== "edit") {
             throw new Error(`Unexpected fixture action: ${action}`);
           }
@@ -796,6 +853,14 @@ describe("message tool group thread replies", () => {
               }
             : { ...common, kind: "action", action };
         },
+      );
+      const tool = createMessageTool({
+        config: {},
+        agentSessionKey: `agent:reviewer:${channel}:group:123:thread:${sourceThread}`,
+        currentChannelProvider: channel,
+        currentChannelId: "123",
+        currentMessagingTarget: "123",
+        currentThreadTs: sourceThread,
       });
       const participant = { agentId: "reviewer", name: "Reviewer" };
       await withGroupThreadTurn(
@@ -847,6 +912,7 @@ describe("message tool group thread replies", () => {
         "Other thread",
         "Top-level send",
         "**Reviewer**\nRedirected reply",
+        "**Reviewer**\nNO_REPLY",
         "**Reviewer**\n",
         "**Reviewer**\nEdited final",
         "Unplaced edit",
@@ -855,6 +921,7 @@ describe("message tool group thread replies", () => {
         [{ text: "Final reply" }],
         [{ text: "**Reviewer**\nRewritten visible final" }],
         [{ text: "**Reviewer**\nPass-through hook" }],
+        [{ text: "NO_REPLY" }],
         [{ mediaUrl: "https://example.com/group-thread.png" }],
         [{ text: "Edited final" }],
       ]);

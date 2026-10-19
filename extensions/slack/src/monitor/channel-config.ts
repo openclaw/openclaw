@@ -76,20 +76,6 @@ export function resolveSlackChannelConfig(params: {
   }
 
   const resolved = matched ?? fallback ?? {};
-  const allowed = firstDefined(resolved.enabled, fallback?.enabled, true) ?? true;
-  const requireMention =
-    firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
-    requireMentionDefault;
-  const ignoreOtherMentions = firstDefined(
-    resolved.ignoreOtherMentions,
-    fallback?.ignoreOtherMentions,
-  );
-  const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
-  const replyToMode = firstDefined(resolved.replyToMode, fallback?.replyToMode);
-  const botLoopProtection = mergePairLoopGuardConfig(
-    fallback?.botLoopProtection,
-    matched?.botLoopProtection,
-  );
   const users = resolveSlackUserAllowListForTeam({
     allowList: firstDefined(resolved.users, fallback?.users),
     teamId: params.teamId,
@@ -97,20 +83,26 @@ export function resolveSlackChannelConfig(params: {
     // ingress treats differently scoped values as non-matching.
     preserveUnmatchedScopedEntries: true,
   });
-  const skills = firstDefined(resolved.skills, fallback?.skills);
-  const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
-  const presenceEvents = firstDefined(resolved.presenceEvents, fallback?.presenceEvents);
   const result: SlackChannelConfigResolved = {
-    allowed,
-    requireMention,
-    ignoreOtherMentions,
-    replyToMode,
-    allowBots,
-    botLoopProtection,
+    allowed: firstDefined(resolved.enabled, fallback?.enabled, true) ?? true,
+    requireMention:
+      firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
+      requireMentionDefault,
+    requireMentionInBotThreads: firstDefined(
+      resolved.requireMentionInBotThreads,
+      fallback?.requireMentionInBotThreads,
+    ),
+    ignoreOtherMentions: firstDefined(resolved.ignoreOtherMentions, fallback?.ignoreOtherMentions),
+    replyToMode: firstDefined(resolved.replyToMode, fallback?.replyToMode),
+    allowBots: firstDefined(resolved.allowBots, fallback?.allowBots),
+    botLoopProtection: mergePairLoopGuardConfig(
+      fallback?.botLoopProtection,
+      matched?.botLoopProtection,
+    ),
     users: users.length > 0 ? users : undefined,
-    skills,
-    systemPrompt,
-    presenceEvents,
+    skills: firstDefined(resolved.skills, fallback?.skills),
+    systemPrompt: firstDefined(resolved.systemPrompt, fallback?.systemPrompt),
+    presenceEvents: firstDefined(resolved.presenceEvents, fallback?.presenceEvents),
   };
   return applyChannelMatchMeta(result, match);
 }

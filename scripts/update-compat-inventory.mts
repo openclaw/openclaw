@@ -12,6 +12,7 @@ import {
   readUpdateCompatibilityInventory,
   type UpdateCompatibilityInventory,
 } from "./lib/update-compat-chunks.mts";
+import { supportsUpdateSchemas } from "./lib/update-compat-contract.mjs";
 
 const DEFAULT_OUTPUT = "scripts/lib/update-compat-inventory.json";
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
@@ -48,16 +49,31 @@ function checkRegistryCoverage(inventory: UpdateCompatibilityInventory, output: 
     throw new Error("npm returned invalid OpenClaw dist-tags; expected latest and beta versions");
   }
   const taggedVersions: string[] = [];
-  for (const tag of ["latest", "beta"]) {
+  // Extended-stable installs follow their own selector once a monthly line has published.
+  for (const tag of ["latest", "beta", "extended-stable"]) {
     const version: unknown = Reflect.get(tags, tag);
+    if (tag === "extended-stable" && version === undefined) {
+      continue;
+    }
     if (typeof version !== "string" || parseReleaseVersion(version)?.version !== version) {
       throw new Error(`npm OpenClaw dist-tag ${tag} is missing or invalid`);
     }
     taggedVersions.push(version);
   }
-  const missing = [...new Set(taggedVersions)].filter(
-    (version) => !inventory.releases.some((release) => release.version === version),
-  );
+  const target = JSON.parse(fs.readFileSync("package.json", "utf8")).openclaw?.schemaVersions;
+  const missing = [...new Set(taggedVersions)].filter((version) => {
+    if (inventory.releases.some((release) => release.version === version)) {
+      return false;
+    }
+    const [schemas] = resolveNpmJsonEntries(
+      npmView(`openclaw@${version}`, "openclaw.schemaVersions"),
+    );
+    const supported = supportsUpdateSchemas(schemas, target);
+    if (!supported) {
+      console.log(`Accounted unsupported first-hop source ${version}`);
+    }
+    return supported;
+  });
   if (missing.length === 0) {
     return;
   }

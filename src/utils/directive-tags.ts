@@ -7,6 +7,7 @@ import {
   findCodeRegions,
   findCodeOwnership,
   isInsideCode,
+  type CodeRegion,
 } from "../shared/text/code-regions.js";
 import {
   createConditionalTextProjector,
@@ -49,20 +50,16 @@ const NO_INLINE_DIRECTIVES = {
   hasReplyTag: false,
 } as const;
 
-function replacementPreservesWordBoundary(source: string, offset: number, length: number): string {
-  const before = source[offset - 1];
-  const after = source[offset + length];
-  return before && after && !/\s/u.test(before) && !/\s/u.test(after) ? " " : "";
-}
+// Stripped directives leave this marker so cleanup edits only their own
+// neighborhood; authored spacing elsewhere (for example `<pre>` columns) stays.
+const REMOVED_DIRECTIVE_MARKER_SEED = "\uE000";
 
-const BLOCK_SENTINEL_SEED = "\uE000";
-
-function createBlockSentinel(text: string): string {
-  let sentinel = BLOCK_SENTINEL_SEED;
-  while (text.includes(sentinel)) {
-    sentinel += BLOCK_SENTINEL_SEED;
+function createRemovedDirectiveMarker(parts: readonly string[]): string {
+  let marker = REMOVED_DIRECTIVE_MARKER_SEED;
+  while (parts.some((part) => part.includes(marker))) {
+    marker += REMOVED_DIRECTIVE_MARKER_SEED;
   }
-  return sentinel;
+  return marker;
 }
 
 export function replaceOutsideCodeRegions(
@@ -213,44 +210,141 @@ function replaceTextParts(
   return edits.length ? applyNativeTextEdits(parts, edits) : [...parts];
 }
 
-type DirectiveWhitespaceTailMode = "trim" | "preserve" | "normalize";
+type DirectiveWhitespaceTailMode = "trim" | "preserve";
 
-function normalizeDirectiveWhitespace(
-  text: string,
-  tailMode: DirectiveWhitespaceTailMode = "trim",
-  preparedRegions?: ReturnType<typeof findCodeRegions>,
-): string {
-  // Stash canonical code regions before normalizing prose. Indented code also
-  // occurs inside Markdown containers without any backtick or tilde delimiter.
-  const blockSentinel = createBlockSentinel(text);
-  const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
-  const blocks: string[] = [];
-  const codeRegions = preparedRegions ?? findCodeRegions(text);
-  let masked = "";
-  let cursor = 0;
-  // The canonical scanner keeps false closers, indented closers, and open fences intact.
-  for (const span of codeRegions) {
-    blocks.push(text.slice(span.start, span.end));
-    masked += `${text.slice(cursor, span.start)}${blockSentinel}${blocks.length - 1}${blockSentinel}`;
-    cursor = span.end;
+function isLineBreak(char: string | undefined): boolean {
+  return char === "\n" || char === "\r";
+}
+
+function isBlank(char: string | undefined): boolean {
+  return char === " " || char === "\t";
+}
+
+/**
+ * Joins the text around each removed directive without touching other whitespace.
+ * Output is built from pieces with incremental tail facts so many directives stay linear.
+ */
+function closeRemovedDirectiveGaps(text: string, marker: string): string {
+  if (!text.includes(marker)) {
+    return text;
   }
-  masked += text.slice(cursor);
+  const contentEnd = text.trimEnd().length;
+  const out: string[] = [];
+  // Last non-blank output character; undefined while the output is empty or blank.
+  let lastContentChar: string | undefined;
+  const push = (piece: string) => {
+    out.push(piece);
+    for (let i = piece.length - 1; i >= 0; i -= 1) {
+      if (!isBlank(piece[i])) {
+        lastContentChar = piece[i];
+        return;
+      }
+    }
+  };
+  // Each trimmed character leaves the output once, so repeated trims stay linear.
+  const trimTrailingBlanks = () => {
+    while (out.length > 0) {
+      const last = out[out.length - 1] ?? "";
+      let end = last.length;
+      while (end > 0 && isBlank(last[end - 1])) {
+        end -= 1;
+      }
+      if (end > 0) {
+        out[out.length - 1] = last.slice(0, end);
+        return;
+      }
+      out.pop();
+    }
+  };
+  // Consecutive line breaks ending the output, counted up to the two a seam may keep.
+  const trailingBreaks = () => {
+    let breaks = 0;
+    for (let p = out.length - 1; p >= 0; p -= 1) {
+      const piece = out[p] ?? "";
+      for (let i = piece.length - 1; i >= 0; i -= 1) {
+        if (piece[i] === "\n") {
+          breaks += 1;
+          if (breaks >= 2) {
+            return breaks;
+          }
+        } else if (piece[i] !== "\r") {
+          return breaks;
+        }
+      }
+    }
+    return breaks;
+  };
+  let cursor = 0;
+  for (;;) {
+    const markerStart = text.indexOf(marker, cursor);
+    if (markerStart < 0) {
+      push(text.slice(cursor));
+      return out.join("");
+    }
+    let markerEnd = markerStart + marker.length;
+    while (text.startsWith(marker, markerEnd)) {
+      markerEnd += marker.length;
+    }
+    push(text.slice(cursor, markerStart));
+    let next = markerEnd;
+    while (isBlank(text[next])) {
+      next += 1;
+    }
+    const atLineStart = lastContentChar === undefined || isLineBreak(lastContentChar);
+    const atLineEnd = next >= text.length || isLineBreak(text[next]);
+    if (atLineStart && atLineEnd) {
+      // A directive-only line leaves at most one blank line at its seam.
+      trimTrailingBlanks();
+      let breaks = trailingBreaks();
+      while (isLineBreak(text[next])) {
+        const width = text.startsWith("\r\n", next) ? 2 : 1;
+        if (breaks < 2) {
+          push(text.slice(next, next + width));
+          breaks += 1;
+        }
+        next += width;
+      }
+    } else if (atLineStart || next >= contentEnd) {
+      // Following indentation belongs to the next content, and trailing message
+      // whitespace belongs to the caller's tail mode, not to the directive.
+      next = markerEnd;
+    } else {
+      trimTrailingBlanks();
+      if (!atLineEnd) {
+        push(" ");
+      }
+    }
+    cursor = next;
+  }
+}
 
-  const suffixStart = tailMode === "preserve" ? masked.trimEnd().length : masked.length;
-  const suffix = masked.slice(suffixStart);
-  const normalized = masked
-    .slice(0, suffixStart)
-    .replace(/\r\n/g, "\n")
-    .replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2")
-    .replace(/^\n+/, "")
-    .replace(/^[ \t](?=\S)/, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n");
-
-  return (tailMode === "trim" ? normalized.trimEnd() : normalized + suffix).replace(
-    blockPlaceholderRe,
-    (_, i) => expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
-  );
+function trimDirectiveMessageBoundaries(
+  text: string,
+  tailMode: DirectiveWhitespaceTailMode,
+  preparedRegions?: readonly CodeRegion[],
+): string {
+  let regions = preparedRegions;
+  // Code regions own their padding, including a leading tab that starts an indented block.
+  const inCode = (offset: number) =>
+    (regions ??= findCodeRegions(text)).some(
+      (region) => region.start <= offset && offset < region.end,
+    );
+  let start = /^(?:\r?\n)*/u.exec(text)?.[0].length ?? 0;
+  if (/^[ \t]\S/u.test(text.slice(start, start + 2)) && !inCode(start)) {
+    start += 1;
+  }
+  let end = text.length;
+  if (tailMode === "trim") {
+    const contentEnd = text.trimEnd().length;
+    // An open code block at the end owns its trailing bytes.
+    const codeOwnsTail =
+      contentEnd < end &&
+      (regions ??= findCodeRegions(text)).some(
+        (region) => region.start <= contentEnd && region.end === text.length,
+      );
+    end = codeOwnsTail ? end : Math.max(contentEnd, start);
+  }
+  return text.slice(start, end);
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -491,7 +585,7 @@ export function parseInlineDirectives(
   }
   if (!text.includes("[[")) {
     return {
-      text: normalizeDirectiveWhitespace(
+      text: trimDirectiveMessageBoundaries(
         text,
         options.preserveTrailingWhitespace ? "preserve" : "trim",
       ),
@@ -521,41 +615,27 @@ export function parseInlineDirectiveParts(
     hasReplyTag: boolean;
     sawCurrent: boolean;
     lastExplicitId?: string;
-    removedTrailingDirectiveLine: boolean;
   }> = parts.map(() => ({
     audioAsVoice: false,
     hasAudioTag: false,
     hasReplyTag: false,
     sawCurrent: false,
-    removedTrailingDirectiveLine: false,
   }));
-  const stripDirective = (match: string, offset: number, source: string, partIndex: number) => {
-    const state = expectDefined(states[partIndex], "directive part state");
-    if (
-      preserveTrailingWhitespace &&
-      !state.removedTrailingDirectiveLine &&
-      offset + match.length === source.trimEnd().length
-    ) {
-      const lineStart =
-        Math.max(source.lastIndexOf("\n", offset - 1), source.lastIndexOf("\r", offset - 1)) + 1;
-      state.removedTrailingDirectiveLine = /^[\t ]*$/.test(source.slice(lineStart, offset));
-    }
-    return replacementPreservesWordBoundary(source, offset, match.length);
-  };
+  const marker = createRemovedDirectiveMarker(parts);
   const audioText = replaceOutsideCodeRegionParts(
     parts,
     AUDIO_TAG_RE,
-    (match, _captures, offset, source, partIndex) => {
+    (match, _captures, _offset, _source, partIndex) => {
       const state = expectDefined(states[partIndex], "audio directive part");
       state.audioAsVoice = state.hasAudioTag = true;
       onAudioDirective?.();
-      return stripAudioTag ? stripDirective(match, offset, source, partIndex) : match;
+      return stripAudioTag ? marker : match;
     },
-  );
+  ).map((text) => closeRemovedDirectiveGaps(text, marker));
   const replyText = replaceTextParts(
     audioText,
     replaceReplyTagsOutsideCodeRegions,
-    (match, captures, offset, source, partIndex) => {
+    (match, captures, _offset, _source, partIndex) => {
       const state = expectDefined(states[partIndex], "reply directive part");
       const idRaw = typeof captures[0] === "string" ? captures[0] : undefined;
       state.hasReplyTag = true;
@@ -567,20 +647,20 @@ export function parseInlineDirectiveParts(
           state.lastExplicitId = id;
         }
       }
-      return stripReplyTags ? stripDirective(match, offset, source, partIndex) : match;
+      return stripReplyTags ? marker : match;
     },
   );
-  const regions = parts.length > 1 ? createTextPartCodeRegionResolver(replyText) : undefined;
+  const closedText = replyText.map((text) => closeRemovedDirectiveGaps(text, marker));
+  const regions = parts.length > 1 ? createTextPartCodeRegionResolver(closedText) : undefined;
   return states.map((state, index) => {
-    const text = expectDefined(replyText[index], "parsed native text");
-    const tailMode = preserveTrailingWhitespace
-      ? state.removedTrailingDirectiveLine
-        ? "normalize"
-        : "preserve"
-      : "trim";
+    const text = expectDefined(closedText[index], "parsed native text");
     const normalizedText =
       state.hasAudioTag || state.hasReplyTag || text !== parts[index]
-        ? normalizeDirectiveWhitespace(text, tailMode, regions?.(index))
+        ? trimDirectiveMessageBoundaries(
+            text,
+            preserveTrailingWhitespace ? "preserve" : "trim",
+            regions?.(index),
+          )
         : text;
     if (!state.hasAudioTag && !state.hasReplyTag) {
       return Object.assign({ text: normalizedText }, NO_INLINE_DIRECTIVES);

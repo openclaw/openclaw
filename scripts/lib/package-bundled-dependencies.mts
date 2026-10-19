@@ -22,39 +22,19 @@ type BundledPackage = {
 // Strict Docker artifacts bundle this private runtime rather than resolving it
 // from npm. Keep the concrete load-bearing entries explicit instead of
 // reimplementing Node's conditional package-exports resolver here.
-const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
-  [
-    "@openclaw/ai",
-    [
-      { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
-      { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
-      {
-        specifier: "@openclaw/ai/transports",
-        entry: "dist/transports.mjs",
-        whenExported: "./transports",
-      },
-      {
-        specifier: "@openclaw/ai/internal/openai-completions-compat",
-        entry: "dist/internal/openai-completions-compat.mjs",
-        whenExported: "./internal/openai-completions-compat",
-      },
-      {
-        specifier: "@openclaw/ai/internal/openai-responses-payload-policy",
-        entry: "dist/internal/openai-responses-payload-policy.mjs",
-        whenExported: "./internal/openai-responses-payload-policy",
-      },
-      {
-        specifier: "@openclaw/ai/internal/runtime",
-        entry: "dist/internal/runtime.mjs",
-      },
-      {
-        specifier: "@openclaw/ai/internal/tool-schema",
-        entry: "dist/internal/tool-schema.mjs",
-        whenExported: "./internal/tool-schema",
-      },
-    ],
-  ],
-]);
+const REQUIRED_AI_RUNTIME_ENTRIES = [
+  { subpath: "", whenExported: false },
+  { subpath: "providers", whenExported: false },
+  { subpath: "transports", whenExported: true },
+  { subpath: "internal/openai-completions-compat", whenExported: true },
+  { subpath: "internal/openai-responses-payload-policy", whenExported: true },
+  { subpath: "internal/runtime", whenExported: false },
+  { subpath: "internal/tool-schema", whenExported: true },
+].map(({ subpath, whenExported }) => ({
+  specifier: subpath ? `@openclaw/ai/${subpath}` : "@openclaw/ai",
+  entry: `dist/${subpath || "index"}.mjs`,
+  whenExported: whenExported ? `./${subpath}` : undefined,
+}));
 
 function listBundleDependencies(packageJson: unknown): string[] {
   if (!isRecord(packageJson)) {
@@ -103,7 +83,7 @@ process.stdout.write(JSON.stringify(resolutions));`,
   }
 }
 
-function collectBundledPackageRuntimeErrors(
+function collectBundledAiRuntimeErrors(
   { name, entries, files, packageRoot, readText }: BundledPackage,
   bundledPackageJson: Record<string, unknown>,
 ): string[] {
@@ -112,7 +92,7 @@ function collectBundledPackageRuntimeErrors(
   const packageExports = isRecord(bundledPackageJson.exports) ? bundledPackageJson.exports : {};
   // Trusted current-main harnesses validate frozen release targets. Require
   // post-cut runtime subpaths only when the candidate manifest owns them.
-  const runtimeEntries = (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? []).filter(
+  const runtimeEntries = REQUIRED_AI_RUNTIME_ENTRIES.filter(
     ({ whenExported }) => !whenExported || Object.hasOwn(packageExports, whenExported),
   );
   const resolutions = resolveBundledPackageSpecifiers(
@@ -236,11 +216,23 @@ export function collectBundledDependencyErrors({
       errors.push(`bundled ${name} package.json must name ${name}`);
       continue;
     }
+    // npm infers peers of bundled packages are already in the bundle, while
+    // packlist excludes them unless explicitly bundled. Missing peers are not
+    // installed, even when the root declares them as required dependencies.
+    const peers = isRecord(manifest.peerDependencies) ? manifest.peerDependencies : {};
+    for (const peer of Object.keys(peers)) {
+      if (
+        typeof dependencies[peer] === "string" &&
+        !runtime.entries.has(`node_modules/${peer}/package.json`)
+      ) {
+        errors.push(`bundled ${name} is missing its root dependency peer ${peer}`);
+      }
+    }
     const bundled = { ...runtime, name };
     if (name === PATCHED_MCP_NAME) {
       errors.push(...collectPatchedMcpErrors(bundled, manifest, dependencies[PATCHED_MCP_NAME]));
-    } else if (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.has(name)) {
-      errors.push(...collectBundledPackageRuntimeErrors(bundled, manifest));
+    } else if (name === "@openclaw/ai") {
+      errors.push(...collectBundledAiRuntimeErrors(bundled, manifest));
     }
   }
   return errors;

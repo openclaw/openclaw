@@ -39,6 +39,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 > & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;
+  /** The creator captured runtime app authority (Codex apps); its default list stays concrete. */
+  holdsRuntimeAuthority?: true;
 };
 
 export type CronToolOptions = {
@@ -73,10 +75,6 @@ export type CronToolOptions = {
 };
 
 export type GatewayToolCaller = typeof callGatewayTool;
-
-export type CronToolDeps = {
-  callGatewayTool?: GatewayToolCaller;
-};
 
 export type ChatMessage = {
   role?: unknown;

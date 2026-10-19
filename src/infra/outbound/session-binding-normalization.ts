@@ -7,15 +7,12 @@ import {
 import { normalizeAccountId } from "../../routing/session-key.js";
 import type { ConversationRef } from "./session-binding.types.js";
 
-type ConversationTargetRefShape = {
-  conversationId: string;
-  parentConversationId?: string | null;
-};
-
 /**
  * Normalizes conversation ids and drops self-referential parent ids.
  */
-export function normalizeConversationTargetRef<T extends ConversationTargetRefShape>(ref: T): T {
+export function normalizeConversationTargetRef<
+  T extends { conversationId: string; parentConversationId?: string | null },
+>(ref: T): T {
   const conversationId = normalizeOptionalString(ref.conversationId) ?? "";
   const parentConversationId = normalizeOptionalString(ref.parentConversationId);
   const { parentConversationId: _ignoredParentConversationId, ...rest } = ref;
@@ -32,12 +29,22 @@ export function normalizeConversationTargetRef<T extends ConversationTargetRefSh
  * Normalizes a full conversation reference for stable binding keys.
  */
 export function normalizeConversationRef<T extends ConversationRef>(ref: T): T {
-  const normalizedTarget = normalizeConversationTargetRef(ref);
   return {
-    ...normalizedTarget,
+    ...normalizeConversationTargetRef(ref),
     channel: normalizeLowercaseStringOrEmpty(ref.channel),
     accountId: normalizeAccountId(ref.accountId),
   };
+}
+
+/** Capture only canonical identity fields; caller context must not cross IPC. */
+export function captureConversationRef(ref: ConversationRef): ConversationRef {
+  const { channel, accountId, conversationId, parentConversationId } = ref;
+  return normalizeConversationRef({
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+  });
 }
 
 /**

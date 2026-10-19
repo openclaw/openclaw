@@ -1,21 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
-function contextWithGitStatus(
-  status: "ahead" | "behind" | "current" | "diverged" | "unavailable",
-): ApplicationContext {
+function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
   const git =
     status === "current"
       ? { status }
-      : status === "ahead"
-        ? { status, commitsAhead: 1 }
-        : status === "behind"
-          ? { status, commitsBehind: 50 }
-          : status === "diverged"
-            ? { status, commitsAhead: 1, commitsBehind: 50 }
-            : { status, reason: "fetch-failed" };
+      : status === "behind"
+        ? { status, commitsBehind: 50 }
+        : { status, reason: "fetch-failed" };
   return {
     gateway: { snapshot: { phase: "connected" } },
     overlays: {
@@ -23,11 +17,11 @@ function contextWithGitStatus(
         updateAvailable: {
           currentVersion: "2026.9.2",
           latestVersion: "2026.9.3",
-          channel: "dev",
+          channel: "stable",
           commitsBehind: 246,
         },
         updateSchedule: {
-          channel: "dev",
+          channel: "stable",
           autoEnabled: false,
           install: { kind: "git", git },
           target: {
@@ -45,41 +39,78 @@ function contextWithGitStatus(
   } as unknown as ApplicationContext;
 }
 
-function resolveUpdateEntry(context: ApplicationContext) {
-  const state = resolveSidebarUpdateAttention(context);
-  const entry = buildUpdateInboxEntry({
-    canDismiss: state.canUpdate,
-    dismissal: state.dismissal,
-    forced: state.forced,
-    requiresAction: state.actionable,
-    severity: "warning",
-    visible: state.present,
-  });
-  return { entry, state };
-}
-
 describe("update attention", () => {
-  it.each(["current", "ahead"] as const)(
-    "retires stale git availability from the Inbox after a refreshed %s comparison",
-    (status) => {
-      const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
-      expect(state.present).toBe(false);
-      expect(entry).toBeNull();
+  it.each(["stable", "beta", "dev", "extended-stable", "unknown"])(
+    "notifies only release-channel subscribers (%s)",
+    (channel) => {
+      const context = contextWithGitStatus("behind");
+      context.overlays.snapshot.updateAvailable!.channel = channel;
+      context.overlays.snapshot.updateSchedule!.channel = channel;
+      expect(resolveSidebarUpdateAttention(context) !== null).toBe(
+        channel === "stable" || channel === "beta",
+      );
     },
   );
 
-  it("retains cached git availability when the refreshed comparison is unavailable", () => {
-    const { entry, state } = resolveUpdateEntry(contextWithGitStatus("unavailable"));
-    expect(state.present).toBe(true);
-    expect(entry).not.toBeNull();
+  it("uses the selected dev channel instead of stale stable availability", () => {
+    const context = contextWithGitStatus("behind");
+    context.overlays.snapshot.updateSchedule!.channel = "dev";
+    expect(resolveSidebarUpdateAttention(context)).toBeNull();
   });
 
-  it.each(["behind", "diverged"] as const)(
-    "keeps refreshed %s git availability in the Inbox",
-    (status) => {
-      const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
-      expect(state.present).toBe(true);
-      expect(entry).not.toBeNull();
+  it("uses the advertised release channel when the schedule is not available", () => {
+    const context = contextWithGitStatus("behind");
+    context.overlays.snapshot.updateSchedule = null;
+    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+    context.overlays.snapshot.updateAvailable!.channel = "dev";
+    expect(resolveSidebarUpdateAttention(context)).toBeNull();
+  });
+
+  it("keeps explicit dev update progress and errors visible", () => {
+    const context = contextWithGitStatus("behind");
+    context.overlays.snapshot.updateSchedule!.channel = "dev";
+    context.overlays.snapshot.updateAvailable!.channel = "dev";
+    context.overlays.snapshot.updateRunning = true;
+    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+    context.overlays.snapshot.updateRunning = false;
+    context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+  });
+
+  it.each([
+    { status: "current", present: false },
+    { status: "behind", present: true },
+    { status: "unavailable", present: true },
+  ] as const)(
+    "sets Inbox presence to $present after a $status comparison",
+    ({ status, present }) => {
+      const entry = resolveSidebarUpdateAttention(contextWithGitStatus(status));
+      if (present) {
+        expect(entry).not.toBeNull();
+      } else {
+        expect(entry).toBeNull();
+      }
     },
   );
+
+  it.each([
+    { name: "stable admin update", canDismiss: true, forced: false, dismissible: true },
+    { name: "read-only update", canDismiss: false, forced: false, dismissible: false },
+    { name: "forced update", canDismiss: true, forced: true, dismissible: false },
+  ])("projects $name with explicit dismissal policy", ({ canDismiss, forced, dismissible }) => {
+    const context = contextWithGitStatus("behind");
+    context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      server: { bootId: "boot-a" },
+      auth: { role: "operator", scopes: [canDismiss ? "operator.admin" : "operator.read"] },
+      features: { methods: ["update.run"] },
+    };
+    context.overlays.snapshot.updateRunning = forced;
+
+    const entry = resolveSidebarUpdateAttention(context);
+
+    expect(Boolean(entry?.dismissal)).toBe(dismissible);
+  });
 });

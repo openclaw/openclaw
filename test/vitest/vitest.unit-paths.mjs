@@ -28,7 +28,6 @@ export const boundaryTestFiles = [
 ];
 
 export const bundledPluginDependentUnitTestFiles = [
-  "src/infra/matrix-plugin-helper.test.ts",
   "src/plugin-sdk/facade-runtime.test.ts",
   "src/plugins/loader.test.ts",
 ];
@@ -56,7 +55,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/process/**",
   "src/secrets/**",
   "src/shared/**",
-  "src/tasks/**",
   "src/media-understanding/**",
   "src/logging/**",
   "src/tui/**",

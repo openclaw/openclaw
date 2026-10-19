@@ -1,4 +1,3 @@
-// Memory Wiki plugin module serializes vault mutation transactions.
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";

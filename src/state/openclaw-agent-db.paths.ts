@@ -1,19 +1,12 @@
-// Agent database path helpers resolve per-agent persisted database paths.
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 
-/**
- * Path helpers for per-agent SQLite state.
- *
- * Agent databases live beside the shared state database root so each agent can
- * own private runtime tables while the shared registry can still discover them.
- */
-/** Inputs for resolving one agent SQLite path or directory. */
 type OpenClawAgentSqlitePathOptions = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -22,29 +15,10 @@ type OpenClawAgentSqlitePathOptions = {
 
 export const INCOGNITO_AGENT_SQLITE_BASENAME = "incognito-openclaw-agent.sqlite";
 
-class IncognitoAgentDatabasePathCollisionError extends Error {
-  readonly path: string;
-
-  constructor(pathname: string) {
-    super(
-      `Incognito agent database sentinel path already exists: ${pathname}. This filename is reserved for in-memory incognito state; move or rename the file and retry.`,
-    );
-    this.name = "IncognitoAgentDatabasePathCollisionError";
-    this.path = pathname;
-  }
-}
-
-export function assertIncognitoAgentDatabasePathAvailable(pathname: string): void {
-  if (existsSync(pathname)) {
-    throw new IncognitoAgentDatabasePathCollisionError(pathname);
-  }
-}
-
 const agentSqlitePaths = new Map<string, string>();
 // Keep the FIFO cursor so eviction never rescans deleted Map entries.
 const agentSqlitePathKeys = agentSqlitePaths.keys();
 
-/** Resolve the SQLite file for one normalized agent id. */
 export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathOptions): string {
   const agentId = normalizeAgentId(options.agentId);
   if (options.path != null) {
@@ -69,7 +43,7 @@ export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathO
   return resolved;
 }
 
-/** Resolve the lexical sentinel path that keys one agent's process-held incognito database. */
+/** Resolve the lexical sentinel path used by an agent's memory session owner. */
 export function resolveIncognitoOpenClawAgentSqlitePath(
   options: Omit<OpenClawAgentSqlitePathOptions, "path">,
 ): string {
@@ -91,16 +65,34 @@ export function isIncognitoOpenClawAgentSqlitePath(
   );
 }
 
-type AgentDatabasePathIdentity = {
-  lexicalPath: string;
-  realPath?: string;
-  device?: bigint | number;
-  inode?: bigint | number;
-  parentDevice?: bigint | number;
-  parentInode?: bigint | number;
-  parentRealPath?: string;
-  unresolvedSuffix?: string;
-};
+/** An explicit sentinel names its physical root; ambient state cannot redirect it. */
+export function resolveExplicitIncognitoAgentSqliteTarget(
+  pathname: string | undefined,
+  options: { agentId?: string; env?: NodeJS.ProcessEnv } = {},
+): { agentId: string; env: NodeJS.ProcessEnv; path: string } | undefined {
+  if (!pathname || path.basename(pathname) !== INCOGNITO_AGENT_SQLITE_BASENAME) {
+    return undefined;
+  }
+  const resolved = path.resolve(pathname);
+  const agentId = normalizeAgentId(
+    options.agentId ?? path.basename(path.dirname(path.dirname(resolved))),
+  );
+  const env = options.env ?? { OPENCLAW_STATE_DIR: path.resolve(resolved, "../../../..") };
+  if (!isIncognitoOpenClawAgentSqlitePath(resolved, { agentId, env })) {
+    throw new Error("Explicit incognito database target does not match its agent and state root");
+  }
+  return { agentId, env, path: resolved };
+}
+
+type AgentDatabasePathIdentity = { lexicalPath: string } & (
+  | { realPath: string; device: bigint; inode: bigint }
+  | {
+      parentDevice: bigint;
+      parentInode: bigint;
+      parentRealPath: string;
+      unresolvedSuffix: string;
+    }
+);
 
 const missingSuffixAliasCache = new Map<string, boolean>();
 
@@ -112,28 +104,20 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
   }
   const lowercaseEquivalent = left.toLowerCase() === right.toLowerCase();
   const uppercaseEquivalent = left.toUpperCase() === right.toUpperCase();
-  if (!lowercaseEquivalent && !uppercaseEquivalent) {
-    return false;
-  }
-  // Keep dotted-I expansions distinct even on filesystems that collapse them.
-  // That existing isolation contract avoids locale-sensitive owner aliasing.
-  return !(
-    Array.from(left).length !== Array.from(right).length &&
-    lowercaseEquivalent &&
-    !uppercaseEquivalent
+  // Keep lowercase-only dotted-I expansions distinct even on filesystems that collapse them.
+  return (
+    uppercaseEquivalent ||
+    (lowercaseEquivalent && Array.from(left).length === Array.from(right).length)
   );
 }
 
 function areMissingSuffixAliases(params: {
-  left: string | undefined;
-  right: string | undefined;
-  parentDevice: bigint | number;
-  parentInode: bigint | number;
+  left: string;
+  right: string;
+  parentDevice: bigint;
+  parentInode: bigint;
   parentRealPath: string;
 }): boolean {
-  if (params.left === undefined || params.right === undefined) {
-    return false;
-  }
   if (params.left === params.right) {
     return true;
   }
@@ -244,41 +228,32 @@ function areSameAgentDatabasePathIdentities(
   if (leftIdentity.lexicalPath === rightIdentity.lexicalPath) {
     return true;
   }
-  if (leftIdentity.realPath && leftIdentity.realPath === rightIdentity.realPath) {
-    return true;
+  if ("realPath" in leftIdentity) {
+    return (
+      "realPath" in rightIdentity &&
+      (leftIdentity.realPath === rightIdentity.realPath ||
+        (leftIdentity.device === rightIdentity.device &&
+          leftIdentity.inode === rightIdentity.inode))
+    );
   }
-  const parentDevice = leftIdentity.parentDevice;
-  const parentInode = leftIdentity.parentInode;
-  const sameMissingParent =
-    parentDevice !== undefined &&
-    parentInode !== undefined &&
-    parentDevice === rightIdentity.parentDevice &&
-    parentInode === rightIdentity.parentInode;
-  const sameMissingSuffix =
-    leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix ||
-    (sameMissingParent &&
-      parentDevice !== undefined &&
-      parentInode !== undefined &&
-      leftIdentity.parentRealPath !== undefined &&
-      areMissingSuffixAliases({
-        left: leftIdentity.unresolvedSuffix,
-        right: rightIdentity.unresolvedSuffix,
-        parentDevice,
-        parentInode,
-        parentRealPath: leftIdentity.parentRealPath,
-      }));
   return (
-    (leftIdentity.device !== undefined &&
-      leftIdentity.inode !== undefined &&
-      leftIdentity.device === rightIdentity.device &&
-      leftIdentity.inode === rightIdentity.inode) ||
-    (sameMissingParent && sameMissingSuffix)
+    !("realPath" in rightIdentity) &&
+    leftIdentity.parentDevice === rightIdentity.parentDevice &&
+    leftIdentity.parentInode === rightIdentity.parentInode &&
+    areMissingSuffixAliases({
+      left: leftIdentity.unresolvedSuffix,
+      right: rightIdentity.unresolvedSuffix,
+      parentDevice: leftIdentity.parentDevice,
+      parentInode: leftIdentity.parentInode,
+      parentRealPath: leftIdentity.parentRealPath,
+    })
   );
 }
 
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
 export function createOpenClawAgentDatabasePathMatcher(): {
   (left: string, right: string): boolean;
+  createIndex(): (pathname: string) => string;
   isCurrent(): boolean;
 } {
   const identities = new Map<string, AgentDatabasePathIdentity>();
@@ -297,19 +272,58 @@ export function createOpenClawAgentDatabasePathMatcher(): {
     (left: string, right: string) =>
       areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right)),
     {
+      // Independent groups share observations, but retain their own first path spelling.
+      createIndex() {
+        const keys = new Map<string, string>();
+        const groups: AgentDatabasePathIdentity[] = [];
+        const fileGroups = new Map<string, number>();
+        const realPathGroups = new Map<string, number>();
+        const missingParentGroups = new Map<string, number[]>();
+        return (pathname: string) => {
+          const identity = resolveIdentity(pathname);
+          const cached = keys.get(identity.lexicalPath);
+          if (cached !== undefined) {
+            return cached;
+          }
+          let group: number | undefined;
+          if ("realPath" in identity) {
+            const fileKey = `${identity.device}:${identity.inode}`;
+            const fileGroup = fileGroups.get(fileKey);
+            const realPathGroup = realPathGroups.get(identity.realPath);
+            group =
+              fileGroup === undefined
+                ? realPathGroup
+                : realPathGroup === undefined
+                  ? fileGroup
+                  : Math.min(fileGroup, realPathGroup);
+            if (group === undefined) {
+              group = groups.push(identity) - 1;
+              fileGroups.set(fileKey, group);
+              realPathGroups.set(identity.realPath, group);
+            }
+          } else {
+            const parentKey = `${identity.parentDevice}:${identity.parentInode}`;
+            const candidates = missingParentGroups.get(parentKey) ?? [];
+            group = candidates.find((index) =>
+              areSameAgentDatabasePathIdentities(groups[index]!, identity),
+            );
+            if (group === undefined) {
+              group = groups.push(identity) - 1;
+              candidates.push(group);
+              missingParentGroups.set(parentKey, candidates);
+            }
+          }
+          // Only retained representatives enter the index, preserving first-match ownership.
+          const key = groups[group]!.lexicalPath;
+          keys.set(identity.lexicalPath, key);
+          return key;
+        };
+      },
       isCurrent() {
         for (const previous of identities.values()) {
           const current = resolveAgentDatabasePathIdentity(previous.lexicalPath);
           // Equal locators alone cannot validate a snapshot after replacement.
-          if (
-            previous.realPath !== current.realPath ||
-            previous.device !== current.device ||
-            previous.inode !== current.inode ||
-            previous.parentDevice !== current.parentDevice ||
-            previous.parentInode !== current.parentInode ||
-            previous.parentRealPath !== current.parentRealPath ||
-            previous.unresolvedSuffix !== current.unresolvedSuffix
-          ) {
+          if (!isDeepStrictEqual(previous, current)) {
             return false;
           }
         }
@@ -329,11 +343,8 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
 
 function canonicalPathForRegistryBoundary(pathname: string): string {
   const identity = resolveAgentDatabasePathIdentity(pathname);
-  if (identity.realPath) {
+  if ("realPath" in identity) {
     return identity.realPath;
-  }
-  if (!identity.parentRealPath || !identity.unresolvedSuffix) {
-    return identity.parentRealPath ?? path.resolve(pathname);
   }
   const unresolvedSegments = identity.unresolvedSuffix.split(path.sep);
   return unresolvedSegments.includes("..")
@@ -348,14 +359,11 @@ export function isPersistentOpenClawAgentDatabasePath(
 ): boolean {
   const lexicalCandidate = path.resolve(pathname);
   const lexicalImportsDir = path.join(path.resolve(resolveStateDir(env)), "imports");
-  if (lexicalCandidate === lexicalImportsDir || isPathInside(lexicalImportsDir, lexicalCandidate)) {
+  if (isPathInside(lexicalImportsDir, lexicalCandidate)) {
     return false;
   }
   const candidate = canonicalPathForRegistryBoundary(pathname);
   const stateDir = canonicalPathForRegistryBoundary(resolveStateDir(env));
   const importsDir = canonicalPathForRegistryBoundary(path.join(stateDir, "imports"));
-  if (candidate === importsDir || isPathInside(importsDir, candidate)) {
-    return false;
-  }
-  return true;
+  return !isPathInside(importsDir, candidate);
 }

@@ -1,13 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
@@ -16,10 +19,14 @@ import {
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -154,17 +161,13 @@ type PreparedCliRunContextOverrides = {
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
-  toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
-  mcpConfigHash?: string;
-  mcpResumeHash?: string;
   mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   fastMode?: PreparedCliRunContext["params"]["fastMode"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
-  emitCommentaryText?: boolean;
   workspaceDir?: string;
   systemPrompt?: string;
   timeoutMs?: number;
@@ -245,7 +248,6 @@ export function buildPreparedCliRunContext(
       fastMode: overrides.fastMode,
       executionMode: overrides.executionMode,
       cliToolAvailability: overrides.cliToolAvailability,
-      emitCommentaryText: overrides.emitCommentaryText,
       onSuccessfulAuthBinding: overrides.onSuccessfulAuthBinding,
       timeoutMs: overrides.timeoutMs ?? 1_000,
       runId,
@@ -266,8 +268,7 @@ export function buildPreparedCliRunContext(
             : "openai",
       resolveExecutionArgs: overrides.resolveExecutionArgs,
       toolAvailabilityEnforcement:
-        overrides.toolAvailabilityEnforcement ??
-        (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
+        provider === "google-gemini-cli" ? "prepare-execution" : "execution-args",
       runtimeArtifact: overrides.runtimeArtifact,
     },
     executionTarget: resolveCliExecutionTarget({
@@ -277,8 +278,6 @@ export function buildPreparedCliRunContext(
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},
-      ...(overrides.mcpConfigHash ? { mcpConfigHash: overrides.mcpConfigHash } : {}),
-      ...(overrides.mcpResumeHash ? { mcpResumeHash: overrides.mcpResumeHash } : {}),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -356,7 +355,11 @@ export async function expectPathMissing(targetPath: string) {
 
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
-export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
+export function createCliRunnerPrepareFixture(
+  prepareCliRun: PrepareCliRun,
+  suiteSessionDirs?: { make(): string },
+) {
+  const lifetime = createFixtureLifetime();
   const admissions: PreparedAgentRunAdmission[] = [];
   const tempDirs = new Set<string>();
   const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
@@ -367,7 +370,9 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
   const databasePaths = new Set<string>();
 
   const createSession = () => {
-    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-")));
+    const dir =
+      suiteSessionDirs?.make() ??
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-")));
     tempDirs.add(dir);
     process.env.OPENCLAW_STATE_DIR = dir;
     const sessionTarget = {
@@ -393,6 +398,8 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
 
   const getSession = () => (defaultSession ??= createSession());
   return {
+    run: lifetime.run,
+    settle: () => lifetime.cleanup(),
     get session() {
       return getSession();
     },
@@ -448,17 +455,25 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       }
     },
     async cleanup() {
+      await lifetime.cleanup();
       admissions.splice(0).forEach((admission) => admission.close());
+      if (suiteSessionDirs) {
+        for (const dir of tempDirs) {
+          await drainSessionStateForTest({ stateDir: dir });
+        }
+      }
       for (const databasePath of databasePaths) {
         await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
         closeAuthProfileReadPool({ kind: "root", rootPath: dir });
-        await closeOpenClawStateDatabaseByPathAsync(
-          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
-        );
-        fs.rmSync(dir, { recursive: true, force: true });
+        if (!suiteSessionDirs) {
+          await closeOpenClawStateDatabaseByPathAsync(
+            resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+          );
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
       }
       tempDirs.clear();
       defaultSession = undefined;
@@ -522,5 +537,36 @@ export function createWeatherSkillFixture(root: string, materialized: boolean) {
         },
       ],
     } satisfies NonNullable<RunCliAgentParams["skillsSnapshot"]>,
+  };
+}
+
+export function createContextEngineCustodyFixture() {
+  const registry = createEmptyPluginRegistry();
+  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+  resources.attach(registry);
+  const database = new DatabaseSync(":memory:");
+  let closed = false;
+  const close = () => {
+    if (!closed) {
+      closed = true;
+      database.close();
+    }
+  };
+  const retirement = createDeferred();
+  const retired = vi.fn(() => {
+    close();
+    retirement.resolve();
+  });
+  resources.register("fixture", { id: "cli-engine-database", dispose: retired });
+  return {
+    registry,
+    resources,
+    retired,
+    retirement: retirement.promise,
+    read: () => database.prepare("SELECT 42 AS value").get()?.value,
+    async cleanup() {
+      await resources.release();
+      close();
+    },
   };
 }

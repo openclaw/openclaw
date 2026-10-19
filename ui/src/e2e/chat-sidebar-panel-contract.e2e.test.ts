@@ -2,6 +2,11 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -11,6 +16,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -44,12 +50,13 @@ type ColdOpenOutcome = {
 };
 
 const offeredSlotLabels = [
+  "Subagents",
+  "Processes",
   "Review",
   "Terminal",
   "Browser",
   "Files",
   "Side chat",
-  "Tasks",
   "Desktop",
   "Discussion",
 ] as const;
@@ -57,8 +64,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Tasks: no background tasks, nothing to inspect.
-  "Tasks",
   // Discussion: no external URL, nothing to open.
   "Discussion",
 ]);
@@ -77,10 +82,10 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
-      "tasks.list",
       "terminal.open",
     ],
     methodResponses: {
+      "sessions.processes.list": { sessionId: "main-session", processes: [], truncated: false },
       "browser.request": {
         cases: [
           { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
@@ -97,7 +102,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/plain-workspace",
         sessionKey: "main",
       },
-      "tasks.list": { tasks: [] },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -116,8 +120,35 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
   const sparse = coldOpenScenario();
   return {
     ...sparse,
+    sessions: [
+      { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+      {
+        key: "agent:main:subagent:panel-content",
+        kind: "direct",
+        label: "Check panel content",
+        spawnedBy: "agent:main:main",
+        status: "done",
+        updatedAt: 2,
+      },
+    ],
     methodResponses: {
       ...sparse.methodResponses,
+      "sessions.processes.list": {
+        sessionId: "main-session",
+        truncated: false,
+        processes: [
+          {
+            processId: "process-1",
+            instanceId: "incarnation-1",
+            name: "Build application",
+            status: "running",
+            startedAt: 1,
+            tail: "Compiling",
+            truncated: false,
+            canStop: false,
+          },
+        ],
+      },
       "browser.request": {
         cases: [
           {
@@ -206,24 +237,6 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/checkout",
         sessionKey: "main",
       },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 2_000,
-            id: "task-sidebar-invariant",
-            kind: "subagent",
-            ownerKey: "main",
-            progressSummary: "Checking every offered panel",
-            runtime: "subagent",
-            startedAt: Date.now() - 1_000,
-            status: "running",
-            taskId: "task-sidebar-invariant",
-            title: "Verify cold-open behavior",
-            updatedAt: Date.now(),
-          },
-        ],
-      },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -247,7 +260,7 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await gateway.waitForRequest("session.discussion.info");
   await gateway.waitForRequest("sessions.companion.state");
   expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-  await page.getByRole("button", { name: "Side panel", exact: true }).first().click();
+  await selectChatLayoutAction(page, "Side panel");
   const choices = page.locator(".side-panel-empty__type");
   await choices.first().waitFor();
   expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
@@ -368,7 +381,12 @@ async function readSlotColdOpenOutcome(
     ).toEqual(offeredSlotLabels);
     const held =
       label === "Discussion"
-        ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
+        ? await holdModuleResponse(
+            page,
+            controlUiE2eBuiltModuleRequest(
+              "ui/src/pages/chat/components/session-discussion-panel.tsx",
+            ),
+          )
         : null;
     try {
       await choices.filter({ hasText: label }).click();
@@ -381,6 +399,25 @@ async function readSlotColdOpenOutcome(
       }
     } finally {
       held?.release();
+    }
+    if (label === "Processes") {
+      const processes = page.locator("openclaw-chat-processes-panel");
+      await processes
+        .getByText(
+          expectedOutcome === "content"
+            ? "Build application"
+            : "No background processes in this conversation.",
+          { exact: true },
+        )
+        .waitFor();
+    }
+    if (label === "Subagents") {
+      const subagents = page.locator("openclaw-chat-subagents-panel");
+      if (expectedOutcome === "content") {
+        await subagents.getByRole("button", { name: "Check panel content", exact: true }).waitFor();
+      } else {
+        await subagents.getByText("No subagents in this conversation.", { exact: true }).waitFor();
+      }
     }
     if (expectedOutcome) {
       await expect
@@ -412,17 +449,12 @@ suite.define(() => {
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
       const selector = panel.locator(".side-panel-empty--selector");
-      const toggle = page.locator(".chat-side-panel-toggle");
-      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-
-      await toggle.click();
+      await selectChatLayoutAction(page, "Side panel");
       await selector.waitFor();
-      expect(await panel.locator("wa-tab").count()).toBe(0);
-      expect(await page.locator(".chat-panel-swap").isVisible()).toBe(false);
+      expect(await panel.locator(".tabstrip-tab").count()).toBe(0);
 
-      await toggle.click();
+      await selectChatLayoutAction(page, "Minimize side panel");
       await selector.waitFor({ state: "hidden" });
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -457,7 +489,11 @@ suite.define(() => {
 
       const initialRequests = await gateway.getRequests("browser.request");
       expect(initialRequests.map((request) => request.params)).toEqual([
-        { method: "GET", path: "/tabs" },
+        {
+          method: "GET",
+          path: "/tabs",
+          tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
+        },
       ]);
 
       await openChatSidePanelType(page, "Files");
@@ -518,6 +554,7 @@ suite.define(() => {
           body: { targetId: "blacksmith-tab", type: "png" },
           method: "POST",
           path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
         });
 
       await browser.locator(".bp-shot").waitFor();
@@ -758,7 +795,7 @@ suite.define(() => {
         await expect.poll(() => rfb.events()).toEqual(["authenticated:1"]);
         await desktop.locator("canvas").waitFor({ state: "visible" });
 
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         await panes.last().locator(".agent-chat__composer-combobox textarea").click();
@@ -782,7 +819,8 @@ suite.define(() => {
         expect(await rfb.events()).not.toContain("closed:1");
 
         const firstCanvas = panes.first().locator("openclaw-desktop-panel canvas");
-        await panes.first().locator(".side-panel__minimize").click();
+        await panes.first().locator(".chat-pane__header").click();
+        await selectChatLayoutAction(panes.first(), "Minimize side panel");
         await firstCanvas.waitFor({ state: "hidden" });
         expect(await firstCanvas.count()).toBe(1);
         expect(await rfb.events()).not.toContain("closed:1");
@@ -864,7 +902,7 @@ suite.define(() => {
     const choices = await openColdSidebar(page, populatedColdOpenScenario());
 
     await choices.filter({ hasText: "Side chat" }).click();
-    const contentActions = page.locator(".side-panel__action-group--content");
+    const contentActions = await openChatLayoutMenu(page);
     const clearAction = contentActions.getByRole("button", {
       name: "Clear side chat",
       exact: true,
@@ -872,25 +910,19 @@ suite.define(() => {
     await clearAction.waitFor();
     expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
     expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
-    const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
-    for (const action of [
-      page.locator(".chat-pane__header").getByRole("button", { name: "Focus", exact: true }),
-      page
-        .locator('[data-region-header="side"]')
-        .getByRole("button", { name: "Close", exact: true }),
-    ]) {
-      expect(await action.evaluate((button) => getComputedStyle(button).color)).toBe(restingColor);
-    }
     const clearTooltip = clearAction.locator("..");
     await clearAction.hover();
     await expect
       .poll(() =>
-        clearTooltip.locator("wa-tooltip").evaluate((tooltip) => Reflect.get(tooltip, "open")),
+        clearTooltip
+          .locator(".tooltip-surface[popover]")
+          .evaluate((tooltip) => tooltip.matches(":popover-open")),
       )
       .toBe(true);
-    expect(await clearTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
+    expect(await clearTooltip.locator(".tooltip-content").textContent()).toContain(
       "Clear side chat",
     );
+    await closeChatLayoutMenu(page);
 
     const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
     for (const direction of ["ltr", "rtl"] as const) {
@@ -900,7 +932,6 @@ suite.define(() => {
           throw new Error("Active side-panel tab must render inside the side panel");
         }
         panel.dir = dir;
-        const tabBase = node.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
         const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
         const label = node.querySelector<HTMLElement>(".tabstrip-tab__label");
         const labelClipper = node.querySelector<HTMLElement>(".tabstrip-tab__tooltip-trigger");
@@ -908,7 +939,6 @@ suite.define(() => {
         const trailingGlyph = close?.querySelector<HTMLElement>("svg");
         if (
           !(close instanceof HTMLElement) ||
-          !tabBase ||
           !leadingGlyph ||
           !label ||
           !labelClipper ||
@@ -916,14 +946,14 @@ suite.define(() => {
         ) {
           throw new Error("Active side-panel tab must render its label and both edge glyphs");
         }
-        const tabBounds = tabBase.getBoundingClientRect();
+        const tabBounds = node.getBoundingClientRect();
         const closeBounds = close.getBoundingClientRect();
         const leadingBounds = leadingGlyph.getBoundingClientRect();
         const labelBounds = label.getBoundingClientRect();
         const labelClipperBounds = labelClipper.getBoundingClientRect();
         const trailingBounds = trailingGlyph.getBoundingClientRect();
         const rtl = dir === "rtl";
-        const tabStyle = getComputedStyle(tabBase);
+        const tabStyle = getComputedStyle(node);
         const closeStyle = getComputedStyle(close);
         return {
           leading: rtl
@@ -969,10 +999,10 @@ suite.define(() => {
       }
     });
 
-    await page.locator(".side-panel-type-menu__trigger").click();
-    await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();
+    await selectChatLayoutAction(page, "Show discussion");
+    await openChatLayoutMenu(page);
     const discussionAction = contentActions.locator(
-      ':scope > a.rail-header__action[target="_blank"]',
+      ':scope > [role="menu"] a.rail-header__action[target="_blank"]',
     );
     await discussionAction.waitFor();
     expect(await discussionAction.getAttribute("href")).toBe("https://discussion.example/session");

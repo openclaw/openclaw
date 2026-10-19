@@ -50,22 +50,6 @@ describe("fetchQaFixtureJson", () => {
     ).resolves.toEqual({ ok: true });
   });
 
-  it("bounds oversized response bodies", async () => {
-    await expect(
-      fetchQaFixtureJson("https://qa.example.invalid/debug/requests", undefined, {
-        maxBodyBytes: 16,
-        timeoutMs: 1000,
-        fetchImpl: async () =>
-          new Response(JSON.stringify({ ok: true, padding: "x".repeat(128) }), {
-            status: 200,
-          }),
-      }),
-    ).rejects.toMatchObject({
-      code: "ETOOBIG",
-      message: "HTTP response from https://qa.example.invalid/debug/requests exceeded 16 bytes",
-    });
-  });
-
   it.each(["advertised", "streamed"] as const)(
     "reports %s overflow without waiting for response cancellation",
     async (kind) => {

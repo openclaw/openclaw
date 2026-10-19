@@ -109,7 +109,43 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.services-cron.json",
   },
+  {
+    name: "ui-app",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-app.json",
+  },
+  {
+    name: "ui-components",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-components.json",
+  },
+  {
+    name: "claws",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.claws.json",
+  },
+  {
+    name: "ui-e2e-chat",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
+  },
 ] as const;
+
+// Full checks retain the aggregate alias; scoped inventories use the same partitions as execution.
+export const TSGO_ROOT_TEST_SHARDS = [
+  { name: "test-root-tooling", config: "test/tsconfig/tsconfig.test.root.tooling.json" },
+  { name: "test-root-scripts", config: "test/tsconfig/tsconfig.test.root.scripts.json" },
+  { name: "test-root-e2e", config: "test/tsconfig/tsconfig.test.root.e2e.json" },
+  { name: "test-root-other", config: "test/tsconfig/tsconfig.test.root.other.json" },
+] as const;
+
+export function expandTsgoExecutionGraphs(
+  graphs: readonly { name: string; config: string }[],
+): readonly { name: string; config: string }[] {
+  return graphs.flatMap((graph) =>
+    graph.config === "test/tsconfig/tsconfig.test.root.json" ? [...TSGO_ROOT_TEST_SHARDS] : [graph],
+  );
+}
 
 export const TSGO_CORE_GRAPHS = [
   { name: "core", config: "tsconfig.core.json" },
@@ -135,9 +171,14 @@ export function resolveCiTsgoGraphs(names: readonly string[]) {
     throw new Error("CI type graph names must be nonempty, unique, and canonical");
   }
   const selected = new Set<string>();
+  const candidates = [...TSGO_CI_GRAPHS, ...TSGO_ROOT_TEST_SHARDS];
   return names.map((name) => {
-    const graph = TSGO_CI_GRAPHS.find((candidate) => candidate.name === name);
-    if (!graph || selected.has(name)) {
+    const graph = candidates.find((candidate) => candidate.name === name);
+    const overlapsRoot =
+      name === "test-root"
+        ? TSGO_ROOT_TEST_SHARDS.some((shard) => selected.has(shard.name))
+        : TSGO_ROOT_TEST_SHARDS.some((shard) => shard.name === name) && selected.has("test-root");
+    if (!graph || selected.has(name) || overlapsRoot) {
       throw new Error("CI type graph names must be nonempty, unique, and canonical");
     }
     selected.add(name);
@@ -153,11 +194,11 @@ function isChangedCiTsgoInput(file: string): boolean {
   );
 }
 
-/** Compiler inventories include erased type imports and cross-family consumers. */
-export function selectChangedCiTsgoGraphs(
+/** Admit narrowing before compiler discovery; undefined retains every canonical graph. */
+export function resolveChangedCiTsgoInputs(
   paths: readonly string[],
-  graphs: readonly { config: string; files: readonly string[] }[],
-): readonly { name: string; config: string }[] | undefined {
+  exists?: (file: string) => boolean,
+): readonly string[] | undefined {
   // Documentation and UI styles cannot change compiler inputs. Keep data and
   // configuration paths for the conservative admission below.
   const compilerPaths = paths.filter(
@@ -166,15 +207,36 @@ export function selectChangedCiTsgoGraphs(
   if (
     compilerPaths.length === 0 ||
     !compilerPaths.every(isChangedCiTsgoInput) ||
-    graphs.length !== TSGO_CI_GRAPHS.length ||
-    TSGO_CI_GRAPHS.some(
+    (exists && !compilerPaths.every(exists))
+  ) {
+    return undefined;
+  }
+  return compilerPaths;
+}
+
+/** Compiler inventories include erased type imports and cross-family consumers. */
+export function selectChangedCiTsgoGraphs(
+  paths: readonly string[],
+  graphs: readonly { config: string; files: readonly string[] }[],
+  options: { scope?: "all" | "noncore" } = {},
+): readonly { name: string; config: string }[] | undefined {
+  const compilerPaths = resolveChangedCiTsgoInputs(paths);
+  const candidates = expandTsgoExecutionGraphs(
+    options.scope === "noncore" ? TSGO_CI_ADDITIONAL_GRAPHS : TSGO_CI_GRAPHS,
+  );
+  if (
+    !compilerPaths ||
+    (options.scope === "noncore" &&
+      !compilerPaths.every((file) => file.startsWith("extensions/"))) ||
+    graphs.length !== candidates.length ||
+    candidates.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
     ) ||
     compilerPaths.some((file) => !graphs.some((graph) => graph.files.includes(file)))
   ) {
     return undefined;
   }
-  return TSGO_CI_GRAPHS.filter((expected) =>
+  return candidates.filter((expected) =>
     graphs.some(
       (graph) =>
         graph.config === expected.config &&
@@ -196,6 +258,9 @@ export const TSGO_TARGETED_TEST_SHARED_SHARDS = [
 export function selectTsgoCoreTestShards(
   requestedGroup?: string,
 ): readonly { name: string; config: string }[] | undefined {
+  if (requestedGroup === "root") {
+    return TSGO_ROOT_TEST_SHARDS;
+  }
   if (!requestedGroup) {
     return TSGO_CORE_TEST_SHARDS;
   }
@@ -326,4 +391,24 @@ export function selectChangedTsgoCoreTestShards(
       (graph) => graph.config === shard.config && paths.some((file) => graph.files.includes(file)),
     ),
   );
+}
+
+/** Prioritize declared changed test roots without changing the selected coverage. */
+export function orderChangedTsgoCoreTestShards(
+  shards: readonly { name: string; config: string }[],
+  paths: readonly string[],
+  graphs: readonly { config: string; roots: readonly string[] }[],
+): readonly { name: string; config: string }[] {
+  const changedTests = new Set(
+    paths.filter((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file)),
+  );
+  const owners = new Set(
+    graphs
+      .filter((graph) => graph.roots.some((root) => changedTests.has(root)))
+      .map((graph) => graph.config),
+  );
+  return [
+    ...shards.filter((shard) => owners.has(shard.config)),
+    ...shards.filter((shard) => !owners.has(shard.config)),
+  ];
 }

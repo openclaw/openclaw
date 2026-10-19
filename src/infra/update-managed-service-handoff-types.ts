@@ -1,34 +1,26 @@
 import type { TriageFailureContext } from "../commands/triage-prompt.js";
 import type { RespawnSupervisor } from "./supervisor-markers.js";
-import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import type { resolveUpdateCliArgv } from "./update-managed-service-handoff-command.js";
 import type { HandoffChild } from "./update-managed-service-handoff-control.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
-import type {
-  createManagedHandoffLeaseStore,
-  ManagedHandoffLease,
-} from "./update-managed-service-handoff-lease.js";
+import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
+import type { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 import type {
   ForegroundUpdateOrigin,
   UpdateRestartSentinelMeta,
 } from "./update-restart-sentinel-payload.js";
 
-export type ManagedServiceUpdateHandoffParams = {
+export type ManagedServiceUpdateHandoffParams = Parameters<typeof resolveUpdateCliArgv>[0] & {
   runId?: string;
   beforePark?: () => Promise<void>;
   /** Local original admission; never serialized to the detached helper. */
   requesterAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
   root: string;
-  timeoutMs?: number;
   recoveryTimeoutMs?: number;
   restartDrainTimeoutMs: number;
   restartDelayMs?: number;
-  channel?: UpdateChannel;
-  tag?: string;
-  acceptCapabilities?: boolean;
-  admission?: "auto" | "installed";
-  reapplyLocalOverrides?: boolean;
   meta: UpdateRestartSentinelMeta;
   requester?: UpdateRequester;
   handoffId?: string;
@@ -36,8 +28,6 @@ export type ManagedServiceUpdateHandoffParams = {
   foregroundOrigin?: ForegroundUpdateOrigin;
   env?: NodeJS.ProcessEnv;
   devTarget?: DevUpdateTarget;
-  execPath?: string;
-  argv1?: string;
   parentPid?: number;
   invocationCwd?: string;
   action?: {

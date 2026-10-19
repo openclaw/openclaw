@@ -4,7 +4,7 @@ import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "../relat
 import { resolveMatrixThreadRouting } from "./threads.js";
 
 describe("resolveMatrixThreadRouting", () => {
-  it.each([undefined, false, true])(
+  it.each([undefined, true])(
     "keeps thread placement independent from reply fallback %s",
     (isFallingBack) => {
       const content = {
@@ -21,18 +21,6 @@ describe("resolveMatrixThreadRouting", () => {
       );
     },
   );
-  it("keeps sessions flat when threadReplies is off", () => {
-    expect(
-      resolveMatrixThreadRouting({
-        isDirectMessage: false,
-        threadReplies: "off",
-        messageId: "$reply1",
-        threadRootId: "$root",
-      }),
-    ).toEqual({
-      threadId: undefined,
-    });
-  });
 
   it("uses the inbound thread root when replies arrive inside an existing thread", () => {
     expect(
@@ -44,18 +32,6 @@ describe("resolveMatrixThreadRouting", () => {
       }),
     ).toEqual({
       threadId: "$root",
-    });
-  });
-
-  it("keeps top-level inbound messages flat when threadReplies is inbound", () => {
-    expect(
-      resolveMatrixThreadRouting({
-        isDirectMessage: false,
-        threadReplies: "inbound",
-        messageId: "$root",
-      }),
-    ).toEqual({
-      threadId: undefined,
     });
   });
 

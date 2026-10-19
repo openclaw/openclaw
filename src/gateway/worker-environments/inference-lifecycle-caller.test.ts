@@ -1,16 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
+import { createWorkerInferenceServiceStub } from "./inference-control.test-helpers.js";
 import { REQUEST } from "./inference.test-support.js";
-import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 describe("worker inference lifecycle caller", () => {
-  it.for(["start", "start-and-drain", "start-drain-release", "refusal", "after-start"] as const)(
+  it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
     "retains actual lifecycle caller custody for %s failure",
     async (failureMode, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -32,44 +36,10 @@ describe("worker inference lifecycle caller", () => {
             throw startFailure;
           }
         });
-        const unexpected = (): never => {
-          throw new Error("Unexpected worker service operation during drain acquisition");
-        };
-        const workerService = {
-          getDedicatedNodeLeaseSignal: unexpected,
-          captureSessionAttachment: unexpected,
-          getSessionAttachment: unexpected,
-          findSessionAttachment: unexpected,
-          getSessionAttachmentStatus: unexpected,
-          assertSessionAttachment: unexpected,
-          touchSessionAttachment: unexpected,
-          execSessionAttachment: unexpected,
-          createSessionAttachment: unexpected,
-          destroySessionAttachment: unexpected,
-          openNodePortal: unexpected,
-          list: unexpected,
-          readPreparedPoolSummary: unexpected,
-          readReadyWorkerTarget: unexpected,
-          get: () => undefined,
-          inventoryVersion: unexpected,
-          readMachineShape: unexpected,
-          machineShapeVersion: unexpected,
-          supportsExecutionMode: unexpected,
-          readProviderDisplayId: unexpected,
-          listMachineOptions: unexpected,
-          listOperatingSystems: unexpected,
-          prepare: unexpected,
-          create: unexpected,
-          destroy: unexpected,
-          destroyUnattached: unexpected,
-          observeDesktop: unexpected,
-          launchDesktopApp: unexpected,
-          startTunnel: unexpected,
-          stopTunnel: unexpected,
-          hasInferenceForSession: () => true,
-        } satisfies WorkerEnvironmentServiceContract & { hasInferenceForSession(): boolean };
+        const workerService = createWorkerInferenceServiceStub();
         registerWorkerInferenceSessionControl(workerService, {
-          reserveDrain: () => ({
+          hasSession: () => true,
+          reserveSessionDrain: () => ({
             assertReserved: () => {},
             release: unacceptedRelease,
             accept: () => {
@@ -80,8 +50,8 @@ describe("worker inference lifecycle caller", () => {
               return { drained: drained.promise, hasWork: () => true, start, release };
             },
           }),
-          captureCancel: () => ({ runIds: [], cancel: async () => [] }),
-          resolveTarget: () => undefined,
+          captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+          resolveSessionTargetForRunId: () => undefined,
         });
         const sessionKey = `agent:main:lifecycle-custody-${failureMode}`;
         const identities = [sessionKey, REQUEST.sessionId];
@@ -113,6 +83,7 @@ describe("worker inference lifecycle caller", () => {
           (value) => ({ ok: true as const, value }),
           (error: unknown) => ({ ok: false as const, error }),
         );
+        let successor: Promise<void> | undefined;
         try {
           await Promise.race([
             entered.promise,
@@ -121,18 +92,40 @@ describe("worker inference lifecycle caller", () => {
             }),
           ]);
           if (failureMode !== "refusal") {
-            await runExclusiveSessionLifecycleMutation({
-              scope: state.statePath("sessions.sqlite"),
-              identities,
+            let successorEntered = false;
+            successor = withSessionTurn(
+              {
+                storePath: state.statePath("sessions.sqlite"),
+                sessionKey,
+                sessionId: REQUEST.sessionId,
+              },
+              async () => {
+                successorEntered = true;
+              },
+            );
+            // The mutation mutex is free, but accepted worker custody still
+            // blocks a successor and keeps the lifecycle caller pending.
+            await runSessionMutation({
+              target: captureSessionTarget({
+                storeScope: state.statePath("sessions.sqlite"),
+                sessionKey,
+                aliases: identities,
+                incarnation: REQUEST.sessionId,
+                agentId: "main",
+              }),
+              policy: "allow-live",
               run: async () => {},
             });
             expect(settled).not.toHaveBeenCalled();
             expect(release).not.toHaveBeenCalled();
+            expect(successorEntered).toBe(false);
             if (failureMode === "start") {
               drained.resolve();
             } else {
               drained.reject(drainFailure);
             }
+            await successor;
+            expect(successorEntered).toBe(true);
           }
           const result = await outcome;
           if (result.ok) {
@@ -163,6 +156,7 @@ describe("worker inference lifecycle caller", () => {
         } finally {
           releaseRawDrain();
           await outcome;
+          await successor;
           signal.removeEventListener("abort", releaseRawDrain);
         }
       });

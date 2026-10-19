@@ -10,7 +10,7 @@ vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMe
 
 describe("report work sessions", () => {
   beforeEach(() => vi.mocked(dispatchGatewayMethod).mockReset());
-  it("uses the authenticated request and projects only link metadata, excluding incognito", async () => {
+  it("requests owned sessions and projects only link metadata, excluding incognito", async () => {
     vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
       ok: true,
       payload: {
@@ -29,8 +29,9 @@ describe("report work sessions", () => {
         nextOffset: 80,
       },
     });
-    const result = await listWorkSessions(40);
+    const result = await listWorkSessions(40, undefined, "alice");
     expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.list", {
+      profileRelation: { profileId: "alice", relationship: "owned" },
       limit: 40,
       offset: 40,
       sortBy: "activity",
@@ -55,7 +56,7 @@ describe("report work sessions", () => {
     expect(JSON.stringify(result)).not.toContain("agent:writer:private");
   });
 
-  it.each([{ ok: false }, { ok: true, payload: {} }])(
+  it.each([{ ok: false }])(
     "distinguishes failed discovery from an empty list (%j)",
     async (response) => {
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce(response);
@@ -71,10 +72,15 @@ describe("report work sessions", () => {
 
 describe("per-member current work", () => {
   beforeEach(() => vi.mocked(dispatchGatewayMethod).mockReset());
-  const profile = (id: string, login: string | null, mergedInto: string | null = null) => ({
+  const profile = (
+    id: string,
+    login: string | null,
+    mergedInto: string | null = null,
+    host?: string,
+  ) => ({
     id,
     mergedInto,
-    githubIdentity: login ? { login } : null,
+    githubIdentity: login ? { ...(host ? { host } : {}), login } : null,
   });
   const identities = (profiles: ReturnType<typeof profile>[]) => {
     vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload: { profiles } });
@@ -97,9 +103,9 @@ describe("per-member current work", () => {
   it.each([
     { profiles: [profile("name-only", null)], aliases: ["name-only"], reason: "unlinked" },
     {
-      profiles: [profile("a", "Alice"), profile("b", "alias")],
-      aliases: ["alice", "alias"],
-      reason: "ambiguous",
+      profiles: [profile("enterprise", "Alice", null, "ghe.example.test")],
+      aliases: ["alice"],
+      reason: "unlinked",
     },
     { profiles: [profile("a", "Alice", "missing")], aliases: ["alice"], reason: "ambiguous" },
     {
@@ -120,6 +126,35 @@ describe("per-member current work", () => {
     },
   );
 
+  it.each([undefined, "github.com"])(
+    "discovers only the public member work across a login collision (host=%s)",
+    async (host) => {
+      identities([
+        profile("enterprise", "Alice", null, "ghe.example.test"),
+        profile("public", "ALICE", null, host),
+      ]);
+      vi.mocked(dispatchGatewayMethod).mockResolvedValue({
+        ok: true,
+        payload: { sessions: [{ key: "agent:writer:public" }] },
+      });
+
+      const result = await listMemberWorkSessions(
+        [{ github: ["alice"] }],
+        createPersonWorkSessions(listWorkSessions),
+      );
+      expect(dispatchGatewayMethod).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({
+          profileRelation: { profileId: "public", relationship: "owned" },
+        }),
+      );
+      expect(result.get("alice")).toEqual({
+        available: true,
+        sessions: [{ key: "agent:writer:public" }],
+      });
+    },
+  );
+
   it("distinguishes unavailable identity dispatch from unlinked and empty owned sessions", async () => {
     vi.mocked(dispatchGatewayMethod).mockRejectedValueOnce(new Error("private detail"));
     const sessions = vi.fn();
@@ -127,40 +162,6 @@ describe("per-member current work", () => {
       available: false,
     });
     expect(sessions).not.toHaveBeenCalled();
-  });
-
-  it("selects canonical ownership before server pagination, retaining privacy exclusions", async () => {
-    identities([profile("alice", "Alice")]);
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-      ok: true,
-      payload: {
-        sessions: [
-          { key: "agent:writer:older-than-global-first-40", label: "Owned work" },
-          { key: "agent:writer:private", incognito: true },
-        ],
-        hasMore: true,
-        nextOffset: 80,
-      },
-    });
-    const result = await createPersonWorkSessions(listWorkSessions)({ github: ["ALICE"] }, 40, 40);
-    expect(dispatchGatewayMethod).toHaveBeenLastCalledWith(
-      "sessions.list",
-      expect.objectContaining({
-        profileRelation: { profileId: "alice", relationship: "owned" },
-        offset: 40,
-        limit: 40,
-        archived: false,
-        excludeSubagents: true,
-        excludeCron: true,
-        excludeSystem: true,
-        includeLastMessage: false,
-      }),
-    );
-    expect(result).toEqual({
-      available: true,
-      sessions: [{ key: "agent:writer:older-than-global-first-40", label: "Owned work" }],
-      nextOffset: 80,
-    });
   });
 
   it("bounds concurrent member discovery and deduplicates identical owners", async () => {

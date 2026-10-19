@@ -29,7 +29,11 @@ export type CronFormState = {
   deleteAfterRun: boolean;
   // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
-  scheduleKind: "at" | "every" | "cron" | "on-exit" | "stream";
+  scheduleKind: CronJob["schedule"]["kind"];
+  eventServer: string;
+  eventName: string;
+  eventArguments: string;
+  eventSource: string;
   scheduleAt: string;
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
@@ -42,7 +46,7 @@ export type CronFormState = {
   triggerScript: string;
   triggerOnce: boolean;
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
-  wakeMode: "next-heartbeat" | "now";
+  wakeMode: CronJob["wakeMode"];
   // System-owned payloads are always payloadLocked; the form only
   // displays it, never submits it.
   payloadKind: CronPayload["kind"];
@@ -51,7 +55,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
-  deliveryMode: "none" | "announce" | "webhook";
+  deliveryMode: "" | CronDelivery["mode"];
   deliveryChannel: string;
   deliveryTo: string;
   deliveryAccountId: string;
@@ -71,6 +75,9 @@ export type CronFormState = {
 
 export type CronFieldKey =
   | "name"
+  | "eventServer"
+  | "eventName"
+  | "eventArguments"
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"
@@ -80,6 +87,7 @@ export type CronFieldKey =
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
+  | "deliveryMode"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";
@@ -131,6 +139,7 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronCloningJob: CronJob | null;
   cronRunsError: string | null;
   cronRunsJobId: string | null;
+  cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
   cronRunsTotal: number;

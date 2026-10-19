@@ -1,10 +1,10 @@
-// Memory Core helpers for safe managed DREAMS.md updates.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
@@ -85,9 +85,11 @@ export async function writeDreamsFileAtomic(
   content: string,
   workspaceDir?: string,
 ): Promise<void> {
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
-    return await files.writeDreams(dreamsPath, content);
+    return await files.writeDreams(dreamsPath, content, assertCurrent);
   }
   await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
   await assertSafeDreamsPath(dreamsPath);
@@ -98,6 +100,7 @@ export async function writeDreamsFileAtomic(
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
     throwOnCleanupError: true,
+    assertBeforeMutation: assertCurrent,
   });
 }
 
@@ -158,8 +161,6 @@ const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
 const RECENT_DIARY_CONTEXT_LIMIT = 3;
 const RECENT_DIARY_CONTEXT_MAX_CHARS = 360;
 
-// ── Date formatting ────────────────────────────────────────────────────
-
 function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
     timeZone: timezone ?? process.env.TZ,
@@ -177,8 +178,6 @@ function formatNarrativeDate(epochMs: number, timezone?: string): string {
   };
   return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
 }
-
-// ── DREAMS.md file I/O ─────────────────────────────────────────────────
 
 function ensureDiarySection(existing: string): string {
   if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
@@ -219,18 +218,17 @@ export function clampDreamDiaryContextEntry(entry: string): string {
   return `${truncateUtf16Safe(normalized, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
 }
 
+function diaryTextLines(block: string): string[] {
+  return block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("<!--") && !line.startsWith("#"));
+}
+
 function normalizeDiaryBlockBody(block: string): string {
-  const bodyLines: string[] = [];
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("<!--") || trimmed.startsWith("#")) {
-      continue;
-    }
-    if (trimmed.startsWith("*") && trimmed.endsWith("*") && trimmed.length > 2) {
-      continue;
-    }
-    bodyLines.push(trimmed);
-  }
+  const bodyLines = diaryTextLines(block).filter(
+    (line) => !(line.startsWith("*") && line.endsWith("*") && line.length > 2),
+  );
   return clampDreamDiaryContextEntry(bodyLines.join(" "));
 }
 
@@ -277,59 +275,56 @@ export async function readRecentDreamDiaryEntries(params: {
 }
 
 function normalizeDiaryBlockFingerprint(block: string): string {
-  const lines = block
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
   let dateLine = "";
   const bodyLines: string[] = [];
-  for (const line of lines) {
+  for (const line of diaryTextLines(block)) {
     if (!dateLine && line.startsWith("*") && line.endsWith("*") && line.length > 2) {
       dateLine = line.slice(1, -1).trim();
-      continue;
-    }
-    if (line.startsWith("<!--") || line.startsWith("#")) {
       continue;
     }
     bodyLines.push(line);
   }
   const normalizedDate = dateLine.replace(/\s+/g, " ").trim();
-  const normalizedBody = bodyLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .trim();
+  const normalizedBody = bodyLines.join("\n");
   return `${normalizedDate}\n${normalizedBody}`;
 }
 
 function joinDiaryBlocks(blocks: string[]): string {
-  if (blocks.length === 0) {
-    return "";
-  }
   return blocks.map((block) => `---\n\n${block.trim()}\n`).join("\n");
 }
 
-function stripBackfillDiaryBlocks(existing: string): { updated: string; removed: number } {
+function dedupeDiaryBlocks(blocks: string[], seen = new Set<string>()): string[] {
+  return blocks.filter((block) => {
+    const fingerprint = normalizeDiaryBlockFingerprint(block);
+    if (seen.has(fingerprint)) {
+      return false;
+    }
+    seen.add(fingerprint);
+    return true;
+  });
+}
+
+function filterDiaryContent(existing: string, filter: (blocks: string[]) => string[]) {
   const ensured = ensureDiarySection(existing);
   const blocks = readDiaryBlocks(ensured);
   if (!blocks) {
-    return { updated: ensured, removed: 0 };
+    return { updated: ensured, removed: 0, kept: 0 };
   }
-  const kept: string[] = [];
-  let removed = 0;
-  for (const block of blocks) {
-    if (block.includes(BACKFILL_ENTRY_MARKER)) {
-      removed += 1;
-      continue;
-    }
-    kept.push(block);
-  }
+  const kept = filter(blocks);
   return {
     updated: replaceDiaryContent(ensured, joinDiaryBlocks(kept)),
-    removed,
+    removed: blocks.length - kept.length,
+    kept: kept.length,
   };
 }
 
-function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
+function stripBackfillDiaryBlocks(existing: string) {
+  return filterDiaryContent(existing, (blocks) =>
+    blocks.filter((block) => !block.includes(BACKFILL_ENTRY_MARKER)),
+  );
+}
+
+function formatBackfillDiaryDate(isoDay: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay);
   if (!match) {
     return isoDay;
@@ -350,9 +345,8 @@ function buildBackfillDiaryEntry(params: {
   isoDay: string;
   bodyLines: string[];
   sourcePath?: string;
-  timezone?: string;
 }): string {
-  const dateStr = formatBackfillDiaryDate(params.isoDay, params.timezone);
+  const dateStr = formatBackfillDiaryDate(params.isoDay);
   const marker = `<!-- ${BACKFILL_ENTRY_MARKER} day=${params.isoDay}${params.sourcePath ? ` source=${params.sourcePath}` : ""} -->`;
   const body = params.bodyLines
     .map((line) => line.trimEnd())
@@ -378,26 +372,12 @@ export async function writeBackfillDiaryEntries(params: {
         ? { updated: existing, removed: 0 }
         : stripBackfillDiaryBlocks(existing);
       const preservedBlocks = readDiaryBlocks(stripped.updated) ?? [];
-      const additions = params.entries.map((entry) =>
-        buildBackfillDiaryEntry({
-          isoDay: entry.isoDay,
-          bodyLines: entry.bodyLines,
-          sourcePath: entry.sourcePath,
-          timezone: params.timezone,
-        }),
-      );
+      const additions = params.entries.map(buildBackfillDiaryEntry);
       const existingFingerprints = new Set(
         preservedBlocks.map((block) => normalizeDiaryBlockFingerprint(block)),
       );
       const appended = params.preserveExisting
-        ? additions.filter((block) => {
-            const fingerprint = normalizeDiaryBlockFingerprint(block);
-            if (existingFingerprints.has(fingerprint)) {
-              return false;
-            }
-            existingFingerprints.add(fingerprint);
-            return true;
-          })
+        ? dedupeDiaryBlocks(additions, existingFingerprints)
         : additions;
       const nextBlocks = [...preservedBlocks, ...appended];
       return {
@@ -437,42 +417,14 @@ export async function dedupeDreamDiaryEntries(params: {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
-      const ensured = ensureDiarySection(existing);
-      const blocks = readDiaryBlocks(ensured);
-      if (!blocks) {
-        return {
-          content: ensured,
-          result: { dreamsPath, removed: 0, kept: 0 },
-          shouldWrite: false,
-        };
-      }
-      const seen = new Set<string>();
-      const keptBlocks: string[] = [];
-      let removed = 0;
-      for (const block of blocks) {
-        const fingerprint = normalizeDiaryBlockFingerprint(block);
-        if (seen.has(fingerprint)) {
-          removed += 1;
-          continue;
-        }
-        seen.add(fingerprint);
-        keptBlocks.push(block);
-      }
+      const { updated, removed, kept } = filterDiaryContent(existing, dedupeDiaryBlocks);
       return {
-        content: replaceDiaryContent(ensured, joinDiaryBlocks(keptBlocks)),
-        result: {
-          dreamsPath,
-          removed,
-          kept: keptBlocks.length,
-        },
+        content: updated,
+        result: { dreamsPath, removed, kept },
         shouldWrite: removed > 0,
       };
     },
   });
-}
-
-function buildDiaryEntry(narrative: string, dateStr: string): string {
-  return `\n---\n\n*${dateStr}*\n\n${narrative}\n`;
 }
 
 export async function appendNarrativeEntry(params: {
@@ -484,7 +436,7 @@ export async function appendNarrativeEntry(params: {
   recentDiaryEntries?: readonly string[];
 }): Promise<string | undefined> {
   const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
-  const entry = buildDiaryEntry(params.narrative, dateStr);
+  const entry = `\n---\n\n*${dateStr}*\n\n${params.narrative}\n`;
   return await updateDreamsFile<string | undefined>({
     workspaceDir: params.workspaceDir,
     updater: async (existing, dreamsPath) => {

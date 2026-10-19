@@ -1,4 +1,3 @@
-// Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
@@ -21,7 +20,7 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
-export type ChannelsRemoveOptions = {
+type ChannelsRemoveOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -141,33 +140,24 @@ async function removeChannelAccount(
         initialValue: ids[0] ?? DEFAULT_ACCOUNT_ID,
       }),
     );
+  } else if (!rawChannel) {
+    runtime.error(
+      `Missing channel. Use ${formatCliCommand("openclaw channels remove --channel <name>")} or run ${formatCliCommand("openclaw channels status")} to inspect configured channels.`,
+    );
+    runtime.exit(1);
+    return;
+  }
 
-    const wantsDisable = await prompter.confirm({
-      message: `Disable ${channelLabel(selectedChannel)} account "${accountId}"? (keeps config)`,
+  if (useWizard || !deleteConfig) {
+    const confirm = prompter ?? createClackPrompter();
+    const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
+    const ok = await confirm.confirm({
+      message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
       initialValue: true,
     });
-    if (!wantsDisable) {
-      await prompter.outro("Cancelled.");
+    if (!ok) {
+      await prompter?.outro("Cancelled.");
       return;
-    }
-  } else {
-    if (!rawChannel) {
-      runtime.error(
-        `Missing channel. Use ${formatCliCommand("openclaw channels remove --channel <name>")} or run ${formatCliCommand("openclaw channels status")} to inspect configured channels.`,
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!deleteConfig) {
-      const confirm = createClackPrompter();
-      const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
-      const ok = await confirm.confirm({
-        message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
-        initialValue: true,
-      });
-      if (!ok) {
-        return;
-      }
     }
   }
 
@@ -191,21 +181,16 @@ async function removeChannelAccount(
     runtime.exit(1);
     return;
   }
-  channel = resolvedChannel;
   const plugin = resolvedPluginState?.plugin ?? getChannelPlugin(resolvedChannel);
   if (!plugin) {
-    if (resolvedPluginState?.catalogEntry) {
-      runtime.error(
-        `Channel plugin "${resolvedPluginState.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedPluginState.catalogEntry.id}`)} first.`,
-      );
-      runtime.exit(1);
-      return;
-    }
-    runtime.error(formatUnknownChannelMessage({ channel: resolvedChannel }));
+    runtime.error(
+      resolvedPluginState?.catalogEntry
+        ? `Channel plugin "${resolvedPluginState.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedPluginState.catalogEntry.id}`)} first.`
+        : formatUnknownChannelMessage({ channel: resolvedChannel }),
+    );
     runtime.exit(1);
     return;
   }
-  const resolvedChannelId: ChatChannel = resolvedChannel;
   const removal = await applyChannelAccountRemoval({
     cfg,
     plugin,
@@ -215,30 +200,25 @@ async function removeChannelAccount(
     beforeRemoval: () =>
       stopGatewayRuntimeBeforeRemove({
         cfg,
-        channel: resolvedChannelId,
+        channel: resolvedChannel,
         accountId,
         shouldStopRuntime: Boolean(plugin.gateway?.startAccount || plugin.gateway?.logoutAccount),
         runtime,
       }),
   });
   if (!removal.ok) {
-    if (removal.error.kind !== "unsupported-action") {
-      runtime.error(
-        formatAccountRemovalErrorMessage({
-          channel: resolvedChannelId,
-          kind: removal.error.kind,
-          accountId,
-          requestedAccount: useWizard ? accountId : normalizeOptionalString(opts.account),
-          accountIds: removal.error.accountIds,
-        }),
-      );
-      runtime.exit(1);
-      return;
-    }
     runtime.error(
-      removal.error.action === "delete"
-        ? `${formatUnsupportedChannelActionMessage({ channel, action: "delete" })} Use ${formatCliCommand("openclaw channels remove --channel " + channel)} to disable it without deleting config.`
-        : `${formatUnsupportedChannelActionMessage({ channel, action: "disable" })} Use ${formatCliCommand("openclaw channels remove --channel " + channel + " --delete")} only if you want to remove config.`,
+      removal.error.kind !== "unsupported-action"
+        ? formatAccountRemovalErrorMessage({
+            channel: resolvedChannel,
+            kind: removal.error.kind,
+            accountId,
+            requestedAccount: useWizard ? accountId : normalizeOptionalString(opts.account),
+            accountIds: removal.error.accountIds,
+          })
+        : removal.error.action === "delete"
+          ? `${formatUnsupportedChannelActionMessage({ channel: resolvedChannel, action: "delete" })} Use ${formatCliCommand("openclaw channels remove --channel " + resolvedChannel)} to disable it without deleting config.`
+          : `${formatUnsupportedChannelActionMessage({ channel: resolvedChannel, action: "disable" })} Use ${formatCliCommand("openclaw channels remove --channel " + resolvedChannel + " --delete")} only if you want to remove config.`,
     );
     runtime.exit(1);
     return;
@@ -251,8 +231,8 @@ async function removeChannelAccount(
     runtime,
   });
   const message = deleteConfig
-    ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
-    : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`;
+    ? `Deleted ${channelLabel(resolvedChannel)} account "${accountId}".`
+    : `Disabled ${channelLabel(resolvedChannel)} account "${accountId}".`;
   if (useWizard && prompter) {
     await prompter.outro(message);
   } else {

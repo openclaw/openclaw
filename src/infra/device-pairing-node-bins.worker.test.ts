@@ -5,6 +5,7 @@ import { updatePairedNodeBins } from "./device-pairing-node-facts.js";
 import { setupPairedNode } from "./device-pairing-node.test-support.js";
 import { getPairedDevice } from "./device-pairing.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 afterEach(async () => {
@@ -19,18 +20,13 @@ test("rejects a replaced probe at precommit and persists the current connection'
   await updatePairedNodeBins("node-1", ["original"], generation, baseDir);
   let connection = "connection-a";
   let precommitObserved = false;
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          precommitObserved = true;
-          connection = "connection-b";
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      precommitObserved = true;
+      connection = "connection-b";
+    }
+    admit(request, grant);
+  });
 
   await expect(
     updatePairedNodeBins(

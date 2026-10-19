@@ -6,6 +6,7 @@ import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-prov
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -16,7 +17,7 @@ import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.ty
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
-  input: { config: OpenClawConfig };
+  input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
   configuredModelRefs: readonly ModelCatalogRef[];
 };
 
@@ -105,21 +106,45 @@ export function prepareCapturedRuntimeFacts(
   if (params.agentFacts.input.config.models?.mode === "replace") {
     return facts;
   }
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.workspaceFacts.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.input.env,
+  );
+  const manifestCatalog = loadManifestModelCatalog({
+    config: params.agentFacts.input.config,
+    metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+  });
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const declaredByIdentity = indexFirstByKey(
+    manifestCatalog.filter((entry) => entry.inference !== undefined),
+    keyOf,
+  );
   const entries = dedupeByKey(
     [
-      ...facts.modelCatalog.entries,
-      ...params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+      ...facts.modelCatalog.entries.map((entry) => {
+        const declared = declaredByIdentity.get(keyOf(entry));
+        // Configured membership must retain the exact route's inference contract.
+        // Route changes clear its capabilities without promoting typed rows to chat.
+        return declared
+          ? { ...entry, inference: overlayCatalogMetadata(declared, entry).inference }
+          : entry;
+      }),
+      // Typed-only rows have no conversational registry Model. Carry their canonical
+      // manifest facts into the same prepared generation instead of inventing chat defaults.
+      ...manifestCatalog.filter((entry) => entry.inference?.chat === false),
+      // Static hooks also answer runtime provider aliases; publish canonical rows once.
+      ...params.templateModelRegistry.getAll().map((model) => {
+        const entry = modelCatalogRowToEntry(model);
+        entry.provider = normalizeProvider(entry.provider);
+        return entry;
+      }),
     ],
-    createModelCatalogIdentityKeyResolver(),
+    keyOf,
   );
-  const orderedEntries = assignProviderModelOrder(
-    entries,
-    loadManifestModelCatalog({
-      config: params.agentFacts.input.config,
-      metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
-    }),
-    { appendUnknown: false },
-  );
+  const orderedEntries = assignProviderModelOrder(entries, manifestCatalog, {
+    appendUnknown: false,
+  });
   return {
     ...facts,
     modelCatalog: { ...facts.modelCatalog, entries: orderedEntries, routeVariants: orderedEntries },

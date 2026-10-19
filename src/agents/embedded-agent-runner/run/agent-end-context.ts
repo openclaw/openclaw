@@ -1,6 +1,7 @@
 import type { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedForegroundPromptContext } from "./params.js";
+import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AgentEndContext = Parameters<typeof runAgentEndSideEffects>[0]["ctx"] & {
@@ -51,20 +52,7 @@ export function buildEmbeddedForegroundPromptContext(
     messageActionTurnCapability: run.messageActionTurnCapability,
     spawnedBy: run.spawnedBy,
     isCanonicalWorkspace: run.isCanonicalWorkspace,
-    senderId: run.senderId,
-    senderName: run.senderName,
-    senderUsername: run.senderUsername,
-    senderE164: run.senderE164,
-    senderIsOwner: run.senderIsOwner,
-    approvalReviewerDeviceId: run.approvalReviewerDeviceId,
-    currentChannelId: run.currentChannelId,
-    chatId: run.chatId,
-    channelContext: run.channelContext,
-    currentMessagingTarget: run.currentMessagingTarget,
-    currentThreadTs: run.currentThreadTs,
-    currentMessageId: run.currentMessageId,
-    currentInboundAudio: run.currentInboundAudio,
-    replyToMode: run.replyToMode,
+    ...projectEmbeddedMessageContext(run),
     requireExplicitMessageTarget: run.requireExplicitMessageTarget,
     disableMessageTool: run.disableMessageTool,
     githubPublicationAvailable: run.githubPublicationAvailable,

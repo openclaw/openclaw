@@ -9,6 +9,7 @@ import {
   sqliteTranscriptPayloadColumns,
   transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { readDatabase } from "./observations.mjs";
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -64,8 +65,7 @@ function readSchemas(stateDir) {
         };
       }
       // Never import a runtime store: the observer must not perform a migration.
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
+      return readDatabase(databasePath, (database) => {
         const userVersion = database.prepare("PRAGMA user_version").get().user_version;
         return {
           kind: entry.kind,
@@ -73,9 +73,7 @@ function readSchemas(stateDir) {
           userVersion,
           contentVersion: readContentVersion(database, entry.kind, userVersion),
         };
-      } finally {
-        database.close();
-      }
+      });
     });
 }
 
@@ -92,13 +90,18 @@ function sessionIdentities(index) {
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
 }
 
-function readSeededAgents(stateDir, configFile) {
+function readSeededAgents(stateDir, configFile, artifactRoot) {
   const config = readJson(configFile);
   const entries =
     config.agents?.entries ??
     Object.fromEntries((config.agents?.list ?? []).map((entry) => [entry.id, entry]));
   const agentIds = Object.keys(entries).toSorted();
-  assert.deepEqual(agentIds, ["main", "ops"], "legacy operator seeded agent roster changed");
+  const nativeEligibility = path.join(artifactRoot, "native-assignment-eligibility.json");
+  const expectedAgentIds =
+    fs.existsSync(nativeEligibility) && readJson(nativeEligibility).status === "required"
+      ? ["main", "native-proof", "ops"]
+      : ["main", "ops"];
+  assert.deepEqual(agentIds, expectedAgentIds, "legacy operator seeded agent roster changed");
   return agentIds.map((agentId) => {
     const agentRoot = path.join(stateDir, "agents", agentId);
     if (entries[agentId].agentDir) {
@@ -322,7 +325,7 @@ function prepare(baselineVersion, candidateTarball, stateDir, snapshotFile, conf
     candidateSchemaVersions: manifest.openclaw.schemaVersions,
     stateDir,
     databases: readSchemas(stateDir),
-    agents: readSeededAgents(stateDir, configFile),
+    agents: readSeededAgents(stateDir, configFile, path.dirname(snapshotFile)),
   };
   fs.writeFileSync(snapshotFile, `${JSON.stringify(snapshot, null, 2)}\n`);
   return "success";

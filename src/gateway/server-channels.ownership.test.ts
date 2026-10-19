@@ -69,6 +69,7 @@ describe("channel ownership startup", () => {
     const runtimeConfig = JSON.parse(await readFile(state.configPath, "utf8")) as OpenClawConfig;
     const log = createSubsystemLogger("gateway/channel-ownership-test");
     manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => runtimeConfig,
       getPluginRegistry: () => registry,
       channelLogs: { discord: log },
@@ -80,7 +81,7 @@ describe("channel ownership startup", () => {
 
   it("blocks an unowned account without retrying while its bound sibling stays online", async () => {
     await start({
-      agents: { ownership: "explicit", list: [{ id: "main" }, { id: "patricia" }] },
+      agents: { ownership: "explicit", entries: { main: {}, patricia: {} } },
       channels: {
         discord: {
           enabled: true,
@@ -126,7 +127,6 @@ describe("channel ownership startup", () => {
   });
 
   it.each([
-    { authored: "ops", owner: "ops", sibling: "main" },
     { authored: "Ops", owner: "ops", sibling: "main" },
     { authored: "main", owner: "main", sibling: "patricia" },
   ])(

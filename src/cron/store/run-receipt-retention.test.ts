@@ -11,12 +11,14 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
+import { finishCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
-} from "./run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "./run-receipt-store.test-support.js";
+} from "./run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 
@@ -68,14 +70,13 @@ describe("pending cron receipt retention", () => {
         startedAtMs: now + 100 + index * 2,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
-          resolveAgentId: (current) => current.agentId!,
         }),
       );
       history.push(receipt.receiptId);
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "ok",
         finishedAtMs: now + 101 + index * 2,
@@ -104,7 +105,7 @@ describe("pending cron receipt retention", () => {
       expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
 
       database.exec(`
-        CREATE TEMP TRIGGER reject_pending_receipt_completion
+        CREATE TRIGGER reject_pending_receipt_completion
         BEFORE UPDATE ON cron_jobs
         WHEN NEW.job_id = '${job.id}'
           AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
@@ -118,12 +119,23 @@ describe("pending cron receipt retention", () => {
       owner.stop();
       await editor.update(job.id, { agentId: "beta" });
 
-      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      // A late settlement still prunes after an owner edit closes its receipt.
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toMatchObject({
+        receiptId: pending!.receiptId,
+      });
+      // A late result prunes while preserving the unreconciled run marker after an owner edit.
       const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
       let fetchedRows: number;
       try {
-        finishCronRunReceipt({ handle: pending!, status: "ok", finishedAtMs: now });
+        runOpenClawStateWriteTransaction(({ db }) =>
+          finishCronRunReceiptInDatabase({
+            database: db,
+            receiptSchema: prepareCronRunReceiptWriteSchema(db),
+            handle: pending!,
+            pendingReceiptId: pending!.receiptId,
+            status: "ok",
+            finishedAtMs: now,
+          }),
+        );
         fetchedRows = queries.mock.results.flatMap((result) =>
           result.type === "return" ? result.value.rows : [],
         ).length;

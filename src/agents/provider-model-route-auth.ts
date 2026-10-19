@@ -453,18 +453,16 @@ export function selectProviderModelRouteAuth(params: {
     );
   }
   let rejectedProfile: ProviderModelAuthProfileSource | undefined;
-  if (sourceDecision.selection.kind === "unavailable") {
-    rejectedProfile = sourceDecision.selection.source;
-  } else if (
-    sourceDecision.selection.kind === "selected" &&
+  if (
+    sourceDecision.selection.kind !== "none" &&
     sourceDecision.selection.source.kind === "profile"
   ) {
     rejectedProfile = sourceDecision.selection.source;
   } else if (effectiveSourcePlan !== params.sourcePlan && params.sourcePlan.kind === "automatic") {
     rejectedProfile = params.sourcePlan.orderedProfiles[0];
   }
-  const hasCompatibleAuthWinner = Boolean(winner || (directSource && directRoute));
-  if (!hasCompatibleAuthWinner) {
+  const selectedRoute = winner?.route ?? directRoute;
+  if (!selectedRoute) {
     const routeSupport = resolveDeferredRouteSupport(params.resolution);
     const normalizedRuntimeAuthOwner = params.runtimeAuthOwner?.id.trim().toLowerCase();
     const runtimeAuthOwnerIsCompatible =
@@ -500,25 +498,14 @@ export function selectProviderModelRouteAuth(params: {
       },
     );
   }
-  const selectedRoute = winner?.route ?? directRoute;
-  if (!selectedRoute) {
-    return reject(
-      "configured-auth",
-      `No route-compatible authentication source is configured for ${params.provider}.`,
-    );
-  }
-
-  const sameRouteAttempts = winner
-    ? routeProfileAttempts.filter(
-        (attempt) => attempt.route.authRequirement === winner.route.authRequirement,
-      )
-    : [];
-  const crossRouteAttempts = winner
-    ? routeProfileAttempts.filter(
-        (attempt) => attempt.route.authRequirement !== winner.route.authRequirement,
-      )
-    : routeProfileAttempts;
-  const orderedProfileAttempts = [...sameRouteAttempts, ...crossRouteAttempts];
+  const orderedProfileAttempts = [
+    ...routeProfileAttempts.filter(
+      (attempt) => attempt.route.authRequirement === winner?.route.authRequirement,
+    ),
+    ...routeProfileAttempts.filter(
+      (attempt) => attempt.route.authRequirement !== winner?.route.authRequirement,
+    ),
+  ];
   const attempts: ProviderModelRouteAuthAttempt[] = orderedProfileAttempts.map(
     (attempt, index) => ({
       kind: "profile",

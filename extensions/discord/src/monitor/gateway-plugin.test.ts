@@ -1,6 +1,6 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
@@ -62,9 +62,20 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayPlugin,
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+const webSocketConstructor = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: webSocketConstructor,
+}));
+
+const captureHost = vi.hoisted(() => ({
+  capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
-  captureWsEventAsync: vi.fn().mockResolvedValue(undefined),
+  captureWsEventAsync: captureHost.capture,
   resolveEffectiveDebugProxyUrl: () => undefined,
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));
@@ -89,16 +100,19 @@ describe("createDiscordGatewayPlugin", () => {
       await import("./gateway-plugin.js"));
   });
 
+  beforeEach(() => {
+    captureHost.capture.mockReset().mockResolvedValue(undefined);
+  });
+
   function createPlugin(
-    testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
+    socket?: EventEmitter,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
     runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = createRuntimeSpies(),
   ) {
-    return createDiscordGatewayPlugin({
-      discordConfig,
-      runtime,
-      ...(testing ? { testing } : {}),
+    webSocketConstructor.mockImplementation(function () {
+      return socket;
     });
+    return createDiscordGatewayPlugin({ discordConfig, runtime });
   }
 
   it("omits MessageContent only when explicitly disabled", () => {
@@ -201,74 +215,57 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("leaves autoInteractions disabled so OpenClaw owns interaction handoff", () => {
-    const plugin = createPlugin();
-
-    expect(
+  it.each(["present", "rejected"] as const)(
+    "emits transport activity with %s async capture",
+    (capability) => {
+      if (capability === "rejected") {
+        captureHost.capture.mockRejectedValue(new Error("capture write failed"));
+      }
+      const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const plugin = createPlugin(socket);
+      const activitySpy = vi.fn();
       (
         plugin as unknown as {
-          options?: {
-            autoInteractions: boolean;
-            intents: number;
-            reconnect: { maxAttempts: number };
-          };
+          emitter: { on: (event: string, listener: (value: unknown) => void) => void };
         }
-      ).options,
-    ).toEqual({
-      autoInteractions: false,
-      intents:
-        GatewayIntents.Guilds |
-        GatewayIntents.GuildExpressions |
-        GatewayIntents.GuildMessages |
-        GatewayIntents.MessageContent |
-        GatewayIntents.DirectMessages |
-        GatewayIntents.GuildMessageReactions |
-        GatewayIntents.DirectMessageReactions,
-      reconnect: { maxAttempts: 50 },
-    });
-  });
+      ).emitter.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, activitySpy);
 
-  it("emits transport activity for current gateway socket messages", () => {
-    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const plugin = createPlugin({
-      webSocketCtor: function WebSocketCtor() {
-        return socket;
-      } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-      >["webSocketCtor"],
-    });
-    const activitySpy = vi.fn();
-    (
-      plugin as unknown as {
-        emitter: { on: (event: string, listener: (value: unknown) => void) => void };
+      const createdSocket = (
+        plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+      ).createWebSocket("wss://gateway.discord.gg");
+      (plugin as unknown as { ws: unknown }).ws = createdSocket;
+
+      try {
+        createdSocket.emit("message", Buffer.from("{}"));
+
+        expect(activitySpy).toHaveBeenCalledWith({ at: 1_700_000_000_000 });
+        createdSocket.emit("error", new Error("socket failure"));
+        createdSocket.emit("close", 1000, Buffer.alloc(0));
+        expect(captureHost.capture.mock.calls.map(([event]) => event.kind)).toEqual([
+          "ws-open",
+          "ws-frame",
+          "error",
+          "ws-close",
+        ]);
+        expect(captureHost.capture).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "wss://gateway.discord.gg",
+            direction: "inbound",
+            payload: Buffer.from("{}"),
+            meta: { subsystem: "discord-gateway" },
+          }),
+        );
+      } finally {
+        dateNowSpy.mockRestore();
       }
-    ).emitter.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, activitySpy);
-
-    const createdSocket = (
-      plugin as unknown as { createWebSocket: (url: string) => typeof socket }
-    ).createWebSocket("wss://gateway.discord.gg");
-    (plugin as unknown as { ws: unknown }).ws = createdSocket;
-
-    try {
-      createdSocket.emit("message", Buffer.from("{}"));
-
-      expect(activitySpy).toHaveBeenCalledWith({ at: 1_700_000_000_000 });
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-  });
+    },
+  );
 
   it("ignores messages from stale gateway sockets", () => {
     const staleSocket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const currentSocket = new EventEmitter();
-    const plugin = createPlugin({
-      webSocketCtor: function WebSocketCtor() {
-        return staleSocket;
-      } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-      >["webSocketCtor"],
-    });
+    const plugin = createPlugin(staleSocket);
     const activitySpy = vi.fn();
     (
       plugin as unknown as {
@@ -290,17 +287,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("logs Discord gateway websocket error and abnormal close details", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const runtime = createRuntimeSpies();
-    const plugin = createPlugin(
-      {
-        webSocketCtor: function WebSocketCtor() {
-          return socket;
-        } as unknown as NonNullable<
-          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-        >["webSocketCtor"],
-      },
-      {},
-      runtime,
-    );
+    const plugin = createPlugin(socket, {}, runtime);
     const createdSocket = (
       plugin as unknown as { createWebSocket: (url: string) => typeof socket }
     ).createWebSocket("wss://gateway.discord.gg");
@@ -324,17 +311,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("keeps gateway close reason logs UTF-16 safe", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const runtime = createRuntimeSpies();
-    const plugin = createPlugin(
-      {
-        webSocketCtor: function WebSocketCtor() {
-          return socket;
-        } as unknown as NonNullable<
-          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-        >["webSocketCtor"],
-      },
-      {},
-      runtime,
-    );
+    const plugin = createPlugin(socket, {}, runtime);
     const createdSocket = (
       plugin as unknown as { createWebSocket: (url: string) => typeof socket }
     ).createWebSocket("wss://gateway.discord.gg");

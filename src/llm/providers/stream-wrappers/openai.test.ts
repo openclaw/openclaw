@@ -15,6 +15,8 @@ import {
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  resolveOpenAIFastMode,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -72,18 +74,60 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("Ultrafast server compaction at request egress", () => {
+  it.each([
+    { payloadTier: undefined, fastMode: "ultrafast" as const, expected: 260_000 },
+    { payloadTier: "priority", fastMode: "ultrafast" as const, expected: 700_000 },
+    { payloadTier: "ultrafast", fastMode: false, expected: 260_000 },
+  ])(
+    "uses the actual request tier $payloadTier/$fastMode",
+    ({ payloadTier, fastMode, expected }) => {
+      const { baseStreamFn, payloads } = createPayloadCapture({
+        payload: () => (payloadTier === undefined ? {} : { service_tier: payloadTier }),
+      });
+      const wrapped = createOpenAIResponsesContextManagementWrapper(
+        createOpenAIFastModeWrapper(baseStreamFn, fastMode),
+        { fastMode, responsesCompactThreshold: 700_000 },
+      );
+      void wrapped(
+        { ...openaiModel, contextWindow: 1_050_000, contextTokens: 922_000 },
+        { messages: [] },
+        {},
+      );
+      expect(payloads[0]?.context_management).toEqual([
+        { type: "compaction", compact_threshold: expected },
+      ]);
+    },
+  );
+});
+
 describe("createOpenAIFastModeWrapper", () => {
+  it.each(["https://api.openai.com/v1", "https://proxy.example/v1"])(
+    "preserves Ultrafast on the API boundary at %s",
+    (baseUrl) => {
+      const { baseStreamFn, payloads } = createPayloadCapture();
+      const enabled = resolveOpenAIFastMode({ fastMode: "ultrafast" });
+      expect(enabled).toBe("ultrafast");
+      const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
+      void wrapped({ ...openaiModel, baseUrl }, { messages: [] }, {});
+      expect(payloads[0]?.service_tier).toBe("ultrafast");
+    },
+  );
+
   it("resolves dynamic fast mode for each stream call", () => {
     const { baseStreamFn, payloads } = createPayloadCapture();
-    let enabled = true;
+    let enabled: boolean | "ultrafast" = true;
     const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
 
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = "ultrafast";
     void wrapped(openaiModel, { messages: [] }, {});
     enabled = false;
     void wrapped(openaiModel, { messages: [] }, {});
 
     expect(payloads[0]?.service_tier).toBe("priority");
-    expect(payloads[1]).not.toHaveProperty("service_tier");
+    expect(payloads[1]?.service_tier).toBe("ultrafast");
+    expect(payloads[2]).not.toHaveProperty("service_tier");
   });
 });
 
@@ -212,7 +256,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
     const diagnostic = String(logger.info.mock.calls[0]?.[0]);
     expect(diagnostic).toContain('"removedToolIdentities":["client:rogue"');
     expect(diagnostic).toContain('"hosted:file_search"');
-    expect(diagnostic).not.toContain(secretFixture);
+    // The logger receives raw metadata; its console/export boundaries own redaction.
+    expect(diagnostic).toContain(`"hosted:${secretFixture}"`);
   });
 
   it("emits one complete diagnostic through composed wrappers after async replacement", async () => {
@@ -518,12 +563,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
       agentId: "main",
       config: {
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["group:web"] },
             },
-          ],
+          },
         },
         tools: {
           web: {

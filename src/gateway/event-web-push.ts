@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
@@ -29,6 +34,7 @@ import {
   webPushTargetClient,
   webPushSessionAccess,
 } from "./web-push-authority.js";
+import { currentWebPushAgentIcon, prepareWebPushAgentIcon } from "./web-push-avatar.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
 const defaultLog = createSubsystemLogger("gateway/web-push");
@@ -49,6 +55,7 @@ export type HumanMentionWebPush = {
   agentId: string;
   senderLabel?: string;
   sessionTitle?: string;
+  prepare: () => Promise<void>;
   isCurrent: () => boolean;
 };
 
@@ -83,21 +90,6 @@ function resolveEventWebPushNotification(
       title: "OpenClaw agent finished",
       body: "An agent completed its response.",
       tag: `openclaw-agent-finished-${runId}`,
-    };
-  }
-  if (event === "task" && value.action === "upserted") {
-    const task = isRecord(value.task) ? value.task : null;
-    if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
-      return null;
-    }
-    const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
-    const taskTitle = normalizeWebPushDisplayLabel(task.title);
-    return {
-      category: "background-task-failed",
-      title: "OpenClaw background task failed",
-      body: "A background task needs attention.",
-      ...(taskTitle ? { identifiedBody: `${taskTitle} needs attention.` } : {}),
-      tag: `openclaw-task-failed-${taskId}`,
     };
   }
   if (event === "cron" && value.action === "finished" && value.status === "error") {
@@ -145,17 +137,23 @@ export function createEventWebPushDelivery(params: {
     opts?: GatewayBroadcastOpts,
     mention?: HumanMentionWebPush,
   ): void => {
+    let stage = "subscriptions";
     void (async () => {
       if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
         return;
       }
+      stage = "sender";
       const sender = await prepareWebPushNotificationSender(params.stateDir);
+      stage = "authority";
       const agentId = normalizeOptionalString(
         opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
       );
       const sessionKeys = opts?.sessionKeys ?? [];
+      const preparedIcon = mention
+        ? undefined
+        : await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
       const groupedResults = await withCurrentWebPushAuthority(
-        { ...params, sessionKeys, agentId },
+        { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
           const { cfg } = authority;
           const recipientProfileId =
@@ -177,10 +175,7 @@ export function createEventWebPushDelivery(params: {
           if (mention && !sessionPath) {
             return undefined;
           }
-          const path =
-            notification.path ??
-            sessionPath?.slice(1) ??
-            (notification.category === "background-task-failed" ? "tasks" : "sessions");
+          const path = notification.path ?? sessionPath?.slice(1) ?? "sessions";
           const url = resolveControlUiWebPushUrl(cfg, path);
           const targets = listCurrentWebPushTargets({
             ...authority,
@@ -191,9 +186,15 @@ export function createEventWebPushDelivery(params: {
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
           });
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
+          const agentIcon = currentWebPushAgentIcon(cfg, preparedIcon);
           const groups = new Map<
             string,
-            { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+            {
+              title: string;
+              body: string;
+              icon?: string;
+              subscriptions: BoundWebPushSubscription[];
+            }
           >();
           for (const target of targets) {
             if (mention && target.userProfileId !== recipientProfileId) {
@@ -233,8 +234,9 @@ export function createEventWebPushDelivery(params: {
                 ? notification.body
                 : (notification.identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
-            const key = JSON.stringify({ title, body });
-            const group = groups.get(key) ?? { title, body, subscriptions: [] };
+            const icon = preferences.detailLevel === "private" ? undefined : agentIcon;
+            const key = JSON.stringify({ title, body, icon });
+            const group = groups.get(key) ?? { title, body, icon, subscriptions: [] };
             group.subscriptions.push(target.subscription);
             groups.set(key, group);
           }
@@ -248,14 +250,16 @@ export function createEventWebPushDelivery(params: {
             .digest("base64url")
             .slice(0, 32);
           return {
-            start: () =>
-              Promise.all(
+            start: () => {
+              stage = "delivery";
+              return Promise.all(
                 [...groups.values()].map((group) =>
                   sender({
                     subscriptions: group.subscriptions,
                     payload: {
                       title: group.title,
                       body: group.body,
+                      ...(group.icon ? { icon: group.icon } : {}),
                       tag: notification.tag,
                       renotify: false,
                       url,
@@ -267,7 +271,8 @@ export function createEventWebPushDelivery(params: {
                     },
                   }),
                 ),
-              ),
+              );
+            },
           };
         },
       );
@@ -283,9 +288,16 @@ export function createEventWebPushDelivery(params: {
           failed,
         });
       }
-    })().catch(() => {
-      // Transport failures can contain endpoints and payload bytes; log only the closed category.
-      log.warn("event Web Push delivery could not complete", { category: notification.category });
+    })().catch((error: unknown) => {
+      log.warn("event Web Push delivery could not complete", {
+        category: notification.category,
+        stage,
+        error: formatErrorMessage(error),
+        errorName: readErrorName(error),
+        errorCode: extractErrorCode(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        retry: false,
+      });
     });
   };
 

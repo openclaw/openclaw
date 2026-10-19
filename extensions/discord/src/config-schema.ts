@@ -9,7 +9,7 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   ProviderCommandsSchema,
   refineChannelDmPolicy,
   TtsConfigSchema,
@@ -24,9 +24,6 @@ import { z } from "zod";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelStreamingProgressSchema.optional(),
-}).strict();
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -50,14 +47,6 @@ const DiscordIdSchema = z
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
-const DiscordDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: DiscordIdListSchema.optional(),
-  })
-  .strict();
-
 const DiscordPresenceEventsSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -77,6 +66,7 @@ const DiscordThreadSchema = z
 
 const DiscordGuildChannelSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
@@ -100,6 +90,7 @@ const DiscordGuildChannelSchema = buildGroupEntrySchema(
 
 const DiscordGuildSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     slug: z.string().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     ...buildChannelReactionShape({
@@ -113,20 +104,16 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
 );
 
-const DiscordVoiceAutoJoinSchema = z
-  .object({
-    guildId: z.string().min(1),
-    channelId: z.string().min(1),
-    whenOccupied: z.boolean().optional(),
-  })
-  .strict();
-
 const DiscordVoiceAllowedChannelSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
   })
   .strict();
+
+const DiscordVoiceAutoJoinSchema = DiscordVoiceAllowedChannelSchema.extend({
+  whenOccupied: z.boolean().optional(),
+});
 
 const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
 const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
@@ -197,10 +184,15 @@ const DiscordVoiceSchema = z
   .strict()
   .optional();
 
-const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+const { accountShape, rootPolicyShape, groupDmShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   allowFrom: DiscordIdListSchema.optional(),
-  streaming: DiscordPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
+});
+
+const DiscordDmSchema = z.strictObject({
+  ...groupDmShape,
+  groupChannels: DiscordIdListSchema.optional(),
 });
 
 const DiscordAccountSchemaBase = z
@@ -272,16 +264,7 @@ const DiscordAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     intents: z
       .object({
         messageContent: z.boolean().optional(),

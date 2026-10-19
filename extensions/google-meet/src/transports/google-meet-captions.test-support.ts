@@ -8,7 +8,7 @@ import { meetTranscriptScript } from "./google-meet-caption-scripts.js";
 import { meetStatusScript } from "./google-meet-page-scripts.js";
 
 const MEETING_URL = "https://meet.google.com/abc-defg-hij";
-export const GUEST_NAME = "Meeting Assistant";
+const GUEST_NAME = "Meeting Assistant";
 type CaptionLine = MeetingTranscriptLine;
 type CaptionSource = NonNullable<MeetingTranscriptLine["source"]>;
 type Transcript = MeetingTranscriptSnapshot & {

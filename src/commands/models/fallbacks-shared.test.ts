@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -68,6 +69,33 @@ describe.each([
     expect(defaultRuntime.writeStdout).toHaveBeenCalledExactlyOnceWith(testCase.model);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
   });
+
+  it.each([{ flags: [] }, { flags: ["--plain"] }])(
+    "escapes control characters in text output (%j)",
+    async ({ flags }) => {
+      const model = "openai/café\u001b[2J\nforged";
+      mocks.loadModelsConfig.mockResolvedValue({
+        agents: { defaults: { [testCase.key]: { fallbacks: [model] } } },
+      });
+      await runRegisteredCli({
+        register: registerModelsCli,
+        argv: ["models", testCase.name, "list", ...flags],
+      });
+      const output = [
+        ...vi.mocked(defaultRuntime.log).mock.calls,
+        ...vi.mocked(defaultRuntime.writeStdout).mock.calls,
+      ]
+        .flat()
+        .join("\n");
+      expect(output).toContain("openai/café\\nforged");
+      expect(output).not.toContain("\u001b");
+      await runRegisteredCli({
+        register: registerModelsCli,
+        argv: ["models", testCase.name, "list", "--json"],
+      });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ fallbacks: [model] }, 2);
+    },
+  );
 
   it.each([false, true])("preserves human output (empty: %s)", async (empty) => {
     if (empty) {

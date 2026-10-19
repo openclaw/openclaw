@@ -1,15 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import { migratedSessionColumn as migratedColumn } from "./openclaw-agent-db-schema-helpers.js";
 import { readSqliteTableColumns } from "./openclaw-agent-db-session-migrations.js";
 
 const SESSION_NODE_SCHEMA_VERSION = 14;
-
-function migratedColumn(
-  columns: ReadonlySet<string>,
-  columnName: string,
-  fallback: string,
-): string {
-  return columns.has(columnName) ? columnName : fallback;
-}
 
 function jsonText(path: string): string {
   return `CASE
@@ -57,25 +50,20 @@ function createSessionNodes(db: DatabaseSync): void {
   `);
 }
 
-type LegacySessionMigrationSelect = { columns: string; sql: string };
-
 /** Live entries take precedence over routes, then retained generations. */
-function createLegacySessionNodeSelects(
-  db: DatabaseSync,
-): Array<LegacySessionMigrationSelect & { replace: boolean }> {
-  const selects: Array<LegacySessionMigrationSelect & { replace: boolean }> = [];
+function backfillSessionNodes(db: DatabaseSync): void {
   const entryColumns = readSqliteTableColumns(db, "session_entries");
+  const routeColumns = readSqliteTableColumns(db, "session_routes");
   if (entryColumns) {
     const status = migratedColumn(entryColumns, "status", "NULL");
-    selects.push({
-      replace: true,
-      columns: `session_key, current_session_id, entry_json, updated_at, status,
+    db.exec(`INSERT OR REPLACE INTO session_nodes (
+        session_key, current_session_id, entry_json, updated_at, status,
         created_at, created_via, created_actor_type, created_actor_id,
         parent_session_key, spawned_by, fork_source_session_key,
         fork_source_session_id, fork_source_entry_id, label, display_name,
         category, icon, pinned_at, archived_at, last_read_at,
-        last_interaction_at, last_activity_at`,
-      sql: `SELECT
+        last_interaction_at, last_activity_at
+      ) SELECT
         session_key,
         session_id,
         entry_json,
@@ -111,40 +99,22 @@ function createLegacySessionNodeSelects(
         ${jsonNumber("$.lastReadAt")},
         ${jsonNumber("$.lastInteractionAt")},
         ${jsonNumber("$.lastActivityAt")}
-      FROM session_entries`,
-    });
+      FROM session_entries;`);
   }
-  if (readSqliteTableColumns(db, "session_routes")) {
-    selects.push({
-      replace: false,
-      columns: `session_key, current_session_id, entry_json, updated_at`,
-      sql: `SELECT session_key, session_id, '{}', updated_at
-      FROM session_routes`,
-    });
+  if (routeColumns) {
+    db.exec(`INSERT OR IGNORE INTO session_nodes
+      (session_key, current_session_id, entry_json, updated_at)
+      SELECT session_key, session_id, '{}', updated_at FROM session_routes;`);
   }
   // Legacy history can contain a generation whose key has neither a live entry
   // nor a route. It still needs one node owner so the flipped FK can retain it.
-  selects.push({
-    replace: false,
-    columns: `session_key, current_session_id, entry_json, updated_at`,
-    sql: `SELECT session_key, session_id, '{}', updated_at
-    FROM sessions`,
-  });
-  return selects;
-}
-
-function backfillSessionNodes(db: DatabaseSync): void {
-  for (const projection of createLegacySessionNodeSelects(db)) {
-    db.exec(`INSERT OR ${projection.replace ? "REPLACE" : "IGNORE"} INTO session_nodes
-      (${projection.columns}) ${projection.sql};`);
-  }
+  db.exec(`INSERT OR IGNORE INTO session_nodes
+    (session_key, current_session_id, entry_json, updated_at)
+    SELECT session_key, session_id, '{}', updated_at FROM sessions;`);
 }
 
 /** Project the legacy window owner with the migration's entry/route precedence. */
-function createLegacySessionWindowSelect(
-  db: DatabaseSync,
-  source: "sessions" | "session_windows",
-): LegacySessionMigrationSelect | undefined {
+function createLegacySessionWindowSelect(db: DatabaseSync) {
   const columns = readSqliteTableColumns(db, "sessions");
   if (!columns) {
     return undefined;
@@ -153,36 +123,20 @@ function createLegacySessionWindowSelect(
   const routeColumns = readSqliteTableColumns(db, "session_routes");
   // Keep owner preference local to each scalar query: supported SQLite 3.51
   // cannot resolve an outer column reference from a correlated ORDER BY.
-  const entryOwner = entryColumns
-    ? `(SELECT se.session_key
-        FROM session_entries AS se
-        INNER JOIN ${source} AS owner_window ON owner_window.session_id = se.session_id
-        WHERE se.session_id = ${source}.session_id
-        ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
-                 se.updated_at DESC,
-                 se.session_key ASC
-        LIMIT 1)`
-    : "NULL";
-  const routeOwner = routeColumns
-    ? `(SELECT sr.session_key
-        FROM session_routes AS sr
-        INNER JOIN ${source} AS owner_window ON owner_window.session_id = sr.session_id
-        WHERE sr.session_id = ${source}.session_id
-        ORDER BY CASE WHEN sr.session_key = owner_window.session_key THEN 0 ELSE 1 END,
-                 sr.updated_at DESC,
-                 sr.session_key ASC
-        LIMIT 1)`
-    : "NULL";
-  const currentEntryJson = entryColumns
-    ? `(SELECT se.entry_json
-        FROM session_entries AS se
-        INNER JOIN ${source} AS owner_window ON owner_window.session_id = se.session_id
-        WHERE se.session_id = ${source}.session_id
-        ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
-                 se.updated_at DESC,
-                 se.session_key ASC
-        LIMIT 1)`
-    : "NULL";
+  const ownerValue = (
+    table: "session_entries" | "session_routes",
+    column: "session_key" | "entry_json",
+  ) => `(SELECT candidate.${column}
+        FROM ${table} AS candidate
+        INNER JOIN session_windows AS owner_window ON owner_window.session_id = candidate.session_id
+        WHERE candidate.session_id = session_windows.session_id
+        ORDER BY CASE WHEN candidate.session_key = owner_window.session_key THEN 0 ELSE 1 END,
+                 candidate.updated_at DESC,
+                 candidate.session_key ASC
+        LIMIT 1)`;
+  const entryOwner = entryColumns ? ownerValue("session_entries", "session_key") : "NULL";
+  const routeOwner = routeColumns ? ownerValue("session_routes", "session_key") : "NULL";
+  const currentEntryJson = entryColumns ? ownerValue("session_entries", "entry_json") : "NULL";
 
   return {
     columns: `session_id, session_key, previous_session_id, reason, session_scope,
@@ -222,12 +176,12 @@ function createLegacySessionWindowSelect(
       ${migratedColumn(columns, "parent_session_key", "NULL")},
       ${migratedColumn(columns, "spawned_by", "NULL")},
       ${migratedColumn(columns, "display_name", "NULL")}
-    FROM ${source}`,
+    FROM session_windows`,
   };
 }
 
 function migrateSessionWindows(db: DatabaseSync): void {
-  const projection = createLegacySessionWindowSelect(db, "session_windows");
+  const projection = createLegacySessionWindowSelect(db);
   if (!projection) {
     return;
   }

@@ -1,4 +1,3 @@
-// Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
@@ -8,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import pMap from "p-map";
+import { PRECOMPUTED_SUBCOMMAND_HELP_NAMES as PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS } from "../src/cli/precomputed-help-commands.js";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
@@ -16,19 +16,6 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
-
-function dedupe(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
-}
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -43,15 +30,6 @@ const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 // Cold CLI boots compete for the same module graph, so CPU count is not a safe
 // proxy for module-loading throughput on a disk-contended host.
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
-  "config",
-  "doctor",
-  "gateway",
-  "models",
-  "plugins",
-  "sessions",
-  "tasks",
-] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
@@ -62,7 +40,10 @@ const CORE_CHANNEL_ORDER = [
   "signal",
   "imessage",
 ] as const;
-const generatorSignature = createHash("sha1").update(readFileSync(scriptPath)).digest("hex");
+const generatorSignature = createHash("sha1")
+  .update(readFileSync(scriptPath))
+  .update(JSON.stringify(PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS))
+  .digest("hex");
 
 type ExtensionChannelEntry = {
   id: string;
@@ -795,11 +776,10 @@ async function renderSourceRootHelpText(
   } satisfies RootHelpRenderOptions;
   const inlineModule = [
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
-    "if (typeof mod.renderRootHelpText !== 'function') {",
-    `  throw new Error(${JSON.stringify("Source root-help module does not export renderRootHelpText.")});`,
+    "if (typeof mod.outputRootHelp !== 'function') {",
+    `  throw new Error(${JSON.stringify("Source root-help module does not export outputRootHelp.")});`,
     "}",
-    `const output = await mod.renderRootHelpText(${JSON.stringify(renderOptions)});`,
-    "process.stdout.write(output);",
+    `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
     "process.exit(0);",
   ].join("\n");
   return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
@@ -810,17 +790,6 @@ async function renderSourceRootHelpText(
     signal: taskContext?.signal,
     timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
   });
-}
-
-async function renderSourceBrowserHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  // The launcher CLI boot renders byte-identical browser help to a direct
-  // tsx source render (registerBrowserCli + configureProgramHelp) while
-  // avoiding a tsx evaluation of the whole browser CLI import graph, which
-  // dominated this script's wall time.
-  return await renderSourceCommandHelpText("browser", renderContext, taskContext);
 }
 
 async function renderSourceCommandHelpText(
@@ -839,20 +808,6 @@ async function renderSourceCommandHelpText(
     signal: taskContext?.signal,
     timeoutMs: COMMAND_HELP_RENDER_TIMEOUT_MS,
   });
-}
-
-async function renderSourceSecretsHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  return await renderSourceCommandHelpText("secrets", renderContext, taskContext);
-}
-
-async function renderSourceNodesHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  return await renderSourceCommandHelpText("nodes", renderContext, taskContext);
 }
 
 async function renderSourceCommandHelpTextRecord(
@@ -926,7 +881,7 @@ async function writeCliStartupMetadata(options?: {
   const nodesHelpSourceSignature = resolveNodesHelpSourceSignature(resolvedSourceRootDir);
   const subcommandHelpSourceSignature = resolveSubcommandHelpSourceSignature(resolvedSourceRootDir);
   const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
-  const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...channelCatalog.ids]);
+  const channelOptions = [...new Set([...CORE_CHANNEL_ORDER, ...channelCatalog.ids])];
 
   let existing: ExistingCliStartupMetadata | undefined;
   try {
@@ -937,21 +892,19 @@ async function writeCliStartupMetadata(options?: {
 
   const reusableExisting =
     existing?.generatorSignature === generatorSignature &&
-    existing.channelCatalogSignature === channelCatalog.signature
+    existing.channelCatalogSignature === channelCatalog.signature &&
+    bundleIdentity &&
+    existing.rootHelpBundleSignature === bundleIdentity.signature
       ? existing
       : undefined;
   const reusableRootHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     typeof reusableExisting.rootHelpText === "string" &&
     reusableExisting.rootHelpText.length > 0
       ? reusableExisting.rootHelpText
       : undefined;
   const reusableBrowserHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.browserHelpSourceSignature === browserHelpSourceSignature &&
     typeof reusableExisting.browserHelpText === "string" &&
     reusableExisting.browserHelpText.length > 0
@@ -959,8 +912,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSecretsHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.secretsHelpSourceSignature === secretsHelpSourceSignature &&
     typeof reusableExisting.secretsHelpText === "string" &&
     reusableExisting.secretsHelpText.length > 0
@@ -968,8 +919,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableNodesHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.nodesHelpSourceSignature === nodesHelpSourceSignature &&
     typeof reusableExisting.nodesHelpText === "string" &&
     reusableExisting.nodesHelpText.length > 0
@@ -977,8 +926,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSubcommandHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.subcommandHelpSourceSignature === subcommandHelpSourceSignature &&
     hasAllPrecomputedSubcommandHelpText(reusableExisting.subcommandHelpText)
       ? (reusableExisting.subcommandHelpText as PrecomputedSubcommandHelpText)
@@ -1044,21 +991,35 @@ async function writeCliStartupMetadata(options?: {
       : afterRootHelp(() =>
           renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor),
         );
-  const browserHelpTextPromise = reusableBrowserHelpText
-    ? Promise.resolve(reusableBrowserHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-      : runSourceRenderer(options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText);
-  const secretsHelpTextPromise = reusableSecretsHelpText
-    ? Promise.resolve(reusableSecretsHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-      : runSourceRenderer(options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText);
-  const nodesHelpTextPromise = reusableNodesHelpText
-    ? Promise.resolve(reusableNodesHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-      : runSourceRenderer(options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText);
+  const commandHelp = (
+    command: "browser" | "secrets" | "nodes",
+    reusable: string | undefined,
+    render?: SourceHelpRenderer,
+  ) =>
+    reusable !== undefined
+      ? Promise.resolve(reusable)
+      : commandHelpTextPromise
+        ? commandHelpTextPromise.then((help) => help[command])
+        : runSourceRenderer(
+            render ??
+              ((context, taskContext) =>
+                renderSourceCommandHelpText(command, context, taskContext)),
+          );
+  const browserHelpTextPromise = commandHelp(
+    "browser",
+    reusableBrowserHelpText,
+    options?.renderSourceBrowserHelpText,
+  );
+  const secretsHelpTextPromise = commandHelp(
+    "secrets",
+    reusableSecretsHelpText,
+    options?.renderSourceSecretsHelpText,
+  );
+  const nodesHelpTextPromise = commandHelp(
+    "nodes",
+    reusableNodesHelpText,
+    options?.renderSourceNodesHelpText,
+  );
   const subcommandHelpTextPromise = reusableSubcommandHelpText
     ? Promise.resolve(reusableSubcommandHelpText)
     : commandHelpTextPromise

@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import os from "node:os";
-import path from "node:path";
+import { createServer, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, onTestFailed } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
@@ -14,7 +12,14 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
+import { createGatewayConfigPath, setupGatewayTempHome } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 const MODEL_A = "reload-proof/model-a";
@@ -26,7 +31,7 @@ const TARGET_REPLY = "TARGET_REPLY_AFTER_RELOAD";
 const DISPATCH_COMPLETE = "SENDER_DISPATCH_COMPLETE";
 
 type ModelCall = {
-  kind: "dispatch" | "dispatch-complete" | "target" | "reply" | "announce";
+  kind: "dispatch" | "dispatch-complete" | "target" | "reply";
   model: string;
   raw: string;
 };
@@ -63,75 +68,11 @@ afterEach(async () => {
 });
 
 function textResponse(response: ServerResponse, text: string): void {
-  const id = randomUUID();
-  const item = {
-    type: "message",
-    id: `msg_${id}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
-}
-
-function toolResponse(response: ServerResponse): void {
-  const id = randomUUID();
-  const args = JSON.stringify({
-    agentId: "target",
-    message: TARGET_MESSAGE,
-    timeoutSeconds: 0,
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `msg_${randomUUID()}`,
+    responseId: `resp_${randomUUID()}`,
   });
-  const item = {
-    type: "function_call",
-    id: `fc_${id}`,
-    call_id: `call_${id}`,
-    name: "sessions_send",
-    arguments: args,
-    status: "completed",
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: args,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
-}
-
-async function readBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 function readTargetToolResult(raw: string): Record<string, unknown> | undefined {
@@ -167,19 +108,16 @@ async function startProvider() {
         response.writeHead(404).end();
         return;
       }
-      const raw = await readBody(request);
+      const raw = await readProviderBody(request);
       const body = JSON.parse(raw) as {
         model?: unknown;
         tools?: Array<{ type?: string; name?: string }>;
       };
       const rawModel = body.model;
       const modelId = typeof rawModel === "string" ? rawModel : "";
-      if (raw.includes("Agent-to-agent announce step:")) {
-        calls.push({ kind: "announce", model: modelId, raw });
-        textResponse(response, "ANNOUNCE_SKIP");
-      } else if (raw.includes(TARGET_REPLY) && raw.includes("Agent-to-agent reply step:")) {
+      if (raw.includes(TARGET_REPLY)) {
         calls.push({ kind: "reply", model: modelId, raw });
-        textResponse(response, "REPLY_SKIP");
+        textResponse(response, "Requester received the target result.");
       } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
         calls.push({ kind: "dispatch-complete", model: modelId, raw });
         const result = readTargetToolResult(raw);
@@ -197,34 +135,28 @@ async function startProvider() {
             expect.objectContaining({ type: "function", name: "sessions_send" }),
           ]),
         );
-        toolResponse(response);
+        writeToolCall(response, "sessions_send", {
+          agentId: "target",
+          message: TARGET_MESSAGE,
+          timeoutSeconds: 0,
+        });
       } else {
-        throw new Error(`unexpected model request: ${raw.slice(0, 500)}`);
+        throw new Error(`unexpected model request for ${modelId || "<missing model>"}`);
       }
     })().catch((error: unknown) => {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("reload proof provider did not bind a loopback port");
-  }
+  const baseUrl = await listenProvider(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl,
     calls,
     releaseTarget: () => releaseTarget.resolve(),
     targetRunId: () => targetRunId,
     targetStarted: targetStarted.promise,
     close: async () => {
       releaseTarget.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeProvider(server);
     },
   };
 }
@@ -244,62 +176,35 @@ function modelDefinition(id: string): ModelDefinitionConfig {
 
 describe("sessions_send across prepared runtime reload", () => {
   it(
-    "finishes model-A work and re-admits the detached reply and announcement on model B",
+    "finishes model-A work and re-admits one detached requester reply on model B",
     { timeout: 90_000 },
     async () => {
       const provider = await startProvider();
       cleanups.push(provider.close);
       let phase = "starting Gateway";
-      onTestFailed(() => console.info({ phase, calls: provider.calls }));
+      onTestFailed(() => {
+        process.stderr.write(
+          `sessions_send reload failure: ${JSON.stringify({
+            phase,
+            calls: provider.calls.map(({ kind, model }) => ({ kind, model })),
+          })}\n`,
+        );
+      });
       resetGatewayState();
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-reload-"));
+      const {
+        tempHome: home,
+        workspaceDir: workspace,
+        envSnapshot,
+      } = await setupGatewayTempHome({
+        prefix: "openclaw-sessions-reload-",
+      });
       cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
-      const stateDir = path.join(home, ".openclaw");
-      const workspace = path.join(home, "workspace");
-      const bundledPluginsDir = path.join(home, "empty-bundled-plugins");
-      const env = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-        "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      ]);
-      cleanups.push(async () => env.restore());
+      cleanups.push(async () => envSnapshot.restore());
+      const configPath = await createGatewayConfigPath(home);
       const token = `reload-proof-${randomUUID()}`;
-      for (const [key, value] of Object.entries({
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      })) {
-        setTestEnvValue(key, value);
-      }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       deleteTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN");
       deleteTestEnvValue("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN");
-      deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-      await Promise.all([
-        fs.mkdir(stateDir, { recursive: true }),
-        fs.mkdir(workspace, { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-      ]);
       const providerConfig = {
         baseUrl: provider.baseUrl,
         apiKey: "test-token-placeholder",
@@ -334,7 +239,7 @@ describe("sessions_send across prepared runtime reload", () => {
       } satisfies OpenClawConfig;
       const gateway = await startGatewayWithClient({
         cfg,
-        configPath: path.join(stateDir, "openclaw.json"),
+        configPath,
         token,
         scopes: ["operator.admin", "operator.read", "operator.write"],
       });
@@ -364,9 +269,7 @@ describe("sessions_send across prepared runtime reload", () => {
       phase = "waiting for target admission";
       await withTestTimeout(provider.targetStarted, 15_000, "target admission timed out").catch(
         (error: unknown) => {
-          throw new Error(`target admission failed: ${JSON.stringify(provider.calls)}`, {
-            cause: error,
-          });
+          throw new Error("target admission failed", { cause: error });
         },
       );
       phase = "waiting for sender completion";
@@ -431,7 +334,7 @@ describe("sessions_send across prepared runtime reload", () => {
         { agentId: "target", env: process.env },
         { recentLimit: 10, agentIds: ["target"] },
       ).recent.find(({ sessionKey }) => sessionKey === "agent:target:main");
-      expect(target?.entry.status, target?.entry.lastRunError).toBe("done");
+      expect(target?.entry.status).toBe("done");
       expect(target?.entry.lastRunError).toBeUndefined();
       expect(provider.calls).toEqual(
         expect.arrayContaining([
@@ -439,7 +342,6 @@ describe("sessions_send across prepared runtime reload", () => {
           expect.objectContaining({ kind: "target", model: "model-a" }),
           expect.objectContaining({ kind: "dispatch-complete", model: "model-a" }),
           expect.objectContaining({ kind: "reply", model: "model-b" }),
-          expect.objectContaining({ kind: "announce", model: "model-b" }),
         ]),
       );
       const dispatchComplete = provider.calls.find((call) => call.kind === "dispatch-complete");
@@ -449,7 +351,7 @@ describe("sessions_send across prepared runtime reload", () => {
       });
       expect(provider.calls.filter((call) => call.kind === "reply")).toHaveLength(1);
       expect(provider.calls.filter((call) => call.kind === "target")).toHaveLength(1);
-      expect(provider.calls.filter((call) => call.kind === "announce")).toHaveLength(1);
+      expect(provider.calls).toHaveLength(4);
     },
   );
 });

@@ -164,7 +164,10 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     private mutating func restoreRecall(_ marker: RecallMarker) {
-        self.cursor = Self.index(ofOccurrence: marker.occurrence, value: marker.value, in: self.entries)
+        let entries = self.entries
+        self.cursor = entries.indices.reversed().lazy
+            .filter { entries[$0] == marker.value }
+            .dropFirst(marker.occurrence - 1).first
         if self.cursor == nil {
             self.resetNavigation()
         }
@@ -217,21 +220,30 @@ struct ChatInputHistory: Equatable, Sendable {
         return nil
     }
 
-    private static func index(ofOccurrence occurrence: Int, value: String, in entries: [String]) -> Int? {
-        var seen = 0
-        for (index, entry) in entries.enumerated().reversed() where entry == value {
-            seen += 1
-            if seen == occurrence { return index }
-        }
-        return nil
-    }
-
     private static func normalized(_ input: String) -> String {
         input.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
 extension OpenClawChatViewModel {
+    /// Captures the admitted route for synchronous editor callbacks without invalidating them on refresh.
+    public func composerModelResolver() -> @MainActor () -> OpenClawChatViewModel? {
+        let session = self.currentSessionSnapshot()
+        return { [weak self] in
+            guard let self, !self.isTransportDetached,
+                  self.sessionKey == session.key,
+                  self.currentSessionSnapshot().deliveryAgentID == session.deliveryAgentID
+            else { return nil }
+            let contractSensitive = self.usesMutableContractRouting(
+                sessionKey: self.sessionKey,
+                contract: session.sessionRoutingContract) ||
+                self.usesMutableContractRouting(sessionKey: self.sessionKey, contract: self.sessionRoutingContract)
+            guard !contractSensitive || self.sessionRoutingContract == session.sessionRoutingContract
+            else { return nil }
+            return self
+        }
+    }
+
     func composerSessionKey(for sessionKey: String, agentID: String? = nil) -> String {
         let qualifiedOwner = OpenClawChatSessionKey.agentID(from: sessionKey)
         guard let agentID = qualifiedOwner ?? agentID ??

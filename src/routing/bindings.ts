@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { isRouteBinding, listConfiguredBindings, listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -79,12 +78,8 @@ export function buildChannelAccountBindings(cfg: OpenClawConfig) {
 }
 
 export function resolvePreferredAccountId(params: {
-  accountIds: string[];
   defaultAccountId: string;
   boundAccounts: string[];
 }): string {
-  if (params.boundAccounts.length > 0) {
-    return expectDefined(params.boundAccounts[0], "bound accounts entry at 0");
-  }
-  return params.defaultAccountId;
+  return params.boundAccounts[0] ?? params.defaultAccountId;
 }

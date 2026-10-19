@@ -63,7 +63,11 @@ describe("Android Access native workflow", () => {
     expect(step.run).toContain(
       "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
     );
-    expect(step.run).toContain('zipalign" -c -P 16 -v 4');
+    const zipalignVersion = step.run.match(/\/build-tools\/([^/]+)\/zipalign"/)?.[1];
+    expect(zipalignVersion).toBeDefined();
+    expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
+      `"build-tools;${zipalignVersion}"`,
+    );
     expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
     expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
     const aggregate = workflow.jobs["ci-gate"].steps.find(
@@ -122,15 +126,8 @@ ${guard}`,
     }
   });
 
-  it("accepts an executed passing native vector and all four packaged ABIs", () => {
-    const result = verifyReports("passed");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
-    );
-  });
-
   it.each([
+    "passed",
     "empty",
     "wrong-class",
     "failed",
@@ -139,8 +136,15 @@ ${guard}`,
     "wrong-variant",
     "ambiguous-output",
     "outside-output",
-  ])("rejects %s evidence even when Gradle returned success", (mode) => {
+  ])("validates %s native evidence independently of Gradle's exit code", (mode) => {
     const result = verifyReports(mode);
-    expect(result.status, result.stderr).not.toBe(0);
+    if (mode === "passed") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
+      );
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+    }
   });
 });

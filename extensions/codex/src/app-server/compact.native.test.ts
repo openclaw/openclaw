@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { AgentHarnessCompactParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -38,7 +39,6 @@ const transport = vi.hoisted(() => ({
     requestKind: string;
     threadId: string;
     turnId: string;
-    hasCompactionTrigger: boolean;
   }>,
 }));
 
@@ -55,12 +55,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
       const metadata: unknown = JSON.parse(headers.get("x-codex-turn-metadata") ?? "{}");
       assert(isJsonObject(body) && isJsonObject(metadata));
       expect(body.model).toBe(MODEL);
-      expect(metadata.request_kind).toBe(transport.phase);
-      assert(
-        typeof metadata.request_kind === "string" &&
-          typeof metadata.thread_id === "string" &&
-          typeof metadata.turn_id === "string",
-      );
+      assert(metadata.request_kind === transport.phase, "Expected the current request phase");
+      assert(typeof metadata.thread_id === "string" && typeof metadata.turn_id === "string");
       assert(transport.requests.length < 2, "Unexpected additional native model request");
       const compaction = metadata.request_kind === "compaction";
       const hasCompactionTrigger =
@@ -72,7 +68,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
         requestKind: metadata.request_kind,
         threadId: metadata.thread_id,
         turnId: metadata.turn_id,
-        hasCompactionTrigger,
       });
       const id = `synthetic-compaction-${transport.requests.length}`;
       const item = compaction
@@ -129,22 +124,6 @@ it(
     await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
     transport.phase = "turn";
     transport.requests = [];
-    const summary = {
-      sourceHead: execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
-        encoding: "utf8",
-        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" },
-        timeout: 5_000,
-      }).trim(),
-      nativeSha256: createHash("sha256")
-        .update(await fs.readFile(native.command))
-        .digest("hex"),
-      nativeVersion: "",
-      setupHostClosed: false,
-      compacted: false,
-      nativeExited: false,
-      requests: transport.requests,
-    };
     let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
     let closeHost: (() => void) | undefined;
     try {
@@ -197,6 +176,8 @@ it(
             ...options,
             startOptions: {
               ...startOptions,
+              // User-scoped homes prefer an installed desktop app; prove the pinned package.
+              managedCommandOrder: "package-only",
               transport: "stdio",
               args: startOptions.args ?? ["app-server"],
               cwd: native.cwd,
@@ -242,6 +223,8 @@ it(
       params.permissionMode = "full";
       setCodexTestModelSupportsTools(params, true);
       setAgentWorkspaceForTest(params, native.cwd);
+      assert(params.config);
+      setRuntimeConfigSnapshot(params.config);
       closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
       const pluginConfig = { appServer: { homeScope: "user", args: ["app-server"] } };
       const setup = await runCodexAppServerAttempt(params, {
@@ -255,13 +238,11 @@ it(
         promptError: null,
       });
       assert(client);
-      summary.nativeVersion = client.getRuntimeIdentity()?.serverVersion ?? "";
-      expect(summary.nativeVersion).toBe(CODEX_APP_SERVER_VERSION);
+      expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
       const setupHost = params.hostCapabilities;
       closeHost();
       closeHost = undefined;
       expect(() => setupHost.assertActive()).toThrow("no longer active");
-      summary.setupHostClosed = true;
 
       const compactionHostParams = { ...params, runId: "native-compaction-admission" };
       closeHost = await bindProductionHarnessHostCapabilitiesForTest(compactionHostParams);
@@ -303,7 +284,6 @@ it(
         trigger: "manual",
       };
       const compacted = await harness.compact(compactParams);
-      summary.compacted = compacted?.compacted === true;
       expect(compacted).toMatchObject({ ok: true, compacted: true });
       expect(transport.requests.map((request) => request.requestKind)).toEqual([
         "turn",
@@ -317,12 +297,11 @@ it(
       try {
         if (client) {
           const closed = await client.closeAndWait();
-          summary.nativeExited = closed.exited;
           expect(closed).toMatchObject({ exited: true });
         }
       } finally {
         closeHost?.();
-        console.info("NATIVE_COMPACTION_PROOF " + JSON.stringify(summary));
+        clearRuntimeConfigSnapshot();
       }
     }
   },

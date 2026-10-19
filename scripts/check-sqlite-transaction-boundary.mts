@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -16,6 +16,7 @@ const removedAsyncTransactionNames = new Set([
 ]);
 const synchronousTransactionCallbackIndexes = new Map([
   ["runOpenClawAgentWriteTransaction", 0],
+  ["runOpenClawAgentWriteWithYieldingAdmission", 0],
   ["runOpenClawStateWriteTransaction", 0],
   ["runSqliteImmediateTransactionSync", 1],
 ]);

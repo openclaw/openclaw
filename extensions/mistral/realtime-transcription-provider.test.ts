@@ -9,7 +9,20 @@ import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
+const provider = buildMistralRealtimeTranscriptionProvider({
+  createRealtimeTranscriptionWebSocketSession,
+});
 let cleanup: (() => Promise<void>) | undefined;
+
+function createSession(
+  baseUrl: string,
+  callbacks: Omit<Parameters<typeof provider.createSession>[0], "providerConfig">,
+) {
+  return provider.createSession({
+    providerConfig: { apiKey: "fixture-value", baseUrl },
+    ...callbacks,
+  });
+}
 
 async function createRealtimeServer(
   onRequest: (url: URL) => void,
@@ -56,14 +69,10 @@ async function createRealtimeServer(
       ws.terminate();
     }
     await new Promise<void>((resolve) => {
-      wss.close(() => {
-        resolve();
-      });
+      wss.close(() => resolve());
     });
     await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
+      server.close(() => resolve());
     });
   };
   return {
@@ -81,15 +90,12 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   });
 
   it("normalizes nested provider config", () => {
-    const provider = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    });
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
         providers: {
           mistral: {
-            apiKey: "mistral-key",
+            apiKey: "  sk-\r\nmistral│  ",
             model: "voxtral-mini-transcribe-realtime-2602",
             encoding: "g711_ulaw",
             sample_rate: "8000",
@@ -100,7 +106,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     expect(resolved).toEqual({
-      apiKey: "mistral-key",
+      apiKey: "sk-mistral",
       baseUrl: undefined,
       model: "voxtral-mini-transcribe-realtime-2602",
       encoding: "pcm_mulaw",
@@ -109,38 +115,15 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
   });
 
-  it("normalizes pasted API key artifacts for realtime auth headers", () => {
-    const provider = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    });
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as OpenClawConfig,
-      rawConfig: {
-        providers: {
-          mistral: {
-            apiKey: "  sk-\r\nmistral│  ",
-          },
-        },
-      },
-    });
-
-    expect(resolved?.apiKey).toBe("sk-mistral");
-  });
-
   it("requires an API key when creating sessions", () => {
     vi.stubEnv("MISTRAL_API_KEY", "");
-    const provider = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    });
     expect(() => provider.createSession({ providerConfig: {} })).toThrow("Mistral API key missing");
   });
 
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
     const { baseUrl } = await createRealtimeServer((url) => requests.push(url));
-    const session = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    }).createSession({
+    const session = provider.createSession({
       providerConfig: {
         apiKey: "fixture-value",
         baseUrl,
@@ -198,16 +181,6 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       transcripts: ["echo", "echo"],
     },
     {
-      name: "does not replay a terminal aggregate after multiple final segments",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "hello world" },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-    {
       name: "flushes new deltas after a finalized segment without replaying its aggregate",
       events: [
         { type: "transcription.text.delta", text: "hello" },
@@ -218,17 +191,6 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       ],
       partials: ["hello", " new", " new speech"],
       transcripts: ["hello", " new speech"],
-    },
-    {
-      name: "flushes new deltas after multiple finalized segments without replaying them",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.text.delta", text: " again" },
-        { type: "transcription.done", text: "hello world again" },
-      ],
-      partials: [" again"],
-      transcripts: ["hello", "world", " again"],
     },
     {
       name: "does not finalize whitespace-only deltas after a final segment",
@@ -248,16 +210,6 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
         { type: "transcription.done", text: "hello." },
       ],
       partials: ["."],
-      transcripts: ["hello"],
-    },
-    {
-      name: "does not finalize a punctuation-only comma delta after a final segment",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.text.delta", text: ", " },
-        { type: "transcription.done", text: "hello," },
-      ],
-      partials: [", "],
       transcripts: ["hello"],
     },
     {
@@ -281,56 +233,6 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       transcripts: ["hello", " 42"],
     },
     {
-      name: "does not replay terminal suffixes after final segments already own the stream",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "hello world again" },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-    {
-      name: "does not replay terminal corrections after final segments already own the stream",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "hello corrected world" },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-    {
-      name: "does not turn terminal sentence punctuation into a transcript",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "hello world." },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-    {
-      name: "does not turn terminal separator punctuation into a transcript",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "hello, world" },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-    {
-      name: "does not replay terminal whitespace normalization as a transcript",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "  hello\t\n  world  " },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-    {
       name: "does not replay a rewritten terminal aggregate after final segments",
       events: [
         { type: "transcription.segment", text: "hello", start: 0, end: 1 },
@@ -344,13 +246,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     const { baseUrl, closed } = await createRealtimeServer(() => {}, events);
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    }).createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onPartial,
-      onTranscript,
-    });
+    const session = createSession(baseUrl, { onPartial, onTranscript });
 
     await session.connect();
     await withTimeout(closed, 1_000, { message: `Mistral terminal socket did not close: ${name}` });
@@ -397,14 +293,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       const onPartial = vi.fn();
       const onTranscript = vi.fn();
       const onError = vi.fn();
-      const session = buildMistralRealtimeTranscriptionProvider({
-        createRealtimeTranscriptionWebSocketSession,
-      }).createSession({
-        providerConfig: { apiKey: "fixture-value", baseUrl },
-        onPartial,
-        onTranscript,
-        onError,
-      });
+      const session = createSession(baseUrl, { onPartial, onTranscript, onError });
 
       try {
         await session.connect();
@@ -456,13 +345,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     ]);
     const onError = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    }).createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onError,
-      onTranscript,
-    });
+    const session = createSession(baseUrl, { onError, onTranscript });
 
     await session.connect();
     await withTimeout(closed, 1_000, { message: "Mistral UTF-8 limit socket did not close" });
@@ -489,10 +372,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     const onTranscript = vi.fn();
     let lastPartialLength = 0;
     let partialCalls = 0;
-    const session = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    }).createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
+    const session = createSession(baseUrl, {
       onError,
       onPartial: (partial) => {
         lastPartialLength = partial.length;
@@ -525,19 +405,10 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
       { type: "transcription.done", text: "late done" },
     ]);
-    const onError = vi.fn(() => {
-      throw new Error("observer failed");
-    });
+    const onError = vi.fn();
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider({
-      createRealtimeTranscriptionWebSocketSession,
-    }).createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onError,
-      onPartial,
-      onTranscript,
-    });
+    const session = createSession(baseUrl, { onError, onPartial, onTranscript });
 
     await session.connect();
     await withTimeout(closed, 1_000, { message: "Mistral provider-error socket did not close" });

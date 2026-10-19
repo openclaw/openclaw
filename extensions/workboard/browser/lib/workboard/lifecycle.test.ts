@@ -42,7 +42,7 @@ it("uses only the current session for lifecycle even when a historical attempt i
   });
   expect(getWorkboardLifecycle(card, [previous])).toEqual({ session: null, state: "unknown" });
   expect(
-    getWorkboardLifecycle(card, [previous], undefined, {
+    getWorkboardLifecycle(card, [previous], {
       key: localKey,
       status: "resolved",
       session: current,
@@ -50,6 +50,5 @@ it("uses only the current session for lifecycle even when a historical attempt i
   ).toMatchObject({
     session: current,
     state: "succeeded",
-    targetStatus: "review",
   });
 });

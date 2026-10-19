@@ -63,8 +63,8 @@ export class WorkerInferenceProxyClient {
     this.unsubscribers = [
       connection.onReady(() => this.resume()),
       connection.onTerminalError((error) => this.rejectAllOperations(error)),
-      connection.onInferenceEvent((frame) => this.handlePayload(frame.payload)),
-      connection.onInferenceTerminal((frame) => this.handlePayload(frame.payload)),
+      connection.rpc.onInferenceEvent((frame) => this.handlePayload(frame.payload)),
+      connection.rpc.onInferenceTerminal((frame) => this.handlePayload(frame.payload)),
     ];
   }
 
@@ -75,14 +75,13 @@ export class WorkerInferenceProxyClient {
     if (this.disposed) {
       return Promise.reject(new Error("worker inference client disposed"));
     }
-    const snapshot = structuredClone(params);
-    const key = inferenceKey(snapshot);
+    const key = inferenceKey(params);
     if (this.operations.has(key)) {
       return Promise.reject(new Error("worker inference turn already active"));
     }
     return new Promise((resolve, reject) => {
       const operation: InferenceOperation = {
-        params: snapshot,
+        params,
         handlers,
         lastSeq: 0,
         resumeRequested: false,
@@ -97,7 +96,7 @@ export class WorkerInferenceProxyClient {
   }
 
   async cancel(params: WorkerInferenceCancelParams): Promise<WorkerInferenceCancelResult> {
-    const response = await this.connection.requestInferenceCancel(params);
+    const response = await this.connection.rpc.request("inference-cancel", params);
     if (response.ok) {
       return response.payload;
     }
@@ -114,10 +113,8 @@ export class WorkerInferenceProxyClient {
       unsubscribe();
     }
     for (const operation of this.operations.values()) {
-      operation.settled = true;
-      operation.reject(new Error("worker inference client disposed"));
+      this.rejectOperation(operation, new Error("worker inference client disposed"));
     }
-    this.operations.clear();
   }
 
   private resume(): void {
@@ -142,11 +139,15 @@ export class WorkerInferenceProxyClient {
     let interrupted = false;
     try {
       await this.connection.waitForReady();
-      const response = await this.connection.requestInferenceStart(operation.params, (frame) => {
-        if (frame.ok && frame.payload.status === "replayed") {
-          operation.lastSeq = 0;
-        }
-      });
+      const response = await this.connection.rpc.request(
+        "inference-start",
+        operation.params,
+        (frame) => {
+          if (frame.ok && frame.payload.status === "replayed") {
+            operation.lastSeq = 0;
+          }
+        },
+      );
       if (!response.ok) {
         fenceForOwnershipError(this.connection, response.error);
         this.rejectOperation(operation, new WorkerInferenceProxyError(response.error));

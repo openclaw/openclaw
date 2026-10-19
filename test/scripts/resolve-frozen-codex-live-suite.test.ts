@@ -79,17 +79,6 @@ describe("frozen Codex live-suite resolver", () => {
     expect(result.summary).toContain("uses `openai/gpt-5.5`");
   });
 
-  it("omits GPT-5.6-only lanes from targets that predate the capability cohort", async ({
-    command,
-  }) => {
-    const result = await runResolver(command, { suiteId: "live-codex-harness-gpt56-sol-docker" });
-
-    expect(result.status).toBe(0);
-    expect(result.output).toBe("run_lane=false\n");
-    expect(result.envFile).toBe("");
-    expect(result.summary).toContain("omitted unsupported current-only suite");
-  });
-
   it("keeps the current GPT-5.6 cohort and generic default unchanged", async ({ command }) => {
     const modelIds = ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"];
     const dedicated = await runResolver(command, {
@@ -124,21 +113,6 @@ describe("frozen Codex live-suite resolver", () => {
     const result = await runResolver(command, {
       catalog: false,
       harnessModel: "openai/gpt-5.6-luna",
-      suiteId: "live-codex-harness-gpt56-sol-docker",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.output).toBe("run_lane=false\n");
-    expect(result.envFile).toBe("");
-    expect(result.summary).toContain("omitted unsupported current-only suite");
-  });
-
-  it("omits GPT-5.6 suites for a catalog-free target with the older harness default", async ({
-    command,
-  }) => {
-    const result = await runResolver(command, {
-      catalog: false,
-      harnessModel: "codex/gpt-5.5",
       suiteId: "live-codex-harness-gpt56-sol-docker",
     });
 

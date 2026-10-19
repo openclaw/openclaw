@@ -9,6 +9,7 @@ import {
   enqueueSessionDelivery,
   loadPendingSessionDeliveries,
 } from "./session-delivery-queue-storage.js";
+import { SessionDeliveryDeadLetteredError } from "./session-delivery-queue.records.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
 describe("session-delivery recovery persistence", () => {
@@ -73,6 +74,64 @@ describe("session-delivery recovery persistence", () => {
         ).resolves.toMatchObject({ recovered: 1 });
         expect(retryDelivery).toHaveBeenCalledTimes(1);
         expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["startup", "targeted drain"] as const)(
+    "reports the terminal reason before a real SQLite settlement failure during %s recovery",
+    async (mode) => {
+      await withSessionDeliveryQueue(async (tempDir, queueContext) => {
+        const id = await enqueueSessionDelivery(
+          {
+            kind: "systemEvent",
+            sessionKey: "agent:main:main",
+            text: "delivery requiring terminal settlement",
+          },
+          queueContext,
+        );
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        const deliver = vi.fn(async () => {
+          db.exec(`
+            CREATE TRIGGER main.reject_session_delivery_settlement
+            BEFORE UPDATE ON delivery_queue_entries
+            WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
+            BEGIN
+              SELECT RAISE(ABORT, 'synthetic session delivery settlement write failure');
+            END;
+          `);
+          throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
+        });
+        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+        try {
+          const recovery =
+            mode === "startup"
+              ? recoverPendingSessionDeliveries({ deliver, queueContext, log })
+              : drainPendingSessionDelivery({
+                  id,
+                  logLabel: "Session delivery",
+                  deliver,
+                  queueContext,
+                  log,
+                });
+          await expect(recovery).resolves.toMatchObject(
+            mode === "startup" ? { recovered: 0, failed: 0 } : { id },
+          );
+        } finally {
+          db.exec("DROP TRIGGER IF EXISTS main.reject_session_delivery_settlement");
+        }
+
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+          `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
+        );
+        const [pending] = await loadPendingSessionDeliveries(queueContext);
+        expect(pending).toEqual(expect.objectContaining({ id, retryCount: 0 }));
+        expect(pending?.settlementOutcome).toBeUndefined();
+        expect(pending?.lastError).toBeUndefined();
       });
     },
   );

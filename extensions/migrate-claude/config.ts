@@ -5,8 +5,8 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { childRecord, readJsonObject, sanitizeName } from "./helpers.js";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readJsonObject, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
 
 type MappedMcpSource = {
@@ -51,51 +51,42 @@ function mapMcpServers(raw: unknown): Record<string, unknown> | undefined {
 
 async function collectMcpSources(source: ClaudeSource): Promise<MappedMcpSource[]> {
   const sources: MappedMcpSource[] = [];
+  const add = (
+    sourceId: string,
+    sourceLabel: string,
+    sourcePath: string | undefined,
+    raw: unknown,
+  ) => {
+    const servers = mapMcpServers(raw);
+    if (servers && sourcePath) {
+      sources.push({ sourceId, sourceLabel, sourcePath, servers });
+    }
+  };
   const projectMcp = await readJsonObject(source.projectMcpPath);
-  const projectServers = mapMcpServers(projectMcp.mcpServers ?? projectMcp);
-  if (projectServers && source.projectMcpPath) {
-    sources.push({
-      sourceId: "project-mcp",
-      sourceLabel: "project .mcp.json",
-      sourcePath: source.projectMcpPath,
-      servers: projectServers,
-    });
-  }
+  add(
+    "project-mcp",
+    "project .mcp.json",
+    source.projectMcpPath,
+    projectMcp.mcpServers ?? projectMcp,
+  );
 
   const claudeJson = await readJsonObject(source.userClaudeJsonPath);
-  const userServers = mapMcpServers(claudeJson.mcpServers);
-  if (userServers && source.userClaudeJsonPath) {
-    sources.push({
-      sourceId: "user-claude-json",
-      sourceLabel: "user ~/.claude.json",
-      sourcePath: source.userClaudeJsonPath,
-      servers: userServers,
-    });
-  }
+  add("user-claude-json", "user ~/.claude.json", source.userClaudeJsonPath, claudeJson.mcpServers);
 
   if (source.projectDir) {
-    const projectRecord = childRecord(childRecord(claudeJson, "projects"), source.projectDir);
-    const projectScopedServers = mapMcpServers(projectRecord.mcpServers);
-    if (projectScopedServers && source.userClaudeJsonPath) {
-      sources.push({
-        sourceId: "user-claude-json-project",
-        sourceLabel: "project entry in ~/.claude.json",
-        sourcePath: source.userClaudeJsonPath,
-        servers: projectScopedServers,
-      });
-    }
+    const projectRecord = asNonArrayRecord(
+      asNonArrayRecord(claudeJson.projects)[source.projectDir],
+    );
+    add(
+      "user-claude-json-project",
+      "project entry in ~/.claude.json",
+      source.userClaudeJsonPath,
+      projectRecord.mcpServers,
+    );
   }
 
   const desktopConfig = await readJsonObject(source.desktopConfigPath);
-  const desktopServers = mapMcpServers(desktopConfig.mcpServers);
-  if (desktopServers && source.desktopConfigPath) {
-    sources.push({
-      sourceId: "desktop",
-      sourceLabel: "Claude Desktop config",
-      sourcePath: source.desktopConfigPath,
-      servers: desktopServers,
-    });
-  }
+  add("desktop", "Claude Desktop config", source.desktopConfigPath, desktopConfig.mcpServers);
   return sources;
 }
 
@@ -144,37 +135,33 @@ export async function buildConfigItems(params: {
     params.source.projectLocalSettingsPath,
   ]) {
     const settings = await readJsonObject(settingsPath);
-    if (settingsPath && settings.hooks !== undefined) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:hooks:${sanitizeName(settingsPath)}`,
-          source: settingsPath,
-          message: "Claude hooks were found but are not enabled automatically.",
-          recommendation: "Review hook commands before recreating equivalent OpenClaw automation.",
-        }),
-      );
-    }
-    if (settingsPath && settings.permissions !== undefined) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:permissions:${sanitizeName(settingsPath)}`,
-          source: settingsPath,
-          message: "Claude permission settings were found but are not translated automatically.",
-          recommendation:
-            "Review deny and allow rules manually. Do not import broad allow rules without a policy review.",
-        }),
-      );
-    }
-    if (settingsPath && settings.env !== undefined) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:env:${sanitizeName(settingsPath)}`,
-          source: settingsPath,
-          message: "Claude environment defaults were found but are not copied automatically.",
-          recommendation:
-            "Move non-secret values manually and store credentials through OpenClaw credential flows.",
-        }),
-      );
+    for (const [key, message, recommendation] of [
+      [
+        "hooks",
+        "Claude hooks were found but are not enabled automatically.",
+        "Review hook commands before recreating equivalent OpenClaw automation.",
+      ],
+      [
+        "permissions",
+        "Claude permission settings were found but are not translated automatically.",
+        "Review deny and allow rules manually. Do not import broad allow rules without a policy review.",
+      ],
+      [
+        "env",
+        "Claude environment defaults were found but are not copied automatically.",
+        "Move non-secret values manually and store credentials through OpenClaw credential flows.",
+      ],
+    ] as const) {
+      if (settingsPath && settings[key] !== undefined) {
+        items.push(
+          createMigrationManualItem({
+            id: `manual:${key}:${sanitizeName(settingsPath)}`,
+            source: settingsPath,
+            message,
+            recommendation,
+          }),
+        );
+      }
     }
   }
 

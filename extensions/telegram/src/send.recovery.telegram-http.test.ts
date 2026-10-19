@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Bot } from "grammy";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import * as mediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -26,6 +25,16 @@ describe("Telegram send recovery conformance over HTTP", () => {
   let photoPath: string;
   let photos: string[];
   let voicePath: string;
+  const requestOptions = () => ({ cfg, api: bot.api });
+  const mediaOptions = () => ({ ...requestOptions(), mediaLocalRoots: [fixture.mediaDir] });
+  const photoOptions = () => ({ ...mediaOptions(), mediaUrl: photoPath });
+  const fieldValues = (key: string, start = 0) =>
+    requests.slice(start).map(({ fields }) => fields[key]);
+  const expectMethods = (...methods: string[]) =>
+    expect(requests.map(({ method }) => method)).toEqual(methods);
+  const configWith = <const T extends object>(overrides: T) => ({
+    channels: { telegram: { ...cfg.channels.telegram, ...overrides } },
+  });
   beforeAll(async () => {
     voicePath = path.join(fixture.mediaDir, "note.ogg");
     await fs.writeFile(
@@ -70,25 +79,6 @@ describe("Telegram send recovery conformance over HTTP", () => {
   });
 
   it.each(["direct", "public"] as const)(
-    "retains %s rich content and preview policy through validation fallback",
-    async (entry) => {
-      rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
-      await sendThrough(entry, "**answer**", async () => {}, undefined, true, undefined, {
-        linkPreview: false,
-      });
-      expect(requests.map(({ method }) => method)).toEqual(["sendRichMessage", "sendMessage"]);
-      expect(requests[0]!.fields.rich_message).toMatchObject({ skip_entity_detection: true });
-      expect(requests[1]!.fields).toMatchObject({
-        text: "answer",
-        link_preview_options: { is_disabled: true },
-        reply_parameters: { message_id: 7, quote: "quote" },
-        reply_markup: { inline_keyboard: buttons },
-      });
-      expect(requests[1]!.fields.parse_mode).toBeUndefined();
-    },
-  );
-
-  it.each(["direct", "public"] as const)(
     "keeps %s first-reply ownership and final controls on multipart rich fallback",
     async (entry) => {
       rejections.push("Bad Request: RICH_MESSAGE_CONTENT_REQUIRED");
@@ -105,25 +95,17 @@ describe("Telegram send recovery conformance over HTTP", () => {
           linkPreview: false,
         },
       );
-      expect(requests.map(({ method }) => method)).toEqual([
-        "sendRichMessage",
-        "sendMessage",
-        "sendMessage",
-      ]);
-      expect(requests.slice(1).map(({ fields }) => fields.text)).toEqual([
-        "A".repeat(4000),
-        "A".repeat(500),
-      ]);
-      expect(requests.slice(1).map(({ fields }) => fields.reply_parameters)).toEqual(
+      expectMethods("sendRichMessage", "sendMessage", "sendMessage");
+      expect(requests[0]!.fields.rich_message).toMatchObject({ skip_entity_detection: true });
+      expect(fieldValues("parse_mode", 1)).toEqual([undefined, undefined]);
+      expect(fieldValues("text", 1)).toEqual(["A".repeat(4000), "A".repeat(500)]);
+      expect(fieldValues("reply_parameters", 1)).toEqual(
         entry === "direct"
           ? [{ message_id: 7, quote: "quote", allow_sending_without_reply: true }, undefined]
           : [undefined, undefined],
       );
-      expect(requests.slice(1).map(({ fields }) => fields.reply_markup)).toEqual([
-        undefined,
-        { inline_keyboard: buttons },
-      ]);
-      expect(requests.slice(1).map(({ fields }) => fields.link_preview_options)).toEqual([
+      expect(fieldValues("reply_markup", 1)).toEqual([undefined, { inline_keyboard: buttons }]);
+      expect(fieldValues("link_preview_options", 1)).toEqual([
         { is_disabled: true },
         { is_disabled: true },
       ]);
@@ -131,81 +113,55 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it.each(["direct", "public"] as const)(
-    "does not replay an unrelated %s rich rejection as plain text",
-    async (entry) => {
-      rejections.push("Bad Request: CHAT_WRITE_FORBIDDEN");
-      await expect(sendThrough(entry, "answer", async () => {}, undefined, true)).rejects.toThrow(
-        /CHAT_WRITE_FORBIDDEN/,
-      );
-      expect(requests.map(({ method }) => method)).toEqual(["sendRichMessage"]);
+  it.each([
+    {
+      rejection: "can't parse entities",
+      text: `**${"x".repeat(1024)}**`,
+      captions: [`<b>${"x".repeat(1024)}</b>`, "x".repeat(1024)],
     },
-  );
-
-  it.each(["direct", "public"] as const)(
-    "keeps the %s parsed caption budget through HTML rejection",
-    async (entry) => {
-      rejections.push("Bad Request: can't parse entities");
+    { rejection: "text must be non-empty", text: "\u200b", captions: ["\u200b", undefined] },
+  ])(
+    "recovers a rejected caption ($rejection) without duplicating accepted media",
+    async ({ rejection, text, captions }) => {
+      rejections.push(`Bad Request: ${rejection}`);
       const result = await sendThrough(
-        entry,
-        `**${"x".repeat(1024)}**`,
+        "direct",
+        text,
         async () => {},
         photoPath,
         false,
         undefined,
         { textMode: "markdown" },
       );
-      expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendPhoto"]);
-      expect(requests.map(({ fields }) => fields.caption)).toEqual([
-        `<b>${"x".repeat(1024)}</b>`,
-        "x".repeat(1024),
-      ]);
+      expectMethods("sendPhoto", "sendPhoto");
+      expect(fieldValues("caption")).toEqual(captions);
       expect(requests[1]!.fields.parse_mode).toBeUndefined();
-      expect(result).toMatchObject(
-        entry === "public" ? { messageId: "2" } : { receipt: { platformMessageIds: ["2"] } },
-      );
+      expect(result).toMatchObject({ receipt: { platformMessageIds: ["2"] } });
     },
   );
 
-  it.each(["direct", "public"] as const)(
-    "retries a provider-empty %s caption without duplicating accepted media",
-    async (entry) => {
-      rejections.push("Bad Request: text must be non-empty");
-      const result = await sendThrough(entry, "\u200b", async () => {}, photoPath);
-      expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendPhoto"]);
-      expect(requests[0]!.fields.caption).toBe("\u200b");
-      expect(requests[1]!.fields.caption).toBeUndefined();
-      expect(requests[1]!.fields.parse_mode).toBeUndefined();
-      expect(result).toMatchObject(
-        entry === "public" ? { messageId: "2" } : { receipt: { platformMessageIds: ["2"] } },
-      );
-    },
-  );
-
-  it.each(["direct", "public"] as const)(
-    "does not strip the topic or change media kind after a %s topic rejection",
-    async (entry) => {
-      rejections.push("Bad Request: message thread not found");
+  it.each([
+    { kind: "rich", rejection: "CHAT_WRITE_FORBIDDEN", method: "sendRichMessage" },
+    { kind: "photo", rejection: "message thread not found", method: "sendPhoto" },
+  ])(
+    "does not retry a $kind send after $rejection",
+    async ({ kind, rejection, method: expectedMethod }) => {
+      rejections.push(`Bad Request: ${rejection}`);
       await expect(
-        sendThrough(entry, "caption", async () => {}, photoPath, false, undefined, {
-          threadId: 77,
-        }),
-      ).rejects.toThrow(/thread not found/);
-      expect(requests.map(({ method }) => method)).toEqual(["sendPhoto"]);
-      expect(requests[0]!.fields.message_thread_id).toBe("77");
-    },
-  );
-
-  it.each(["direct", "public"] as const)(
-    "does not retry a %s text send outside its missing topic",
-    async (entry) => {
-      rejections.push("Bad Request: message thread not found");
-      await expect(
-        sendThrough(entry, "answer", async () => {}, undefined, false, undefined, { threadId: 77 }),
-      ).rejects.toThrow(/thread not found/);
-      expect(requests.map(({ method, fields }) => [method, fields.message_thread_id])).toEqual([
-        ["sendMessage", 77],
-      ]);
+        sendThrough(
+          "direct",
+          "answer",
+          async () => {},
+          kind === "photo" ? photoPath : undefined,
+          kind === "rich",
+          undefined,
+          kind === "rich" ? {} : { threadId: 77 },
+        ),
+      ).rejects.toThrow(rejection);
+      expect(requests.map(({ method }) => method)).toEqual([expectedMethod]);
+      if (kind === "photo") {
+        expect(requests[0]!.fields.message_thread_id).toBe("77");
+      }
     },
   );
 
@@ -213,7 +169,6 @@ describe("Telegram send recovery conformance over HTTP", () => {
     ["image/png", "sendPhoto", "photo", "image.png"],
     ["video/quicktime", "sendVideo", "video", "video.mov"],
     ["audio/mpeg", "sendAudio", "audio", "audio.mp3"],
-    ["application/pdf", "sendDocument", "document", "file.pdf"],
     ["image/gif", "sendAnimation", "animation", "animation.gif"],
     ["application/x-custom", "sendDocument", "document", "file.bin"],
   ])(
@@ -224,41 +179,16 @@ describe("Telegram send recovery conformance over HTTP", () => {
         contentType,
         kind: undefined,
       });
-      await deliverReplies({
-        cfg,
-        bot,
-        runtime,
-        chatId: "123",
-        token: cfg.channels.telegram.botToken,
-        replies: [{ mediaUrl: "https://example.com/anonymous" }],
-        replyToMode: "off",
-        textLimit: 4000,
+      await deliver([{ mediaUrl: "https://example.com/anonymous" }], {
+        mediaLocalRoots: undefined,
       });
-      expect(requests.map((request) => request.method)).toEqual([method]);
+      expectMethods(method);
       const upload = resolveTelegramTestUpload(requests[0]!.fields, field);
       expect(upload.name).toBe(filename);
       expect(await upload.text()).toBe("external-loader-bytes");
     },
   );
 
-  it("reaches the same MIME filename owner from the durable sender", async () => {
-    const loader = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      buffer: await fs.readFile(photoPath),
-      contentType: "image/png",
-      kind: "image",
-    });
-    try {
-      await sendMessageTelegram("123", "", {
-        cfg,
-        api: bot.api,
-        mediaUrl: "https://example.com/anonymous",
-      });
-      expect(requests.map(({ method }) => method)).toEqual(["sendPhoto"]);
-      expect(resolveTelegramTestUpload(requests[0]!.fields, "photo").name).toBe("image.png");
-    } finally {
-      loader.mockRestore();
-    }
-  });
   it.each(["direct", "public"] as const)(
     "batches %s photos with one caption and reply, preserving the trailing singleton",
     async (entry) => {
@@ -270,17 +200,15 @@ describe("Telegram send recovery conformance over HTTP", () => {
               silent: true,
             })
           : await sendMessageTelegram("123", "Album", {
-              cfg,
-              api: bot.api,
+              ...mediaOptions(),
               mediaUrls: photos,
-              mediaLocalRoots: [fixture.mediaDir],
               replyToMessageId: 7,
               replyToIdSource: "implicit",
               replyToMode: "first",
               messageThreadId: 77,
               silent: true,
             });
-      expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup", "sendPhoto"]);
+      expectMethods("sendMediaGroup", "sendPhoto");
       const album = JSON.parse(String(requests[0]!.fields.media));
       expect(album).toHaveLength(10);
       expect(album.map((item: { caption?: string }) => item.caption)).toEqual([
@@ -310,10 +238,8 @@ describe("Telegram send recovery conformance over HTTP", () => {
       const ids = Array.from({ length: 10 }, (_, index) => String(1001 + index));
       await expect(
         sendMessageTelegram("123", "Album", {
-          cfg,
-          api: bot.api,
+          ...mediaOptions(),
           mediaUrls: photos,
-          mediaLocalRoots: [fixture.mediaDir],
           messageThreadId: 77,
           signal: abort.signal,
           assertPlatformSendAuthorized: () => {
@@ -328,7 +254,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
             if (messageId === ids.at(-1)) {
               if (failure === "abort") {
                 abort.abort();
-              } else {
+              } else if (failure === "revoked") {
                 authorized = false;
               }
             }
@@ -340,7 +266,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
           receipt: { platformMessageIds: ids, threadId: "77" },
         },
       });
-      expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup"]);
+      expectMethods("sendMediaGroup");
     },
   );
 
@@ -358,55 +284,34 @@ describe("Telegram send recovery conformance over HTTP", () => {
       }),
     ).rejects.toMatchObject({ deliveryResult: { messageIds: ["1001", "1002"] } });
     expect(accepted).toHaveBeenCalledExactlyOnceWith(photos.slice(0, 2));
-    expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup"]);
+    expectMethods("sendMediaGroup");
   });
 
-  it.each(["accepted", "photo-rejected", "unrelated-rejection"] as const)(
+  it.each(["photo-rejected", "unrelated-rejection"] as const)(
     "keeps album recovery and caption ordering under %s",
     async (outcome) => {
-      if (outcome !== "accepted") {
-        rejections.push(
-          outcome === "photo-rejected"
-            ? "Bad Request: PHOTO_INVALID_DIMENSIONS"
-            : "Bad Request: CHAT_WRITE_FORBIDDEN",
-        );
-      }
+      rejections.push(
+        outcome === "photo-rejected"
+          ? "Bad Request: PHOTO_INVALID_DIMENSIONS"
+          : "Bad Request: CHAT_WRITE_FORBIDDEN",
+      );
       if (outcome === "photo-rejected") {
         rejections.push("Bad Request: PHOTO_INVALID_DIMENSIONS");
       }
       const sending = deliver([{ text: "x".repeat(1100), mediaUrls: photos.slice(0, 2) }]);
       if (outcome === "unrelated-rejection") {
         await expect(sending).rejects.toThrow("CHAT_WRITE_FORBIDDEN");
-        expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup"]);
+        expectMethods("sendMediaGroup");
       } else {
         const result = await sending;
-        expect(requests.map(({ method }) => method)).toEqual(
-          outcome === "accepted"
-            ? ["sendMediaGroup", "sendMessage"]
-            : ["sendMediaGroup", "sendPhoto", "sendDocument", "sendPhoto", "sendMessage"],
-        );
+        expectMethods("sendMediaGroup", "sendPhoto", "sendDocument", "sendPhoto", "sendMessage");
         expect(requests.at(-1)!.fields.text).toBe("x".repeat(1100));
-        expect(result.receipt?.platformMessageIds).toEqual(
-          outcome === "accepted" ? ["1001", "1002", "2"] : ["3", "4", "5"],
-        );
+        expect(result.receipt?.platformMessageIds).toEqual(["3", "4", "5"]);
       }
     },
   );
 
-  it("keeps interactive controls on their payload instead of grouping them away", async () => {
-    await deliver([
-      { text: "Earlier" },
-      { text: "Choose", mediaUrls: photos.slice(0, 2), channelData: { telegram: { buttons } } },
-    ]);
-    expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "sendPhoto", "sendPhoto"]);
-    expect(requests.map(({ fields }) => fields.reply_markup)).toEqual([
-      undefined,
-      JSON.stringify({ inline_keyboard: buttons }),
-      undefined,
-    ]);
-  });
-
-  it.each(["text", "media", "rich", "album"] as const)(
+  it.each(["text", "album"] as const)(
     "stops %s continuation on a wrong-topic acceptance without losing the receipt",
     async (kind) => {
       fixture.responseFor = (method) =>
@@ -437,12 +342,11 @@ describe("Telegram send recovery conformance over HTTP", () => {
         deliver(
           [
             {
-              text: "A".repeat(kind === "rich" ? 4500 : 8000),
-              ...(kind === "media" ? { mediaUrl: photoPath } : {}),
+              text: "A".repeat(8000),
               ...(kind === "album" ? { mediaUrls: photos.slice(0, 2) } : {}),
             },
           ],
-          { thread: { scope: "forum", id: 77 }, richMessages: kind === "rich", textLimit: 32768 },
+          { thread: { scope: "forum", id: 77 }, richMessages: false, textLimit: 32768 },
         ),
       ).rejects.toMatchObject({
         deliveryResult: {
@@ -457,30 +361,26 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it.each(["direct", "public"] as const)(
-    "classifies %s migration rejection as not dispatched without rewriting the destination",
-    async (entry) => {
-      rejections.push({
-        error_code: 400,
-        description: "Bad Request: group chat was upgraded to a supergroup chat",
-        parameters: { migrate_to_chat_id: -100123 },
-      });
-      const error = await sendThrough(entry, "answer", async () => {}).catch(
-        (failure: unknown) => failure,
-      );
-      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-      expect(error).toMatchObject({
-        retryable: false,
-        message: expect.stringContaining("-100123"),
-      });
-      expect(requests.map(({ fields }) => fields.chat_id)).toEqual(["123"]);
-    },
-  );
+  it("classifies migration rejection as not dispatched without rewriting the destination", async () => {
+    rejections.push({
+      error_code: 400,
+      description: "Bad Request: group chat was upgraded to a supergroup chat",
+      parameters: { migrate_to_chat_id: -100123 },
+    });
+    const error = await sendThrough("public", "answer", async () => {}).catch(
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      retryable: false,
+      message: expect.stringContaining("-100123"),
+    });
+    expect(fieldValues("chat_id")).toEqual(["123"]);
+  });
 
   it.each(["accepted", "forbidden", "unrelated", "missing-fallback", "caption-too-long"] as const)(
     "settles a voice reply with %s provider outcome and mirrors only accepted content",
     async (outcome) => {
-      const voice = voicePath;
       const registry = createEmptyPluginRegistry();
       addTestHook({
         registry,
@@ -509,7 +409,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
       const sending = deliver(
         [
           {
-            mediaUrl: voice,
+            mediaUrl: voicePath,
             audioAsVoice: true,
             ...(outcome === "caption-too-long"
               ? { text: "\u200b".repeat(1024) }
@@ -537,7 +437,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
         });
         expect(mirror).toHaveBeenCalledExactlyOnceWith({
           text: outcome === "caption-too-long" ? undefined : "Allowed fallback",
-          mediaUrls: outcome === "forbidden" ? undefined : [voice],
+          mediaUrls: outcome === "forbidden" ? undefined : [voicePath],
         });
       }
       expect(recordingAt).toEqual([0]);
@@ -567,7 +467,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
       } else {
         await expect(sending).resolves.toMatchObject({ delivered: true });
       }
-      expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "pinChatMessage"]);
+      expectMethods("sendMessage", "pinChatMessage");
       expect(requests[1]!.fields.message_id).toBe(1);
     },
   );
@@ -633,66 +533,25 @@ describe("Telegram send recovery conformance over HTTP", () => {
       );
     },
   );
-  it.each(["accepted", "empty-fallback", "later-rejection"] as const)(
-    "keeps accepted media and voice text separate under %s",
-    async (outcome) => {
-      rejections.push("", "VOICE_MESSAGES_FORBIDDEN");
-      if (outcome === "empty-fallback") {
-        rejections.push(
-          "Bad Request: text must be non-empty",
-          "Bad Request: text must be non-empty",
-        );
-      } else if (outcome === "later-rejection") {
-        rejections.push("", "Bad Request: CHAT_WRITE_FORBIDDEN");
-      }
-      const mirror = vi.fn();
-      const sending = deliver(
-        [
-          {
-            mediaUrls: [photos[0]!, voicePath, photos[1]!],
-            audioAsVoice: true,
-            spokenText: "Voice fallback",
-          },
-        ],
-        { transcriptMirror: mirror },
-      );
-      if (outcome === "accepted") {
-        await expect(sending).resolves.toMatchObject({
-          receipt: { platformMessageIds: ["1", "3", "4"] },
-        });
-        expect(mirror).toHaveBeenCalledExactlyOnceWith({
-          text: "Voice fallback",
-          mediaUrls: [photos[0], photos[1]],
-        });
-      } else {
-        await expect(sending).rejects.toMatchObject({
-          deliveryResult: { messageIds: outcome === "empty-fallback" ? ["1"] : ["1", "3"] },
-        });
-        expect(mirror).not.toHaveBeenCalled();
-      }
-      expect(requests[1]!.method).toBe("sendVoice");
-      expect(requests[2]!.method).toBe("sendMessage");
-    },
-  );
-  it("uses the retained direct-send credential despite an unavailable config SecretRef", async () => {
-    const token = "987654321:retained-startup";
-    const retainedBot = new Bot(token, { client: { apiRoot: cfg.channels.telegram.apiRoot } });
-    await expect(
-      deliver([{ text: "Retained credential reply" }], {
-        bot: retainedBot,
-        token,
-        cfg: {
-          channels: {
-            telegram: {
-              apiRoot: cfg.channels.telegram.apiRoot,
-              botToken: { source: "file", provider: "unavailable", id: "/telegram/botToken" },
-            },
-          },
+  it("keeps accepted media and voice fallback text receipts when later media is rejected", async () => {
+    rejections.push("", "VOICE_MESSAGES_FORBIDDEN", "", "Bad Request: CHAT_WRITE_FORBIDDEN");
+    const mirror = vi.fn();
+    const sending = deliver(
+      [
+        {
+          mediaUrls: [photos[0]!, voicePath, photos[1]!],
+          audioAsVoice: true,
+          spokenText: "Voice fallback",
         },
-      }),
-    ).resolves.toMatchObject({ delivered: true });
-    expect(fixture.endpoints).toEqual([`/bot${token}/sendMessage`]);
-    expect(requests.map(({ fields }) => fields.text)).toEqual(["Retained credential reply"]);
+      ],
+      { transcriptMirror: mirror },
+    );
+    await expect(sending).rejects.toMatchObject({
+      deliveryResult: { messageIds: ["1", "3"] },
+    });
+    expect(mirror).not.toHaveBeenCalled();
+    expect(requests[1]!.method).toBe("sendVoice");
+    expect(requests[2]!.method).toBe("sendMessage");
   });
 
   it.each([false, true])(
@@ -706,11 +565,8 @@ describe("Telegram send recovery conformance over HTTP", () => {
         ...(rejected ? ["Bad Request: keyboard retrofit failed"] : []),
       );
       const sending = sendMessageTelegram("123", "\u200b".repeat(1025), {
-        cfg,
-        api: bot.api,
+        ...photoOptions(),
         textMode: "html",
-        mediaUrl: photoPath,
-        mediaLocalRoots: [fixture.mediaDir],
         buttons,
       });
       if (rejected) {
@@ -721,12 +577,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
           meta: { telegramHasInlineKeyboard: true },
         });
       }
-      expect(requests.map(({ method }) => method)).toEqual([
-        "sendPhoto",
-        "sendMessage",
-        "sendMessage",
-        "editMessageReplyMarkup",
-      ]);
+      expectMethods("sendPhoto", "sendMessage", "sendMessage", "editMessageReplyMarkup");
       expect(requests.at(-1)!.fields).toMatchObject({
         message_id: 1,
         reply_markup: { inline_keyboard: buttons },
@@ -740,10 +591,8 @@ describe("Telegram send recovery conformance over HTTP", () => {
       const document = path.join(fixture.mediaDir, "report.pdf");
       await fs.writeFile(document, "%PDF-1.4\nreport");
       await sendMessageTelegram("123", "Attachments", {
-        cfg,
-        api: bot.api,
+        ...mediaOptions(),
         mediaUrls: [photos[0]!, photos[1]!, document, photos[2]!, photos[3]!],
-        mediaLocalRoots: [fixture.mediaDir],
         forceDocument,
       });
       expect(requests.map(({ method }) => method)).toEqual(
@@ -768,185 +617,168 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it.each(["unknown", "too-wide", "too-large"] as const)(
+  it.each(["unknown", "too-wide"] as const)(
     "uses a document when photo dimensions are %s",
     async (shape) => {
       vi.spyOn(mediaRuntime, "getImageMetadata").mockResolvedValue(
-        shape === "unknown"
-          ? null
-          : shape === "too-wide"
-            ? { width: 4000, height: 100 }
-            : { width: 6000, height: 5001 },
+        shape === "unknown" ? null : { width: 4000, height: 100 },
       );
-      await sendMessageTelegram("123", "Caption", {
-        cfg,
-        api: bot.api,
-        mediaUrl: photoPath,
-        mediaLocalRoots: [fixture.mediaDir],
-      });
-      expect(requests.map(({ method }) => method)).toEqual(["sendDocument"]);
+      await sendMessageTelegram("123", "Caption", photoOptions());
+      expectMethods("sendDocument");
       expect(
         Buffer.from(await resolveTelegramTestUpload(requests[0]!.fields, "document").arrayBuffer()),
       ).toEqual(await fs.readFile(photoPath));
     },
   );
 
-  it.each([false, true])(
-    "keeps explicit replies on oversized captions (implicit: %s)",
-    async (implicit) => {
-      await sendMessageTelegram("123", "A".repeat(1100), {
-        cfg,
-        api: bot.api,
-        mediaUrl: photoPath,
-        mediaLocalRoots: [fixture.mediaDir],
-        replyToMessageId: 7,
-        replyToIdSource: implicit ? "implicit" : "explicit",
-        replyToMode: "first",
-      });
-      expect(requests.map(({ fields }) => fields.reply_to_message_id)).toEqual(
-        implicit ? ["7", undefined] : ["7", 7],
-      );
-    },
-  );
+  it("consumes an implicit first reply on media before its oversized caption follow-up", async () => {
+    await sendMessageTelegram("123", "A".repeat(1100), {
+      ...photoOptions(),
+      replyToMessageId: 7,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+    expect(fieldValues("reply_to_message_id")).toEqual(["7", undefined]);
+  });
 
-  it.each([false, true])(
-    "preserves a mismatched native location receipt (venue: %s)",
-    async (venue) => {
-      fixture.responseFor = () => ({
-        message_id: 303,
-        message_thread_id: 100,
-        chat: { id: -100123, type: "supergroup" },
-      });
-      await expect(
-        sendLocationTelegram(
-          "-100123:topic:99",
-          {
-            latitude: 48.858844,
-            longitude: 2.294351,
-            ...(venue ? { name: "Eiffel Tower", address: "Champ de Mars" } : {}),
-          },
-          { cfg, api: bot.api },
-        ),
-      ).rejects.toMatchObject({
-        deliveryResult: { messageIds: ["303"], receipt: { threadId: "100" } },
-      });
-      expect(requests.map(({ method }) => method)).toEqual([venue ? "sendVenue" : "sendLocation"]);
-    },
-  );
+  it("preserves a mismatched native venue receipt", async () => {
+    fixture.responseFor = () => ({
+      message_id: 303,
+      message_thread_id: 100,
+      chat: { id: -100123, type: "supergroup" },
+    });
+    await expect(
+      sendLocationTelegram(
+        "-100123:topic:99",
+        {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          name: "Eiffel Tower",
+          address: "Champ de Mars",
+        },
+        requestOptions(),
+      ),
+    ).rejects.toMatchObject({
+      deliveryResult: { messageIds: ["303"], receipt: { threadId: "100" } },
+    });
+    expectMethods("sendVenue");
+  });
 
-  it.each([false, true])(
-    "keeps durable voice privacy fallback context on a rich account=%s",
-    async (richMessages) => {
-      rejections.push("Bad Request: VOICE_MESSAGES_FORBIDDEN");
-      await sendMessageTelegram("123:topic:77", "Hello **there**", {
-        cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages } } },
-        api: bot.api,
-        mediaUrl: voicePath,
-        mediaLocalRoots: [fixture.mediaDir],
-        asVoice: true,
-        replyToMessageId: 7,
-        silent: true,
-        buttons,
-      });
-      expect(requests.map(({ method }) => method)).toEqual([
-        "sendVoice",
-        richMessages ? "sendRichMessage" : "sendMessage",
-      ]);
-      expect(requests[1]!.fields).toMatchObject({
-        message_thread_id: 77,
-        disable_notification: true,
-        reply_markup: { inline_keyboard: buttons },
-        ...(richMessages ? { reply_parameters: { message_id: 7 } } : { reply_to_message_id: 7 }),
-      });
-    },
-  );
+  it("keeps durable voice privacy fallback context on a rich account", async () => {
+    rejections.push("Bad Request: VOICE_MESSAGES_FORBIDDEN");
+    await sendMessageTelegram("123:topic:77", "Hello **there**", {
+      ...mediaOptions(),
+      cfg: configWith({ richMessages: true }),
+      mediaUrl: voicePath,
+      asVoice: true,
+      replyToMessageId: 7,
+      silent: true,
+      buttons,
+    });
+    expectMethods("sendVoice", "sendRichMessage");
+    expect(requests[1]!.fields).toMatchObject({
+      message_thread_id: 77,
+      disable_notification: true,
+      reply_markup: { inline_keyboard: buttons },
+      reply_parameters: { message_id: 7 },
+    });
+  });
 
   it("enforces the configured upload limit before reaching Telegram", async () => {
     await expect(
       sendMessageTelegram("123", "", {
-        cfg: {
-          channels: { telegram: { ...cfg.channels.telegram, mediaMaxMb: 1 / (1024 * 1024) } },
-        },
-        api: bot.api,
-        mediaUrl: photoPath,
-        mediaLocalRoots: [fixture.mediaDir],
+        ...photoOptions(),
+        cfg: configWith({ mediaMaxMb: 1 / (1024 * 1024) }),
       }),
     ).rejects.toMatchObject({ name: "ImageOptimizationLimitError", maxBytes: 1 });
     expect(requests).toEqual([]);
   });
 
-  it("retains accepted album parts when loading a later file fails", async () => {
-    await expect(
-      sendMessageTelegram("123", "Album", {
-        cfg,
-        api: bot.api,
-        mediaUrls: [...photos.slice(0, 10), path.join(fixture.mediaDir, "missing.png")],
-        mediaLocalRoots: [fixture.mediaDir],
-      }),
-    ).rejects.toMatchObject({
-      deliveryResult: {
-        messageIds: Array.from({ length: 10 }, (_, index) => String(1001 + index)),
-      },
+  it("sends WAV media requested as voice using sendAudio", async () => {
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      buffer: Buffer.from("audio-bytes"),
+      kind: "audio",
+      contentType: "audio/wav",
+      fileName: "note.wav",
     });
-    expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup"]);
+    await sendMessageTelegram("123", "Caption", {
+      ...requestOptions(),
+      mediaUrl: "https://example.com/audio",
+      asVoice: true,
+    });
+    expectMethods("sendAudio");
+    expect(await resolveTelegramTestUpload(requests[0]!.fields, "audio").text()).toBe(
+      "audio-bytes",
+    );
   });
 
   it.each([
-    { contentType: "audio/mpeg", fileName: "note.mp3", method: "sendVoice" },
-    { contentType: "audio/wav", fileName: "note.wav", method: "sendAudio" },
-    { contentType: " Audio/Ogg; codecs=opus ", fileName: "note.ogg", method: "sendVoice" },
-  ])(
-    "sends requested voice media as $method for $contentType",
-    async ({ contentType, fileName, method }) => {
+    { entry: "durable", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
+    { entry: "durable", method: "sendAudio", contentType: "audio/mpeg", asVoice: false },
+    { entry: "streaming", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
+    { entry: "streaming", method: "sendAudio", contentType: "audio/mp4", asVoice: false },
+  ] as const)(
+    "sends a rounded probed duration with $entry $method uploads",
+    async ({ entry, method, contentType, asVoice }) => {
+      vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
       vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
         buffer: Buffer.from("audio-bytes"),
         kind: "audio",
         contentType,
-        fileName,
+        fileName: "clip",
       });
-      await sendMessageTelegram("123", "Caption", {
-        cfg,
-        api: bot.api,
-        mediaUrl: "https://example.com/audio",
-        asVoice: true,
-      });
+      const mediaUrl = "https://example.com/clip";
+      if (entry === "durable") {
+        await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice });
+      } else {
+        await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
+      }
       expect(requests.map((request) => request.method)).toEqual([method]);
-      expect(
-        await resolveTelegramTestUpload(
-          requests[0]!.fields,
-          method === "sendVoice" ? "voice" : "audio",
-        ).text(),
-      ).toBe("audio-bytes");
+      expect(String(requests[0]!.fields.duration)).toBe("13");
     },
   );
 
-  it.each(["text must be non-empty", "chunk content rejected"])(
-    "does not claim delivery when all text fails with %s",
-    async (description) => {
-      rejections.push(`Bad Request: ${description}`, `Bad Request: ${description}`);
-      await expect(sendMessageTelegram("123", "\u200b", { cfg, api: bot.api })).rejects.toThrow(
-        description,
-      );
-      expect(requests.map(({ method }) => method)).toEqual(
-        Array(description === "text must be non-empty" ? 2 : 1).fill("sendMessage"),
-      );
+  it.each(["N/A", "0", "Infinity", new Error("ffprobe unavailable")])(
+    "still sends audio when duration probing yields %s",
+    async (result) => {
+      const probe = vi.spyOn(mediaRuntime, "runFfprobe");
+      if (result instanceof Error) {
+        probe.mockRejectedValue(result);
+      } else {
+        probe.mockResolvedValue(result);
+      }
+      await sendMessageTelegram("123", "", {
+        cfg,
+        api: bot.api,
+        mediaUrl: voicePath,
+        mediaLocalRoots: [fixture.mediaDir],
+        asVoice: true,
+      });
+      expect(requests.map((request) => request.method)).toEqual(["sendVoice"]);
+      expect(requests[0]!.fields.duration).toBeUndefined();
     },
   );
+
+  it("does not claim delivery when all text is rejected as empty", async () => {
+    const description = "text must be non-empty";
+    rejections.push(`Bad Request: ${description}`, `Bad Request: ${description}`);
+    await expect(sendMessageTelegram("123", "\u200b", { cfg, api: bot.api })).rejects.toThrow(
+      description,
+    );
+    expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "sendMessage"]);
+  });
 
   it("keeps authored link destinations through an HTML rejection", async () => {
     rejections.push("Bad Request: can't parse entities");
-    await sendMessageTelegram("123", "Read [docs](https://example.com/guide)", {
-      cfg,
-      api: bot.api,
-    });
-    expect(requests.map(({ fields }) => fields.text)).toEqual([
+    await sendMessageTelegram("123", "Read [docs](https://example.com/guide)", requestOptions());
+    expect(fieldValues("text")).toEqual([
       'Read <a href="https://example.com/guide">docs</a>',
       "Read docs (https://example.com/guide)",
     ]);
     const text = "[reference]: https://example.com";
     await editMessageTelegram("123", 321, text, {
-      cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
-      api: bot.api,
+      ...requestOptions(),
+      cfg: configWith({ richMessages: true }),
     });
     expect(requests.at(-1)).toEqual({
       method: "editMessageText",

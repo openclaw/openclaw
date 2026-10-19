@@ -13,9 +13,9 @@ export type WindowsTestShard = {
 // and hooks, rounded up to 0.1s. Concurrent case sums overcount fixture walls.
 // Project startup belongs to its first file; keep compatible project files
 // together. Timings guide placement; package scripts alone own coverage.
+// Census timings: run 36437664939, Windows jobs 108980729190/108980729152.
 const fileSeconds: Readonly<Record<string, number>> = {
   "extensions/acpx/src/runtime-argv.process.test.ts": 16.2,
-  "extensions/canvas/scripts/pnpm-runner.test.ts": 1.5,
   "extensions/lobster/src/lobster-runner.test.ts": 6.4,
   "extensions/memory-core/src/memory-extra-file-path.windows.test.ts": 11,
   "extensions/memory-wiki/src/obsidian.discovery.test.ts": 1.6,
@@ -26,7 +26,7 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "extensions/mxc/test/path-comparison.test.ts": 1.6,
   "extensions/mxc/test/sandbox-policy-loader.test.ts": 0.1,
   "packages/terminal-core/src/display-string.test.ts": 0.1,
-  "src/agents/agent-tools.read.host-operations.test.ts": 6.2,
+  "src/agents/agent-tools.read.workspace-mutations.test.ts": 6.2,
   "src/agents/agent-tools.read.windows.test.ts": 18.2,
   "src/agents/apply-patch.test.ts": 3.9,
   "src/agents/bash-tools.exec.script-preflight.test.ts": 12.2,
@@ -57,7 +57,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/daemon/schtasks.env-case.real.test.ts": 8.9,
   "src/daemon/schtasks.startup-fallback.test.ts": 8.3,
   "src/flows/doctor-health-contributions.windows-cloud-state.test.ts": 13.1,
-  "src/gateway/control-ui-asset-retention.publication.test.ts": 3.2,
   "src/gateway/gateway-cron-process-identity.windows.test.ts": 15.1,
   "src/gateway/worker-environments/workspace-quiescence.windows.test.ts": 4.2,
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts": 15,
@@ -69,6 +68,7 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/infra/fs-safe.test.ts": 2.5,
   "src/infra/git-exec.test.ts": 1.8,
   "src/infra/openclaw-cli-shim.windows.test.ts": 1.8,
+  "src/infra/openclaw-process-census.test.ts": 1.7,
   "src/infra/ports.test.ts": 3.2,
   "src/infra/process-env.test.ts": 0.1,
   "src/infra/sqlite-private-directory.windows.test.ts": 1.3,
@@ -87,6 +87,8 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/infra/windows-diagnostic-env.test.ts": 1.8,
   "src/infra/windows-encoding.test.ts": 0.7,
   "src/infra/windows-install-roots.test.ts": 0.6,
+  "src/infra/windows-process-census.native.test.ts": 1.7,
+  "src/infra/windows-process-census.test.ts": 1.6,
   "src/infra/windows-process-start.native.test.ts": 0.7,
   "src/infra/windows-process-start.test.ts": 0.9,
   "src/media-understanding/attachments.file-url.windows.test.ts": 3.8,
@@ -103,16 +105,13 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/process/exec.windows.test.ts": 2.6,
   "src/process/owned-stdio.real.test.ts": 2.4,
   "src/process/owned-stdio.windows.test.ts": 4.3,
+  "src/process/supervisor/service-child-group-ownership.test.ts": 0.1,
   "src/process/supervisor/supervisor.anchored-shell.real.test.ts": 5.7,
   "src/process/terminal-pty.test.ts": 1.4,
   "src/process/windows-command.test.ts": 6.5,
   "src/shared/pid-alive.env.test.ts": 1.4,
   "src/shared/runtime-import.test.ts": 1.4,
   "src/shared/worker-bundle-archive.test.ts": 4,
-  "src/skills/runtime/refresh-watch-close.test.ts": 0.1,
-  "src/skills/runtime/refresh-watch-path.test.ts": 0.2,
-  "src/skills/runtime/refresh.missing-root.integration.test.ts": 5.4,
-  "src/skills/runtime/refresh.windows.test.ts": 0.3,
   "src/snapshot/local-repository.windows.test.ts": 3.7,
   "src/state/openclaw-database-paths.windows.test.ts": 8.8,
   "src/state/openclaw-state-ownership.test.ts": 12.9,
@@ -154,10 +153,15 @@ const runtimeBuildSeconds = 68;
 const fallbackFileSeconds = 3;
 const targetSeconds = 420;
 
+function addTimingSeconds(total: number, seconds: number): number {
+  // Preserve measured 0.1s precision so floating-point drift cannot inflate Math.ceil.
+  return Math.round((total + seconds) * 10) / 10;
+}
+
 function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>>): string[] {
   const targets = [1, 2].flatMap((part) => {
     const script = scripts[`test:windows:ci:${part}`];
-    const match = script?.match(/^node --import \S+ scripts\/test-projects\.mts (.+)$/u);
+    const match = script?.match(/^node scripts\/test-projects\.mts (.+)$/u);
     const files = match?.[1]?.trim().split(/\s+/u);
     if (!files?.length || files.some((file) => !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
       throw new Error(`Windows CI part ${part} must declare explicit test-projects file targets`);
@@ -184,13 +188,13 @@ export function createWindowsTestShards(
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.
       runtime.targets.push(file);
-      runtime.seconds += seconds;
+      runtime.seconds = addTimingSeconds(runtime.seconds, seconds);
     } else {
       const configs = buildVitestRunPlans([file]).map((plan) => plan.config);
       const key = configs.toSorted().join("\n") || file;
       const project = projects.get(key) ?? { targets: [], seconds: 0 };
       project.targets.push(file);
-      project.seconds += seconds;
+      project.seconds = addTimingSeconds(project.seconds, seconds);
       projects.set(key, project);
     }
   }
@@ -225,7 +229,7 @@ export function createWindowsTestShards(
       const shard = shards.reduce((best, candidate) =>
         candidate.predicted_seconds < best.predicted_seconds ? candidate : best,
       );
-      shard.predicted_seconds += envelope.seconds;
+      shard.predicted_seconds = addTimingSeconds(shard.predicted_seconds, envelope.seconds);
       shard.targets.push(...envelope.targets);
     }
     // Keep whole files: splitting a fixture file would repeat its prepared compiler.

@@ -1,13 +1,24 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  type AnyAgentTool,
+  callGatewayTool,
+  readGatewayToolOperatorScopes,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { assertBrowserDashboardTargetCurrent } from "./browser-dashboard.js";
 import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
   createBrowserNodeProxyRequest,
   createBrowserNodeSessionTabRoute,
   type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
+import { isBrowserLifecycleAction } from "./browser-tool-action-facts.js";
 import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
@@ -17,28 +28,18 @@ import {
   resolveBrowserBaseUrl,
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
-  type BrowserNodeTarget,
 } from "./browser-tool.routing.js";
+import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import type { browserAct } from "./browser/client-actions.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
+import { withBrowserRequestScope } from "./browser/request-scope.js";
 import {
-  type AnyAgentTool,
-  type browserAct,
-  type BrowserToolCapabilities,
-  getRuntimeConfig,
-  getBrowserProfileCapabilities,
-  readPositiveIntegerParam,
-  readStringParam,
-  readStringValue,
-  resolveBrowserConfig,
-  resolveProfile,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  jsonResult,
-  callGatewayTool,
-  readGatewayToolOperatorScopes,
-} from "./browser-tool.runtime.js";
-import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
-import { withBrowserRequestScope } from "./browser/request-scope.js";
+} from "./browser/session-tab-registry.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -265,7 +266,7 @@ export function createBrowserTool(
             browserDashboard: await callDashboard("POST", true),
           });
         }
-        if (["doctor", "status", "start", "stop", "profiles", "importprofile"].includes(action)) {
+        if (isBrowserLifecycleAction(action)) {
           throw new Error(
             "Use browser tab actions with a dashboard selector; open resumes it and close pauses it",
           );
@@ -333,8 +334,8 @@ export function createBrowserTool(
             signal,
             opts,
             sessionTabs: {
-              touch: () => {},
-              untrack: () => {},
+              touch: async () => {},
+              untrack: async () => {},
               trackOpened: async () => {
                 throw new Error("Dashboard owns its context.");
               },
@@ -379,15 +380,13 @@ export function createBrowserTool(
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
       const isUserBrowserProfile = profileCapabilities?.usesChromeMcp === true;
-      if (isUserBrowserProfile) {
-        if (target === "sandbox") {
-          throw new Error(
-            `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
-          );
-        }
+      if (isUserBrowserProfile && target === "sandbox") {
+        throw new Error(
+          `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
+        );
       }
 
-      let nodeTarget: BrowserNodeTarget | null = null;
+      let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
       try {
         nodeTarget = await resolveBrowserToolNodeTarget({
           requestedNode: requestedNode ?? undefined,
@@ -452,6 +451,7 @@ export function createBrowserTool(
         resolvedBrowser,
       });
       const sessionTabs = createBrowserToolSessionTabs({
+        agentId: opts?.agentId,
         sessionKey: opts?.agentSessionKey,
         requestedProfile: profile,
         defaultProfile: resolvedBrowser.defaultProfile,
@@ -464,29 +464,22 @@ export function createBrowserTool(
         isHostFallbackActive: proxyRequest?.isHostFallbackActive,
         registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
       });
-      switch (action) {
-        case "doctor":
-        case "status":
-        case "start":
-        case "stop":
-        case "profiles":
-        case "importprofile":
-          return await executeBrowserLifecycleAction({
-            action,
-            input: params,
-            baseUrl,
-            profile,
-            timeoutMs: toolTimeoutMs,
-            proxyRequest,
-            allowHostControl: opts?.allowHostControl,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            signal,
-          });
-        default:
-          break;
+      if (isBrowserLifecycleAction(action)) {
+        return await executeBrowserLifecycleAction({
+          action,
+          input: params,
+          baseUrl,
+          profile,
+          timeoutMs: toolTimeoutMs,
+          proxyRequest,
+          allowHostControl: opts?.allowHostControl,
+          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          signal,
+        });
       }
       let tabIdentity: BrowserTabIdentity | undefined;
       if (browserDashboard) {
+        const { assertBrowserDashboardTargetCurrent } = await import("./browser-dashboard.js");
         await assertBrowserDashboardTargetCurrent(browserDashboard, opts?.agentId, { signal });
       }
       const dispatchTabAction = () =>
@@ -533,8 +526,8 @@ export function createBrowserTool(
         ? await withBrowserRequestScope(
             {
               managedOnly: true,
-              assertCurrent: (admittedProfile) =>
-                assertBrowserDashboardTargetCurrent(
+              assertCurrent: async (admittedProfile) =>
+                (await import("./browser-dashboard.js")).assertBrowserDashboardTargetCurrent(
                   dashboardTarget,
                   opts?.agentId,
                   { signal },

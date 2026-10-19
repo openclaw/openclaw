@@ -6,8 +6,10 @@ import type { FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WithDistArtifactOwnership } from "../../../scripts/lib/runtime-artifact-contract.js";
 import { loadSourceRuntimePreparation } from "../../../scripts/lib/source-update-artifact-preflight.mts";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
-import type { PluginLifecycleLeaseContext } from "../../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
 type SourceArtifactOwnership = { withDistArtifactOwnership: WithDistArtifactOwnership };
@@ -28,80 +30,100 @@ function isSourceArtifactOwnership(value: unknown): value is SourceArtifactOwner
 export async function completeSourceUpdateRuntime(params: {
   root: string;
   timeoutMs: number;
-  lease: PluginLifecycleLeaseContext;
   sourceRuntimePrepared?: boolean;
-  beforePersistentEffect?: () => void | Promise<void>;
+  assertCurrent?: () => void;
   beforePublication?: () => Promise<void>;
 }): Promise<{ changed: boolean }> {
-  params.lease.assertOwned();
+  params.assertCurrent?.();
   if (params.sourceRuntimePrepared === true) {
     return { changed: false };
   }
   const installKind = await resolveUpdateInstallKind(params.root, {
-    signal: params.lease.signal,
+    signal: resolveCommandProcessSignal(),
     timeoutMs: params.timeoutMs,
   });
+  params.assertCurrent?.();
   if (installKind !== "git") {
-    params.lease.assertOwned();
     return { changed: false };
   }
-  const root = await fs.realpath(params.root);
-  params.lease.assertOwned();
-  const prepare = await loadSourceRuntimePreparation(root);
-  params.lease.assertOwned();
-  if (!prepare) {
-    return { changed: false };
-  }
-  const complete = async () => {
-    params.lease.assertOwned();
-    const prepared = prepare({ repoRoot: root });
-    try {
-      params.lease.assertOwned();
-      if (prepared.changed) {
-        await params.beforePublication?.();
-        params.lease.assertOwned();
-        await withGatewayRuntimeArtifactPublication(
-          {
-            root,
-            env: process.env,
-            timeoutMs: params.timeoutMs,
-            assertCurrent: () => params.lease.assertOwned(),
-          },
-          async (assertPublicationCurrent) => {
-            await prepared.publish(async () => {
-              await params.beforePersistentEffect?.();
-              await assertPublicationCurrent();
-              params.lease.assertOwned();
-            });
-          },
-        );
+  return await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, (lease) =>
+    withCommandProcessScope(async () => {
+      const root = await fs.realpath(params.root);
+      lease.assertOwned();
+      const prepare = await loadSourceRuntimePreparation(root);
+      lease.assertOwned();
+      if (!prepare) {
+        return { changed: false };
       }
-    } catch (error) {
-      try {
+      const complete = async () => {
+        lease.assertOwned();
+        const prepared = prepare({ repoRoot: root });
+        try {
+          lease.assertOwned();
+          if (prepared.changed) {
+            await params.beforePublication?.();
+            lease.assertOwned();
+            const publicationFailures: unknown[] = [];
+            try {
+              await withGatewayRuntimeArtifactPublication(
+                {
+                  root,
+                  env: process.env,
+                  timeoutMs: params.timeoutMs,
+                  assertCurrent: () => lease.assertOwned(),
+                },
+                async (assertPublicationCurrent) => {
+                  lease.renew?.();
+                  await prepared.publish(async () => {
+                    await assertPublicationCurrent();
+                    lease.assertOwned();
+                  });
+                },
+              );
+            } catch (error) {
+              publicationFailures.push(error);
+            }
+            try {
+              // Publication has settled rollback and released its temporary authority.
+              lease.renew?.();
+            } catch (error) {
+              if (!publicationFailures.includes(error)) {
+                publicationFailures.push(error);
+              }
+            }
+            throwSqliteLifecycleErrors(
+              publicationFailures,
+              "Runtime publication and plugin lease renewal restoration failed.",
+            );
+          }
+        } catch (error) {
+          try {
+            await prepared.cleanup();
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Runtime completion and staging cleanup failed.",
+              {
+                cause: cleanupError,
+              },
+            );
+          }
+          throw error;
+        }
         await prepared.cleanup();
-      } catch (cleanupError) {
-        throw new AggregateError(
-          [error, cleanupError],
-          "Runtime completion and staging cleanup failed.",
-          {
-            cause: cleanupError,
-          },
-        );
+        return { changed: prepared.changed };
+      };
+      if (params.sourceRuntimePrepared === false) {
+        return await complete();
       }
-      throw error;
-    }
-    await prepared.cleanup();
-    return { changed: prepared.changed };
-  };
-  if (params.sourceRuntimePrepared === false) {
-    return await complete();
-  }
-  const ownership: unknown = await import(
-    pathToFileURL(path.join(root, "scripts", "lib", "dist-artifact-ownership.mts")).href
+      const ownership: unknown = await import(
+        pathToFileURL(path.join(root, "scripts", "lib", "dist-artifact-ownership.mts")).href
+      );
+      lease.assertOwned();
+      if (!isSourceArtifactOwnership(ownership)) {
+        throw new Error("The installed source checkout cannot complete its runtime artifacts.");
+      }
+      return await ownership.withDistArtifactOwnership(root, complete);
+    }, lease.signal),
   );
-  params.lease.assertOwned();
-  if (!isSourceArtifactOwnership(ownership)) {
-    throw new Error("The installed source checkout cannot complete its runtime artifacts.");
-  }
-  return await ownership.withDistArtifactOwnership(root, complete);
 }

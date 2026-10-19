@@ -1,5 +1,5 @@
+import "../../agents/auth-profiles/external-auth.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as externalAuthTesting } from "../../agents/auth-profiles/external-auth.test-support.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -14,7 +14,11 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
+const { testing: externalAuthTesting } =
+  await import("../../agents/auth-profiles/external-auth.test-support.js");
+
 const state = await setupAgentRunnerExecutionTestState();
+const executeChannelTurn = await getExecuteAgentTurnForTest();
 const { mintReplyMessageActionTurnCapability } =
   await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
 const sessionKey = "agent:main:discord:channel:100000000000000003";
@@ -23,6 +27,17 @@ const runId = "channel-message-authority";
 const currentChannelId = "100000000000000003";
 
 beforeEach(() => {
+  state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+  state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+    result: await params.run(
+      "claude-cli",
+      "claude-sonnet-4-6",
+      initialFallbackAttemptOptions(params),
+    ),
+    provider: "claude-cli",
+    model: "claude-sonnet-4-6",
+    attempts: [],
+  }));
   state.mintReplyMessageActionTurnCapabilityMock.mockImplementation(
     mintReplyMessageActionTurnCapability,
   );
@@ -82,25 +97,12 @@ function resolveCapability(token: string | undefined, key = sessionKey) {
 }
 
 describe("channel reply message authority", () => {
-  it.each(["success", "failure", "policy-session"] as const)(
+  it.each(["failure", "policy-session"] as const)(
     "retains the CLI source authority until %s settlement",
     async (outcome) => {
       const turn = channelTurn();
       const authorityKey = outcome === "policy-session" ? policySessionKey : sessionKey;
       let token: string | undefined;
-      state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run(
-            "claude-cli",
-            "claude-sonnet-4-6",
-            initialFallbackAttemptOptions(params),
-          ),
-          provider: "claude-cli",
-          model: "claude-sonnet-4-6",
-          attempts: [],
-        }),
-      );
       state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
         token = run.messageActionTurnCapability;
         expect(resolveCapability(token, authorityKey)).toMatchObject({
@@ -119,13 +121,18 @@ describe("channel reply message authority", () => {
         return { payloads: [{ text: "done" }], meta: {} };
       });
 
-      const execute = await getExecuteAgentTurnForTest();
-      const result = await execute({
+      const result = await executeChannelTurn({
         ...turn,
         ...(outcome === "policy-session" ? { runtimePolicySessionKey: policySessionKey } : {}),
       });
 
       expect(result.kind).toBe(outcome === "failure" ? "final" : "success");
+      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+      if (outcome === "failure") {
+        await expect(state.runCliAgentMock.mock.results[0]?.value).rejects.toThrow(
+          "CLI execution failed",
+        );
+      }
       expect(token).toBeDefined();
       expect(resolveCapability(token, authorityKey)).toBeUndefined();
     },
@@ -135,7 +142,6 @@ describe("channel reply message authority", () => {
     let embeddedToken: string | undefined;
     let cliToken: string | undefined;
     let admission: RunCliAgentParams["preparedRunAdmission"];
-    state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (run: RunEmbeddedAgentInternalParams) => {
         embeddedToken = run.messageActionTurnCapability;
@@ -166,8 +172,7 @@ describe("channel reply message authority", () => {
       };
     });
 
-    const execute = await getExecuteAgentTurnForTest();
-    expect((await execute(channelTurn())).kind).toBe("success");
+    expect((await executeChannelTurn(channelTurn())).kind).toBe("success");
     expect(embeddedToken).toBeDefined();
     expect(cliToken).toBeDefined();
     expect(resolveCapability(embeddedToken)).toBeUndefined();
@@ -178,25 +183,11 @@ describe("channel reply message authority", () => {
     "does not mint channel authority for %s routing metadata",
     async (mode) => {
       const turn = channelTurn();
-      state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run(
-            "claude-cli",
-            "claude-sonnet-4-6",
-            initialFallbackAttemptOptions(params),
-          ),
-          provider: "claude-cli",
-          model: "claude-sonnet-4-6",
-          attempts: [],
-        }),
-      );
       state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
         expect(run.messageActionTurnCapability).toBeUndefined();
         return { payloads: [{ text: "done" }], meta: {} };
       });
-      const execute = await getExecuteAgentTurnForTest();
-      await execute({
+      await executeChannelTurn({
         ...turn,
         isHeartbeat: mode === "heartbeat",
         sessionCtx: {

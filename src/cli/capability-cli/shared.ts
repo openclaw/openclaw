@@ -1,7 +1,4 @@
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -13,13 +10,14 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../../agents/auth-profiles.js";
 import {
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
+import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -28,22 +26,15 @@ import type { CapabilityTransport } from "./metadata.js";
 export function resolveTransport(opts: {
   local?: boolean;
   gateway?: boolean;
-  supported: Array<CapabilityTransport>;
   defaultTransport: CapabilityTransport;
 }): CapabilityTransport {
   if (opts.local && opts.gateway) {
     throw new Error("Pass only one of --local or --gateway.");
   }
   if (opts.local) {
-    if (!opts.supported.includes("local")) {
-      throw new Error("This command does not support --local.");
-    }
     return "local";
   }
   if (opts.gateway) {
-    if (!opts.supported.includes("gateway")) {
-      throw new Error("This command does not support --gateway.");
-    }
     return "gateway";
   }
   return opts.defaultTransport;
@@ -51,12 +42,6 @@ export function resolveTransport(opts: {
 
 function hasOwnKeys(value: unknown): boolean {
   return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
-}
-
-export function resolveSelectedProviderFromModelRef(
-  modelRef: string | undefined,
-): string | undefined {
-  return resolveModelRefOverride(modelRef).provider;
 }
 
 export function resolveCapabilityProviderAgentId(
@@ -83,16 +68,6 @@ export function resolveCapabilityAgentOption(
     ? rawAgentId
     : inheritOptionFromParent<string>(command, "agent");
 }
-function getAuthProfileIdsForProvider(
-  cfg: OpenClawConfig,
-  providerId: string,
-  agentId: string,
-): string[] {
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const store = loadAuthProfileStoreForRuntime(agentDir);
-  return listProfilesForProvider(store, providerId);
-}
-
 export function providerHasGenericConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -112,7 +87,10 @@ export function providerHasGenericConfig(params: {
   const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
   return (
     (params.agentId
-      ? getAuthProfileIdsForProvider(params.cfg, params.providerId, params.agentId).length > 0
+      ? listProfilesForProvider(
+          loadAuthProfileStoreForRuntime(resolveAgentDir(params.cfg, params.agentId)),
+          params.providerId,
+        ).length > 0
       : false) ||
     hasOwnKeys(modelsProviders[params.providerId]) ||
     hasOwnKeys(pluginEntries[params.providerId]?.config) ||
@@ -121,52 +99,17 @@ export function providerHasGenericConfig(params: {
   );
 }
 
-export function resolveModelRefOverride(raw: string | undefined): {
-  provider?: string;
-  model?: string;
-} {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash === trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
-  };
-}
-
 export function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
-  const resolved = resolveModelRefOverride(raw);
-  if (!raw?.trim()) {
+  const { provider, model } = resolveModelRefOverride(raw);
+  if (!model) {
     return undefined;
   }
-  if (!resolved.provider || !resolved.model) {
+  if (!provider) {
     throw new Error("Model overrides must use the form <provider/model>.");
   }
-  return {
-    provider: resolved.provider,
-    model: resolved.model,
-  };
-}
-
-export function parseOptionalFiniteNumber(
-  raw: string | number | undefined,
-  label: string,
-): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = parseStrictFiniteNumber(raw);
-  if (value === undefined) {
-    throw new Error(`${label} must be a finite number`);
-  }
-  return value;
+  return { provider, model };
 }
 
 export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
@@ -180,14 +123,11 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(
-  raw: string | number | undefined,
-  flagName = "--timeout-ms",
-): number | undefined {
+export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName: "--timeout-ms" });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {
@@ -198,7 +138,7 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
   optionalActivePaths?: Set<string>;
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
-  const cfg = params.config ?? getRuntimeConfig();
+  const cfg = params.config ?? (await captureRuntimeConfigAsyncReader()());
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,
@@ -213,11 +153,23 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
   return effectiveConfig;
 }
 
+export async function resolveLocalCapabilityAgent(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  agent?: string;
+  surface?: string;
+}) {
+  const cfg = await resolveLocalCapabilityRuntimeConfig(params);
+  const agentId = resolveCapabilityProviderAgentId(
+    cfg,
+    params.agent,
+    params.surface ?? params.commandName,
+  );
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  return { cfg, agentId, agentDir: resolveAgentDir(cfg, agentId) };
+}
+
 export function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  if (sourceConfig) {
-    setRuntimeConfigSnapshot(config, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(config);
-  }
+  setRuntimeConfigSnapshot(config, getRuntimeConfigSourceSnapshot() ?? undefined);
 }

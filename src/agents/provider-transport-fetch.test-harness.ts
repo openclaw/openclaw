@@ -101,7 +101,6 @@ export {
   ensureModelProviderLocalServiceMock,
   fetchWithSsrFGuardMock,
   managedStreamCleanupRegistrations,
-  mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,

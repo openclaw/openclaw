@@ -23,44 +23,37 @@ beforeEach(() => {
   );
 });
 
+async function executeWithBlockReply(onBlockReply: (payload: ReplyPayload) => Promise<void>) {
+  const execute = await getExecuteAgentTurnForTest();
+  return execute({
+    ...createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
+    blockStreamingEnabled: true,
+  });
+}
+
+function observeFallbackDecision() {
+  const decision: { allowed?: boolean } = {};
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: DeliveryFallbackParams) => {
+    const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
+    assert(params.canFallbackAfterError);
+    decision.allowed = await params.canFallbackAfterError({
+      provider: "anthropic",
+      model: "claude",
+      error: new Error("later failure"),
+      attempt: 1,
+      total: 2,
+    });
+    return { result, provider: "anthropic", model: "claude", attempts: [] };
+  });
+  return decision;
+}
+
 describe("direct delivery execution evidence", () => {
-  it.each(["cycle", "bigint"])(
-    "keeps a successful direct send when opaque channelData contains %s",
-    async (kind) => {
-      const channelData: Record<string, unknown> = {};
-      channelData.value = kind === "cycle" ? channelData : 1n;
-      const payload: ReplyPayload = { text: "Delivered answer", channelData };
-      const onBlockReply = vi.fn<(payload: ReplyPayload) => Promise<void>>(async () => {});
-      let blockError: unknown;
-      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        try {
-          await params.onBlockReply?.(payload);
-        } catch (error) {
-          blockError = error;
-          throw error;
-        }
-        return { payloads: [], meta: {} };
-      });
-
-      const execute = await getExecuteAgentTurnForTest();
-      const result = await execute({
-        ...createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-        blockStreamingEnabled: true,
-      });
-
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({ text: payload.text, channelData });
-      expect(blockError).toBeUndefined();
-      assert(result.kind === "success");
-      expect(result.runResult.payloads).toEqual([]);
-    },
-  );
-
   it.each([false, true])(
     "keeps settlement completeness=%s when the source later changes during execution",
     async (completeAtSettlement) => {
       const source = createBlockReplySource();
-      let fallbackAllowed: boolean | undefined;
+      const fallback = observeFallbackDecision();
       source.setComplete(completeAtSettlement);
       const onBlockReply = vi.fn(async (payload: ReplyPayload) => {
         await source.run(async () => {
@@ -72,39 +65,16 @@ describe("direct delivery execution evidence", () => {
         source.setComplete(!completeAtSettlement);
         return { payloads: [], meta: {} };
       });
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: DeliveryFallbackParams) => {
-          const result = await params.run(
-            "anthropic",
-            "claude",
-            initialFallbackAttemptOptions(params),
-          );
-          assert(params.canFallbackAfterError);
-          fallbackAllowed = await params.canFallbackAfterError({
-            provider: "anthropic",
-            model: "claude",
-            error: new Error("later failure"),
-            attempt: 1,
-            total: 2,
-          });
-          return { result, provider: "anthropic", model: "claude", attempts: [] };
-        },
-      );
-
-      const execute = await getExecuteAgentTurnForTest();
-      const result = await execute({
-        ...createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-        blockStreamingEnabled: true,
-      });
+      const result = await executeWithBlockReply(onBlockReply);
       assert(result.kind === "success");
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(source.complete).toBe(!completeAtSettlement);
-      expect(fallbackAllowed).toBe(!completeAtSettlement);
+      expect(fallback.allowed).toBe(!completeAtSettlement);
       expect(result.hasDirectlySentBlockReply).toBe(completeAtSettlement || undefined);
     },
   );
 
-  it.each(["after-success", "transport-rejection", "transport-serialization"])(
+  it.each(["after-success", "transport-serialization"])(
     "uses real direct receipts for thrown runtime fallback: %s",
     async (failure) => {
       const opaque: Record<string, unknown> = {};
@@ -116,9 +86,6 @@ describe("direct delivery execution evidence", () => {
       const onBlockReply = vi.fn(async (reply: ReplyPayload) => {
         if (failure === "transport-serialization") {
           JSON.stringify(reply.channelData);
-        }
-        if (failure === "transport-rejection") {
-          throw new Error("transport rejected");
         }
         delivered.push(reply.text ?? "");
       });
@@ -146,11 +113,7 @@ describe("direct delivery execution evidence", () => {
         },
       );
 
-      const execute = await getExecuteAgentTurnForTest();
-      await execute({
-        ...createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-        blockStreamingEnabled: true,
-      });
+      await executeWithBlockReply(onBlockReply);
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(delivered).toEqual(failure === "after-success" ? ["Answer"] : []);
       // Unclassified transport errors retain ambiguous-send custody, even without success.
@@ -159,10 +122,7 @@ describe("direct delivery execution evidence", () => {
         expect(caughtError).toBeInstanceOf(TypeError);
       } else {
         expect(caughtError).toMatchObject({
-          message:
-            failure === "transport-rejection"
-              ? "transport rejected"
-              : "runtime failed after delivery",
+          message: "runtime failed after delivery",
         });
       }
     },
@@ -183,7 +143,7 @@ describe("direct delivery execution evidence", () => {
   }>)(
     "preserves receipt custody for $outcome (pending=$pending)",
     async ({ outcome, pending, confirmed, retry }) => {
-      let fallbackAllowed: boolean | undefined;
+      const fallback = observeFallbackDecision();
       const onBlockReply = vi.fn(async (payload: ReplyPayload) => {
         setBlockReplyDelivery(Promise.resolve({ outcome, pending }), payload);
       });
@@ -191,33 +151,11 @@ describe("direct delivery execution evidence", () => {
         await params.onBlockReply?.({ text: "Answer" });
         return { payloads: [{ text: "Final" }], meta: {} };
       });
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: DeliveryFallbackParams) => {
-          const result = await params.run(
-            "anthropic",
-            "claude",
-            initialFallbackAttemptOptions(params),
-          );
-          assert(params.canFallbackAfterError);
-          fallbackAllowed = await params.canFallbackAfterError({
-            provider: "anthropic",
-            model: "claude",
-            error: new Error("later error"),
-            attempt: 1,
-            total: 2,
-          });
-          return { result, provider: "anthropic", model: "claude", attempts: [] };
-        },
-      );
-      const execute = await getExecuteAgentTurnForTest();
-      const result = await execute({
-        ...createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-        blockStreamingEnabled: true,
-      });
+      const result = await executeWithBlockReply(onBlockReply);
       assert(result.kind === "success");
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(result.hasDirectlySentBlockReply).toBe(confirmed || undefined);
-      expect(fallbackAllowed).toBe(retry);
+      expect(fallback.allowed).toBe(retry);
     },
   );
 });

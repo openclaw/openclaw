@@ -4,13 +4,12 @@ import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
+import { createLifecycleArtifactReclamationPlan } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -48,8 +47,8 @@ afterAll(async () => {
 installGatewayTestHooks();
 
 test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
+  setRuntimeConfigSnapshot({});
   const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };
-  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   const shared = openOpenClawStateDatabase();
   const context = createDirectChatContext();
   await initializeSessionReadContext(context);
@@ -57,24 +56,28 @@ test("joins a direct history projection's accepted read before retiring the Gate
   await projection.ensureMaterialized();
   const entered = createDeferred();
   const release = createDeferred();
-  const createTransport = stateReader.createOpenClawStateReadTransport;
-  const reader = vi
-    .spyOn(stateReader, "createOpenClawStateReadTransport")
-    .mockImplementation((command) => {
-      const transport = createTransport(command);
-      if (command.type !== "acpSessions.metadata") {
-        return transport;
-      }
-      return {
-        ...transport,
-        async read(...args) {
-          const reply = await transport.read(...args);
-          entered.resolve();
-          await release.promise;
-          return reply;
-        },
-      };
-    });
+  const captureSource = stateReader.captureOpenClawStateReadSource;
+  const reader = vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
+    const source = captureSource();
+    return {
+      ...source,
+      createTransport(command) {
+        const transport = source.createTransport(command);
+        if (command.type !== "sessionRows.sharedFacts") {
+          return transport;
+        }
+        return {
+          ...transport,
+          async startRead(...args) {
+            const reply = await transport.startRead(...args);
+            entered.resolve();
+            await release.promise;
+            return reply;
+          },
+        };
+      },
+    };
+  });
   const dispose = projection.dispose;
   const disposing = vi.spyOn(projection, "dispose").mockImplementation(() => {
     dispose();
@@ -92,6 +95,8 @@ test("joins a direct history projection's accepted read before retiring the Gate
       disposing.mockRestore();
     }
   });
+  // A new identity forces a native read instead of reusing an absent-ACP receipt.
+  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   sessionChanges.emit(scope);
   await withTestTimeout(entered.promise, 5_000, "Projection did not retain its shared-state read");
   expect(shared.db.isOpen).toBe(true);
@@ -131,9 +136,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
       return worker;
     });
   try {
-    await expect(
-      runSqliteSessionReclamation({ plan, forceInProcess: false }),
-    ).resolves.toMatchObject({
+    await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
       kind: "lifecycle-artifacts",
       value: { removedEntries: 1 },
     });

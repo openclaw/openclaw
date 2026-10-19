@@ -6,7 +6,6 @@ import type { CoreConfig } from "../../types.js";
 import { MatrixClient } from "../sdk.js";
 import type { MatrixClientEventMap } from "../sdk/types.js";
 import { registerMatrixMonitorEvents } from "./events.js";
-import type { MatrixRawEvent } from "./types.js";
 
 class MonitorEventClient extends MatrixClient {
   emitForTest<K extends keyof MatrixClientEventMap>(event: K, ...args: MatrixClientEventMap[K]) {
@@ -17,7 +16,6 @@ class MonitorEventClient extends MatrixClient {
 export function createMatrixMonitorEventsTestHarness(params: {
   cfg?: CoreConfig;
   accountId?: string;
-  onRoomMessage: (roomId: string, event: MatrixRawEvent) => Promise<void>;
 }) {
   const priorFetch = globalThis.fetch;
   const priorDispatcher = getGlobalDispatcher();
@@ -102,7 +100,6 @@ export function createMatrixMonitorEventsTestHarness(params: {
     warnedCryptoMissingRooms: new Set<string>(),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     formatNativeDependencyHint: () => "synthetic dependency hint",
-    onRoomMessage: params.onRoomMessage,
     runDetachedTask: (_label, task) => {
       const promise = Promise.resolve()
         .then(task)

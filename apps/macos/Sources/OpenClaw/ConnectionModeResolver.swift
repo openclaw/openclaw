@@ -32,9 +32,7 @@ enum ConnectionModeResolver {
             break
         }
 
-        let remoteURLRaw = ((gateway?["remote"] as? [String: Any])?["url"] as? String) ?? ""
-        let remoteURL = remoteURLRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remoteURL.isEmpty {
+        if GatewayRemoteConfig.resolveUrlString(root: root) != nil {
             return EffectiveConnectionMode(mode: .remote, source: .configRemoteURL)
         }
 

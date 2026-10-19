@@ -1,8 +1,3 @@
-/**
- * IDENTITY.md parsing and writing support.
- * The parser accepts human-authored markdown, while the writer only updates
- * stable rich identity fields.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
@@ -18,7 +13,6 @@ import { DEFAULT_IDENTITY_FILENAME } from "./workspace-bootstrap-policy.js";
 // 2.7 MiB data URL. Keep bounded headroom for the remaining identity fields.
 const MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
-/** Parsed rich identity values from a workspace `IDENTITY.md` file. */
 export type AgentIdentityFile = {
   name?: string;
   emoji?: string;
@@ -35,7 +29,11 @@ const WRITABLE_IDENTITY_FIELDS = [
   ["avatar", "Avatar"],
 ] as const satisfies ReadonlyArray<readonly [keyof AgentIdentityFile, string]>;
 
-const RICH_IDENTITY_LABELS = new Set(["name", "creature", "vibe", "theme", "emoji", "avatar"]);
+const RICH_IDENTITY_LABELS = ["name", "creature", "vibe", "theme", "emoji", "avatar"] as const;
+
+function isRichIdentityLabel(label: string): label is (typeof RICH_IDENTITY_LABELS)[number] {
+  return RICH_IDENTITY_LABELS.some((field) => field === label);
+}
 
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "not set yet",
@@ -50,10 +48,12 @@ export function sanitizeAgentIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function compactIdentityConfig(identity: IdentityConfig): IdentityConfig | undefined {
+export function normalizeIdentityForFile(
+  identity: IdentityConfig | undefined,
+): IdentityConfig | undefined {
   const resolved: IdentityConfig = {};
   for (const [field] of WRITABLE_IDENTITY_FIELDS) {
-    const value = identity[field]?.trim();
+    const value = identity?.[field]?.trim();
     if (value) {
       resolved[field] = value;
     }
@@ -66,17 +66,11 @@ export function createAgentIdentityConfig(params: {
   emoji?: unknown;
   avatar?: unknown;
 }): IdentityConfig | undefined {
-  return compactIdentityConfig({
+  return normalizeIdentityForFile({
     ...(params.name ? { name: sanitizeAgentIdentityLine(params.name) } : {}),
     emoji: sanitizeAgentIdentityLine(normalizeOptionalString(params.emoji) ?? ""),
     avatar: sanitizeAgentIdentityLine(normalizeOptionalString(params.avatar) ?? ""),
   });
-}
-
-export function normalizeIdentityForFile(
-  identity: IdentityConfig | undefined,
-): IdentityConfig | undefined {
-  return identity ? compactIdentityConfig(identity) : undefined;
 }
 
 function normalizeIdentityValue(value: string): string {
@@ -95,73 +89,61 @@ function normalizeIdentityLabel(label: string): string {
   return normalizeLowercaseStringOrEmpty(label.replace(/[*_`]/g, ""));
 }
 
-function isIdentityPlaceholder(value: string): boolean {
-  const normalized = normalizeIdentityValue(value);
-  return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
+function parseIdentityLine(line: string): { label: string; value: string } | undefined {
+  const cleaned = line
+    .trim()
+    .replace(/^\s*-\s*/, "")
+    .replace(/^([*_`]+)([A-Za-z]+):\1/u, "$2:");
+  const colonIndex = cleaned.indexOf(":");
+  return colonIndex === -1
+    ? undefined
+    : {
+        label: normalizeIdentityLabel(cleaned.slice(0, colonIndex)),
+        value: cleaned.slice(colonIndex + 1),
+      };
 }
 
-/** Parse rich identity fields from human-authored markdown content. */
+function stripIdentityValueDecoration(value: string): string {
+  let cleaned = value.trim();
+  for (;;) {
+    const paired = cleaned.match(/^(\*{1,2}|_{1,2}|`+)([\s\S]+)\1$/u);
+    const marker = paired?.[1];
+    const inner = paired?.[2];
+    if (!marker || inner === undefined) {
+      return cleaned;
+    }
+    cleaned = inner.trim();
+    // Code spans preserve their contents, including literal emphasis markers.
+    if (marker.startsWith("`")) {
+      return cleaned;
+    }
+  }
+}
+
 function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
   const identity: AgentIdentityFile = {};
-  const lines = content.split(/\r?\n/);
-  for (const line of lines) {
-    const cleaned = line.trim().replace(/^\s*-\s*/, "");
-    const colonIndex = cleaned.indexOf(":");
-    if (colonIndex === -1) {
+  for (const line of content.split(/\r?\n/)) {
+    const parsed = parseIdentityLine(line);
+    if (!parsed) {
       continue;
     }
-    const label = normalizeIdentityLabel(cleaned.slice(0, colonIndex));
-    const value = cleaned
-      .slice(colonIndex + 1)
-      .replace(/^[*_`\s]+|[*_`\s]+$/g, "")
-      .trim();
-    if (!value) {
+    const value = stripIdentityValueDecoration(parsed.value);
+    if (!value || IDENTITY_PLACEHOLDER_VALUES.has(normalizeIdentityValue(value))) {
       continue;
     }
-    if (isIdentityPlaceholder(value)) {
-      continue;
-    }
-    switch (label) {
-      case "name":
-      case "emoji":
-      case "creature":
-      case "vibe":
-      case "theme":
-      case "avatar":
-        identity[label] = value;
+    if (isRichIdentityLabel(parsed.label)) {
+      identity[parsed.label] = value;
     }
   }
   return Object.keys(identity).length > 0 ? identity : null;
 }
 
-function matchesIdentityLabel(line: string, label: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("-")) {
-    return false;
-  }
-  const cleaned = trimmed.replace(/^\s*-\s*/, "");
-  const colonIndex = cleaned.indexOf(":");
-  if (colonIndex === -1) {
-    return false;
-  }
-  return normalizeIdentityLabel(cleaned.slice(0, colonIndex)) === normalizeIdentityLabel(label);
-}
-
 function resolveIdentityInsertIndex(lines: string[]): number {
   // New fields stay grouped with existing rich identity fields; otherwise place
   // them directly after the title block so legacy prose remains intact.
-  let lastIdentityIndex = -1;
-  for (const [index, line] of lines.entries()) {
-    const cleaned = line.trim().replace(/^\s*-\s*/, "");
-    const colonIndex = cleaned.indexOf(":");
-    if (colonIndex === -1) {
-      continue;
-    }
-    const label = normalizeIdentityLabel(cleaned.slice(0, colonIndex));
-    if (RICH_IDENTITY_LABELS.has(label)) {
-      lastIdentityIndex = index;
-    }
-  }
+  const lastIdentityIndex = lines.findLastIndex((line) =>
+    isRichIdentityLabel(parseIdentityLine(line)?.label ?? ""),
+  );
   if (lastIdentityIndex >= 0) {
     return lastIdentityIndex + 1;
   }
@@ -197,17 +179,14 @@ export function mergeIdentityMarkdownContent(
     const identityLine = `- ${label}: ${value}`;
 
     const matchingIndexes = nextLines.reduce<number[]>((indexes, line, index) => {
-      if (matchesIdentityLabel(line, label)) {
+      if (line.trim().startsWith("-") && parseIdentityLine(line)?.label === field) {
         indexes.push(index);
       }
       return indexes;
     }, []);
 
-    if (matchingIndexes.length > 0) {
-      const [firstIndex, ...duplicateIndexes] = matchingIndexes;
-      if (firstIndex === undefined) {
-        continue;
-      }
+    const [firstIndex, ...duplicateIndexes] = matchingIndexes;
+    if (firstIndex !== undefined) {
       nextLines[firstIndex] = identityLine;
       for (const duplicateIndex of duplicateIndexes.toReversed()) {
         nextLines.splice(duplicateIndex, 1);
@@ -265,11 +244,19 @@ export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileS
       return { kind: "missing" };
     }
     try {
-      const { dev, ino, size, mtimeMs, ctimeMs } = opened.stat;
+      const { size, mtimeMs, ctimeMs } = opened.stat;
+      const { dev, ino } = opened.exactIdentity;
       if (size > MAX_IDENTITY_FILE_BYTES) {
         return { kind: "too-large" };
       }
-      const revision = JSON.stringify([opened.path, dev, ino, size, mtimeMs, ctimeMs]);
+      const revision = JSON.stringify([
+        opened.path,
+        String(dev),
+        String(ino),
+        size,
+        mtimeMs,
+        ctimeMs,
+      ]);
       if (revision === input.knownRevision) {
         return { kind: "unchanged" };
       }

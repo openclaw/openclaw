@@ -1,5 +1,4 @@
 import type { SessionDeliveryState, SessionOrigin } from "../config/sessions/types.js";
-// Shared delivery context helpers expose route normalization shared by modules.
 import {
   channelRouteCompactKey,
   channelRouteThreadId,
@@ -91,17 +90,12 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
-/** Converts delivery context fields into the SDK channel route reference shape. */
-function channelRouteFromDeliveryContext(context?: DeliveryContext): ChannelRouteRef | undefined {
-  return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
-}
-
 function mergeRouteMetadataWithDeliveryContext(
   route: ChannelRouteRef | undefined,
   context: DeliveryContext,
 ): ChannelRouteRef | undefined {
   if (!route) {
-    return channelRouteFromDeliveryContext(context);
+    return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
   }
   return normalizeChannelRouteRef({
     channel: route.channel ?? context.channel,

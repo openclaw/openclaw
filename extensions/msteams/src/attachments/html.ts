@@ -23,7 +23,7 @@ import type {
 export function extractMSTeamsHtmlAttachmentIds(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): string[] {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return [];
   }
@@ -34,13 +34,11 @@ export function extractMSTeamsHtmlAttachmentIds(
       continue;
     }
     ATTACHMENT_TAG_RE.lastIndex = 0;
-    let match: RegExpExecArray | null = ATTACHMENT_TAG_RE.exec(html);
-    while (match) {
+    for (const match of html.matchAll(ATTACHMENT_TAG_RE)) {
       const id = match[1]?.trim();
       if (id) {
         ids.add(id);
       }
-      match = ATTACHMENT_TAG_RE.exec(html);
     }
   }
   return Array.from(ids);
@@ -49,7 +47,7 @@ export function extractMSTeamsHtmlAttachmentIds(
 export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return undefined;
   }
@@ -68,8 +66,7 @@ export function summarizeMSTeamsHtmlAttachments(
     }
     htmlAttachments += 1;
     IMG_SRC_RE.lastIndex = 0;
-    let match: RegExpExecArray | null = IMG_SRC_RE.exec(html);
-    while (match) {
+    for (const match of html.matchAll(IMG_SRC_RE)) {
       imgTags += 1;
       const src = match[1]?.trim();
       if (src) {
@@ -81,18 +78,15 @@ export function summarizeMSTeamsHtmlAttachments(
           srcHosts.add(safeHostForUrl(src));
         }
       }
-      match = IMG_SRC_RE.exec(html);
     }
 
     ATTACHMENT_TAG_RE.lastIndex = 0;
-    let attachmentMatch: RegExpExecArray | null = ATTACHMENT_TAG_RE.exec(html);
-    while (attachmentMatch) {
+    for (const attachmentMatch of html.matchAll(ATTACHMENT_TAG_RE)) {
       attachmentTags += 1;
       const id = attachmentMatch[1]?.trim();
       if (id) {
         attachmentIds.add(id);
       }
-      attachmentMatch = ATTACHMENT_TAG_RE.exec(html);
     }
   }
 
@@ -131,17 +125,13 @@ function createAdvertisedMediaFact(
   kind: MSTeamsInboundMedia["kind"],
   sourceId?: string,
 ): MSTeamsInboundMedia {
-  const media: MSTeamsInboundMedia = { kind };
-  if (sourceId) {
-    media.sourceId = sourceId;
-  }
-  return media;
+  return { kind, ...(sourceId ? { sourceId } : {}) };
 }
 
 export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsInboundMedia[] {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return [];
   }

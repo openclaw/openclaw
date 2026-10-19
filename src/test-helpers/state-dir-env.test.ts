@@ -1,4 +1,5 @@
 // State dir environment tests cover isolated state directory env helpers.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -51,11 +52,15 @@ describe("state-dir-env helpers", () => {
     const prev = snapshotCurrentStateDirVars();
     const snapshot = snapshotStateDirEnv();
 
-    setStateDirEnv("/tmp/openclaw-state-dir-test");
-    expect(process.env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-state-dir-test");
+    try {
+      setStateDirEnv("/tmp/openclaw-state-dir-test");
+      expect(process.env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-state-dir-test");
 
-    restoreStateDirEnv(snapshot);
-    expectStateDirVars(prev);
+      restoreStateDirEnv(snapshot);
+      expectStateDirVars(prev);
+    } finally {
+      snapshot.restore();
+    }
   });
 
   it.each([false, true])(

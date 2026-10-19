@@ -1,8 +1,9 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 
 type ChatPositionMarker = {
   id: string;
@@ -17,12 +18,13 @@ export type ChatPositionIndex = {
   markerIdsByMessageId: Map<string, string>;
 };
 
-type RenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type RenderItem = SystemEventRenderItem;
 
 export function projectChatPositions(
   items: readonly RenderItem[],
   expandedWork: ReadonlyMap<string, boolean>,
   messageRowKeysById: Map<string, string>,
+  searchActive = false,
 ): ChatPositionIndex {
   const markers = new Map<string, ChatPositionMarker>();
   const markerIdsByMessageId = new Map<string, string>();
@@ -43,6 +45,13 @@ export function projectChatPositions(
     messageRowKeysById.set(messageId, rowKey);
   };
   const group = (item: MessageGroup, rowKey: string) => {
+    if (
+      isSessionActivityGroup(item) &&
+      !searchActive &&
+      !expandedWork.get("session-activity:" + item.key)
+    ) {
+      return;
+    }
     if ((item.role !== "user" && item.role !== "assistant") || item.visibleContent === "none") {
       return;
     }

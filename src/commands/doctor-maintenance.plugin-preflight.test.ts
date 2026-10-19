@@ -3,8 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { refreshPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
@@ -124,12 +123,7 @@ module.exports = {
 
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const databaseBefore = fs.readFileSync(databasePath);
-  const coordinator = acquireGatewayLifecycleCoordinator({ databasePath });
-  coordinator.release();
-  // A separate SQLite connection owns the lock outside the reentrant process map,
-  // reproducing another Gateway's ownership without a subprocess timing dependency.
-  const otherOwner = tryAcquireExclusiveSqliteCoordinator(coordinator.path, { busyTimeoutMs: 0 });
-  expect(otherOwner).not.toBeNull();
+  const otherOwner = acquireGatewayStateOwner({ databasePath });
   const begin = () =>
     beginDoctorMaintenance({
       options: { repair: true, nonInteractive: true },
@@ -137,7 +131,7 @@ module.exports = {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
   try {
-    await expect(begin()).rejects.toThrow("OpenClaw state database is busy (gateway-lifecycle)");
+    await expect(begin()).rejects.toThrow("OpenClaw state database is busy at");
     expect(markers()).toEqual([false, false, false, false]);
     expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
   } finally {
@@ -148,12 +142,14 @@ module.exports = {
   expect(maintenance).toBeDefined();
   try {
     expect(markers()).toEqual([false, false, false, false]);
-    const result = await autoMigrateLegacyState({
-      cfg: config,
-      env: process.env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await maintenance!.run(() =>
+      autoMigrateLegacyState({
+        cfg: config,
+        env: process.env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      }),
+    );
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Repaired plugin-owned state");
     expect(markers()).toEqual([true, true, true, true]);

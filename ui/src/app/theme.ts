@@ -6,18 +6,12 @@ import {
   type ThemeId,
   type ThemeMode,
 } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 export type ThemeName = ThemeId | "custom";
 export type { ThemeMode };
 type ThemeFamily = Exclude<BuiltinThemeId, "claw" | "knot"> | "openknot" | "custom";
 export type ResolvedTheme = "dark" | "light" | ThemeFamily | `${ThemeFamily}-light`;
-
-function prefersLightScheme(): boolean {
-  if (typeof globalThis.matchMedia !== "function") {
-    return false;
-  }
-  return globalThis.matchMedia("(prefers-color-scheme: light)").matches;
-}
 
 export function parseThemeSelection(
   themeRaw: unknown,
@@ -29,15 +23,15 @@ export function parseThemeSelection(
   return { theme: normalizedTheme, mode: normalizedMode };
 }
 
-function resolveMode(mode: ThemeMode): "light" | "dark" {
-  if (mode === "system") {
-    return prefersLightScheme() ? "light" : "dark";
-  }
-  return mode;
-}
-
 export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
-  const resolvedMode = resolveMode(mode);
+  let resolvedMode = mode;
+  if (resolvedMode === "system") {
+    resolvedMode =
+      typeof globalThis.matchMedia === "function" &&
+      globalThis.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark";
+  }
   if (theme === "claw") {
     return resolvedMode;
   }
@@ -61,8 +55,7 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
   }
   const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
   const finish = (event: Event) => {
-    link.removeEventListener("load", finish);
-    link.removeEventListener("error", finish);
+    stops.forEach((stop) => stop());
     if (event.type === "error") {
       // Failed assets must not strand startup; normal CSS defaults stay readable.
       // Remove the failed link so a later selection can retry rather than wait forever.
@@ -71,8 +64,7 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
     }
     ready();
   };
-  link.addEventListener("load", finish);
-  link.addEventListener("error", finish);
+  const stops = [listen(link, "load", finish), listen(link, "error", finish)];
   if (!existing) {
     link.id = id;
     link.rel = "stylesheet";

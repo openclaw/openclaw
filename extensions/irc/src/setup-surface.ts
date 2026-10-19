@@ -1,4 +1,4 @@
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type {
   ChannelSetupDmPolicy,
@@ -12,6 +12,7 @@ import {
   createStandardChannelSetupStatus,
   formatDocsLink,
   setSetupChannelEnabled,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import {
   normalizeOptionalString,
@@ -27,7 +28,6 @@ import {
 } from "./normalize.js";
 import {
   ircSetupAdapter,
-  parsePort,
   setIrcAllowFrom,
   setIrcDmPolicy,
   setIrcGroupAccess,
@@ -60,10 +60,6 @@ function ircAccountTextInput(
   };
 }
 
-function parseListInput(raw: string): string[] {
-  return normalizeStringEntries(raw.split(/[\n,;]+/g));
-}
-
 function normalizeGroupEntry(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -79,8 +75,15 @@ function normalizeGroupEntry(raw: string): string | null {
   return `#${normalized.replace(/^#+/, "")}`;
 }
 
+function parseAutoJoinChannels(value: string): string[] {
+  return splitSetupEntries(value)
+    .map(normalizeGroupEntry)
+    .filter((entry): entry is string => Boolean(entry && entry !== "*"))
+    .filter(isChannelTarget);
+}
+
 const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
-  defaultAccountId: (cfg) => resolveDefaultIrcAccountId(cfg),
+  defaultAccountId: resolveDefaultIrcAccountId,
   noteTitle: t("wizard.irc.allowlistTitle"),
   noteLines: [
     t("wizard.irc.allowlistIntro"),
@@ -92,9 +95,7 @@ const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
   message: t("wizard.irc.allowFromPrompt"),
   placeholder: "alice, bob!ident@example.org",
   parseEntries: (raw) => ({
-    entries: normalizeStringEntries(
-      parseListInput(raw).map((entry) => normalizeIrcAllowEntry(entry)),
-    ),
+    entries: normalizeStringEntries(splitSetupEntries(raw).map(normalizeIrcAllowEntry)),
   }),
   getExistingAllowFrom: ({ cfg }) => cfg.channels?.irc?.allowFrom ?? [],
   applyAllowFrom: ({ cfg, allowFrom }) => setIrcAllowFrom(cfg, allowFrom),
@@ -186,12 +187,7 @@ const ircDmPolicy: ChannelSetupDmPolicy = {
   allowFromKey: "channels.irc.allowFrom",
   getCurrent: (cfg) => (cfg as CoreConfig).channels?.irc?.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy) => setIrcDmPolicy(cfg as CoreConfig, policy),
-  promptAllowFrom: async ({ cfg, prompter, accountId }) =>
-    await promptIrcAllowFrom({
-      cfg: cfg as CoreConfig,
-      prompter,
-      accountId,
-    }),
+  promptAllowFrom: promptIrcAllowFrom,
 };
 
 export const ircSetupWizard: ChannelSetupWizard = {
@@ -281,16 +277,13 @@ export const ircSetupWizard: ChannelSetupWizard = {
       },
       validate: ({ value }) => {
         const raw = normalizeStringifiedOptionalString(value) ?? "";
-        const parsed = parseStrictPositiveInteger(raw);
-        return parsed !== undefined && parsed <= 65535
-          ? undefined
-          : "Use a port between 1 and 65535";
+        return parseTcpPort(raw) !== null ? undefined : "Use a port between 1 and 65535";
       },
-      normalizeValue: ({ value }) => String(parsePort(value, 6697)),
+      normalizeValue: ({ value }) => String(parseTcpPort(value) ?? 6697),
       applySet: async ({ cfg, accountId, value }) =>
         updateIrcAccountConfig(cfg as CoreConfig, accountId, {
           enabled: true,
-          port: parsePort(value, 6697),
+          port: parseTcpPort(value) ?? 6697,
         }),
     },
     ircAccountTextInput("nick", {
@@ -320,17 +313,9 @@ export const ircSetupWizard: ChannelSetupWizard = {
       currentValue: ({ cfg, accountId }) =>
         resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.channels?.join(", "),
       shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
-      normalizeValue: ({ value }) =>
-        parseListInput(value)
-          .map((entry) => normalizeGroupEntry(entry))
-          .filter((entry): entry is string => Boolean(entry && entry !== "*"))
-          .filter((entry) => isChannelTarget(entry))
-          .join(", "),
+      normalizeValue: ({ value }) => parseAutoJoinChannels(value).join(", "),
       applySet: async ({ cfg, accountId, value }) => {
-        const channels = parseListInput(value)
-          .map((entry) => normalizeGroupEntry(entry))
-          .filter((entry): entry is string => Boolean(entry && entry !== "*"))
-          .filter((entry) => isChannelTarget(entry));
+        const channels = parseAutoJoinChannels(value);
         return updateIrcAccountConfig(cfg as CoreConfig, accountId, {
           enabled: true,
           channels: channels.length > 0 ? channels : undefined,

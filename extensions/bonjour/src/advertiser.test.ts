@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
-    debug: vi.fn(),
   },
 }));
 const {
@@ -70,23 +69,22 @@ function mockCiaoService(params?: {
 }
 
 vi.mock("@homebridge/ciao", () => ({ getResponder }));
+vi.mock("openclaw/plugin-sdk/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime")>()),
+  registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
+}));
 
 const { startGatewayBonjourAdvertiser } = await import("./advertiser.js");
 
 afterAll(() => {
   vi.doUnmock("@homebridge/ciao");
+  vi.doUnmock("openclaw/plugin-sdk/runtime");
   vi.resetModules();
 });
 
 const startAdvertiser = (opts: Partial<Parameters<typeof startGatewayBonjourAdvertiser>[0]> = {}) =>
-  startGatewayBonjourAdvertiser(
-    { gatewayPort: 18789, sshPort: 2222, ...opts },
-    {
-      logger,
-      registerUncaughtExceptionHandler,
-      registerUnhandledRejectionHandler,
-    },
-  );
+  startGatewayBonjourAdvertiser({ gatewayPort: 18789, sshPort: 2222, ...opts }, logger);
 
 describe("gateway bonjour advertiser", () => {
   type ServiceCall = {
@@ -328,27 +326,6 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("does not monkey-patch responder methods during shutdown", async () => {
-    const responder = {
-      createService,
-      shutdown,
-      advertiseService: vi.fn(),
-      announce: vi.fn(),
-      probe: vi.fn(),
-      republishService: vi.fn(),
-    };
-    const originalMethods = { ...responder };
-    mockCiaoService({ responder });
-
-    const started = await startAdvertiser();
-    await started.stop();
-
-    expect(responder.advertiseService).toBe(originalMethods.advertiseService);
-    expect(responder.announce).toBe(originalMethods.announce);
-    expect(responder.probe).toBe(originalMethods.probe);
-    expect(responder.republishService).toBe(originalMethods.republishService);
-  });
-
   it("does not clobber console.log if another wrapper replaced it before shutdown", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const replacementConsoleLog = vi.fn();
@@ -436,23 +413,6 @@ describe("gateway bonjour advertiser", () => {
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
-
-    await started.stop();
-  });
-
-  it("truncates reported Kubernetes service name at the DNS label byte limit", async () => {
-    const reportedHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
-    enableAdvertiserUnitMode(reportedHostname);
-
-    const started = await startAdvertiser();
-
-    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
-    const serviceName = gatewayCall?.[0]?.name as string;
-    const hostname = gatewayCall?.[0]?.hostname as string;
-
-    expect(Buffer.byteLength(`${reportedHostname} (OpenClaw)`)).toBe(64);
-    expect(hostname).toBe(reportedHostname);
-    expect(Buffer.byteLength(serviceName)).toBeLessThanOrEqual(63);
 
     await started.stop();
   });

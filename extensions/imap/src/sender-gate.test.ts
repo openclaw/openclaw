@@ -136,9 +136,7 @@ describe("IMAP sender admission", () => {
     "rejects unsigned body bytes even with DMARC %s",
     async (dmarc) => {
       const result = createImapAuthResult(dmarc);
-      if (result.dmarc) {
-        result.dmarc.alignment.dkim.underSized = 32;
-      }
+      result.dmarc.alignment.dkim.underSized = 32;
       const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
       const authenticator = vi.fn(async () => result);
       await expect(
@@ -162,6 +160,40 @@ describe("IMAP sender admission", () => {
         strength: result === "pass" ? "verified" : "unverified",
       });
     }
+  });
+
+  it("requires the explicit trusted-header relaxation for asserted admission", async () => {
+    const parsed = await message([
+      "From: trusted@example.com",
+      "Authentication-Results: mx.example.com; dmarc=pass header.from=example.com",
+    ]);
+    const authenticator = vi.fn(async () => createImapAuthResult("none"));
+
+    await expect(
+      evaluateImapSender({ ...parsed, account: account(), authenticator }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "unverified-authentication",
+    });
+
+    await expect(
+      evaluateImapSender({
+        ...parsed,
+        account: account({
+          senderAuth: {
+            min: "asserted",
+            trustedAuthservIds: ["mx.example.com"],
+            acceptTrustedAuthservId: true,
+          },
+        }),
+        authenticator,
+      }),
+    ).resolves.toMatchObject({
+      accepted: true,
+      strength: "asserted",
+      reason: "trusted-authserv-dmarc-pass",
+    });
   });
 
   it("rejects untrusted Authentication-Results authorities", async () => {

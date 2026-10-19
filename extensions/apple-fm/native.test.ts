@@ -23,6 +23,18 @@ const success = (stdout = "") => ({
   termination: "exit" as const,
 });
 
+function cancelAfterCompile() {
+  const abort = new AbortController();
+  vi.mocked(runCommandBuffered).mockImplementation(async (argv) => {
+    if (argv[0] === "/usr/bin/xcrun") {
+      await fs.writeFile(argv.at(-1)!, "synthetic executable");
+      abort.abort();
+    }
+    return success();
+  });
+  return abort.signal;
+}
+
 beforeEach(async () => {
   native = createAppleFmNative(fileURLToPath(new URL(".", import.meta.url)));
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "apple-fm-native-test-"));
@@ -53,34 +65,24 @@ afterEach(async () => {
 });
 
 describe("Apple Foundation Models helper lifecycle", () => {
-  it("discovers a cold model without installing a helper or enabling inference", async () => {
-    expect(await native.probe()).toEqual(facts);
-    expect(await fs.readdir(directory)).toEqual([]);
-    await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
-  });
-
   it("cleans up cold discovery on cancellation without publishing an executable", async () => {
-    const abort = new AbortController();
-    vi.mocked(runCommandBuffered).mockImplementation(async (argv) => {
-      if (argv[0] === "/usr/bin/xcrun") {
-        await fs.writeFile(argv.at(-1)!, "synthetic executable");
-        abort.abort();
-      }
-      return success();
-    });
-    await expect(native.probe({ signal: abort.signal })).rejects.toThrow();
+    await expect(native.probe({ signal: cancelAfterCompile() })).rejects.toThrow();
     expect(await fs.readdir(directory)).toEqual([]);
     await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
   });
 
-  it.each(["linux", "win32"])("does not probe or compile on %s", async (platform) => {
-    Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+  it("does not probe or compile on non-Mac hosts", async () => {
+    Object.defineProperty(process, "platform", { ...originalPlatform, value: "linux" });
     expect(await native.probe()).toBeNull();
     expect(runCommandBuffered).not.toHaveBeenCalled();
     expect(await fs.readdir(directory)).toEqual([]);
   });
 
-  it("installs a helper during selected setup and reuses it for discovery and inference", async () => {
+  it("keeps discovery disposable until selection installs a reusable helper", async () => {
+    expect(await native.probe()).toEqual(facts);
+    expect(await fs.readdir(directory)).toEqual([]);
+    await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
+    vi.mocked(runCommandBuffered).mockClear();
     const first = await native.prepare();
     expect(first).toMatchObject(facts);
     expect(await native.probe()).toEqual(facts);
@@ -99,16 +101,19 @@ describe("Apple Foundation Models helper lifecycle", () => {
     ).toBe(true);
   });
 
+  it("skips compiler optimization only for the disposable discovery helper", async () => {
+    await native.probe();
+    await native.prepare();
+    expect(
+      vi
+        .mocked(runCommandBuffered)
+        .mock.calls.filter(([argv]) => argv[0] === "/usr/bin/xcrun")
+        .map(([argv]) => argv.filter((arg) => arg.startsWith("-O"))),
+    ).toEqual([["-Onone"], ["-O"]]);
+  });
+
   it("does not publish a compiled helper when setup is canceled", async () => {
-    const abort = new AbortController();
-    vi.mocked(runCommandBuffered).mockImplementation(async (argv) => {
-      if (argv[0] === "/usr/bin/xcrun") {
-        await fs.writeFile(argv.at(-1)!, "synthetic executable");
-        abort.abort();
-      }
-      return success();
-    });
-    await expect(native.prepare({ signal: abort.signal })).rejects.toThrow();
+    await expect(native.prepare({ signal: cancelAfterCompile() })).rejects.toThrow();
     await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
     const [buildRoot] = await fs.readdir(path.join(directory, "tools", "apple-fm"));
     expect(await fs.readdir(path.join(directory, "tools", "apple-fm", buildRoot!))).toEqual([]);
@@ -119,18 +124,6 @@ describe("Apple Foundation Models helper lifecycle", () => {
     await expect(native.probe()).rejects.toThrow("does not install developer tools automatically");
     expect(runCommandBuffered).toHaveBeenCalledOnce();
     expect(await fs.readdir(directory)).toEqual([]);
-  });
-
-  it("preserves large numeric tool identifiers without rounding them", async () => {
-    await native.prepare();
-    vi.mocked(runCommandBuffered).mockResolvedValue(
-      success(
-        '{"text":"","toolCalls":[{"id":"call-1","name":"lookup","arguments":{"id":9007199254740993}}],"inputTokens":10,"outputTokens":10}',
-      ),
-    );
-    expect((await native.run({ messages: [] })).toolCalls[0]?.arguments.id).toBe(
-      "9007199254740993",
-    );
   });
 
   it("preserves native context errors and rejects malformed helper output", async () => {

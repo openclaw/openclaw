@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listGoogleMeetCalendarEvents } from "./calendar.js";
 import { exportGoogleDriveDocumentText } from "./drive.js";
-import { fetchGoogleMeetSpace } from "./meet.js";
+import { fetchGoogleMeetSpace } from "./meet-api.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
 
 afterEach(() => {

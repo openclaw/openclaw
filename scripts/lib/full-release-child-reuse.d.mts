@@ -1,6 +1,7 @@
 export interface ReusableReleaseChildRequest {
   repository: string;
   targetSha: string;
+  workflowSha: string;
   role: string;
   inputs: Record<string, string | boolean | number>;
   /** Exclude children dispatched by this parent run. */
@@ -31,6 +32,7 @@ export interface ReusableReleaseChildSelection {
 }
 
 export interface ReusableReleaseChildDependencies {
+  report?: (message: string) => void;
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{
     artifactMetadata: unknown;

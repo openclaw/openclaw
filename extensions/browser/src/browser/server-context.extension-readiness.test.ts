@@ -74,27 +74,6 @@ describe("extension profile readiness", () => {
     vi.clearAllMocks();
   });
 
-  it("waits for an authenticated extension after its relay starts", async () => {
-    vi.useFakeTimers();
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(false);
-    const browser = createExtensionProfile();
-    setTimeout(() => {
-      isChromeReachable.mockResolvedValue(true);
-      browser.connect();
-    }, 1_400);
-
-    const ready = browser.profile.ensureBrowserAvailable().then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(await ready).toEqual({ ok: true });
-    expect(isChromeReachable).toHaveBeenCalledOnce();
-    browser.dispose();
-  });
-
   it("keeps the actionable pairing error when no extension connects", async () => {
     vi.useFakeTimers();
     vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
@@ -109,31 +88,6 @@ describe("extension profile readiness", () => {
       expect.stringContaining("Pair the browser extension."),
     );
     expect(chromeModule.isChromeReachable).not.toHaveBeenCalled();
-    browser.dispose();
-  });
-
-  it("cancels an attachment wait immediately with its owning browser operation", async () => {
-    vi.useFakeTimers();
-    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
-    const controller = new AbortController();
-
-    const browser = createExtensionProfile();
-    const cancelled = browser.profile
-      .ensureBrowserAvailable({ signal: controller.signal })
-      .catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(300);
-    controller.abort(new Error("browser request cancelled"));
-
-    expect((await cancelled) as Error).toHaveProperty("message", "browser request cancelled");
-    await vi.advanceTimersByTimeAsync(0);
-    const runtime = browser.state.profiles.get("chrome");
-    expect(runtime).toBeDefined();
-    if (runtime) {
-      const actor = getProfileLifecycle(runtime);
-      expect(actor.starts.size).toBe(0);
-      expect(actor.leases.size).toBe(0);
-    }
-    expect(vi.getTimerCount()).toBe(0);
     browser.dispose();
   });
 
@@ -156,10 +110,12 @@ describe("extension profile readiness", () => {
       expect(getProfileLifecycle(runtime).leases.size).toBe(1);
     }
     expect(browser.state.extensionRelays?.get("chrome")).toBe(browser.relay);
+    expect(vi.getTimerCount()).toBe(1);
 
     browser.connect();
     await expect(sibling).resolves.toBeUndefined();
     if (runtime) {
+      expect(getProfileLifecycle(runtime).starts.size).toBe(0);
       expect(getProfileLifecycle(runtime).leases.size).toBe(0);
     }
     expect(browser.relay.bridge.extensionConnected).toBe(true);

@@ -1,12 +1,91 @@
 import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
+import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
-function transcriptScrollMargin(element: Element | null): number {
-  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
-    return 0;
+export const POSITION_RAIL_MARKER_HEIGHT = 12;
+const POSITION_RAIL_MARKER_OVERSCAN = 6;
+
+export function positionRailWindowIndexes(
+  count: number,
+  markerIndexes: ReadonlyMap<string, number>,
+  offset: number,
+  height: number,
+  ...retainedIds: readonly (string | null | undefined)[]
+): number[] {
+  const start = Math.max(
+    0,
+    Math.floor(offset / POSITION_RAIL_MARKER_HEIGHT) - POSITION_RAIL_MARKER_OVERSCAN,
+  );
+  const end = Math.min(
+    count,
+    Math.ceil((offset + height) / POSITION_RAIL_MARKER_HEIGHT) + POSITION_RAIL_MARKER_OVERSCAN,
+  );
+  const indexes = new Set<number>();
+  for (let index = start; index < end; index++) {
+    indexes.add(index);
   }
-  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
-  return Number.isFinite(margin) ? margin : 0;
+  // Roving Tab entry and an explored focus survive an independently scrolled rail.
+  for (const id of retainedIds) {
+    const index = id ? markerIndexes.get(id) : undefined;
+    if (index !== undefined) {
+      indexes.add(index);
+    }
+  }
+  return [...indexes].toSorted((left, right) => left - right);
+}
+
+export type PositionRailReaderState = {
+  viewport?: ChatSessionScrollPosition & { height: number };
+  resizeTarget?: { offset: number; atEnd: boolean };
+  followingResize: boolean;
+  followActive: boolean;
+};
+
+export function resolvePositionRailReaderViewport(
+  previous: PositionRailReaderState,
+  measured: TranscriptViewportMeasurement,
+  focused: boolean,
+): { state: PositionRailReaderState; scheduleLayout: boolean } {
+  const viewport = {
+    height: measured.clientHeight,
+    ...captureChatSessionScrollPosition(measured),
+  };
+  const state = { ...previous, viewport };
+  let scheduleLayout = false;
+  if (previous.viewport && viewport.height !== previous.viewport.height) {
+    // Intersections can precede resize compensation. Preserve the reader's
+    // rail offset while keeping any keyboard-focused marker in view.
+    state.followingResize = true;
+    state.followActive ||= focused;
+    scheduleLayout ||= state.followActive;
+    // A measured end supersedes startup's non-end estimate; smooth follow may still be pending.
+    const atEnd = state.resizeTarget?.atEnd || previous.viewport.anchorToEnd;
+    const maxOffset = Math.max(0, measured.scrollHeight - viewport.height);
+    state.resizeTarget = {
+      offset: atEnd ? maxOffset : Math.min(previous.viewport.scrollTop, maxOffset),
+      atEnd,
+    };
+  }
+  // Navigation and a resize can arrive in the same observer delivery.
+  if (previous.viewport && viewport.scrollTop !== previous.viewport.scrollTop) {
+    const target = state.resizeTarget?.offset;
+    // Smooth resize compensation crosses intermediate offsets before its target.
+    // The transcript input owner retires it when the reader takes over.
+    const compensating =
+      target !== undefined &&
+      (Math.abs(viewport.scrollTop - target) <= 1 ||
+        (viewport.scrollTop >= Math.min(previous.viewport.scrollTop, target) &&
+          viewport.scrollTop <= Math.max(previous.viewport.scrollTop, target)));
+    if (!compensating) {
+      if (state.followingResize) {
+        state.followActive = true;
+        scheduleLayout = true;
+      }
+      state.followingResize = false;
+      state.resizeTarget = undefined;
+    }
+  }
+  return { state, scheduleLayout };
 }
 
 /** Row offsets start below the scroll padding plus the in-flow history header. */
@@ -14,15 +93,17 @@ export function resolveTranscriptScrollMargin(
   scrollElement: Element | null,
   headerHeight: number,
 ): number {
-  return transcriptScrollMargin(scrollElement) + headerHeight;
+  const margin =
+    scrollElement instanceof HTMLElement && typeof getComputedStyle === "function"
+      ? Number.parseFloat(getComputedStyle(scrollElement).paddingTop)
+      : 0;
+  return (Number.isFinite(margin) ? margin : 0) + headerHeight;
 }
 
 export function syncScrollMargin(
-  scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-  headerHeight: number,
+  scrollMargin: number,
 ): void {
-  const scrollMargin = resolveTranscriptScrollMargin(scrollElement, headerHeight);
   if (scrollMargin === virtualizer.options.scrollMargin) {
     return;
   }
@@ -32,19 +113,32 @@ export function syncScrollMargin(
   });
 }
 
-export function initialTranscriptRect(host: ReactiveControllerHost) {
-  const width = host instanceof HTMLElement ? host.clientWidth : 0;
-  const height = host instanceof HTMLElement ? host.clientHeight : 0;
+export function initialTranscriptRect() {
   return {
-    width: width || (typeof window === "undefined" ? 0 : window.innerWidth),
-    height: height || (typeof window === "undefined" ? 0 : window.innerHeight),
+    width: typeof window === "undefined" ? 0 : window.innerWidth,
+    height: typeof window === "undefined" ? 0 : window.innerHeight,
   };
 }
 
-export function measureConnectedTranscriptRows(
-  scrollElement: HTMLDivElement | null,
+export function isTranscriptRangeCommitted(
+  inner: HTMLElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): boolean {
+  return virtualizer.getVirtualItems().every((row) => {
+    const node = virtualizer.elementsCache.get(row.key);
+    return (
+      node !== undefined &&
+      inner?.contains(node) === true &&
+      Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) === row.size
+    );
+  });
+}
+
+export function readConnectedTranscriptRows(
+  scrollElement: HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: Iterable<HTMLElement>,
+): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
     !scrollElement ||
@@ -52,79 +146,34 @@ export function measureConnectedTranscriptRows(
     !rect?.width ||
     !rect.height
   ) {
-    return false;
+    return null;
   }
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
-  let changed = false;
-  for (const row of scrollElement.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
+  const measurements: Array<{ index: number; height: number }> = [];
+  // Refs can arrive out of order during prepends; preserve DOM-order corrections.
+  const rows = [...rowElements]
+    .filter((row) => scrollElement.contains(row))
+    .toSorted(
+      (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),
+    );
+  for (const row of rows) {
     const index = virtualizer.indexFromElement(row);
     // Rows are border-boxes; read their fractional layout height, not a scaled
     // client rect when a containing board or sidebar is transitioning.
     const height = Number.parseFloat(getComputedStyle(row).height);
-    const key = virtualizer.options.getItemKey(index);
-    const previousSize = virtualizer.itemSizeCache.get(key);
-    virtualizer.resizeItem(index, Number.isFinite(height) ? height : row.offsetHeight);
-    changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
+    measurements.push({ index, height: Number.isFinite(height) ? height : row.offsetHeight });
   }
-  return changed;
-}
-
-export function measureTranscriptRowRefs(
-  elements: readonly HTMLElement[],
-  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-  canMeasureVisibleRows: boolean,
-): void {
-  const range = virtualizer.range;
-  const candidates =
-    canMeasureVisibleRows && !virtualizer.options.useCachedMeasurements && range
-      ? elements.flatMap((element) => {
-          const index = virtualizer.indexFromElement(element);
-          return element.isConnected &&
-            index >= range.startIndex &&
-            index <= range.endIndex &&
-            !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(index))
-            ? [{ element, index }]
-            : [];
-        })
-      : [];
-  // Cached and overscan mounts must not force even a viewport layout read.
-  if (candidates.length > 0 && virtualizer.scrollElement?.clientHeight) {
-    const rows = candidates.map(({ element, index }) => ({
-      element,
-      index,
-      visibility: element.style.getPropertyValue("content-visibility"),
-      priority: element.style.getPropertyPriority("content-visibility"),
-    }));
-    const measurements: Array<{ index: number; size: number }> = [];
-    try {
-      // Resolve intrinsic placeholders before paint, with all writes before
-      // all reads. resizeItem can write scrollTop, so defer it until afterward.
-      for (const { element } of rows) {
-        element.style.setProperty("content-visibility", "visible");
-      }
-      for (const { element, index } of rows) {
-        measurements.push({
-          index,
-          size: virtualizer.options.measureElement(element, undefined, virtualizer),
-        });
-      }
-    } finally {
-      for (const { element, visibility, priority } of rows) {
-        if (visibility) {
-          element.style.setProperty("content-visibility", visibility, priority);
-        } else {
-          element.style.removeProperty("content-visibility");
-        }
-      }
+  return () => {
+    let changed = false;
+    for (const { index, height } of measurements) {
+      const key = virtualizer.options.getItemKey(index);
+      const previousSize = virtualizer.itemSizeCache.get(key);
+      virtualizer.resizeItem(index, height);
+      changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
     }
-    for (const { index, size } of measurements) {
-      virtualizer.resizeItem(index, size);
-    }
-  }
-  for (const element of elements) {
-    virtualizer.measureElement(element);
-  }
+    return changed;
+  };
 }
 
 export function measureTranscriptRow(
@@ -132,18 +181,21 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  // Rounded row heights accumulate when skipped overscan uses those measurements.
-  const size = entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-  if (size === 0 && virtualizer.scrollElement?.clientHeight === 0) {
-    // A hidden panel has no row geometry. Retain the last measurement instead
-    // of replacing it with zero and moving the restored viewport.
-    const index = virtualizer.indexFromElement(element);
-    return (
-      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
-      virtualizer.options.estimateSize(index)
-    );
+  if (entry || !virtualizer.targetWindow?.ResizeObserver) {
+    // Rounded row heights accumulate when skipped overscan uses those measurements.
+    const size =
+      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
+    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+      return size;
+    }
   }
-  return size;
+  // Row registration waits for the observer's first layout; hidden panels retain
+  // their last measurement instead of replacing it with zero and moving the viewport.
+  const index = virtualizer.indexFromElement(element);
+  return (
+    virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
+    virtualizer.options.estimateSize(index)
+  );
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
@@ -152,63 +204,45 @@ export function maxTranscriptScrollOffset(element: HTMLElement | null): number |
     : null;
 }
 
-export function reconcileInitialTranscriptOffset(
-  element: HTMLDivElement | null,
-  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-): "pending" | "settled" | "corrected" {
-  const maxOffset = maxTranscriptScrollOffset(element);
-  const offset = virtualizer.scrollOffset;
-  if (maxOffset === null || offset === null) {
-    return "pending";
-  }
-  if (offset >= 0 && offset <= maxOffset) {
-    return "settled";
-  }
-  if (maxOffset !== 0) {
-    return "pending";
-  }
-  // An underfilled end anchor clamps to zero without a native scroll event.
-  virtualizer.scrollOffset = 0;
-  virtualizer.scrollToOffset(0);
-  return "corrected";
-}
+export function createPositionRailGutter(
+  scrollElement: () => HTMLDivElement | null,
+  innerElement: () => HTMLDivElement | null,
+  columnElement: () => HTMLDivElement | undefined,
+) {
+  let resizeObserver: ResizeObserver | null = null;
+  let observedViewport: HTMLDivElement | null = null;
+  let observedInner: HTMLDivElement | null = null;
+  let observedRegion: HTMLElement | null = null;
 
-export class PositionRailGutterController implements ReactiveController {
-  private frame: number | null = null;
-  private resizeObserver: ResizeObserver | null = null;
-  private viewport: HTMLDivElement | null = null;
-  private innerElement: HTMLDivElement | null = null;
-  private region: HTMLElement | null = null;
+  const disconnect = () => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    observedViewport = null;
+    observedInner = null;
+    observedRegion = null;
+  };
 
-  constructor(
-    private readonly host: ReactiveControllerHost & {
-      readonly scrollElement: HTMLDivElement | null;
-    },
-    private readonly inner: () => HTMLDivElement | null,
-  ) {
-    host.addController(this);
-  }
-
-  hostUpdated(): void {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const update = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     const region = viewport?.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
-    if (viewport === this.viewport && inner === this.innerElement && region === this.region) {
+    if (viewport === observedViewport && inner === observedInner && region === observedRegion) {
       return;
     }
-    this.hostDisconnected();
-    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region) {
+    disconnect();
+    const column = columnElement();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region || !column) {
       return;
     }
-    this.viewport = viewport;
-    this.innerElement = inner;
-    this.region = region;
+    observedViewport = viewport;
+    observedInner = inner;
+    observedRegion = region;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
-    this.resizeObserver = new ResizeObserver((entries) => {
+    resizeObserver = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
-        if (entry.target === inner) {
+        if (entry.target === column) {
           const width = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
           changed ||= width !== innerWidth;
           innerWidth = width;
@@ -218,59 +252,45 @@ export class PositionRailGutterController implements ReactiveController {
           regionHeight = height;
         }
       }
-      // Streaming changes the inner height, but only column width affects the gutter.
       if (changed) {
-        this.scheduleSync();
+        sync();
       }
     });
-    this.resizeObserver.observe(inner, { box: "border-box" });
-    this.resizeObserver.observe(region, { box: "border-box" });
-    this.scheduleSync();
-  }
+    // The virtual column has no flow height. Observing the owned range instead
+    // feeds row measurements back into shallower ResizeObserver delivery.
+    resizeObserver.observe(column, { box: "border-box" });
+    resizeObserver.observe(region, { box: "border-box" });
+  };
 
-  private scheduleSync(): void {
-    if (this.frame !== null) {
-      return;
-    }
-    // Nested Lit children can still be replacing footer content. A synchronous
-    // layout read here clamps scrolling against that intermediate viewport.
-    this.frame = requestAnimationFrame(() => {
-      this.frame = null;
-      this.sync();
-    });
-  }
-
-  hostDisconnected(): void {
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
-    this.viewport = null;
-    this.innerElement = null;
-    this.region = null;
-    if (this.frame !== null) {
-      cancelAnimationFrame(this.frame);
-      this.frame = null;
-    }
-  }
-
-  sync(): void {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const read = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     if (!viewport?.isConnected || inner?.parentElement !== viewport) {
-      return;
+      return null;
     }
     const left = viewport.getBoundingClientRect().left + viewport.clientLeft;
     const gutter = inner.getBoundingClientRect().left - left;
     // Publish the resolved, unscaled column width: a saved percentage cannot be
     // reused inside a descendant table without changing its containing block.
     const columnWidth = inner.clientWidth;
+    const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
+    return { viewport, gutter, columnWidth, regionHeight: region.clientHeight };
+  };
+
+  const sync = (geometry = read()) => {
+    if (!geometry) {
+      return;
+    }
+    const { viewport, gutter, columnWidth, regionHeight } = geometry;
     if (columnWidth > 0) {
       viewport.style.setProperty("--chat-transcript-column-width", `${columnWidth}px`);
     }
     // The conversation region stays fixed when its composer resizes the scrollport.
-    const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
-    viewport.style.setProperty("--chat-position-rail-viewport-height", `${region.clientHeight}px`);
+    viewport.style.setProperty("--chat-position-rail-viewport-height", `${regionHeight}px`);
     // Reserve room for the compact left rail and breathing space, including
     // when a saved width fills the pane.
     viewport.toggleAttribute("data-position-rail-gutter", gutter >= 68);
-  }
+  };
+
+  return { update, disconnect, read, sync };
 }

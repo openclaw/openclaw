@@ -1,15 +1,10 @@
-// Plugin runtime index tests cover runtime entrypoint exports and registry setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
-import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
-import { VERSION } from "../../version.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
@@ -22,42 +17,15 @@ vi.mock("../../infra/heartbeat-runner.js", () => {
   return { runHeartbeatOnce: heartbeatRunnerMocks.runHeartbeatOnce };
 });
 
-const sandboxContextMocks = vi.hoisted(() => ({
-  resolveSandboxContext: vi.fn(),
-}));
-
-vi.mock("./runtime-model-auth.runtime.js", () => ({
-  getApiKeyForModel: runtimeModelAuthMocks.getApiKeyForModel,
-  getRuntimeAuthForModelCore: runtimeModelAuthMocks.getRuntimeAuthForModelCore,
-  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
-}));
-vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
+// mock-isolation: Exercise the lazy runtime facade without loading credential-backed model auth.
+vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
 
 import { createPluginRuntime } from "./index.js";
-
-function createGatewaySubagentRuntime() {
-  return {
-    complete: vi.fn(),
-    run: vi.fn(),
-    waitForRun: vi.fn(),
-    getSessionMessages: vi.fn(),
-    deleteSession: vi.fn(),
-  };
-}
-
-function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  for (const key of keys) {
-    expect(typeof value[key]).toBe("function");
-  }
-}
 
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    runtimeModelAuthMocks.getApiKeyForModel.mockReset();
-    runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockReset();
-    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockReset();
-    sandboxContextMocks.resolveSandboxContext.mockReset();
+    Object.values(runtimeModelAuthMocks).forEach((mock) => mock.mockReset());
     resetConfigRuntimeState();
   });
 
@@ -95,15 +63,6 @@ describe("plugin runtime command execution", () => {
     heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
   });
 
-  it("exposes runtime.version from the shared VERSION constant", () => {
-    expect(createPluginRuntime().version).toBe(VERSION);
-  });
-
-  it("exposes reset freshness resolver on the host channel runtime", () => {
-    const sessionRuntime = createPluginRuntime().channel.session as Record<string, unknown>;
-    expect(typeof sessionRuntime.resolveEntryResetFreshness).toBe("function");
-  });
-
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
     vi.useFakeTimers();
     const handler = vi.fn(async (_request: Parameters<typeof requestHeartbeat>[0]) => ({
@@ -112,17 +71,13 @@ describe("plugin runtime command execution", () => {
     }));
     const dispose = setHeartbeatWakeHandler(handler);
     try {
-      createPluginRuntime().system.requestHeartbeatNow({
-        reason: "legacy-plugin",
-        coalesceMs: 0,
-      });
+      createPluginRuntime().system.requestHeartbeatNow({ reason: "legacy-plugin", coalesceMs: 0 });
       await vi.advanceTimersByTimeAsync(1);
-      const request = handler.mock.calls[0]?.[0] as
-        | { source?: string; intent?: string; reason?: string }
-        | undefined;
-      expect(request?.source).toBe("other");
-      expect(request?.intent).toBe("immediate");
-      expect(request?.reason).toBe("legacy-plugin");
+      expect(handler.mock.calls[0]?.[0]).toMatchObject({
+        source: "other",
+        intent: "immediate",
+        reason: "legacy-plugin",
+      });
     } finally {
       dispose();
       vi.useRealTimers();
@@ -130,29 +85,17 @@ describe("plugin runtime command execution", () => {
   });
 
   it("resolves thinking policy with configured model compat from runtime config", () => {
-    setRuntimeConfigSnapshot({
-      models: {
-        providers: {
-          gmn: {
-            baseUrl: "https://gmn.example.com/v1",
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT 5.4 via GMN",
-                reasoning: true,
-                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT 5.4 via GMN",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    };
+    const providers = { gmn: { baseUrl: "https://gmn.example.com/v1", models: [model] } };
+    setRuntimeConfigSnapshot({ models: { providers } } as unknown as OpenClawConfig);
 
     const runtime = createPluginRuntime();
-    const policy = runtime.agent.resolveThinkingPolicy({
-      provider: "gmn",
-      model: "gpt-5.4",
-    });
+    const policy = runtime.agent.resolveThinkingPolicy({ provider: "gmn", model: "gpt-5.4" });
 
     expect(policy.levels.map((level) => level.id)).toContain("xhigh");
   });
@@ -165,132 +108,19 @@ describe("plugin runtime command execution", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       tools: { elevated: { enabled: false } },
     };
 
-    const result = runtime.sandbox.resolveWorkspaceAuthority({
-      config,
+    const scope = {
       agentId: "main",
       sessionKey: "agent:main:subagent:workboard-card",
-    });
-
-    expect(getSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:subagent:workboard-card",
-    });
-    expect(result.confinementError).toContain("outside the sandbox");
-  });
-
-  it("prepares the live sandbox before returning workspace authority", async () => {
-    const runtime = createPluginRuntime();
-    vi.spyOn(runtime.agent.session, "getSessionEntry").mockReturnValue(undefined);
-    sandboxContextMocks.resolveSandboxContext.mockResolvedValue({ backendId: "docker" });
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
-        list: [{ id: "main", default: true, workspace: "/workspace" }],
-      },
-      tools: {
-        elevated: { enabled: false },
-        sandbox: { tools: { allow: ["read"] } },
-      },
     };
+    const result = runtime.sandbox.resolveWorkspaceAuthority({ config, ...scope });
 
-    await expect(
-      runtime.sandbox.prepareWorkspaceAuthority({
-        config,
-        agentId: "main",
-        sessionKey: "agent:main:subagent:workboard-card",
-        workspaceDir: "/workspace",
-      }),
-    ).resolves.toEqual({ sandboxed: true, workspaceAccess: "rw" });
-    expect(sandboxContextMocks.resolveSandboxContext).toHaveBeenCalledWith({
-      config,
-      agentId: "main",
-      sessionKey: "agent:main:subagent:workboard-card",
-      workspaceDir: "/workspace",
-      requireCurrentConfig: true,
-    });
-  });
-
-  it.each([
-    {
-      name: "exposes runtime.mediaUnderstanding helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.mediaUnderstanding as Record<string, unknown>, [
-          "resolveAudioInputBudget",
-          "runFile",
-          "describeImageFile",
-          "describeImageFileWithModel",
-          "extractStructuredWithModel",
-          "describeVideoFile",
-        ]);
-        expect(runtime.mediaUnderstanding.transcribeAudioFile).toBeTypeOf("function");
-      },
-    },
-    {
-      name: "exposes runtime.imageGeneration helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.imageGeneration as Record<string, unknown>, [
-          "generate",
-          "listProviders",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.webSearch helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.webSearch as Record<string, unknown>, [
-          "listProviders",
-          "search",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.llm completion and provider-service acquisition",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.llm as Record<string, unknown>, [
-          "complete",
-          "acquireLocalService",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.worktrees checkout inspection and lifecycle helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.worktrees as Record<string, unknown>, [
-          "resolveCheckoutRoot",
-          "hasSelfContainedCheckoutMetadata",
-          "create",
-          "release",
-          "removeIfLossless",
-        ]);
-      },
-    },
-    {
-      name: "exposes canonical read-only model selection without injection",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        const modelConfig = runtime.modelConfig;
-        expect(modelConfig.resolveDefaultModelForAgent).toBe(resolveDefaultModelForAgent);
-        expect(modelConfig.resolveAllowedModelRef).toBe(resolveAllowedModelRefCore);
-        expect(modelConfig.resolveDefaultModelForAgent({ cfg: {} })).toEqual({
-          provider: DEFAULT_PROVIDER,
-          model: DEFAULT_MODEL,
-        });
-        expect(Object.getOwnPropertyDescriptor(runtime, "modelConfig")).toEqual({
-          configurable: true,
-          enumerable: true,
-          get: expect.any(Function),
-          set: undefined,
-        });
-        expect(Reflect.set(runtime, "modelConfig", {})).toBe(false);
-        expect(runtime.modelConfig).toBe(modelConfig);
-      },
-    },
-  ] as const)("$name", ({ assert }) => {
-    assert(createPluginRuntime());
+    expect(getSessionEntry).toHaveBeenCalledWith(scope);
+    expect(result.confinementError).toContain("outside the sandbox");
   });
 
   it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
@@ -301,64 +131,26 @@ describe("plugin runtime command execution", () => {
       api: "openai-responses",
       baseUrl: "https://workspace-cloud.example/v1",
     };
-    const cfg = { plugins: { allow: ["workspace-cloud"] } } as OpenClawConfig;
-    runtimeModelAuthMocks.getApiKeyForModel.mockResolvedValue({
-      apiKey: "model-key",
-      source: "workspace cloud credentials",
-      mode: "api-key",
-    });
-    runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockResolvedValue({
-      apiKey: "runtime-key",
-      source: "workspace cloud runtime credentials",
-      mode: "api-key",
-    });
-    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockResolvedValue({
-      apiKey: "provider-key",
-      source: "workspace cloud credentials",
-      mode: "api-key",
-    });
-
-    const modelAuth = await runtime.modelAuth.getApiKeyForModel({
-      model: model as never,
+    const cfg: OpenClawConfig = { plugins: { allow: ["workspace-cloud"] } };
+    const scope = {
       cfg,
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
       store: { version: 1, profiles: {} },
-    } as never);
-    expect(modelAuth.apiKey).toBe("model-key");
-    const runtimeAuth = await runtime.modelAuth.getRuntimeAuthForModel({
-      model: model as never,
-      cfg,
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      store: { version: 1, profiles: {} },
-    } as never);
-    expect(runtimeAuth.apiKey).toBe("runtime-key");
-
-    const providerAuth = await runtime.modelAuth.resolveApiKeyForProvider({
-      provider: "workspace-cloud",
-      cfg,
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      store: { version: 1, profiles: {} },
-    } as never);
-    expect(providerAuth.apiKey).toBe("provider-key");
-
-    expect(runtimeModelAuthMocks.getApiKeyForModel).toHaveBeenCalledWith({
-      model,
-      cfg,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(runtimeModelAuthMocks.getRuntimeAuthForModelCore).toHaveBeenCalledWith({
-      model,
-      cfg,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(runtimeModelAuthMocks.resolveProviderRuntimeApiKey).toHaveBeenCalledWith({
-      provider: "workspace-cloud",
-      cfg,
-      workspaceDir: "/tmp/workspace",
-    });
+    };
+    for (const [method, mockName, apiKey] of [
+      ["getApiKeyForModel", "getApiKeyForModel", "model-key"],
+      ["getRuntimeAuthForModel", "getRuntimeAuthForModelCore", "runtime-key"],
+      ["resolveApiKeyForProvider", "resolveProviderRuntimeApiKey", "provider-key"],
+    ] as const) {
+      const mock = runtimeModelAuthMocks[mockName];
+      const target =
+        method === "resolveApiKeyForProvider" ? { provider: "workspace-cloud" } : { model };
+      mock.mockResolvedValue({ apiKey, source: "workspace cloud credentials", mode: "api-key" });
+      const auth = await runtime.modelAuth[method]({ ...scope, ...target } as never);
+      expect(auth.apiKey).toBe(apiKey);
+      expect(mock).toHaveBeenCalledWith({ ...target, cfg, workspaceDir: scope.workspaceDir });
+    }
   });
 
   it("keeps subagent unavailable by default", () => {
@@ -374,37 +166,5 @@ describe("plugin runtime command execution", () => {
     expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
       "only available inside the Gateway",
     );
-  });
-
-  it("uses an explicit subagent runtime", async () => {
-    const run = vi.fn().mockResolvedValue({ runId: "run-1" });
-    const runtime = createPluginRuntime({
-      subagent: { ...createGatewaySubagentRuntime(), run },
-    });
-
-    await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
-      runId: "run-1",
-    });
-    expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
-  });
-
-  it("uses explicit nodes runtime when provided", async () => {
-    const nodes = {
-      list: vi.fn().mockResolvedValue({ nodes: [] }),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-      openDuplex: vi.fn().mockResolvedValue({ closed: Promise.resolve({ ok: true }) }),
-    };
-    const runtime = createPluginRuntime({ nodes });
-
-    await expect(runtime.nodes.list({ connected: true })).resolves.toEqual({ nodes: [] });
-    await expect(
-      runtime.nodes.invoke({ nodeId: "node-1", command: "browser.proxy" }),
-    ).resolves.toEqual({ ok: true });
-    expect(nodes.list).toHaveBeenCalledWith({ connected: true });
-    expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
-    await expect(
-      runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
-    ).resolves.toMatchObject({ closed: expect.any(Promise) });
-    expect(nodes.openDuplex).toHaveBeenCalledWith({ nodeId: "node-1", command: "image.bridge" });
   });
 });

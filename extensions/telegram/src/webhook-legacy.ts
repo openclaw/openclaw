@@ -31,25 +31,25 @@ function parseIpLiteral(value: string | undefined): string | undefined {
   return undefined;
 }
 
-// Preserve v2026.9.6 auth-failure buckets; these addresses never grant Gateway authority.
+// Forwarding ports retain their auth-failure buckets; these addresses never grant Gateway authority.
 export function createTelegramLegacyWebhookAuthLimiter(config: OpenClawConfig | undefined) {
   const rateLimiter = createFixedWindowRateLimiter(WEBHOOK_RATE_LIMIT_DEFAULTS);
   const trusted = new net.BlockList();
   for (const proxy of config?.gateway?.trustedProxies ?? []) {
     const value = proxy.trim();
     const [address = "", prefix] = value.split("/", 2);
+    const family = net.isIP(address);
+    if (!family) {
+      continue;
+    }
+    const ipType = family === 6 ? "ipv6" : "ipv4";
     if (prefix !== undefined) {
       const bits = parseStrictNonNegativeInteger(prefix);
-      const family = net.isIP(address);
-      if (bits !== undefined && family === 4 && bits <= 32) {
-        trusted.addSubnet(address, bits, "ipv4");
-      } else if (bits !== undefined && family === 6 && bits <= 128) {
-        trusted.addSubnet(address, bits, "ipv6");
+      if (bits !== undefined && bits <= (family === 6 ? 128 : 32)) {
+        trusted.addSubnet(address, bits, ipType);
       }
-    } else if (net.isIP(value) === 4) {
-      trusted.addAddress(value, "ipv4");
-    } else if (net.isIP(value) === 6) {
-      trusted.addAddress(value, "ipv6");
+    } else {
+      trusted.addAddress(value, ipType);
     }
   }
   const isTrusted = (ip: string) => trusted.check(ip, net.isIP(ip) === 6 ? "ipv6" : "ipv4");

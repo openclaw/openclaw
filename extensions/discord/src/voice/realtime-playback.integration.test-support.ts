@@ -17,10 +17,8 @@ vi.mock("./audio-worker-thread.js", async () => {
     ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
   };
 });
-import { createVoiceCaptureState } from "./capture-state.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
@@ -90,9 +88,13 @@ export function createRealtimePlaybackFixture(
     conversations: new DiscordVoiceConversationQueue(),
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
-    capture: createVoiceCaptureState(),
-    realtimeLifecycle: { status: "inactive", generation: 0 },
-    receiveRecovery: createVoiceReceiveRecoveryState(),
+    capture: new Map(),
+    realtimeLifecycle: { status: "inactive" },
+    receiveRecovery: {
+      decryptFailureCount: 0,
+      lastDecryptFailureAt: 0,
+      decryptRecoveryInFlight: false,
+    },
     stop: vi.fn(),
   };
   const roomPlayer = new DiscordRealtimePlayer(audio);
@@ -131,7 +133,6 @@ export function createRealtimePlaybackFixture(
       player: roomPlayer,
       harness,
       markProviderGenerationObserved: () => {},
-      mode: "agent-proxy",
       onTerminalError,
       providerId: () => "openai",
       realtimeConfig: () =>

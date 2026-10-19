@@ -2,7 +2,7 @@ import { chunkText } from "../../auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 
-export type MatrixSendFn = (
+type MatrixSendFn = (
   to: string,
   text: string,
   options?: Record<string, unknown>,

@@ -1,45 +1,24 @@
+import type { CopilotSession } from "@github/copilot-sdk";
 import {
   buildAgentHookContextChannelFields,
   type AgentHarnessCompactParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createCopilotAbortError } from "./prompt-error.js";
 
-export interface CopilotHistoryCompactResult {
-  success: boolean;
-  tokensRemoved: number;
-  messagesRemoved: number;
-  summaryContent?: string;
-  contextWindow?: {
-    tokenLimit: number;
-    currentTokens: number;
-    messagesLength: number;
-    systemTokens?: number;
-    conversationTokens?: number;
-    toolDefinitionsTokens?: number;
-  };
-}
+export type CopilotHistoryCompactResult = Awaited<
+  ReturnType<CopilotSession["rpc"]["history"]["compact"]>
+>;
 
-export interface CopilotHistoryCompactSession {
-  abort(): Promise<void>;
-  disconnect(): Promise<void>;
+export type CopilotHistoryCompactSession = Pick<CopilotSession, "abort" | "disconnect"> & {
   rpc: {
-    history: {
-      abortManualCompaction(): Promise<{ aborted: boolean }>;
-      compact(params?: { customInstructions?: string }): Promise<CopilotHistoryCompactResult>;
-    };
+    history: Pick<CopilotSession["rpc"]["history"], "abortManualCompaction" | "compact">;
   };
-}
+};
 
 export function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
+  if (signal?.aborted) {
+    throw createCopilotAbortError(signal.reason);
   }
-  const reason = "reason" in signal ? signal.reason : undefined;
-  if (reason instanceof Error) {
-    throw reason;
-  }
-  const error = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-  error.name = "AbortError";
-  throw error;
 }
 
 export function isStaleSdkSessionError(error: unknown): boolean {

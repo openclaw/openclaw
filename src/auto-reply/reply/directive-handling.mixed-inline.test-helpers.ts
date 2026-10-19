@@ -15,6 +15,10 @@ export function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEn
 
 export async function applyMixedDirectives(params: {
   body: string;
+  abortSignal?: AbortSignal;
+  resolveThinkingCatalog?: Parameters<
+    typeof applyInlineDirectiveOverrides
+  >[0]["modelState"]["resolveThinkingCatalog"];
   cfg?: OpenClawConfig;
   ctx?: MsgContext;
   agentDir?: string;
@@ -67,7 +71,7 @@ export async function applyMixedDirectives(params: {
     allowedModelKeys: new Set(allowedModels.map((entry) => `${entry.provider}/${entry.id}`)),
     allowedModelCatalog: allowedModels,
     resetModelOverride: false,
-    resolveThinkingCatalog: async () => allowedModels,
+    resolveThinkingCatalog: params.resolveThinkingCatalog ?? (async () => allowedModels),
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel ?? (async () => "off"),
     resolveDefaultReasoningLevel: async () => "off",
   };
@@ -83,6 +87,7 @@ export async function applyMixedDirectives(params: {
   };
 
   const result = await applyInlineDirectiveOverrides({
+    abortSignal: params.abortSignal,
     ctx: {
       ...params.ctx,
       Body: params.body,

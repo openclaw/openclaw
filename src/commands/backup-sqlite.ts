@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig, resolveStateDir } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resolveStateDir } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { readBackupEngine } from "../snapshot/database-backup.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
-import type {
-  SnapshotDatabaseManifest,
-  SnapshotManifest,
-  SnapshotRef,
-  SnapshotSummary,
-} from "../snapshot/snapshot-provider.js";
+import type { SnapshotDatabaseManifest } from "../snapshot/snapshot-provider.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -28,44 +26,6 @@ type BackupSqliteCreateOptions = {
   json?: boolean;
 };
 
-type BackupSqliteRepositoryOptions = {
-  repository?: string;
-  json?: boolean;
-};
-
-type BackupSqliteJsonOptions = {
-  json?: boolean;
-};
-
-type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
-  scratch?: string;
-};
-
-type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
-  target?: string;
-};
-
-type BackupSqliteListResult = {
-  ok: true;
-  repositoryPath: string;
-  snapshots: SnapshotSummary[];
-};
-
-type BackupSqliteSnapshotResult = {
-  ok: true;
-  snapshotPath: string;
-  manifest: SnapshotManifest;
-};
-
-type BackupSqliteRestoreResult = BackupSqliteSnapshotResult & {
-  targetPath: string;
-};
-
-type ResolvedSnapshotDatabase = {
-  path: string;
-  identity: { role: "global" } | { role: "agent"; agentId: string };
-};
-
 const OPENCLAW_SNAPSHOT_READ_OPTIONS = {
   allowedDatabaseRoles: ["global", "agent"],
 } as const;
@@ -73,13 +33,32 @@ const OPENCLAW_SNAPSHOT_READ_OPTIONS = {
 export async function backupSqliteCreateCommand(
   runtime: RuntimeEnv,
   options: BackupSqliteCreateOptions,
-): Promise<BackupSqliteSnapshotResult> {
+) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
+  const globalPath = options.global === true ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   try {
-    const database = await resolveSnapshotDatabase(options);
+    const database = await resolveSnapshotDatabase(options, config, globalPath);
+    let postgres = false;
+    try {
+      postgres = readBackupEngine(database.path).engine === "postgres";
+    } catch (error) {
+      if (!isSqliteCorruptionError(error)) {
+        throw error;
+      }
+      // Preserve the native snapshot owner's corruption diagnostics and cleanup.
+    }
+    if (postgres) {
+      throw new Error(
+        "backup sqlite cannot copy a PostgreSQL anchor. Use openclaw backup create; stop through the service owner, then rerun.",
+      );
+    }
     const result = await createLocalSqliteSnapshotProvider({ repositoryPath }).create(database);
-    const report: BackupSqliteSnapshotResult = {
-      ok: true,
+    const report = {
+      ok: true as const,
       snapshotPath: result.ref.path,
       manifest: result.manifest,
     };
@@ -113,15 +92,15 @@ export async function backupSqliteCreateCommand(
 
 export async function backupSqliteListCommand(
   runtime: RuntimeEnv,
-  options: BackupSqliteRepositoryOptions,
-): Promise<BackupSqliteListResult> {
+  options: { repository?: string; json?: boolean },
+) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const snapshots = await createLocalSqliteSnapshotProvider({
     repositoryPath,
     ...OPENCLAW_SNAPSHOT_READ_OPTIONS,
   }).list();
-  const report: BackupSqliteListResult = {
-    ok: true,
+  const report = {
+    ok: true as const,
     repositoryPath,
     snapshots,
   };
@@ -145,12 +124,12 @@ export async function backupSqliteListCommand(
 export async function backupSqliteVerifyCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteVerifyOptions,
-): Promise<BackupSqliteSnapshotResult> {
+  options: { scratch?: string; json?: boolean },
+) {
   const resolved = resolveSnapshot(snapshot, options.scratch);
   const verified = await resolved.provider.verify(resolved.ref);
-  const report: BackupSqliteSnapshotResult = {
-    ok: true,
+  const report = {
+    ok: true as const,
     snapshotPath: resolved.ref.path,
     manifest: verified.manifest,
   };
@@ -167,13 +146,13 @@ export async function backupSqliteVerifyCommand(
 export async function backupSqliteRestoreCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteRestoreOptions,
-): Promise<BackupSqliteRestoreResult> {
+  options: { target?: string; json?: boolean },
+) {
   const resolved = resolveSnapshot(snapshot);
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   const restored = await resolved.provider.restoreFresh(resolved.ref, targetPath);
-  const report: BackupSqliteRestoreResult = {
-    ok: true,
+  const report = {
+    ok: true as const,
     snapshotPath: resolved.ref.path,
     targetPath,
     manifest: restored.manifest,
@@ -190,7 +169,9 @@ export async function backupSqliteRestoreCommand(
 
 async function resolveSnapshotDatabase(
   options: BackupSqliteCreateOptions,
-): Promise<ResolvedSnapshotDatabase> {
+  config: OpenClawConfig,
+  globalPath: string | undefined,
+) {
   const rawAgentId = options.agent?.trim();
   if (options.agent !== undefined && !rawAgentId) {
     throw new Error("--agent must not be blank");
@@ -201,31 +182,22 @@ async function resolveSnapshotDatabase(
   if (options.global !== true && !rawAgentId) {
     throw new Error("Choose a SQLite snapshot source: --global or --agent <id>.");
   }
-  if (options.global === true) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     return {
-      path: await fs.realpath(selectedPath),
-      identity: { role: "global" },
+      path: await fs.realpath(globalPath),
+      identity: { role: "global" as const },
     };
   }
-  const config = getRuntimeConfig({ skipPluginValidation: true });
   const agentId = resolveConfiguredAgentId(config, normalizeAgentId(rawAgentId));
   const agentRoot = await resolveBackupAgentRoot(config, agentId);
   assertNotUpdateCapturePath(agentRoot.databasePath, resolveStateDir());
   return {
     path: await fs.realpath(agentRoot.databasePath),
-    identity: { role: "agent", agentId },
+    identity: { role: "agent" as const, agentId },
   };
 }
 
-function resolveSnapshot(
-  snapshot: string,
-  scratch?: string,
-): {
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  ref: SnapshotRef;
-} {
+function resolveSnapshot(snapshot: string, scratch?: string) {
   const snapshotPath = resolveRequiredBackupPath(snapshot, "<snapshot>");
   const repositoryPath = path.dirname(snapshotPath);
   const validationRootPath = scratch

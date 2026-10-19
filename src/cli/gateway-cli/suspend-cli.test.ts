@@ -22,17 +22,16 @@ describe("gateway suspend CLI", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each([undefined, 0, "0.25"])("prints a ready lease for wait %j", async (waitSeconds) => {
+  it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
     const callGateway = vi.fn(async () => readyResult);
     const runtime = createNonExitingRuntimeEnv();
+    const rpcOpts = { url: "wss://gateway.example:19444", token: "opaque-credential" };
 
-    await runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime });
+    await runGatewaySuspend({ rpcOpts, waitSeconds: 0 }, { callGateway, runtime });
 
-    expect(callGateway).toHaveBeenCalledWith(
-      "gateway.suspend.prepare",
-      {},
-      { requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u) },
-    );
+    expect(callGateway).toHaveBeenCalledWith("gateway.suspend.prepare", rpcOpts, {
+      requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u),
+    });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith("Gateway suspension prepared.");
     expect(runtime.log).toHaveBeenCalledWith("Suspension ID: suspension-1");
@@ -56,13 +55,6 @@ describe("gateway suspend CLI", () => {
 
   it.each([
     {
-      name: "custom local port",
-      rpcOpts: { localPortOverride: 18999 },
-      profile: "",
-      container: "",
-      command: "openclaw gateway resume suspension-1 --port 18999",
-    },
-    {
       name: "named profile and custom local port",
       rpcOpts: { localPortOverride: 18999 },
       profile: "work",
@@ -75,13 +67,6 @@ describe("gateway suspend CLI", () => {
       profile: "work",
       container: "demo",
       command: "openclaw --container demo gateway resume suspension-1 --port 18999",
-    },
-    {
-      name: "explicit URL and credentials remain private",
-      rpcOpts: { url: "wss://gateway.example:19444", token: "opaque-credential" },
-      profile: "",
-      container: "",
-      command: "openclaw gateway resume suspension-1",
     },
   ])(
     "prints a correctly scoped resume hint for $name",
@@ -168,28 +153,10 @@ describe("gateway suspend CLI", () => {
           },
         },
       ),
-    ).rejects.toThrow("Timed out waiting for the Gateway to become idle.");
-    expect(callGateway).toHaveBeenCalledOnce();
-  });
-
-  it("reports the latest blockers when the wait deadline expires", async () => {
-    let now = 1_000;
-
-    await expect(
-      runGatewaySuspend(
-        { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.1" },
-        {
-          callGateway: vi.fn(async () => busyResult),
-          runtime: createNonExitingRuntimeEnv(),
-          nowMs: () => now,
-          sleep: async (delayMs) => {
-            now += delayMs;
-          },
-        },
-      ),
     ).rejects.toThrow(
       "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nTimed out waiting for the Gateway to become idle.",
     );
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 });
 

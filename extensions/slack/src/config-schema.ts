@@ -31,13 +31,6 @@ const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),
 }).strict();
-const SlackDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
-  })
-  .strict();
 
 const SlackPresenceEventsSchema = z
   .object({
@@ -48,6 +41,7 @@ const SlackPresenceEventsSchema = z
 
 const SlackChannelSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
@@ -84,7 +78,7 @@ const SlackRelaySchema = z
 
 const SlackIdentitySchema = z.enum(["bot", "user"]);
 
-const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+const { accountShape, rootPolicyShape, groupDmShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   streaming: SlackStreamingConfigSchema.optional(),
 });
@@ -108,6 +102,7 @@ const SlackAccountSchema = z
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
     unfurlLinks: z.boolean().optional(),
     unfurlMedia: z.boolean().optional(),
@@ -141,7 +136,7 @@ const SlackAccountSchema = z
       })
       .strict()
       .optional(),
-    dm: SlackDmSchema.optional(),
+    dm: z.strictObject(groupDmShape).optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     typingReaction: z.string().optional(),
   })

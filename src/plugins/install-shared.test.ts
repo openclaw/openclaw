@@ -65,8 +65,9 @@ describe("installPluginDirectoryIntoExtensions", () => {
 
     const result = await installPluginDirectoryIntoExtensions({
       ...options,
-      afterCopy: async (installedDir) => {
+      afterInstall: async (installedDir) => {
         await fs.promises.writeFile(path.join(installedDir, "index.js"), "final capabilities");
+        return null;
       },
       onBeforePluginArtifactCommit: async ({ stagedArtifactDir }) => {
         reviewedArtifactDir = stagedArtifactDir;

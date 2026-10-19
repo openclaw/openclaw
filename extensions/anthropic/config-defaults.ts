@@ -1,10 +1,7 @@
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   modelEntryWithClaudeCliRuntime,
   normalizeAnthropicProviderId,
@@ -12,14 +9,11 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   resolveKnownAnthropicModelRef,
 } from "./claude-model-refs.js";
-import {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
-  CLAUDE_CLI_PROFILE_ID,
-} from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
 const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [
+  "anthropic/claude-sonnet-5-5",
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
 ] as const;
@@ -39,9 +33,7 @@ function resolveAnthropicDefaultAuthMode(
 
   const order = [
     ...(config.auth?.order?.anthropic ?? []),
-    ...((config.auth?.order as Record<string, string[] | undefined> | undefined)?.[
-      CLAUDE_CLI_BACKEND_ID
-    ] ?? []),
+    ...(config.auth?.order?.[CLAUDE_CLI_BACKEND_ID] ?? []),
   ];
   for (const profileId of order) {
     const entry = profiles[profileId];
@@ -114,7 +106,7 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
     if (parsed?.provider === CLAUDE_CLI_BACKEND_ID) {
       return true;
     }
-    const runtimeId = isRecord(entry?.agentRuntime) ? entry.agentRuntime.id : undefined;
+    const runtimeId = entry?.agentRuntime?.id;
     return (
       parsed?.provider === "anthropic" &&
       normalizeLowercaseStringOrEmpty(runtimeId) === CLAUDE_CLI_BACKEND_ID
@@ -129,9 +121,7 @@ function usesSelectedClaudeCliAuthProfile(config: OpenClawConfig): boolean {
   const profiles = config.auth?.profiles ?? {};
   const orderedProfileIds = [
     ...(config.auth?.order?.anthropic ?? []),
-    ...((config.auth?.order as Record<string, string[] | undefined> | undefined)?.[
-      CLAUDE_CLI_BACKEND_ID
-    ] ?? []),
+    ...(config.auth?.order?.[CLAUDE_CLI_BACKEND_ID] ?? []),
   ];
   for (const profileId of orderedProfileIds) {
     const provider = profiles[profileId]?.provider;
@@ -198,8 +188,7 @@ export function normalizeAnthropicProviderConfigForProvider<
   if (
     (provider !== "anthropic" && provider !== CLAUDE_CLI_BACKEND_ID) ||
     providerConfig.api ||
-    !Array.isArray(providerConfig.models) ||
-    providerConfig.models.length === 0
+    !providerConfig.models?.length
   ) {
     return providerConfig;
   }
@@ -222,12 +211,9 @@ export function applyAnthropicConfigDefaults(params: {
 
   let mutated = false;
   const nextDefaults = { ...defaults };
-  const contextPruning = defaults.contextPruning ?? {};
-  const heartbeat = defaults.heartbeat ?? {};
-
   if (defaults.contextPruning?.mode === undefined) {
     nextDefaults.contextPruning = {
-      ...contextPruning,
+      ...defaults.contextPruning,
       mode: "cache-ttl",
       ttl: defaults.contextPruning?.ttl ?? "1h",
     };
@@ -236,16 +222,15 @@ export function applyAnthropicConfigDefaults(params: {
 
   if (defaults.heartbeat?.every === undefined) {
     nextDefaults.heartbeat = {
-      ...heartbeat,
+      ...defaults.heartbeat,
       every: authMode === "oauth" ? "1h" : "30m",
     };
     mutated = true;
   }
 
+  const nextModels = { ...defaults.models };
+  let modelsMutated = false;
   if (authMode === "api_key") {
-    const nextModels = defaults.models ? { ...defaults.models } : {};
-    let modelsMutated = false;
-
     const primary = resolveKnownAnthropicModelRef(resolveAgentModelPrimaryValue(defaults.model));
     const parsedPrimary = primary ? parseAnthropicModelRef(primary) : null;
     const refs = [
@@ -282,23 +267,13 @@ export function applyAnthropicConfigDefaults(params: {
         modelsMutated = true;
       }
     }
-
-    if (modelsMutated) {
-      nextDefaults.models = nextModels;
-      mutated = true;
-    }
   }
 
   if (
     authMode === "oauth" &&
     (usesClaudeCliModelSelection(params.config) || usesSelectedClaudeCliAuthProfile(params.config))
   ) {
-    const nextModels = defaults.models ? { ...defaults.models } : {};
-    let modelsMutated = false;
-    const runtimeRefs = new Set([
-      ...collectClaudeCliRuntimeRefsFromConfig(params.config),
-      ...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
-    ]);
+    const runtimeRefs = collectClaudeCliRuntimeRefsFromConfig(params.config);
     for (const ref of runtimeRefs) {
       const current = nextModels[ref];
       const updated = modelEntryWithClaudeCliRuntime(current);
@@ -308,10 +283,10 @@ export function applyAnthropicConfigDefaults(params: {
       nextModels[ref] = updated;
       modelsMutated = true;
     }
-    if (modelsMutated) {
-      nextDefaults.models = nextModels;
-      mutated = true;
-    }
+  }
+  if (modelsMutated) {
+    nextDefaults.models = nextModels;
+    mutated = true;
   }
 
   if (!mutated) {

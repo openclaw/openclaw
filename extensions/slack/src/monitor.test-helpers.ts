@@ -11,6 +11,8 @@ import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/cha
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 // Slack helper module supports monitor helpers behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -25,6 +27,7 @@ import type { sendMessageSlack } from "./send.js";
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
 type SlackProviderMonitor = (params: {
+  scheduler: PluginServiceSchedulerV1;
   botToken: string;
   appToken: string;
   abortSignal: AbortSignal;
@@ -99,6 +102,7 @@ type SlackTestState = {
     (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
+  socketModeReceiverArgs?: Record<string, unknown>;
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
   dispatches: Set<{ controller: AbortController; run: Promise<void> }>;
 };
@@ -128,6 +132,7 @@ const { state: slackTestState, transport: slackTestTransport } = vi.hoisted(
       upsertPairingRequestMock: vi.fn(),
       resolveSlackUserAllowlistMock: vi.fn(),
       socketModeLogger: undefined,
+      socketModeReceiverArgs: undefined,
       createSlackStartupAuthClientMock: vi.fn(),
       dispatches: new Set(),
     },
@@ -303,6 +308,7 @@ export function startSlackMonitor(
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
+    scheduler: createTestPluginServiceScheduler(),
     botToken: opts?.botToken ?? "bot-token",
     appToken: opts?.appToken ?? "app-token",
     abortSignal: controller.signal,
@@ -421,6 +427,7 @@ export async function resetSlackTestState(
   slackTestState.appConstructed = createSlackTestEvent();
   slackTestState.appStarted = createSlackTestEvent();
   slackTestState.socketModeLogger = undefined;
+  slackTestState.socketModeReceiverArgs = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.httpRequestListenerMock.mockReset();
@@ -484,8 +491,8 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    readSessionUpdatedAt: vi.fn(() => undefined),
-    getSessionEntry: vi.fn(() => undefined),
+    readSessionUpdatedAtAsync: vi.fn(async () => undefined),
+    getSessionEntryAsync: vi.fn(async () => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
@@ -607,8 +614,11 @@ vi.mock("@slack/bolt", () => {
       send: vi.fn<(envelopeId: string) => Promise<void>>().mockResolvedValue(undefined),
     });
 
-    constructor(args: { logger?: { error: (...args: unknown[]) => void } }) {
-      slackTestState.socketModeLogger = args.logger;
+    constructor(args: Record<string, unknown>) {
+      slackTestState.socketModeReceiverArgs = args;
+      slackTestState.socketModeLogger = args.logger as
+        | { error: (...args: unknown[]) => void }
+        | undefined;
     }
   }
   return {

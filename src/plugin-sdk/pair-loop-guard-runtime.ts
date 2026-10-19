@@ -35,7 +35,7 @@ export type PairLoopGuardResult =
   | { suppressed: true; cooldownUntilMs: number };
 
 /** Snapshot entry for observability and tests. */
-export type PairLoopGuardSnapshotEntry = {
+type PairLoopGuardSnapshotEntry = {
   /** Internal pair key containing scope, conversation, and unordered participant ids. */
   key: string;
   /** Number of retained events in the current window. */
@@ -80,7 +80,7 @@ const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
 const KEY_SEPARATOR = "\u0001";
 
 /** Default plugin-facing loop guard config before per-channel overrides. */
-export const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<PairLoopGuardConfig> = {
+const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<PairLoopGuardConfig> = {
   enabled: true,
   maxEventsPerWindow: 20,
   windowSeconds: 60,
@@ -107,20 +107,7 @@ export function mergePairLoopGuardConfig(
     }
     for (const key of PAIR_LOOP_GUARD_CONFIG_KEYS) {
       if (config[key] !== undefined) {
-        switch (key) {
-          case "enabled":
-            merged.enabled = config.enabled;
-            break;
-          case "maxEventsPerWindow":
-            merged.maxEventsPerWindow = config.maxEventsPerWindow;
-            break;
-          case "windowSeconds":
-            merged.windowSeconds = config.windowSeconds;
-            break;
-          case "cooldownSeconds":
-            merged.cooldownSeconds = config.cooldownSeconds;
-            break;
-        }
+        Object.assign(merged, { [key]: config[key] });
         hasValue = true;
       }
     }
@@ -208,15 +195,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
   }
 
-  function recordAndCheck(paramsLocal: {
-    scopeId: string;
-    conversationId: string;
-    senderId: string;
-    receiverId: string;
-    eventId?: string;
-    settings: PairLoopGuardSettings;
-    nowMs?: number;
-  }): PairLoopGuardResult {
+  const recordAndCheck: PairLoopGuard["recordAndCheck"] = (paramsLocal) => {
     if (!paramsLocal.settings.enabled) {
       return { suppressed: false };
     }
@@ -276,7 +255,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
 
     return { suppressed: false };
-  }
+  };
 
   return {
     recordAndCheck,

@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 
 const hooks = vi.hoisted(() => ({ afterEach: [] as Array<() => Promise<void>> }));

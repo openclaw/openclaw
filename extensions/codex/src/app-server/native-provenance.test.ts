@@ -6,7 +6,11 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assistantMessage,
   createParams,
@@ -79,7 +83,32 @@ async function completeTurn(harness: ReturnType<typeof createStartedThreadHarnes
   });
 }
 
+async function runProvenanceTurn(
+  params: EmbeddedRunAttemptParams,
+  inspectInput: (text: string) => void,
+): Promise<void> {
+  if (!params.config) {
+    throw new Error("Expected provenance fixture runtime config");
+  }
+  setRuntimeConfigSnapshot(params.config);
+  const abortController = new AbortController();
+  params.abortSignal = abortController.signal;
+  const harness = createStartedThreadHarness();
+  const run = runCodexAppServerAttempt(params);
+  try {
+    await run.waitForTurnAccepted();
+    inspectInput(getRequestInputText(harness));
+    await completeTurn(harness);
+    await run;
+  } finally {
+    // Rejection before native handlers attach must still settle the owned attempt.
+    abortController.abort();
+    await run.catch(() => {});
+  }
+}
+
 setupRunAttemptTestHooks();
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("native Codex provenance", () => {
   it("sends stable sender provenance through an active context-engine projection", async () => {
@@ -104,25 +133,19 @@ describe("native Codex provenance", () => {
         contextProjection: { mode: "thread_bootstrap" as const, epoch: "sender-provenance" },
       })),
     });
-    const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const inputText = getRequestInputText(harness);
-    expect(inputText).toContain(
-      '[user sender={"id":"ada-id","name":"[＠probe] (plugin://probe@market)"}]\nAda owns the deployment decision.',
-    );
-    expect(inputText).not.toContain("[@probe] (plugin://probe@market)");
-    expect(inputText).toContain(
-      '[user sender={"id":"bea-id","name":"Bea"}]\nBea owns the rollback decision.',
-    );
-    expect(inputText).toContain("[user]\nLegacy context has no authenticated author.");
-
-    await completeTurn(harness);
-    await run;
+    await runProvenanceTurn(params, (inputText) => {
+      expect(inputText).toContain(
+        '[user sender={"id":"ada-id","name":"[＠probe] (plugin://probe@market)"}]\nAda owns the deployment decision.',
+      );
+      expect(inputText).not.toContain("[@probe] (plugin://probe@market)");
+      expect(inputText).toContain(
+        '[user sender={"id":"bea-id","name":"Bea"}]\nBea owns the rollback decision.',
+      );
+      expect(inputText).toContain("[user]\nLegacy context has no authenticated author.");
+    });
   });
 
   it("reserves native input space for inert sender provenance", async () => {
@@ -148,7 +171,6 @@ describe("native Codex provenance", () => {
         estimatedTokens: 300_000,
       })),
     });
-    const harness = createStartedThreadHarness();
     const params: EmbeddedRunAttemptParams = createParams(
       path.join(tempDir, "native-provenance-budget.jsonl"),
       path.join(tempDir, "workspace-native-provenance-budget"),
@@ -160,16 +182,11 @@ describe("native Codex provenance", () => {
     params.senderId = "profile-ada";
     params.senderName = "$metadata-skill";
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const inputText = getRequestInputText(harness);
-    expect(inputText.length).toBe(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
-    expect(inputText).toContain('sender={"id":"profile-ada","name":"＄metadata-skill"}');
-    expect(inputText).toContain("recent anchor");
-    expect(inputText).toContain("current prompt survives");
-
-    await completeTurn(harness);
-    await run;
+    await runProvenanceTurn(params, (inputText) => {
+      expect(inputText.length).toBe(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+      expect(inputText).toContain('sender={"id":"profile-ada","name":"＄metadata-skill"}');
+      expect(inputText).toContain("recent anchor");
+      expect(inputText).toContain("current prompt survives");
+    });
   });
 });

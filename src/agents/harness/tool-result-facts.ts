@@ -13,11 +13,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
-import {
-  isToolResultError,
-  resolveToolResultFailureKind,
-  type ToolResultFailureKind,
-} from "../tool-result-error.js";
+import { resolveToolResultFailureKind, type ToolResultFailureKind } from "../tool-result-error.js";
 
 export function recordAgentHarnessToolResultTelemetry(params: {
   toolName: string;
@@ -149,7 +145,7 @@ export function resolveAgentHarnessToolResultPresentation(params: {
       : params.result;
   return {
     result,
-    isError: params.executionIsError || isToolResultError(params.result),
+    isError: params.executionIsError || presentationFailureKind !== undefined,
     failureKind,
   };
 }
@@ -273,52 +269,7 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
   return undefined;
 }
 
-export function collectAgentHarnessMessagingMediaUrls(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const pushMediaUrl = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
-      urls.push(value.trim());
-    }
-  };
-  const pushAttachment = (value: unknown) => {
-    if (!isRecord(value)) {
-      return;
-    }
-    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      pushMediaUrl(value[key]);
-    }
-  };
-  for (const key of [
-    "media",
-    "mediaUrl",
-    "media_url",
-    "path",
-    "filePath",
-    "fileUrl",
-    "imageUrl",
-    "image_url",
-  ]) {
-    const value = record[key];
-    pushMediaUrl(value);
-  }
-  for (const key of ["mediaUrls", "media_urls", "imageUrls", "image_urls"]) {
-    const value = record[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      pushMediaUrl(entry);
-    }
-  }
-  const attachments = record.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      pushAttachment(attachment);
-    }
-  }
-  return urls;
-}
-function isCronAddAction(args: Record<string, unknown>): boolean {
+export function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }

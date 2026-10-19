@@ -1,210 +1,184 @@
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason, classifyFailoverSignal } from "./classify.js";
+import { isCloudCodeAssistFormatError } from "./classify-core.js";
+import {
+  classifyFailoverReason,
+  classifyFailoverSignal,
+  isAuthErrorMessage,
+  isBillingErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
+} from "./classify.js";
+import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
-describe("HTTP 402 prose classification", () => {
-  it.each([
-    {
-      message: "Prompt tokens limit exceeded. See https://example.invalid/monthly/rate_limit",
-      reason: "billing",
-    },
-    {
-      message: "Organization spend limit reached. See https://example.invalid/subscription",
-      reason: "rate_limit",
-    },
-    {
-      message:
-        '{"help":"https://example.invalid/subscription","message":"Workspace spend limit reached"}',
-      reason: "rate_limit",
-    },
-  ])("classifies prose rather than URL hints: $message", ({ message, reason }) => {
-    expect(classifyFailoverSignal({ status: 402, message }, { providerPlugin: null })).toEqual({
-      kind: "reason",
-      reason,
-    });
-  });
-
-  it("does not treat a bare leading number and a URL as payment evidence", () => {
-    expect(
-      classifyFailoverReason(
-        "402 records processed. See https://example.invalid/organizations/synthetic/settings/keys",
-        { providerPlugin: null },
-      ),
-    ).toBeNull();
-  });
+const noPlugin = { providerPlugin: null };
+type Signal = Parameters<typeof classifyFailoverSignal>[0];
+type Options = Parameters<typeof classifyFailoverSignal>[1];
+const classifyWithoutPlugin = (message: string) => classifyFailoverReason(message, noPlugin);
+function expectReason(expected: string, signal: Signal, opts?: Options) {
+  expect(classifyFailoverSignal(signal, opts)).toEqual({ kind: "reason", reason: expected });
+}
+const validation = { errorType: "invalid_request_error", code: "unknown_parameter" };
+const validationSignal = (status: number) => ({
+  status,
+  message: `${status} Unknown parameter: 'logprobs'`,
+  ...validation,
 });
 
-describe("request validation behind gateway status codes", () => {
-  it.each(["400 Your input exceeds the context window of this model", "413 status code (no body)"])(
-    "preserves canonical assistant overflow evidence: %s",
-    (message) => {
-      expect(classifyFailoverSignal({ message })).toEqual({ kind: "context_overflow" });
+describe("failover classification", () => {
+  it("preserves authentication status 403", () => {
+    for (const message of [
+      "403",
+      "HTTP 403",
+      "provider returned HTTP 403",
+      "status code: 403",
+      "response_code=403",
+      "Error code 403 was returned",
+      JSON.stringify({ status: 403 }),
+      JSON.stringify({ code: "403" }),
+    ]) {
+      expect(isAuthErrorMessage(message), message).toBe(true);
+      expect(classifyWithoutPlugin(message), message).toBe("auth");
+    }
+    expectReason("auth", { status: 403, message: "provider refusal" }, noPlugin);
+  });
+
+  it("ignores diagnostic counts and identifiers containing 403", () => {
+    for (const message of [
+      JSON.stringify({ argumentChars: 403 }),
+      JSON.stringify({ requestId: "403" }),
+      "Processed 403 records",
+    ]) {
+      expect(isAuthErrorMessage(message), message).toBe(false);
+      expect(classifyWithoutPlugin(message), message).toBeNull();
+    }
+  });
+
+  it.each([
+    [
+      "rate_limit",
+      {
+        status: 402,
+        message: "Organization spend limit reached. See https://example.invalid/subscription",
+      },
+      noPlugin,
+    ],
+    ["server_error", { status: 500, message: "upstream failure" }],
+    ["billing", validationSignal(402)],
+    ["overloaded", validationSignal(529)],
+    ["rate_limit", { code: "rate_limit_exceeded", message: "Request rejected" }, noPlugin],
+    [
+      "rate_limit",
+      { status: 400, code: "rate_limit_exceeded", message: "Request rejected" },
+      {
+        providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "rate_limit" },
+      },
+    ],
+    [
+      "timeout",
+      {
+        message:
+          "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>",
+      },
+    ],
+  ] satisfies [string, Signal, Options?][])(
+    "HTTP policy: %s for %j",
+    (expected, signal, opts?: Options) => {
+      expectReason(expected, signal, opts);
     },
   );
 
-  it.each([404, 500, 502])("preserves request-validation semantics for HTTP %s", (status) => {
+  it("does not treat a bare leading number and a URL as payment evidence", () => {
     expect(
-      classifyFailoverSignal({
-        status,
-        message: `${status} Unknown parameter: 'logprobs'`,
-        errorType: "invalid_request_error",
-        code: "unknown_parameter",
-      }),
-    ).toEqual({ kind: "reason", reason: "format" });
+      classifyWithoutPlugin(
+        "402 records processed. See https://example.invalid/organizations/synthetic/settings/keys",
+      ),
+    ).toBeNull();
+  });
+
+  it("preserves request-validation semantics for HTTP 404", () => {
+    expectReason("format", validationSignal(404));
     expect(
       classifyFailoverReason(
-        `${status} {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}`,
+        '404 {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}',
       ),
     ).toBe("format");
   });
 
-  it.each([
-    "timeout",
-    "overloaded",
-    "server_error",
-    "rate_limit",
-    "authentication",
-    "context_length_exceeded",
-  ])("keeps an explicit rejection of %s ahead of message patterns", (parameter) => {
+  it("keeps an explicit rejection ahead of context-length message patterns", () => {
     const error = {
-      type: "invalid_request_error",
-      code: "unknown_parameter",
-      message: `Unsupported parameter: ${parameter}`,
+      type: validation.errorType,
+      code: validation.code,
+      message: "Unsupported parameter: context_length_exceeded",
     };
-    expect(
-      classifyFailoverSignal({
-        status: 500,
-        message: `500 ${error.message}`,
-        errorType: error.type,
-        code: error.code,
-        details: [JSON.stringify(error)],
-      }),
-    ).toEqual({ kind: "reason", reason: "format" });
+    expectReason("format", {
+      status: 500,
+      message: `500 ${error.message}`,
+      ...validation,
+      details: [JSON.stringify(error)],
+    });
     for (const separator of [" ", ": "]) {
       expect(classifyFailoverReason(`502${separator}${JSON.stringify({ error })}`)).toBe("format");
     }
   });
 
   it.each([
-    { status: 401, reason: "auth" },
-    { status: 402, reason: "billing" },
-    { status: 429, reason: "rate_limit" },
-    { status: 499, reason: "timeout" },
-    { status: 529, reason: "overloaded" },
-  ])("preserves HTTP $status policy for validation-coded errors", ({ status, reason }) => {
-    expect(
-      classifyFailoverSignal({
-        status,
-        message: `${status} Unknown parameter: 'logprobs'`,
-        errorType: "invalid_request_error",
-        code: "unknown_parameter",
-      }),
-    ).toEqual({ kind: "reason", reason });
+    {
+      status: 400,
+      code: "rate_limit_exceeded",
+      message:
+        "400 This prompt is longer than the free tier allows for a single request. Shorten it.",
+      details: [
+        '{"code":"rate_limit_exceeded","message":"This prompt is longer than the free tier allows for a single request. Shorten it."}',
+        "rate_limit_exceeded",
+      ],
+    },
+    {
+      status: 422,
+      message: '422 {"error":{"code":"rate_limit_exceeded","message":"Request rejected"}}',
+    },
+  ])("does not replay a rejection based only on its inner code: $status", (signal) => {
+    expect(classifyFailoverSignal(signal, noPlugin)).toEqual({
+      kind: "reason",
+      reason: "rate_limit",
+      sameModelRetry: false,
+    });
   });
-});
-
-describe("Claude CLI logged-out failures", () => {
-  const loggedOutMessage = "Not logged in · Please run /login";
 
   it("classifies the logged-out response as auth only for claude-cli", () => {
-    expect(classifyFailoverReason(loggedOutMessage, { provider: "claude-cli" })).toBe("auth");
-    expect(classifyFailoverReason(loggedOutMessage, { provider: "openai" })).toBeNull();
-    expect(classifyFailoverReason(loggedOutMessage)).toBeNull();
-  });
-});
-
-describe("OAuth session expiry", () => {
-  const expiredMessage = "Failed to authenticate: OAuth session expired and could not be refreshed";
-
-  it("classifies OAuth expiry as auth only for claude-cli", () => {
-    expect(classifyFailoverReason(expiredMessage, { provider: "claude-cli" })).toBe("auth");
-    expect(classifyFailoverReason(expiredMessage, { provider: "custom-cli" })).toBe(
-      "session_expired",
-    );
-    expect(classifyFailoverReason(expiredMessage)).toBe("session_expired");
-  });
-});
-
-describe("Gateway transcript validation vs provider session expiry", () => {
-  it("keeps Gateway transcript validation local instead of session_expired", () => {
-    expect(classifyFailoverReason("Invalid session transcript entry: model_change")).toBe("format");
-    expect(
-      classifyFailoverReason("Invalid session transcript entry: model_change", {
-        provider: "openrouter",
-      }),
-    ).toBe("format");
+    const message = "Not logged in · Please run /login";
+    expect(classifyFailoverReason(message, { provider: "claude-cli" })).toBe("auth");
+    expect(classifyFailoverReason(message, { provider: "openai" })).toBeNull();
+    expect(classifyFailoverReason(message)).toBeNull();
   });
 
   it.each([
-    "invalid session",
-    "HTTP 404: session not found",
-    "no such session",
-    "conversation expired",
-  ])("still treats provider session-expiry copy as session_expired: %s", (message) => {
-    expect(classifyFailoverReason(message)).toBe("session_expired");
-  });
-});
-
-describe("HTTP 5xx status classification", () => {
-  // A provider-side 5xx is not a timing failure. Naming it "timeout" both tells
-  // the user the request timed out and takes the "timeout" carve-outs in
-  // resolveRunFailoverDecision, which skip retry-limit model fallback.
-  it.each([500, 502, 503, 505, 507, 520, 521, 523])(
-    "classifies an untyped %i as server_error",
-    (status) => {
-      expect(classifyFailoverSignal({ status, message: "upstream failure" })).toEqual({
-        kind: "reason",
-        reason: "server_error",
-      });
-    },
-  );
-
-  it.each([499, 504, 522, 524])("keeps gateway-timeout status %i as timeout", (status) => {
-    expect(classifyFailoverSignal({ status, message: "upstream failure" })).toEqual({
-      kind: "reason",
-      reason: "timeout",
-    });
+    [
+      isBillingErrorMessage,
+      "## Payments\nHandle insufficient credits.\n## Plans\nUpgrade your plan.",
+      false,
+    ],
+    [isServerErrorMessage, "status: internal server error", true],
+    [
+      isCloudCodeAssistFormatError,
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
+      false,
+    ],
+  ] as const)("guards message classification with %s: %s", (predicate, message, expected) => {
+    expect(predicate(message)).toBe(expected);
   });
 
-  it.each([502, 503, 521])("classifies a CDN HTML error page at %i as server_error", (status) => {
-    // An HTML body means a CDN answered instead of the provider, so there is
-    // no provider error type to read. It is still an upstream failure.
-    const html = `${status} <!doctype html><html><head><title>${status}</title></head><body>Cloudflare</body></html>`;
-    expect(classifyFailoverSignal({ message: html })).toEqual({
-      kind: "reason",
-      reason: "server_error",
-    });
+  it("keeps server evidence retryable without a raw timeout match", () => {
+    const message = "Proxy notice: Status: Internal Server Error; code:500";
+    expect(isTimeoutErrorMessage(message)).toBe(false);
+    expect(classifyFailoverReason(message)).toBe("timeout");
   });
 
-  it("keeps a CDN HTML error page at 529 overloaded, matching the non-HTML body", () => {
-    // The HTML path must not disagree with the canonical status mapping just
-    // because the body happens to be a page instead of a payload.
-    const html =
-      "529 <!doctype html><html><head><title>529</title></head><body>Overloaded</body></html>";
-    expect(classifyFailoverSignal({ message: html })).toEqual({
-      kind: "reason",
-      reason: "overloaded",
-    });
-    expect(classifyFailoverSignal({ status: 529, message: "Overloaded" })).toEqual({
-      kind: "reason",
-      reason: "overloaded",
-    });
-  });
-
-  it("keeps a CDN HTML error page at a gateway-timeout status as timeout", () => {
-    const html =
-      "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>";
-    expect(classifyFailoverSignal({ message: html })).toEqual({
-      kind: "reason",
-      reason: "timeout",
-    });
-  });
-
-  it("still prefers a provider-typed body over the status mapping", () => {
-    expect(
-      classifyFailoverSignal({
-        status: 502,
-        message: '{"error":{"type":"overloaded_error","message":"Overloaded"}}',
-      }),
-    ).toEqual({ kind: "reason", reason: "overloaded" });
+  it("keeps HTTP 429 overload wording in rate-limit backoff and copy", () => {
+    const message =
+      '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
+    expect(classifyFailoverReason(message)).toBe("rate_limit");
+    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
   });
 });

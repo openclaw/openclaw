@@ -3,20 +3,21 @@ import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 import { installWorkboardBoardMock } from "./control-ui-workboard-mocks.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
+const card = {
+  id: "card",
+  title: "Latest title",
+  status: "todo",
+  priority: "normal",
+  labels: [],
+  position: 1000,
+  createdAt: 1,
+  updatedAt: 10,
+  metadata: { automation: { boardId: "default" } },
+};
+
 it.for(["move", "archive", "delete"] as const)(
   "rejects stale %s through the serialized Workboard mock without changing cards or emitting events",
   async (action, { gatewayPage }) => {
-    const card = {
-      id: "card",
-      title: "Latest title",
-      status: "todo",
-      priority: "normal",
-      labels: [],
-      position: 1000,
-      createdAt: 1,
-      updatedAt: 10,
-      metadata: { automation: { boardId: "default" } },
-    };
     const seed = {
       boards: [{ id: "default" }],
       cards: [card],
@@ -60,17 +61,7 @@ it.for(["move", "archive", "delete"] as const)(
 it("returns link cleanup revisions so the next guarded mock delete can succeed", async ({
   gatewayPage,
 }) => {
-  const parent = {
-    id: "parent",
-    title: "Parent",
-    status: "todo",
-    priority: "normal",
-    labels: [],
-    position: 1000,
-    createdAt: 1,
-    updatedAt: 10,
-    metadata: { automation: { boardId: "default" } },
-  };
+  const parent = { ...card, id: "parent", title: "Parent" };
   const child = {
     ...parent,
     id: "child",

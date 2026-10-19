@@ -5,14 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
-type PluginManifestCommandAliasKind = "runtime-slash";
-
 /** One command alias declared by a plugin manifest. */
 export type PluginManifestCommandAlias = {
   /** Command-like name users may put in plugin config by mistake. */
   name: string;
   /** Command family, used for targeted diagnostics. */
-  kind?: PluginManifestCommandAliasKind;
+  kind?: "runtime-slash";
   /** Optional root CLI command that handles related CLI operations. */
   cliCommand?: string;
 };
@@ -41,7 +39,7 @@ export type PluginManifestCommandAliasRegistry = {
   }[];
 };
 
-/** Normalizes manifest command alias records and reports duplicate/invalid entries. */
+/** Normalizes manifest command alias records, omitting invalid entries. */
 export function normalizeManifestCommandAliases(
   value: unknown,
 ): PluginManifestCommandAlias[] | undefined {
@@ -50,14 +48,8 @@ export function normalizeManifestCommandAliases(
   }
 
   const normalized: PluginManifestCommandAlias[] = [];
-  for (const entry of value) {
-    if (typeof entry === "string") {
-      const name = normalizeOptionalString(entry) ?? "";
-      if (name) {
-        normalized.push({ name });
-      }
-      continue;
-    }
+  for (const rawEntry of value) {
+    const entry = typeof rawEntry === "string" ? { name: rawEntry } : rawEntry;
     if (!isRecord(entry)) {
       continue;
     }

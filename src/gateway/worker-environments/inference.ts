@@ -14,7 +14,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import {
   createWorkerInferenceSessionControls,
   joinInferenceOperations,
@@ -30,6 +30,7 @@ import {
   validFrameBytes,
 } from "./inference-frames.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import { inferenceError } from "./inference-terminal-message.js";
 import type {
   ActiveInference,
   InferenceTurnIdentity,
@@ -43,11 +44,17 @@ import {
   serializeWorkerSessionTurnClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { formatWorkerInferenceError } from "./worker-error.js";
+import { getWorkerTurnInference } from "./placement-turn-claim-events.js";
+import { projectWorkerInferenceError } from "./worker-error.js";
 
-export type { WorkerInferenceExecutor, WorkerInferenceSink } from "./inference.types.js";
+export type { WorkerInferenceSink } from "./inference.types.js";
 
-const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
+export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
+  (await getWorkerTurnInference(params.identity)?.(params)) ??
+  inferenceError(
+    params.signal.aborted || !params.isCurrent() ? "cancelled" : "session-not-attached",
+  );
+
 // One active turn plus one provider that ignored abort. This prevents repeated
 // cancel/restart from creating unbounded provider work without wedging the session forever.
 const MAX_PROVIDER_OPERATIONS_PER_SESSION = 2;
@@ -70,7 +77,7 @@ function trySend(
 
 export function createWorkerInferenceManager(options: WorkerInferenceManagerOptions) {
   const store = options.store ?? createWorkerInferenceStore();
-  const requestMaxBytes = options.requestMaxBytes ?? DEFAULT_REQUEST_MAX_BYTES;
+  const requestMaxBytes = options.requestMaxBytes ?? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
   const streamMaxBytes = options.streamMaxBytes ?? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
   const active = new Map<string, ActiveInference>();
   const operations = new Map<Promise<unknown>, { sessionId: string; storeKey: string }>();
@@ -215,12 +222,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
         try {
           const begin = await entry.begun;
           assertKnownTurn(entry.storeKey);
-          if (!begin || begin.kind === "rejected") {
-            entry.settled = true;
-            forget(entry);
-            return;
-          }
-          if (begin.kind === "replay") {
+          if (!begin || begin.kind === "rejected" || begin.kind === "replay") {
             entry.settled = true;
             forget(entry);
             return;
@@ -308,7 +310,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     let outcome: WorkerInferenceTerminalOutcome;
     let failure: { error: unknown } | undefined;
     try {
-      const config = options.getConfig?.();
       outcome = await options.execute({
         identity: entry.identity,
         request: entry.request,
@@ -346,15 +347,16 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
           entry.seq = nextSeq;
         },
         isCurrent: () => durableFence(entry) === null,
-        ...(config ? { config } : {}),
       });
     } catch (caught) {
       const error = preserveInferenceAuthorityFailure(caught, entry.authorityFailure);
       failure = { error };
+      const projected = entry.abortReason ? undefined : projectWorkerInferenceError(error);
       outcome = terminalError(
         entry.abortReason ?? "provider-error",
         undefined,
-        entry.abortReason ? undefined : formatWorkerInferenceError(error),
+        projected?.message,
+        projected?.retryAfterMs,
       );
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         retainFailure(entry, error);
@@ -490,8 +492,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     ) {
       return { ok: false, reason: "provider-error" };
     }
-    const measured = boundedJsonUtf8Bytes(params.request, requestMaxBytes);
-    if (!measured.complete || measured.bytes > requestMaxBytes) {
+    if (!boundedJsonUtf8Bytes(params.request, requestMaxBytes).complete) {
       return { ok: false, reason: "invalid-context" };
     }
     const serialized = stableStringify(params.request);
@@ -509,7 +510,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     if (
       existing &&
       existing.request.turnId === params.request.turnId &&
-      existing.requestHash === hash &&
+      existing.storeInput.requestHash === hash &&
       !existing.settled
     ) {
       existing.identity = params.identity;
@@ -544,7 +545,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       identity: params.identity,
       request: structuredClone(params.request),
       sessionTarget: params.sessionTarget,
-      requestHash: hash,
       storeInput: {
         environmentId: params.identity.environmentId,
         sessionId: params.request.sessionId,
@@ -636,8 +636,9 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     request: WorkerInferenceCancelParams;
     revalidate?: RevalidateInference;
   }): Promise<WorkerInferenceCancelApplicationResult> => {
-    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
-      await joinInferenceOperations([], unknownSettlements.get(inferenceTurnKey(params.request)));
+    const unknownFailures = unknownSettlements.get(inferenceTurnKey(params.request));
+    if (unknownFailures) {
+      await joinInferenceOperations([], unknownFailures);
     }
     const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
     const failed = active.get(claimKey);

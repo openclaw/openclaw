@@ -1,7 +1,3 @@
-/**
- * Synchronous Amazon Bedrock Mantle provider registration. It wires discovery,
- * runtime bearer-token preparation, stream wrappers, and failover classifiers.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
@@ -46,7 +42,6 @@ function normalizeMantleResolvedModel(params: {
   return { ...params.model, cost };
 }
 
-/** Register the Amazon Bedrock Mantle provider with OpenClaw. */
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
   const startupPluginConfig = (api.pluginConfig ?? {}) as BedrockMantlePluginConfig;
@@ -84,13 +79,8 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) =>
       resolveMantleBearerToken(env) ? "env:AWS_BEARER_TOKEN_BEDROCK" : undefined,
-    prepareRuntimeAuth: async ({ apiKey, env }) =>
-      await resolveMantleRuntimeBearerToken({
-        apiKey,
-        env,
-      }),
-    normalizeResolvedModel: ({ modelId, model }) =>
-      normalizeMantleResolvedModel({ modelId, model }),
+    prepareRuntimeAuth: resolveMantleRuntimeBearerToken,
+    normalizeResolvedModel: normalizeMantleResolvedModel,
     supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,

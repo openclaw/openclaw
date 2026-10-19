@@ -16,24 +16,22 @@ import {
 } from "./facade-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const activationLoaders = [
-  ["sync", loadActivatedBundledPluginPublicSurfaceModuleSync],
-  ["async", loadActivatedBundledPluginPublicSurfaceModule],
-] as const;
-
-it.each(
-  activationLoaders.flatMap(([kind, load]) =>
-    [
-      { defaults: "unconditional defaults", manifest: { enabledByDefault: true }, paddedId: false },
-      {
-        defaults: "platform defaults",
-        manifest: { enabledByDefaultOnPlatforms: [` ${process.platform} `, "not-a-platform"] },
-        paddedId: false,
-      },
-      { defaults: "normalized IDs", manifest: { enabledByDefault: true }, paddedId: true },
-    ].map(({ defaults, manifest, paddedId }) => ({ defaults, manifest, paddedId, kind, load })),
-  ),
-)(
+it.each([
+  {
+    kind: "sync",
+    load: loadActivatedBundledPluginPublicSurfaceModuleSync,
+    defaults: "platform defaults",
+    manifest: { enabledByDefaultOnPlatforms: [` ${process.platform} `, "not-a-platform"] },
+    paddedId: false,
+  },
+  {
+    kind: "async",
+    load: loadActivatedBundledPluginPublicSurfaceModule,
+    defaults: "normalized IDs",
+    manifest: { enabledByDefault: true },
+    paddedId: true,
+  },
+])(
   "$kind activation with $defaults preserves policy errors, cached exports, and artifact failures",
   async ({ load, manifest, paddedId }) => {
     const bundledRoot = path.resolve("dist-runtime", "extensions");

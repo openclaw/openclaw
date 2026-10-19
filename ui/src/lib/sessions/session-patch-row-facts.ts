@@ -40,10 +40,10 @@ export function projectSessionPatchRowFields(
   if (patch.fastMode !== undefined) {
     fields.push({ fastMode: entry.fastMode });
   }
-  if (typeof patch.archived === "boolean") {
+  if (patch.archived !== undefined) {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
-  for (const key of ["category", "boardPresentation", "boardFace"] as const) {
+  for (const key of ["label", "category", "boardPresentation", "boardFace"] as const) {
     if (patch[key] !== undefined) {
       fields.push({ [key]: entry[key] });
     }
@@ -54,6 +54,7 @@ export function projectSessionPatchRowFields(
       unread: deriveSessionUnread(entry),
       lastReadAt: entry.lastReadAt,
       markedUnreadAt: entry.markedUnreadAt,
+      agentStatus: entry.agentStatus,
     };
     fields.push(
       patch.pinned === undefined ? read : patch.unread === false ? { ...pin, ...read } : pin,

@@ -1,10 +1,8 @@
-// Typing indicator lifecycle controller for reply dispatchers.
 import {
   parseFiniteNumber,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
-import { createTypingStartGuard } from "./typing-start-guard.js";
 
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
@@ -43,20 +41,30 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const startGuard = createTypingStartGuard({
-    isSealed: () => closed,
-    onStartError: params.onStartError,
-    maxConsecutiveFailures,
-    onTrip: () => {
-      keepaliveLoop.stop();
-    },
-  });
+  let consecutiveFailures = 0;
+  let tripped = false;
+  const startTyping = async (): Promise<void> => {
+    if (closed || tripped) {
+      return;
+    }
+    try {
+      await params.start();
+      consecutiveFailures = 0;
+    } catch (error) {
+      consecutiveFailures += 1;
+      params.onStartError(error);
+      if (consecutiveFailures >= maxConsecutiveFailures) {
+        tripped = true;
+        keepaliveLoop.stop();
+      }
+    }
+  };
   // Explicit refreshes and keepalive ticks share this gate so one stalled
   // provider request cannot fan out into unbounded concurrent starts.
-  let startInFlight: ReturnType<typeof startGuard.run> | undefined;
+  let startInFlight: Promise<void> | undefined;
 
   const fireStart = async (): Promise<void> => {
-    const pending = (startInFlight ??= startGuard.run(() => params.start()));
+    const pending = (startInFlight ??= startTyping());
     try {
       await pending;
     } finally {
@@ -96,11 +104,12 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (closed) {
       return;
     }
-    startGuard.reset();
+    consecutiveFailures = 0;
+    tripped = false;
     clearTtlTimer();
     const startPromise = fireStart();
     void startPromise.then(() => {
-      if (closed || startGuard.isTripped()) {
+      if (closed || tripped) {
         return;
       }
       // Core can refresh an active reply independently of this channel loop.

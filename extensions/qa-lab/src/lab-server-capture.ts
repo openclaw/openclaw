@@ -6,10 +6,7 @@ import {
   type CaptureQueryPreset,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import {
-  normalizeOptionalString,
-  readStringField,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
@@ -28,9 +25,7 @@ export function createQaCaptureLifecycle() {
       captureStoreLease = lease;
       void lease.catch(() => {
         // A failed acquisition owns no store; a later request can acquire again.
-        if (captureStoreLease === lease) {
-          captureStoreLease = undefined;
-        }
+        captureStoreLease = undefined;
       });
     }
     const pending = captureStoreLease.then(({ store }) => operation(store));
@@ -93,10 +88,10 @@ export function mapCaptureEventForQa(row: Record<string, unknown>) {
   return {
     ...row,
     payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: normalizeOptionalString(readStringField(meta, "provider")),
-    api: normalizeOptionalString(readStringField(meta, "api")),
-    model: normalizeOptionalString(readStringField(meta, "model")),
-    captureOrigin: normalizeOptionalString(readStringField(meta, "captureOrigin")),
+    provider: normalizeOptionalString(meta?.provider),
+    api: normalizeOptionalString(meta?.api),
+    model: normalizeOptionalString(meta?.model),
+    captureOrigin: normalizeOptionalString(meta?.captureOrigin),
   };
 }
 
@@ -114,10 +109,8 @@ async function probeTcpReachability(
   rawUrl: string,
   timeoutMs = 700,
 ): Promise<QaStartupProbeStatus> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return {
       label: rawUrl,
       url: rawUrl,

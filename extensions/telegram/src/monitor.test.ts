@@ -4,6 +4,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorTelegramProvider } from "./monitor.js";
@@ -18,16 +19,17 @@ const mocks = vi.hoisted(() => ({
   sessions: [] as SessionOptions[],
   runSession: vi.fn<(options: SessionOptions) => Promise<void>>(),
   config: vi.fn<() => OpenClawConfig>(() => ({ channels: { telegram: {} } })),
-  readOffset: vi.fn<typeof OffsetStore.readTelegramUpdateOffset>(),
+  prepareAccount: vi.fn<typeof OffsetStore.prepareTelegramAccount>(),
   writeOffset: vi.fn(async (_params: unknown) => {}),
-  deleteOffset: vi.fn<typeof OffsetStore.deleteTelegramUpdateOffset>(),
   startWebhook: vi.fn(async (_params: unknown) => ({ stop: vi.fn(async () => {}) })),
   closeTransport: vi.fn(async () => {}),
   runtime: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: mocks.config,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: mocks.config,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.config(),
 }));
 vi.mock("./runtime.js", () => ({ getTelegramRuntime: mocks.runtime }));
 vi.mock("./polling-session.js", () => ({
@@ -41,9 +43,8 @@ vi.mock("./polling-session.js", () => ({
   },
 }));
 vi.mock("./update-offset-store.js", () => ({
-  readTelegramUpdateOffset: mocks.readOffset,
+  prepareTelegramAccount: mocks.prepareAccount,
   writeTelegramUpdateOffset: mocks.writeOffset,
-  deleteTelegramUpdateOffset: mocks.deleteOffset,
 }));
 vi.mock("./webhook.js", () => ({ startTelegramWebhook: mocks.startWebhook }));
 vi.mock("./fetch.js", () => ({
@@ -54,30 +55,62 @@ vi.mock("./fetch.js", () => ({
   }),
 }));
 
-const controllers: AbortController[] = [];
-const monitors: Promise<void>[] = [];
-function startMonitor(options: MonitorTelegramOpts = {}) {
+const monitors: ReturnType<typeof startMonitor>[] = [];
+function startMonitor(options: MonitorTelegramOpts = {}): {
+  abort: AbortController;
+  task: Promise<void>;
+} {
   const abort = new AbortController();
-  controllers.push(abort);
   const task = monitorTelegramProvider({
     token: "test-token",
     ...options,
     abortSignal: abort.signal,
   });
-  monitors.push(task);
-  return { abort, task };
+  const monitor = { abort, task };
+  monitors.push(monitor);
+  return monitor;
 }
-function keepSessionRunning(options: SessionOptions) {
-  const signal = options.abortSignal;
-  if (!signal) {
-    throw new Error("Expected the monitor's account abort signal");
-  }
-  if (signal.aborted) {
-    return Promise.resolve();
-  }
-  return new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+async function createOffsetState(stateDir: string) {
+  const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
+  const queue = createChannelIngressQueueForTests({
+    channelId: "telegram",
+    accountId: "default",
+    stateDir,
   });
+  const offsets = new Map<string, unknown>();
+  const keyedStore = {
+    lookup: vi.fn(async (key: string) => offsets.get(key)),
+    register: vi.fn(async (key: string, value: unknown) => {
+      offsets.set(key, value);
+    }),
+  };
+  mocks.runtime.mockReturnValue({
+    state: {
+      openChannelIngressQueue: () => queue,
+      openKeyedStore: () => keyedStore,
+    },
+  });
+  mocks.prepareAccount.mockImplementation(store.prepareTelegramAccount);
+  return { store, queue, offsets, keyedStore };
+}
+async function withOffsetStore(
+  prefix: string,
+  run: (state: Awaited<ReturnType<typeof createOffsetState>>) => Promise<void>,
+) {
+  await withStateDirEnv(prefix, async ({ stateDir }) => {
+    await run(await createOffsetState(stateDir));
+  });
+}
+async function startLiveMonitor(token = "test-token") {
+  const started = createDeferred<void>();
+  mocks.runSession.mockImplementationOnce((options) => {
+    expect(options.abortSignal).toBeDefined();
+    started.resolve();
+    return waitForAbortSignal(options.abortSignal);
+  });
+  const monitor = startMonitor({ token });
+  await started.promise;
+  return monitor;
 }
 
 describe("monitorTelegramProvider", () => {
@@ -85,49 +118,23 @@ describe("monitorTelegramProvider", () => {
     vi.clearAllMocks();
     mocks.sessions.length = 0;
     mocks.runSession.mockReset().mockResolvedValue(undefined);
-    mocks.readOffset.mockReset().mockResolvedValue(41);
+    mocks.prepareAccount.mockReset().mockResolvedValue(41);
     mocks.config.mockReturnValue({ channels: { telegram: {} } });
-    mocks.deleteOffset.mockReset().mockResolvedValue(undefined);
     mocks.runtime.mockReset();
     resetTelegramPollingLeasesForTest();
   });
   afterEach(async () => {
-    for (const controller of controllers.splice(0)) {
-      controller.abort();
+    for (const { abort } of monitors) {
+      abort.abort();
     }
-    await Promise.allSettled(monitors.splice(0));
+    await Promise.allSettled(monitors.splice(0).map(({ task }) => task));
     resetTelegramPollingLeasesForTest();
     closeOpenClawStateDatabaseForTest();
   });
 
   it("retries an interrupted identity reset before polling and preserves same-bot pending work", async () => {
-    const offsets = new Map<string, unknown>();
-    await withStateDirEnv("telegram-rotation-", async ({ stateDir }) => {
-      const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
-      const queue = createChannelIngressQueueForTests({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      mocks.runtime.mockReturnValue({
-        state: {
-          openChannelIngressQueue: () => queue,
-          openKeyedStore: () => ({
-            lookup: async (key: string) => offsets.get(key),
-            register: async (key: string, value: unknown) => {
-              offsets.set(key, value);
-            },
-            delete: async (key: string) => offsets.delete(key),
-          }),
-        },
-      });
-      mocks.readOffset.mockImplementation(store.readTelegramUpdateOffset);
-      mocks.deleteOffset
-        .mockImplementationOnce(async () => {
-          // Simulate interruption between the two independent store commits.
-          throw new Error("interrupted reset");
-        })
-        .mockImplementation(store.deleteTelegramUpdateOffset);
+    await withOffsetStore("telegram-rotation-", async (state) => {
+      const { store, queue } = state;
       await queue.enqueue("1", { text: "bot A" });
       await queue.complete("1");
       await store.writeTelegramUpdateOffset({
@@ -137,10 +144,12 @@ describe("monitorTelegramProvider", () => {
       });
       const purge = queue.purge?.bind(queue);
       queue.purge = undefined;
+      // Simulate interruption between the purge and identity replacement commits.
+      state.keyedStore.register.mockRejectedValueOnce(new Error("interrupted reset"));
       await expect(startMonitor({ token: "222222:token-b" }).task).rejects.toThrow(
         /account "default".*restart.*host/,
       );
-      expect(mocks.deleteOffset).not.toHaveBeenCalled();
+      expect(await store.readTelegramUpdateOffset({ botToken: "111111:token-a" })).toBe(1);
       expect(await queue.enqueue("1", { text: "unsupported reset" })).toMatchObject({
         kind: "completed",
       });
@@ -168,20 +177,21 @@ describe("monitorTelegramProvider", () => {
   it.each(["lookup", "purge-admission", "purge"])(
     "preserves replacement rows and the offset when aborted during %s",
     async (phase) => {
-      await withStateDirEnv("telegram-aborted-reset-", async ({ stateDir }) => {
-        const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
+      await withOffsetStore("telegram-aborted-reset-", async (state) => {
+        const { store, queue } = state;
         const paused = createDeferred<void>();
         const resume = createDeferred<void>();
-        let storedOffset: unknown = {
+        const pauseAt = async (checkpoint: string) => {
+          if (phase === checkpoint) {
+            paused.resolve();
+            await resume.promise;
+          }
+        };
+        state.offsets.set("default", {
           version: 3,
           botId: "111111",
           tokenFingerprint: "old",
           lastUpdateId: 1,
-        };
-        const queue = createChannelIngressQueueForTests({
-          channelId: "telegram",
-          accountId: "default",
-          stateDir,
         });
         if (phase !== "lookup") {
           const purge = queue.purge?.bind(queue);
@@ -189,38 +199,18 @@ describe("monitorTelegramProvider", () => {
             throw new Error("Expected core purge capability");
           }
           queue.purge = async (options) => {
-            if (phase === "purge-admission") {
-              paused.resolve();
-              await resume.promise;
-            }
+            await pauseAt("purge-admission");
             const count = await purge(options);
-            if (phase === "purge") {
-              paused.resolve();
-              await resume.promise;
-            }
+            await pauseAt("purge");
             return count;
           };
         }
-        mocks.runtime.mockReturnValue({
-          state: {
-            openChannelIngressQueue: () => queue,
-            openKeyedStore: () => ({
-              lookup: async () => {
-                if (phase === "lookup") {
-                  paused.resolve();
-                  await resume.promise;
-                }
-                return storedOffset;
-              },
-              delete: async () => {
-                storedOffset = undefined;
-                return true;
-              },
-            }),
-          },
-        });
-        mocks.readOffset.mockImplementation(store.readTelegramUpdateOffset);
-        mocks.deleteOffset.mockImplementation(store.deleteTelegramUpdateOffset);
+        if (phase === "lookup") {
+          state.keyedStore.lookup.mockImplementationOnce(async (key) => {
+            await pauseAt("lookup");
+            return state.offsets.get(key);
+          });
+        }
         const monitor = startMonitor({ token: "222222:token-b" });
         try {
           await paused.promise;
@@ -246,32 +236,13 @@ describe("monitorTelegramProvider", () => {
   );
 
   it.each([
-    { name: "same-bot token rotation", version: 3, botId: "111111", tokenFingerprint: "old" },
-    { name: "matching legacy identity", version: 2, botId: "111111", tokenFingerprint: null },
-    { name: "unknown legacy identity", version: 1, botId: null, tokenFingerprint: null },
-  ])("keeps queue rows for $name", async (identity) => {
-    await withStateDirEnv("telegram-same-bot-", async ({ stateDir }) => {
-      const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
-      let storedOffset: unknown = { ...identity, lastUpdateId: 2 };
-      const queue = createChannelIngressQueueForTests({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      mocks.runtime.mockReturnValue({
-        state: {
-          openChannelIngressQueue: () => queue,
-          openKeyedStore: () => ({
-            lookup: async () => storedOffset,
-            delete: async () => {
-              storedOffset = undefined;
-              return true;
-            },
-          }),
-        },
-      });
-      mocks.readOffset.mockImplementation(store.readTelegramUpdateOffset);
-      mocks.deleteOffset.mockImplementation(store.deleteTelegramUpdateOffset);
+    ["same-bot token rotation", "111111", "old"],
+    ["matching identity without token fingerprint", "111111", null],
+    ["unknown identity", null, null],
+  ])("keeps queue rows for %s", async (_name, botId, tokenFingerprint) => {
+    await withOffsetStore("telegram-same-bot-", async (state) => {
+      const { queue } = state;
+      state.offsets.set("default", { version: 3, botId, tokenFingerprint, lastUpdateId: 2 });
       await queue.enqueue("1", { text: "pending" });
       await queue.enqueue("2", { text: "delivered" });
       await queue.complete("2");
@@ -280,18 +251,12 @@ describe("monitorTelegramProvider", () => {
 
       expect(await queue.listPending()).toMatchObject([{ id: "1", payload: { text: "pending" } }]);
       expect(await queue.enqueue("2", { text: "duplicate" })).toMatchObject({ kind: "completed" });
-      expect(storedOffset).toBeUndefined();
+      expect(state.offsets.get("default")).toMatchObject({ botId: "111111", lastUpdateId: null });
       expect(mocks.sessions[0]?.getCommittedUpdateId()).toBeNull();
     });
   });
   it("refuses a second live monitor for the same token", async () => {
-    const started = createDeferred<void>();
-    mocks.runSession.mockImplementation((options) => {
-      started.resolve();
-      return keepSessionRunning(options);
-    });
-    const first = startMonitor();
-    await started.promise;
+    const first = await startLiveMonitor();
     await expect(startMonitor().task).rejects.toThrow("refusing duplicate poller");
     expect(mocks.sessions).toHaveLength(1);
     first.abort.abort();
@@ -299,16 +264,9 @@ describe("monitorTelegramProvider", () => {
   });
 
   it("allows separate tokens and releases the first token after shutdown", async () => {
-    const started = createDeferred<void>();
-    mocks.runSession.mockImplementation((options) => {
-      if (mocks.sessions.length === 2) {
-        started.resolve();
-      }
-      return keepSessionRunning(options);
-    });
-    const first = startMonitor({ token: "test-token-a" });
-    const second = startMonitor({ token: "test-token-b" });
-    await started.promise;
+    // Vitest cannot resolve concurrent manual-mocked imports; keep the first monitor live.
+    const first = await startLiveMonitor("test-token-a");
+    const second = await startLiveMonitor("test-token-b");
     first.abort.abort();
     await first.task;
     mocks.runSession.mockResolvedValueOnce(undefined);

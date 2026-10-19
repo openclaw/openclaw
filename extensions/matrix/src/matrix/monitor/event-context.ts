@@ -42,8 +42,13 @@ export function createMatrixEventContextResolver(params: {
         );
         return null;
       });
-    // Fetch failures stay uncached so later references retry the homeserver.
-    if (!event) {
+    // Thread senders also prove mention-policy ownership; mismatched roots cannot supply it.
+    // Failed lookups stay uncached so later references retry the homeserver.
+    if (
+      !event ||
+      (isThread &&
+        (event.event_id !== input.eventId || (event.room_id && event.room_id !== input.roomId)))
+    ) {
       return isThread ? { threadStarterBody: `Matrix thread root ${input.eventId}` } : {};
     }
 

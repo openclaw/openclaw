@@ -1,6 +1,11 @@
 /**
  * Private runtime facade for memory host storage, indexing, and search primitives.
  */
+export { encodeSqliteStringSet, sqliteStringSetEntries } from "../infra/kysely-sync.js";
+export {
+  loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
+} from "../infra/database-engine/sqlite-vec.js";
 export {
   ensureMemoryEntryOriginsSchema,
   readMemoryEntryOriginsInDatabase,
@@ -10,34 +15,19 @@ export {
 
 export {
   buildFileEntry,
-  buildMemoryReadResult,
-  buildMemoryReadResultFromSlice,
   buildMultimodalChunkForIndexing,
-  chunkMarkdown,
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
-  cosineSimilarity,
   encodeMemoryEmbedding,
   decodeMemoryEmbedding,
   createMemorySearchDeadlineControl,
-  extractProjectKeysFromCuratedEntry,
-  DEFAULT_MEMORY_READ_LINES,
-  DEFAULT_MEMORY_READ_MAX_CHARS,
-  dropMemoryPathFtsTriggers,
-  ensureDir,
   ensureMemoryChunkProvenance,
   ensureMemoryIndexSchema,
-  ensureMemoryRecallMetadataSchema,
-  ensureMemoryPathFtsTriggers,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   isAutomaticMemoryEntryEligible,
-  isMemoryOriginEligibleForAutomaticInjection,
   isFileMissingError,
-  isTransientMemoryReadError,
   listMemoryFiles,
-  loadSqliteVecExtension,
-  loadSqliteVecExtensionFromPath,
   matchesExtraMemoryPathEntry,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,
@@ -45,55 +35,46 @@ export {
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
-  MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-  normalizeProjectAnnotationKey,
   normalizeExtraMemoryPathEntries,
-  normalizeExtraMemoryPaths,
-  parseEmbedding,
   readMemoryFile,
+  readMemorySearchManagerStatus,
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
   retryTransientMemoryRead,
-  remapChunkLines,
   requireNodeSqlite,
   formatMemoryIndexRebuildGuidance,
-  resolveMemoryBackendConfig,
   resolveMemoryIndexIdentityDiagnostic,
-  resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,
   resolveMemorySearchStaleness,
   runWithConcurrency,
-  splitCuratedMarkdownEntries,
-  statRegularFile,
+  stopMemorySqliteWalMaintenance,
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { chunkMarkdown } from "../../packages/memory-host-sdk/src/engine-storage.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { ensureDir } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
   MemoryWorkspaceFiles,
   MemoryWorkspaceWatchRequest,
-  CuratedMarkdownEntry,
-  CuratedProjectAnnotations,
   MemoryEntryProvenance,
   MemoryExtraPath,
-  MemoryOriginClass,
   MemorySearchResult,
-  MemorySessionKind,
   MemorySource,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
-export {
-  openOpenClawAgentDatabaseReadOnly,
-  type OpenClawAgentDatabaseReadOnlyOpenResult,
-  type OpenClawAgentReadOnlyDatabase,
-  type OpenClawAgentReadOnlyDatabaseHandle,
-} from "../state/openclaw-agent-db-readonly.js";
+export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+export { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { isPostgresSqlConnection } from "../infra/sql-connection.js";
+export { DatabaseSearchCapabilityUnavailableError } from "../infra/database-engine/capability-unavailable.js";
+export { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** Health probe result for embedding provider availability checks. */
 export type MemoryEmbeddingProbeResult = {
@@ -106,21 +87,21 @@ export type MemoryEmbeddingProbeResult = {
 };
 
 export type {
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
+  MemoryCliSearchOutcome,
   MemoryChunk,
   MemoryFileEntry,
-  LegacyMemoryReadResult,
   MemoryIndexIdentityDiagnostic,
   MemoryIndexIdentityState,
   MemoryProviderStatus,
   MemoryReadResult,
   MemorySearchDeadlineControl,
-  MemorySearchDeadlineControlAction,
   MemorySearchDeadlineControlOptions,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySyncProgressUpdate,
   MemorySessionSyncTarget,
   MemorySyncParams,
-  ResolvedMemoryBackendConfig,
   MemoryVectorIndexState,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";

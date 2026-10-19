@@ -11,9 +11,6 @@ import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_SYNC_CACHE_NAMESPACE = "sync-cache";
-// Mirrors the matrix plugin's core claimable-dedupe state namespace:
-// `matrix.inbound-dedupe.<hash>` (extensions/matrix monitor/inbound-dedupe.ts).
-const MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE = "matrix.inbound-dedupe.%";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 const MATRIX_SYNC_CACHE_MAX_ENTRIES = 20_000;
 const MATRIX_SYNC_CACHE_MAX_CHUNKS = Math.floor((MATRIX_SYNC_CACHE_MAX_ENTRIES - 1) / 2);
@@ -91,16 +88,18 @@ function parsePluginStateJson(raw: unknown): unknown {
   }
 }
 
-function readMatrixSyncCacheCursorFromRows(
-  rows: Array<{ entryKey?: unknown; valueJson?: unknown }>,
-): MatrixSyncStoreCursor[] {
+function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson?: unknown }>) {
   const rowsByKey = new Map<string, unknown>();
   for (const row of rows) {
     if (typeof row.entryKey === "string") {
       rowsByKey.set(row.entryKey, parsePluginStateJson(row.valueJson));
     }
   }
-  const cursors: MatrixSyncStoreCursor[] = [];
+  const entries: Array<{
+    cursor: string;
+    stateKey: string;
+    sync: unknown;
+  }> = [];
   for (const [entryKey, rawMeta] of rowsByKey) {
     if (!entryKey.endsWith(":meta") || !isRecord(rawMeta) || rawMeta.kind !== "meta") {
       continue;
@@ -126,17 +125,16 @@ function readMatrixSyncCacheCursorFromRows(
       continue;
     }
     try {
-      const cursor = readPersistedMatrixSyncCursor({
-        savedSync: JSON.parse(chunks.join("")) as unknown,
-      });
+      const sync: unknown = JSON.parse(chunks.join(""));
+      const cursor = readPersistedMatrixSyncCursor({ savedSync: sync });
       if (cursor) {
-        cursors.push({ cursor, pathname: "", source: "sqlite", stateKey });
+        entries.push({ cursor, stateKey, sync });
       }
     } catch {
       continue;
     }
   }
-  return cursors;
+  return entries;
 }
 
 async function readMatrixSyncCacheCursorsFromSqlite(
@@ -171,8 +169,8 @@ async function readMatrixSyncCacheCursorsFromSqlite(
           entryKey?: unknown;
           valueJson?: unknown;
         }>;
-        for (const cursor of readMatrixSyncCacheCursorFromRows(rows)) {
-          cursors.push({ ...cursor, pathname: databasePath });
+        for (const { cursor, stateKey } of readMatrixSyncCacheFromRows(rows)) {
+          cursors.push({ cursor, pathname: databasePath, source: "sqlite", stateKey });
         }
       } finally {
         db.close();
@@ -204,10 +202,6 @@ function chunkMatrixSyncCacheJson(value: string): string[] {
   return chunks;
 }
 
-function digestText(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 async function rewriteMatrixSyncCacheRows(params: {
   cursor: string;
   pathname: string;
@@ -233,30 +227,14 @@ async function rewriteMatrixSyncCacheRows(params: {
     if (!isRecord(meta)) {
       throw new Error("Matrix sync cache metadata row was missing");
     }
-    const cursorEntry = readMatrixSyncCacheCursorFromRows(rows)[0];
+    const cursorEntry = readMatrixSyncCacheFromRows(rows).find(
+      (entry) => entry.stateKey === params.stateKey,
+    );
     if (!cursorEntry) {
       throw new Error("Matrix sync cache did not contain a persisted sync cursor");
     }
-    const generation = typeof meta.generation === "string" ? meta.generation : "";
-    const chunkCount =
-      typeof meta.chunkCount === "number" &&
-      Number.isSafeInteger(meta.chunkCount) &&
-      meta.chunkCount <= MATRIX_SYNC_CACHE_MAX_CHUNKS
-        ? meta.chunkCount
-        : 0;
-    const chunks: string[] = [];
-    for (let index = 0; index < chunkCount; index += 1) {
-      const chunk = parsePluginStateJson(
-        rows.find((row) => row.entryKey === `${params.stateKey}:sync:${generation}:${index}`)
-          ?.valueJson,
-      );
-      if (!isRecord(chunk) || typeof chunk.data !== "string") {
-        throw new Error("Matrix sync cache chunk row was missing");
-      }
-      chunks.push(chunk.data);
-    }
     const syncJson = JSON.stringify(
-      writePersistedMatrixSyncCursor(JSON.parse(chunks.join("")), params.cursor),
+      writePersistedMatrixSyncCursor(cursorEntry.sync, params.cursor),
     );
     const nextGeneration = randomUUID().replaceAll("-", "");
     const nextChunks = chunkMatrixSyncCacheJson(syncJson);
@@ -284,7 +262,7 @@ async function rewriteMatrixSyncCacheRows(params: {
         ...meta,
         generation: nextGeneration,
         chunkCount: nextChunks.length,
-        syncDigest: digestText(syncJson),
+        syncDigest: createHash("sha256").update(syncJson, "utf8").digest("hex"),
       }),
       now,
     );
@@ -452,15 +430,11 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
   );
 }
 
-async function hasPersistedMatrixPluginStateDedupeEntry(params: {
+async function hasPersistedMatrixIngressCompletion(params: {
+  accountId: string;
   eventId: string;
-  roomId: string;
   stateDir: string;
 }): Promise<string | null> {
-  // Mirrors extensions/matrix monitor/inbound-dedupe.ts: the persisted entry
-  // value records the NUL-joined (account, room, event) dedupe key; suffix
-  // matching keeps the probe independent of the runtime account id.
-  const expectedKeySuffix = `\0${params.roomId.trim()}\0${params.eventId.trim()}`;
   const databasePaths = await findFilesByName({
     filename: "openclaw.sqlite",
     rootDir: params.stateDir,
@@ -470,26 +444,15 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        const rows = db
+        const completed = db
           .prepare(
-            `SELECT value_json AS valueJson
-               FROM plugin_state_entries
-              WHERE plugin_id = ?
-                AND namespace LIKE ?
-                AND (expires_at IS NULL OR expires_at > ?)`,
+            `SELECT 1 FROM channel_ingress_events
+              WHERE channel_id = ? AND account_id = ? AND event_id = ?
+                AND status = 'completed'
+              LIMIT 1`,
           )
-          .all(MATRIX_PLUGIN_ID, MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE, Date.now()) as Array<{
-          valueJson?: unknown;
-        }>;
-        const matched = rows.some((row) => {
-          const entry = parsePluginStateJson(row.valueJson);
-          return (
-            isRecord(entry) &&
-            typeof entry.key === "string" &&
-            entry.key.endsWith(expectedKeySuffix)
-          );
-        });
-        if (matched) {
+          .get(MATRIX_PLUGIN_ID, params.accountId, params.eventId);
+        if (completed) {
           return databasePath;
         }
       } finally {
@@ -502,17 +465,18 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
   return null;
 }
 
-export async function waitForMatrixInboundDedupeEntry(params: {
+export async function waitForMatrixIngressCompletion(params: {
+  accountId?: string;
   eventId: string;
-  roomId: string;
   stateDir: string;
   timeoutMs: number;
 }) {
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
-    const sqlitePath = await hasPersistedMatrixPluginStateDedupeEntry({
+    const sqlitePath = await hasPersistedMatrixIngressCompletion({
+      accountId,
       eventId: params.eventId,
-      roomId: params.roomId,
       stateDir: params.stateDir,
     });
     if (sqlitePath) {
@@ -521,6 +485,6 @@ export async function waitForMatrixInboundDedupeEntry(params: {
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }
   throw new Error(
-    `timed out waiting for Matrix inbound dedupe commit for ${params.roomId}|${params.eventId}`,
+    `timed out waiting for Matrix ingress completion for ${accountId}|${params.eventId}`,
   );
 }

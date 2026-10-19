@@ -4,6 +4,7 @@ import {
   type GatewayInstallationReplacement,
 } from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayShutdownTrigger } from "../../process/gateway-work-admission.js";
@@ -12,12 +13,20 @@ import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 
 export type GatewayRunSignalAction = "stop" | "restart" | "external-restart";
 
+export type GatewayRunSignalContext = {
+  acceptedAtMs: number;
+  suspendHandoff?: ReturnType<typeof consumeGatewaySuspendHandoff>;
+  deferRestartDrain?: boolean;
+};
+
 export type GatewayRunSignalRequest = {
   acceptedAtMs: number;
   action: GatewayRunSignalAction;
   signal: GatewayShutdownTrigger;
   restartReason?: string;
   restartIntent?: GatewayRestartIntent;
+  /** The live suspend owner already drained and authorized interruption. */
+  interruptAfterDrain?: true;
   /** Cancellation removes the helper registry before this shutdown settles. */
   foregroundUpdate?: boolean;
   hostedStop?: ReturnType<typeof createGatewayHostLifecycle>;

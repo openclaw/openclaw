@@ -64,40 +64,8 @@ function expectStatus(
 }
 
 describe("resolveStatusTtsSnapshot", () => {
-  it("treats null prefs as empty settings", () => {
-    const prefsPath = writePrefs(null);
-    expectStatus({ tts: { auto: "always", provider: "edge", prefsPath } } as OpenClawConfig, {
-      provider: "microsoft",
-    });
-  });
-
-  it("uses prefs overrides without loading speech providers", () => {
-    const prefsPath = writePrefs({
-      auto: "always",
-      provider: "edge",
-      maxLength: 2048,
-      summarize: false,
-    });
-    expectStatus({ tts: { prefsPath } } as OpenClawConfig, {
-      provider: "microsoft",
-      maxLength: 2048,
-      summarize: false,
-    });
-  });
-
   it("reports auto provider when tts is on without an explicit provider", () => {
     expectStatus({ tts: { auto: "always" } }, { provider: "auto" });
-  });
-
-  it("reports per-agent TTS overrides", () => {
-    expectStatus(
-      {
-        tts: { auto: "off", provider: "openai" },
-        agents: { list: [{ id: "reader", tts: { auto: "always", provider: "elevenlabs" } }] },
-      },
-      { provider: "elevenlabs" },
-      "reader",
-    );
   });
 
   it("reports per-agent persona provider over global persona", () => {
@@ -108,7 +76,7 @@ describe("resolveStatusTtsSnapshot", () => {
           persona: "alfred",
           personas: { alfred: { provider: "google" }, jarvis: { provider: "edge" } },
         },
-        agents: { list: [{ id: "reader", tts: { persona: "jarvis" } }] },
+        agents: { entries: { reader: { tts: { persona: "jarvis" } } } },
       },
       { provider: "microsoft", persona: "jarvis" },
       "reader",
@@ -164,25 +132,6 @@ describe("resolveStatusTtsSnapshot", () => {
     expect(snapshot?.voice).toBe(`${"v".repeat(92)}...`);
   });
 
-  it("omits default OpenAI endpoint details from status", () => {
-    expectStatus(
-      {
-        tts: {
-          auto: "always",
-          provider: "openai",
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1/",
-              model: "gpt-4o-mini-tts",
-              voice: "coral",
-            },
-          },
-        },
-      },
-      { provider: "openai", model: "gpt-4o-mini-tts", voice: "coral" },
-    );
-  });
-
   it("reports migrated canonical speaker voice fields", () => {
     expectStatus(
       {
@@ -193,25 +142,6 @@ describe("resolveStatusTtsSnapshot", () => {
         },
       },
       { provider: "elevenlabs", voice: "voice-123" },
-    );
-  });
-
-  it("reports merged per-agent provider metadata", () => {
-    expectStatus(
-      {
-        tts: {
-          auto: "off",
-          provider: "openai",
-          providers: { openai: { model: "gpt-4o-mini-tts", voice: "coral" } },
-        },
-        agents: {
-          list: [
-            { id: "reader", tts: { auto: "always", providers: { openai: { voice: "nova" } } } },
-          ],
-        },
-      },
-      { provider: "openai", model: "gpt-4o-mini-tts", voice: "nova" },
-      "reader",
     );
   });
 

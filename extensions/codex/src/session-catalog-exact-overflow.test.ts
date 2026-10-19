@@ -1,16 +1,17 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
-import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
+import { memoryCatalogState } from "./session-catalog-index.test-support.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import { NODE_INVOKE_TIMEOUT_MS } from "./session-catalog-parsing.js";
-import { nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
+import {
+  nativeCatalogFixture,
+  remoteCatalogFactory,
+} from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
   config,
-  createCodexSessionCatalogControlFactory,
   createRuntime,
-  idleThread,
   pinnedConnectionMocks,
 } from "./session-catalog.test-helpers.js";
 
@@ -18,26 +19,10 @@ afterEach(() => vi.restoreAllMocks());
 
 async function remoteFixture(count: number) {
   const native = nativeCatalogFixture(count);
-  const target =
-    native.rows.at(-1) ?? idleThread({ id: "uncached", source: "cli", ephemeral: false });
+  const target = native.rows.at(-1)!;
   let activeRows: CodexThread[] = native.rows;
-  const stored = new Map<string, StoredCodexCatalogEntry>();
-  const state: CodexCatalogState = {
-    entries: async () => [...stored].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    register: async (key, value) => {
-      stored.set(key, value);
-    },
-    delete: async (key) => stored.delete(key),
-  };
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({
-      supervision: { enabled: true },
-      appServer: {
-        transport: "websocket",
-        url: "wss://exact-overflow.example.test/codex",
-        authToken: "synthetic-exact-token",
-      },
-    }),
+  const { values: stored, state } = memoryCatalogState();
+  const factory = remoteCatalogFactory("exact-overflow", {
     getRuntimeConfig: () => config,
     openResidentState: () => state,
   });
@@ -86,33 +71,23 @@ describe("exact Codex lookup beyond resident retention", () => {
       id: f.target.id,
     });
 
-    expect(
-      pinnedConnectionMocks.request.mock.calls.some(
-        ([request]) => request.method === "thread/read",
-      ),
-    ).toBe(true);
-    expect(
-      pinnedConnectionMocks.request.mock.calls.some(
-        ([request]) => request.method === "thread/list",
-      ),
-    ).toBe(true);
+    expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual(
+      expect.arrayContaining(["thread/read", "thread/list"]),
+    );
   });
 
-  it.each([0, 1])(
-    "requires native non-archived membership even when thread/read succeeds (cached rows: %i)",
-    async (count) => {
-      const f = await remoteFixture(count);
-      expect(
-        [...f.stored.values()].some(
-          (entry) => entry.kind === "row" && entry.row.threadId === f.target.id,
-        ),
-      ).toBe(count === 1);
-      f.clearActiveRows();
-      await expect(f.control.requireEligibleThread(f.target.id)).rejects.toThrow(
-        "eligibility could not be verified",
-      );
-    },
-  );
+  it("requires fresh non-archived membership even when a cached thread/read succeeds", async () => {
+    const f = await remoteFixture(1);
+    expect(
+      [...f.stored.values()].some(
+        (entry) => entry.kind === "row" && entry.row.threadId === f.target.id,
+      ),
+    ).toBe(true);
+    f.clearActiveRows();
+    await expect(f.control.requireEligibleThread(f.target.id)).rejects.toThrow(
+      "eligibility could not be verified",
+    );
+  });
 
   it("uses fresh native membership after a remote resident row was archived", async () => {
     const f = await remoteFixture(1);

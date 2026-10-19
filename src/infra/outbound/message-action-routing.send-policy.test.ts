@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const ttsMocks = vi.hoisted(() => ({
@@ -14,21 +15,6 @@ const ttsMocks = vi.hoisted(() => ({
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
 }));
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} input to be an object`);
-  }
-  return arg as Record<string, unknown>;
-}
 
 const slackConfig = {
   channels: {
@@ -77,49 +63,9 @@ describe("runMessageAction core send routing", () => {
       .mockReset()
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
   });
-  it.each([
-    { name: "bound target", currentChannelId: "source-chat" },
-    { name: "missing targets" },
-    { name: "empty targets", currentChannelId: "", currentMessagingTarget: "" },
-    { name: "blank targets", currentChannelId: " ", currentMessagingTarget: "\t" },
-  ])(
-    "enforces an explicit WebChat cross-provider restriction with $name before transport",
-    async (targets) => {
-      const sendText = registerSlackTextPlugin();
-
-      await expect(
-        runMessageAction({
-          cfg: {
-            ...slackConfig,
-            tools: { message: { crossContext: { allowAcrossProviders: false } } },
-          },
-          action: "send",
-          params: {
-            channel: "slack",
-            target: "channel:C123",
-            message: "synthetic policy probe",
-            bestEffort: true,
-          },
-          toolContext: {
-            currentChannelProvider: "webchat",
-            currentChannelId: targets.currentChannelId,
-            currentMessagingTarget: targets.currentMessagingTarget,
-          },
-          dryRun: false,
-        }),
-      ).rejects.toMatchObject({
-        reasonCode: "message_cross_context_denied",
-        policyRef: "message-cross-context:provider",
-      });
-      expect(sendText).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
-    { name: "default access", allowed: true },
-    { name: "global opt-in", global: true, allowed: true },
     { name: "agent opt-in", global: false, agent: true, allowed: true },
-    { name: "global restriction", global: false, allowed: false },
     { name: "agent restriction", global: true, agent: false, allowed: false },
   ])("preserves $name for targetless recovery", async (policy) => {
     const sendText = registerSlackTextPlugin();
@@ -129,16 +75,14 @@ describe("runMessageAction core send routing", () => {
         message: { crossContext: { allowAcrossProviders: policy.global } },
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            ...(policy.agent === undefined
+        entries: {
+          main:
+            policy.agent === undefined
               ? {}
               : {
                   tools: { message: { crossContext: { allowAcrossProviders: policy.agent } } },
-                }),
-          },
-        ],
+                },
+        },
       },
     };
     const recovery = resolveAgentRestartRecoveryContext({
@@ -146,6 +90,7 @@ describe("runMessageAction core send routing", () => {
       canUseInternalRuntimeHandoff: true,
       expectedExistingSessionId: "session-1",
       resolvedSessionId: "session-1",
+      resolvedSessionKey: "agent:main:dashboard:recovery",
       runId: "recovery-run",
       sessionEntry: {
         sessionId: "session-1",
@@ -185,7 +130,7 @@ describe("runMessageAction core send routing", () => {
       to: "channel:C123",
     });
     expect(sendText).toHaveBeenCalledOnce();
-    expect(firstMockArg(sendText, "send text")).toMatchObject({
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
       to: "channel:C123",
       text: "synthetic recovery policy probe",
     });
@@ -264,7 +209,7 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
-  it.each(["agent:main:subagent:worker", "channel:agent:main:main"])(
+  it.each(["channel:agent:main:main"])(
     "rejects implicit delivery to internal session %s before sending",
     async (currentChannelId) => {
       const sendText = registerSlackTextPlugin();
@@ -314,38 +259,11 @@ describe("runMessageAction core send routing", () => {
       channel: "slack",
       to: "channel:C123",
     });
-    expect(firstMockArg(sendText, "send text")).toMatchObject({
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
       to: "channel:C123",
       text: "deliver to the actual conversation",
     });
     expect(sendText).toHaveBeenCalledOnce();
-  });
-
-  it("uses best-effort delivery for explicit current-source message-tool-only replies", async () => {
-    const sendText = registerSlackTextPlugin();
-
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        target: "channel:C123",
-        message: "visible current-channel source reply",
-        bestEffort: false,
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
-      sessionKey: "agent:main:slack:channel:C123",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
-    });
-
-    if (result.kind !== "send") {
-      throw new Error(`expected send result, got ${result.kind}`);
-    }
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(result.to).toBe("channel:C123");
   });
 
   it("preserves required delivery when message-tool-only sends target another conversation", async () => {

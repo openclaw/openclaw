@@ -1,7 +1,8 @@
 import { ComponentType, InteractionResponseType } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as loggingCore from "openclaw/plugin-sdk/logging-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ButtonInteraction } from "../internal/discord.js";
+import type { BaseComponentInteraction } from "../internal/discord.js";
 import { createInteraction } from "../internal/interactions.js";
 import {
   attachRestMock,
@@ -18,6 +19,7 @@ import {
 } from "./test-helpers.test-support.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   setDiscordActivitiesRuntime(undefined);
 });
 
@@ -32,23 +34,22 @@ function componentContext(): AgentComponentContext {
   };
 }
 
-function createLaunchFixture(
-  deps: Parameters<typeof createDiscordActivityButton>[2] = {},
-  userId = "42",
-) {
+function createLaunchFixture(userId = "42") {
   const runtime = createActivityTestRuntime();
   setDiscordActivitiesRuntime(runtime);
-  const button = createDiscordActivityButton(componentContext(), "123456789012345678", deps);
+  const button = createDiscordActivityButton(componentContext(), "123456789012345678");
   if (!button) {
     throw new Error("expected activity button");
   }
   const launchActivity = vi.fn(async () => undefined);
+  const reply = vi.fn(async () => undefined);
   const interaction = {
     launchActivity,
+    reply,
     rawData: { channel_id: "777" },
     userId,
-  } as unknown as ButtonInteraction;
-  return { runtime, button, launchActivity, interaction };
+  } as unknown as BaseComponentInteraction;
+  return { runtime, button, launchActivity, reply, interaction };
 }
 
 describe("Discord Activity interaction", () => {
@@ -58,9 +59,27 @@ describe("Discord Activity interaction", () => {
     expect(button?.customIdParser("other:key=value").key).toBe("other");
   });
 
-  it("registers from the configured Activity application ID without a learned ID", () => {
-    setDiscordActivitiesRuntime(createActivityTestRuntime());
-    expect(createDiscordActivityButton(componentContext())).not.toBeNull();
+  it("learns the startup application ID before resolving Activity availability", () => {
+    const cfg = createActivityTestConfig({ applicationId: "" });
+    const runtime = createActivityTestRuntime(cfg);
+    setDiscordActivitiesRuntime(runtime);
+    const context = { ...componentContext(), cfg, discordConfig: cfg.channels?.discord };
+
+    expect(createDiscordActivityButton(context)).toBeNull();
+    expect(createDiscordActivityButton(context, "123456789012345678")).not.toBeNull();
+    expect(runtime.resolveHttpAccount()?.applicationId).toBe("123456789012345678");
+
+    const disabledDiscordConfig = { ...context.discordConfig, enabled: false };
+    expect(
+      createDiscordActivityButton(
+        {
+          ...context,
+          cfg: { ...cfg, channels: { ...cfg.channels, discord: disabledDiscordConfig } },
+          discordConfig: disabledDiscordConfig,
+        },
+        "123456789012345678",
+      ),
+    ).toBeNull();
   });
 
   it("posts a raw LAUNCH_ACTIVITY callback", async () => {
@@ -77,7 +96,7 @@ describe("Discord Activity interaction", () => {
           custom_id: "ocactivity1_AAAAAAAAAAAAAAAAAAAAAA",
         },
       }),
-    ) as ButtonInteraction;
+    ) as BaseComponentInteraction;
 
     await interaction.launchActivity();
 
@@ -87,11 +106,7 @@ describe("Discord Activity interaction", () => {
   });
 
   it("launches for a channel member outside the agent allowlist", async () => {
-    const reply = vi.fn(async () => undefined);
-    const { runtime, button, launchActivity, interaction } = createLaunchFixture(
-      { reply: reply as never },
-      "99",
-    );
+    const { runtime, button, launchActivity, reply, interaction } = createLaunchFixture("99");
     const rendered = buildDiscordPresentationComponents({
       blocks: [
         {
@@ -178,8 +193,8 @@ describe("Discord Activity interaction", () => {
   });
 
   it("launches after the write budget when the store stalls and logs once", async () => {
-    const logError = vi.fn();
-    const { runtime, button, launchActivity, interaction } = createLaunchFixture({ logError });
+    const logError = vi.spyOn(loggingCore, "logError").mockImplementation(() => {});
+    const { runtime, button, launchActivity, interaction } = createLaunchFixture();
     const pendingWrite = createDeferred<void>();
     let backgroundSettled = false;
     const stalledWrite = pendingWrite.promise.then(() => {
@@ -204,8 +219,8 @@ describe("Discord Activity interaction", () => {
   });
 
   it("still launches when recording the pending launch fails and logs once", async () => {
-    const logError = vi.fn();
-    const { runtime, button, launchActivity, interaction } = createLaunchFixture({ logError });
+    const logError = vi.spyOn(loggingCore, "logError").mockImplementation(() => {});
+    const { runtime, button, launchActivity, interaction } = createLaunchFixture();
     const recordPendingLaunch = vi
       .spyOn(runtime.store, "recordPendingLaunch")
       .mockRejectedValue(new Error("store offline"));
@@ -219,17 +234,11 @@ describe("Discord Activity interaction", () => {
   });
 
   it("replies ephemerally and does not launch for invalid widget data", async () => {
-    setDiscordActivitiesRuntime(createActivityTestRuntime());
-    const reply = vi.fn(async () => undefined);
-    const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
-      reply: reply as never,
-    });
-    const launchActivity = vi.fn(async () => undefined);
-    const interaction = { launchActivity } as unknown as ButtonInteraction;
+    const { button, launchActivity, reply, interaction } = createLaunchFixture();
 
     await button?.run(interaction, {});
 
-    expect(reply).toHaveBeenCalledWith(interaction, {
+    expect(reply).toHaveBeenCalledWith({
       content: "This widget is no longer valid.",
       ephemeral: true,
     });

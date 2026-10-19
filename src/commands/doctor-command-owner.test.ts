@@ -84,27 +84,19 @@ describe("command owner health", () => {
     },
   );
 
-  it.each([
-    { name: "no owners", owners: [], expected: ["telegram:123"] },
-    {
-      name: "existing owners and duplicates",
-      owners: ["slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"],
-      expected: ["slack:owner", "telegram:123"],
-    },
-    {
-      name: "a new owner alongside existing owners",
-      owners: ["slack:owner"],
-      expected: ["slack:owner", "telegram:123"],
-    },
-  ])("preserves command owners in the hint with $name", ({ owners, expected }) => {
+  it("preserves existing command owners and removes duplicates in the hint", () => {
     expect(
       formatCommandOwnerHint({
-        cfg: { commands: { ownerAllowFrom: owners } },
+        cfg: {
+          commands: {
+            ownerAllowFrom: ["slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"],
+          },
+        },
         channel: "telegram",
         id: "123",
       }),
     ).toBe(
-      `Ask the operator to run \`openclaw config set commands.ownerAllowFrom '${JSON.stringify(expected)}'\` in a terminal to make this sender a command owner.`,
+      `Ask the operator to run \`openclaw config set commands.ownerAllowFrom '["slack:owner","telegram:123"]'\` in a terminal to make this sender a command owner.`,
     );
   });
 

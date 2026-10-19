@@ -25,7 +25,7 @@ export async function searchGraphUsers(params: {
     return res.value ?? [];
   }
 
-  const top = typeof params.top === "number" && params.top > 0 ? params.top : 10;
+  const top = params.top !== undefined && params.top > 0 ? params.top : 10;
   const path = `/users?$search=${encodeURIComponent(`"displayName:${query}"`)}&$select=id,displayName,mail,userPrincipalName&$top=${top}`;
   const res = await fetchGraphJson<GraphResponse<GraphUser>>({
     token: params.token,

@@ -21,6 +21,16 @@
     ]
   },
   "modelCatalog": {
+    "aliases": {
+      "stepfun-ai": {
+        "provider": "stepfun",
+        "api": "openai-completions"
+      },
+      "stepfun-ai-step-plan": {
+        "provider": "stepfun-plan",
+        "api": "openai-completions"
+      }
+    },
     "modelsDev": {
       "stepfun": "stepfun-ai",
       "stepfun-plan": "stepfun-ai-step-plan"

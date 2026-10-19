@@ -1,15 +1,19 @@
 import path from "node:path";
+import { isGatewayResponseFrame } from "@openclaw/gateway-protocol/frame-guards";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import type { RawData } from "ws";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../agents/embedded-agent-runner/run-state.js";
+import { getEmbeddedRunAttachment } from "../agents/embedded-agent-runner/run-state.js";
+import { createAttemptNestedToolActivityState } from "../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/embedded-agent-runner/run/types.js";
-import { clearActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
+import { detachActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -18,12 +22,15 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { makeEmbeddedRunnerAttempt } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { rawDataToString } from "../infra/ws.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.js";
+import * as messageInjection from "../sessions/session-controller.message-injection.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import {
   agentCommandMock,
   connectOk,
@@ -42,8 +49,8 @@ const runAttempt = vi.hoisted(() =>
   vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>(),
 );
 
-// The real harness selects the runtime and prepares its authority before this
-// model-execution boundary. The test never creates a reply operation or hash.
+// The real harness selects the runtime and binds its authority to the controller
+// operation before this model-execution boundary.
 vi.mock("../agents/embedded-agent-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: runAttempt,
 }));
@@ -90,16 +97,17 @@ installGatewayTestHooks({
   cleanup: async () => {
     harness?.ws.close();
     await harness?.server.close();
+    await closeSkillsWatchers(true);
     harness?.envSnapshot.restore();
   },
 });
 
-it.each([
-  { source: "browser", disposition: "steered", expectation: "required" },
-  { source: "system", disposition: "followup", expectation: "optional" },
+it.for([
+  { source: "browser", disposition: "steered" },
+  { source: "system", disposition: "followup" },
 ] as const)(
   "routes browser corrections to a $source direct command as $disposition",
-  async ({ source, disposition: expectedDisposition, expectation }) => {
+  async ({ source, disposition: expectedDisposition }, { signal }) => {
     const sessionKey = `agent:main:direct-steering-${source}`;
     const sessionId = `direct-steering-session-${source}`;
     const runId = `announce:direct-steering-${source}`;
@@ -159,8 +167,8 @@ it.each([
       typeof import("../agents/agent-model-discovery.js")
     >("../agents/agent-model-discovery.js");
     const discoverySpy = vi
-      .spyOn(discovery, "discoverModels")
-      .mockImplementation(actualDiscovery.discoverModels);
+      .spyOn(discovery, "discoverModelsAsync")
+      .mockImplementation(actualDiscovery.discoverModelsAsync);
     onTestFinished(() => discoverySpy.mockRestore());
     await prepareGatewayReplyRuntimeForTest({ force: true });
     await writeSessionStore({
@@ -183,6 +191,33 @@ it.each([
     );
     const releaseModel = createDeferred();
     const modelStarted = createDeferred();
+    const sessionLifecycleState = await import("./session-lifecycle-state.js");
+    const startCommitted = createDeferred();
+    // Start persistence is detached from model readiness and can still change sharing facts.
+    void startCommitted.promise.catch(() => undefined);
+    const prepareLifecycle = sessionLifecycleState.prepareGatewaySessionLifecycleEvent;
+    const lifecycleSpy = vi
+      .spyOn(sessionLifecycleState, "prepareGatewaySessionLifecycleEvent")
+      .mockImplementation((params) => {
+        const persist = prepareLifecycle(params);
+        if (
+          params.sessionKey !== sessionKey ||
+          params.event.runId !== runId ||
+          params.event.data?.phase !== "start"
+        ) {
+          return persist;
+        }
+        return async () => {
+          try {
+            await persist();
+            startCommitted.resolve();
+          } catch (error) {
+            startCommitted.reject(error);
+            throw error;
+          }
+        };
+      });
+    onTestFinished(() => lifecycleSpy.mockRestore());
     const ownerReady = createDeferred<{
       attempt: EmbeddedRunAttemptParams;
       handle: ReturnType<typeof prepareEmbeddedAttemptStream>["queueHandle"];
@@ -224,13 +259,14 @@ it.each([
           coreBuiltinToolNames: new Set(),
           replaySafeToolNames: new Set(),
           codeModeExecToolNames: new Set(),
+          sourceReplyCapableToolNames: new Set(),
           sideEffectToolOwners: new Map(),
           trustedLocalMediaToolNames: new Set(),
         },
         hookAgentId: attempt.agentId ?? "main",
         diagnosticTrace: createDiagnosticTraceContext(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, runId }),
-        nestedToolActivities: [],
+        nestedToolActivityState: createAttemptNestedToolActivityState(),
         isReplaySafeTool: () => false,
         runAbortController: controller,
         abortRun: (_timeout, reason) => controller.abort(reason),
@@ -262,12 +298,37 @@ it.each([
         });
       } finally {
         prepared.subscription.unsubscribe();
-        clearActiveEmbeddedRun(sessionId, prepared.queueHandle, sessionKey, attempt.sessionFile);
+        detachActiveEmbeddedRun(sessionId, prepared.queueHandle, sessionKey, attempt.sessionFile);
         embeddedRunMock.activeIds.delete(sessionId);
         session.dispose();
       }
     });
     const requestId = `original-${source}`;
+    const browserTerminal = createDeferred<unknown>();
+    let browserTerminalObserved = false;
+    const isOriginalTerminal = (frame: unknown) =>
+      isGatewayResponseFrame(frame) &&
+      frame.id === requestId &&
+      (!isRecord(frame.payload) || frame.payload.status !== "accepted");
+    if (source === "browser") {
+      const observeTerminal = (data: RawData) => {
+        const frame: unknown = JSON.parse(rawDataToString(data));
+        if (isOriginalTerminal(frame)) {
+          browserTerminalObserved = true;
+          browserTerminal.resolve(frame);
+        }
+      };
+      const closed = () => {
+        browserTerminalObserved = true;
+        browserTerminal.reject(new Error("Original agent socket closed"));
+      };
+      harness.ws.on("message", observeTerminal);
+      harness.ws.once("close", closed);
+      onTestFinished(() => {
+        harness.ws.off("message", observeTerminal);
+        harness.ws.off("close", closed);
+      });
+    }
     const accepted =
       source === "browser"
         ? onceMessage<AgentResponse>(
@@ -277,13 +338,7 @@ it.each([
         : undefined;
     const original =
       source === "browser"
-        ? onceMessage<AgentResponse>(
-            harness.ws,
-            (frame) =>
-              frame.type === "res" &&
-              frame.id === requestId &&
-              frame.payload?.status !== "accepted",
-          )
+        ? browserTerminal.promise
         : runAnnounceAgentCall({
             agentParams: {
               sessionKey,
@@ -317,24 +372,28 @@ it.each([
         }),
       );
     }
-    const capture = vi.spyOn(replyRunRegistry, "resolveCurrentMessageInjectionTarget");
+    const capture = vi.spyOn(messageInjection, "captureCurrentReplyMessageInjectionTarget");
+    onTestFinished(() => capture.mockRestore());
     const diagnostics = vi.spyOn(diagnosticLogger, "info");
     onTestFinished(() => diagnostics.mockRestore());
     try {
       if (accepted) {
         expect(await accepted).toMatchObject({ ok: true, payload: { status: "accepted" } });
       }
-      const { attempt, handle } = await Promise.race([
-        ownerReady.promise,
-        original.then((response) => {
-          throw new Error(
-            `Direct command finished before publishing its steering owner: ${JSON.stringify(response)}`,
-          );
-        }),
-      ]);
-      const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+      const { attempt, handle } = await withinTest(
+        Promise.race([
+          Promise.all([ownerReady.promise, startCommitted.promise]).then(([owner]) => owner),
+          original.then((response) => {
+            throw new Error(
+              `Direct command finished before its steering owner and lifecycle start were ready: ${JSON.stringify(response)}`,
+            );
+          }),
+        ]),
+        signal,
+      );
+      const registration = getEmbeddedRunAttachment(handle);
       const facts = {
-        hasReplyOperation: replyRunRegistry.get(sessionKey) !== undefined,
+        hasReplyOperation: getSessionControllerOperation(sessionKey) !== undefined,
         authoritySource: registration?.toolAuthority?.source,
         hasOperatorAuthority:
           readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined,
@@ -348,13 +407,13 @@ it.each([
         supportsTranscriptCommitWait: handle.supportsTranscriptCommitWait,
       };
       expect(facts).toEqual({
-        hasReplyOperation: false,
-        authoritySource: "attempt",
+        hasReplyOperation: true,
+        authoritySource: "reply",
         hasOperatorAuthority: source === "browser",
         ownsAdmittedInstance: true,
         hasDelegatedAuthority: true,
         isControlUiVisible: true,
-        terminalReplyExpectation: expectation,
+        terminalReplyExpectation: "result-required",
         injectionVersion: 2,
         supportsTranscriptCommitWait: true,
       });
@@ -365,7 +424,9 @@ it.each([
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
-      expect(response.ok).toBe(true);
+      expect(response.ok, JSON.stringify({ response, diagnostics: diagnostics.mock.calls })).toBe(
+        true,
+      );
       const captured = capture.mock.results.find(
         (result) => result.type === "return" && result.value?.runId === runId,
       );
@@ -374,7 +435,7 @@ it.each([
         sourceTurnId: runId,
       });
       expect(
-        await disposition.promise,
+        await withinTest(disposition.promise, signal),
         JSON.stringify(
           diagnostics.mock.calls.filter(([message]) => message.startsWith("direct steering")),
         ),
@@ -383,8 +444,13 @@ it.each([
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       }
     } finally {
+      // The fixture prevents completion until release; only then does its response budget begin.
+      const settled =
+        source === "browser" && !browserTerminalObserved
+          ? Promise.allSettled([onceMessage(harness.ws, isOriginalTerminal)])
+          : originalSettled;
       releaseModel.resolve();
-      const outcomes = await originalSettled;
+      const outcomes = await settled;
       expect
         .soft(
           outcomes.flatMap((outcome) =>
@@ -392,7 +458,6 @@ it.each([
           ),
         )
         .toEqual([]);
-      capture.mockRestore();
     }
   },
 );

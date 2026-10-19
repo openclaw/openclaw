@@ -60,6 +60,20 @@ export function isDoctorRecoverableInvalidConfigError(err: unknown): boolean {
   return isInvalidConfigError(err) && err.recovery !== "manual";
 }
 
+/** An unavailable read cannot establish invalid authored settings or authorize Doctor repair. */
+export function createConfigReadError(
+  snapshot: Pick<ConfigFileSnapshot, "path" | "issues">,
+  details = formatInvalidConfigDetails(snapshot.issues),
+): Error {
+  const issue: (ConfigValidationIssue & ErrorOptions) | undefined = snapshot.issues.find(
+    (candidate) => candidate.errorCode === "CONFIG_READ_FAILED",
+  );
+  return Object.assign(
+    new Error(`Config could not be read at ${snapshot.path}:\n${details}`, { cause: issue?.cause }),
+    { code: "CONFIG_READ_FAILED" },
+  );
+}
+
 /** Logs and throws the standard invalid-config error for a validation result. */
 export function throwInvalidConfig(params: {
   configPath: string;

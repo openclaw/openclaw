@@ -25,6 +25,7 @@ type ChatMessage = {
   role: string;
   stopReason?: string;
   content: unknown;
+  openclawRunError?: { runId: string; summary: string };
 };
 
 it(
@@ -139,7 +140,7 @@ it(
               skipBootstrap: true,
               model: { primary: "stream-fixture/stream-fixture" },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",
@@ -215,7 +216,25 @@ it(
           );
           if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
             expect.soft(waited.status, scenario).toBe("error");
-            expect.soft(assistant?.stopReason, scenario).toBe("error");
+            expect
+              .soft(
+                history.messages.filter(
+                  (message) => message.openclawRunError?.runId === started.runId,
+                ),
+                scenario,
+              )
+              .toEqual([
+                expect.objectContaining({
+                  role: "custom",
+                  openclawRunError: {
+                    runId: started.runId,
+                    summary: expect.stringMatching(/\S/),
+                  },
+                }),
+              ]);
+            if (scenario.endsWith("text")) {
+              expect.soft(JSON.stringify(assistant?.content), scenario).toContain("Partial answer");
+            }
             expect.soft(toolResults, scenario).toHaveLength(0);
             expect.soft(events, scenario).toContainEqual(
               expect.objectContaining({

@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /** Provider setup wizard helpers shared by provider plugins and CLI setup flows. */
 import {
   normalizeOptionalLowercaseString,
@@ -165,38 +164,19 @@ export function resolveProviderPluginChoiceCore(params: {
   };
 
   const explicitChoice = parseProviderPluginMethodChoice(choice);
-  if (explicitChoice) {
-    const { providerId, methodId } = explicitChoice;
-    const provider = params.providers.find(
-      (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
-    );
-    if (!provider) {
-      return null;
-    }
-    const method = resolveMethodById(provider, methodId);
-    if (!method) {
-      return null;
-    }
-    return withManifestTarget({
-      provider,
-      method,
-      ...(method.wizard ? { wizard: method.wizard } : {}),
-    });
-  }
-
-  // The manifest owns dispatch; runtime wizard metadata need not repeat its choice ID.
-  if (params.manifestChoice) {
-    const declared = params.manifestChoice;
-    if (declared.choiceId !== choice) {
+  const selection = explicitChoice ?? params.manifestChoice;
+  if (selection) {
+    // Explicit method references outrank metadata; named choices retain their exact manifest owner.
+    if (!explicitChoice && params.manifestChoice?.choiceId !== choice) {
       return null;
     }
     const provider = params.providers.find(
       (entry) =>
-        entry.pluginId === declared.pluginId &&
-        normalizeProviderId(entry.id) === normalizeProviderId(declared.providerId),
+        (explicitChoice || entry.pluginId === params.manifestChoice?.pluginId) &&
+        normalizeProviderId(entry.id) === normalizeProviderId(selection.providerId),
     );
-    const methodId = normalizeOptionalLowercaseString(declared.methodId);
-    if (!provider || !methodId) {
+    const methodId = normalizeOptionalLowercaseString(selection.methodId);
+    if (!provider || (!explicitChoice && !methodId)) {
       return null;
     }
     const method = resolveMethodById(provider, methodId);
@@ -204,7 +184,7 @@ export function resolveProviderPluginChoiceCore(params: {
       ? withManifestTarget({
           provider,
           method,
-          wizard: method.wizard,
+          ...(!explicitChoice || method.wizard ? { wizard: method.wizard } : {}),
         })
       : null;
   }
@@ -218,7 +198,7 @@ export function resolveProviderPluginChoiceCore(params: {
       const choiceId =
         normalizeOptionalString(wizard.choiceId) ||
         buildProviderPluginMethodChoice(provider.id, method.id);
-      if ((normalizeOptionalString(choiceId) ?? "") === choice) {
+      if (choiceId === choice) {
         return withManifestTarget({ provider, method, wizard });
       }
     }
@@ -234,14 +214,12 @@ export function resolveProviderPluginChoiceCore(params: {
         }
       }
     }
-    if (
-      normalizeProviderId(provider.id) === normalizeProviderId(choice) &&
-      provider.auth.length > 0
-    ) {
+    const method = provider.auth[0];
+    if (method && normalizeProviderId(provider.id) === normalizeProviderId(choice)) {
       return withManifestTarget({
         provider,
-        method: expectDefined(provider.auth[0], "auth entry at 0"),
-        ...(provider.auth[0]?.wizard ? { wizard: provider.auth[0].wizard } : {}),
+        method,
+        ...(method.wizard ? { wizard: method.wizard } : {}),
       });
     }
   }

@@ -1,31 +1,9 @@
 import { getCommandPathWithRootOptions, isSimpleCommandHelpInvocation } from "./argv.js";
-import type { RootHelpRenderOptions } from "./program/root-help.js";
-import type { PrecomputedSubcommandHelpName } from "./root-help-metadata.js";
-
-type OutputPrecomputedHelpText = () => boolean;
+import { PRECOMPUTED_SUBCOMMAND_HELP_NAMES } from "./precomputed-help-commands.js";
 
 const PRECOMPUTED_COMMAND_HELP_NAMES = new Set(["browser", "secrets", "nodes"] as const);
 
-export type PrecomputedCommandHelpDeps = {
-  outputPrecomputedBrowserHelpText?: OutputPrecomputedHelpText;
-  outputPrecomputedSecretsHelpText?: OutputPrecomputedHelpText;
-  outputPrecomputedNodesHelpText?: OutputPrecomputedHelpText;
-  outputPrecomputedSubcommandHelpText?: (commandName: PrecomputedSubcommandHelpName) => boolean;
-  loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
-    env?: NodeJS.ProcessEnv,
-  ) => Promise<RootHelpRenderOptions | null>;
-  env?: NodeJS.ProcessEnv;
-};
-
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set<PrecomputedSubcommandHelpName>([
-  "config",
-  "doctor",
-  "gateway",
-  "models",
-  "plugins",
-  "sessions",
-  "tasks",
-]);
+const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set(PRECOMPUTED_SUBCOMMAND_HELP_NAMES);
 
 function resolvePrecomputedCommandHelpName<T extends string>(
   argv: string[],
@@ -40,11 +18,8 @@ function resolvePrecomputedCommandHelpName<T extends string>(
     : null;
 }
 
-export async function tryOutputPrecomputedCommandHelp(
-  argv: string[],
-  deps: PrecomputedCommandHelpDeps = {},
-): Promise<boolean> {
-  const env = deps.env ?? process.env;
+export async function tryOutputPrecomputedCommandHelp(argv: string[]): Promise<boolean> {
+  const env = process.env;
   if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
     return false;
   }
@@ -54,9 +29,7 @@ export async function tryOutputPrecomputedCommandHelp(
     ? null
     : resolvePrecomputedCommandHelpName(argv, PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS);
   if (subcommandName) {
-    const outputPrecomputedSubcommandHelpText =
-      deps.outputPrecomputedSubcommandHelpText ??
-      (await import("./root-help-metadata.js")).outputPrecomputedSubcommandHelpText;
+    const { outputPrecomputedSubcommandHelpText } = await import("./root-help-metadata.js");
     return outputPrecomputedSubcommandHelpText(subcommandName);
   }
   if (!commandName) {
@@ -64,10 +37,8 @@ export async function tryOutputPrecomputedCommandHelp(
   }
 
   if (commandName === "nodes") {
-    const loadRootHelpRenderOptionsForConfigSensitivePlugins =
-      deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
-      (await import("./root-help-live-config.js"))
-        .loadRootHelpRenderOptionsForConfigSensitivePlugins;
+    const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+      await import("./root-help-live-config.js");
     if (await loadRootHelpRenderOptionsForConfigSensitivePlugins(env)) {
       return false;
     }
@@ -78,8 +49,6 @@ export async function tryOutputPrecomputedCommandHelp(
     secrets: "outputPrecomputedSecretsHelpText",
     nodes: "outputPrecomputedNodesHelpText",
   } as const;
-  const output =
-    deps[outputName[commandName]] ??
-    (await import("./root-help-metadata.js"))[outputName[commandName]];
+  const output = (await import("./root-help-metadata.js"))[outputName[commandName]];
   return output();
 }

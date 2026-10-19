@@ -19,13 +19,11 @@ export function createGatewayProcessExpectations(
   };
 }
 
-type RestartPostCheckContext = {
-  activationAccepted: boolean;
-  json: boolean;
-  stdout: NodeJS.WritableStream;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
-};
+type RestartPostCheckContext = Parameters<
+  NonNullable<
+    Parameters<typeof import("./lifecycle-core.js").runServiceRestart>[0]["postRestartCheck"]
+  >
+>[0];
 
 export type RestartParams = {
   opts?: { json?: boolean };
@@ -105,7 +103,9 @@ export function createDeferredSafeRestartResult(): SafeGatewayRestartRequestResu
         cronRuns: 0,
         backgroundExecSessions: 0,
         rootRequests: 0,
-        activeTasks: 0,
+        agentRuns: 0,
+        acpRuns: 0,
+        mediaRuns: 0,
         totalActive: 1,
       },
       blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],

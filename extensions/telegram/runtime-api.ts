@@ -1,4 +1,3 @@
-// Telegram API module exposes the plugin public contract.
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
@@ -81,7 +80,9 @@ export {
   createTelegramThreadBindingManager,
   getTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingIdleTimeoutBySessionKeyAsync,
   setTelegramThreadBindingMaxAgeBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKeyAsync,
 } from "./src/thread-bindings.js";
 export { resolveTelegramToken } from "./src/token.js";
 export { setTelegramRuntime } from "./src/runtime.js";

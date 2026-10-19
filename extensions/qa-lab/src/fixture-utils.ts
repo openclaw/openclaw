@@ -31,10 +31,6 @@ function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
 
-function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
-  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
-}
-
 async function readBoundedResponseText(params: {
   response: Response;
   url: string;
@@ -42,7 +38,7 @@ async function readBoundedResponseText(params: {
   signal: AbortSignal;
 }) {
   const tooLargeError = () =>
-    Object.assign(new Error(bodyTooLargeErrorMessage(params.url, params.maxBytes)), {
+    Object.assign(new Error(`HTTP response from ${params.url} exceeded ${params.maxBytes} bytes`), {
       code: "ETOOBIG",
     });
   const contentLength = params.response.headers.get("content-length");
@@ -109,9 +105,9 @@ export function outputToolNames(response: unknown): string[] {
   if (!Array.isArray(output)) {
     return [];
   }
-  return output
-    .filter((item) => item.type === "function_call" && typeof item.name === "string")
-    .map((item) => item.name as string);
+  return output.flatMap((item) =>
+    item.type === "function_call" && typeof item.name === "string" ? [item.name] : [],
+  );
 }
 
 export function outputText(response: unknown): string {
@@ -196,10 +192,6 @@ export function countToolIdentifierMentions(text: string, identifier: string): n
   return countOccurrences(text, identifier, true);
 }
 
-function createCounts(needles: Record<string, string>): Record<string, number> {
-  return Object.fromEntries(Object.keys(needles).map((key) => [key, 0]));
-}
-
 function recordRole(record: unknown): string | undefined {
   const candidate = asOptionalObjectRecord(record);
   return (
@@ -213,16 +205,10 @@ function collectStringLeaves(value: unknown, output: string[]) {
     output.push(value);
     return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectStringLeaves(item, output);
-    }
-    return;
-  }
   if (!value || typeof value !== "object") {
     return;
   }
-  for (const item of Object.values(value)) {
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
     collectStringLeaves(item, output);
   }
 }
@@ -284,7 +270,7 @@ export async function countSessionLogMentions(params: {
   sessionsDir: string;
   needles: Record<string, string>;
 }): Promise<Record<string, number>> {
-  const counts = createCounts(params.needles);
+  const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
   await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
     const scanText = sessionLogScanText(eventJson);
     if (scanText === null) {

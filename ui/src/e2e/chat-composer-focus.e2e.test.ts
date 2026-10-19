@@ -1,115 +1,85 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI chat composer focus",
-});
+const suite = createControlUiE2eSuite({ name: "Control UI chat composer focus" });
+const expectFocus = (locator: Locator, focused = true) =>
+  expect
+    .poll(() => locator.evaluate((element) => document.activeElement === element))
+    .toBe(focused);
+
+async function openAgentPicker(page: Page) {
+  await installMockGateway(page, {
+    defaultAgentId: "main",
+    methodResponses: {
+      "agents.list": {
+        agents: ["main", "research"].map((id) => ({ id, workspace: `/tmp/${id}` })),
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}new?agent=main`);
+  const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+  return {
+    picker,
+    trigger: picker.locator(".agent-select__trigger"),
+    menu: picker.locator(".agent-select__menu"),
+    option: picker.getByRole("menuitemradio", { name: "research", exact: true }),
+    composer: page.locator(".new-session-page__message"),
+  };
+}
 
 suite.define(() => {
   it("routes agent-menu letters and selection keys to their owners", async () => {
     await suite.withPage({}, async ({ page }) => {
-      await installMockGateway(page, {
-        defaultAgentId: "main",
-        methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", workspace: "/tmp/main" },
-              { id: "research", workspace: "/tmp/research" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-
-      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
-      const trigger = picker.locator(".agent-select__trigger");
+      const { picker, trigger, option, composer } = await openAgentPicker(page);
       await trigger.waitFor({ state: "visible" });
       await trigger.focus();
       await page.keyboard.press("Enter");
       // Opening initializes the selected row after its animation completes.
       const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
-      await expect
-        .poll(() => selected.evaluate((element) => document.activeElement === element))
-        .toBe(true);
+      await expectFocus(selected);
       await page.keyboard.press("ArrowDown");
-      const option = picker.getByRole("menuitemradio", { name: "research", exact: true });
-      await expect
-        .poll(() => option.evaluate((element) => document.activeElement === element))
-        .toBe(true);
+      await expectFocus(option);
 
       await page.keyboard.press("Space");
 
       await expect
         .poll(() => picker.locator(".agent-select__label").textContent())
         .toBe("research");
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      await expect
-        .poll(() =>
-          picker
-            .locator("wa-dropdown")
-            .evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-        )
-        .toBe(false);
-      // The open property clears before the closing popup retires.
-      await picker.locator('wa-dropdown-item[aria-label="research"]').waitFor({ state: "hidden" });
+      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+      await option.waitFor({ state: "hidden" });
 
       await trigger.focus();
       await page.keyboard.press("Enter");
-      await expect
-        .poll(() => option.evaluate((element) => document.activeElement === element))
-        .toBe(true);
+      await expectFocus(option);
 
       await page.keyboard.type("r");
 
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("r");
+      await expect.poll(() => composer.inputValue()).toBe("r");
     });
   });
 
-  it("protects an open agent dropdown before an item receives focus", async () => {
+  it("keeps agent-menu activation keys out of the composer while its trigger retains focus", async () => {
     await suite.withPage({}, async ({ page }) => {
-      await installMockGateway(page, {
-        defaultAgentId: "main",
-        methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", workspace: "/tmp/main" },
-              { id: "research", workspace: "/tmp/research" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      const composer = page.locator(".new-session-page__message");
+      const { trigger, menu, option, composer } = await openAgentPicker(page);
       await composer.waitFor({ state: "visible" });
 
-      const result = await page.evaluate(() => {
-        const dropdown = document.querySelector<HTMLElement & { open: boolean }>(
-          ".new-session-page__select--agent wa-dropdown",
-        );
-        const main = document.querySelector<HTMLElement>("main");
-        if (!dropdown || !main) {
-          throw new Error("missing real agent dropdown fixture");
-        }
-        dropdown.open = true;
-        main.focus();
-        main.dispatchEvent(
-          new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
-        );
-        return {
-          activeTag: document.activeElement?.localName,
-          dropdownOpen: dropdown.open,
-        };
-      });
+      await trigger.click();
+      await menu.waitFor({ state: "visible" });
+      await trigger.focus();
+      await expectFocus(trigger);
+      await page.keyboard.press("Space");
 
-      expect(result).toEqual({ activeTag: "main", dropdownOpen: true });
+      await expect
+        .poll(() => menu.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
+      await expectFocus(option);
       await expect.poll(() => composer.inputValue()).toBe("");
     });
   });
@@ -119,11 +89,7 @@ suite.define(() => {
       const messageText = "Context menu typing route";
       await installMockGateway(page, {
         historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: messageText }],
-            timestamp: 1_000,
-          },
+          { role: "assistant", content: [{ type: "text", text: messageText }], timestamp: 1_000 },
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -139,26 +105,7 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
       await expect.poll(() => composer.inputValue()).toBe("x");
-      await expect
-        .poll(() => composer.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-    });
-  });
-
-  it("preserves the first character typed outside the new-session composer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-
-      const composer = page.locator(".new-session-page__message");
-      await composer.waitFor({ state: "visible" });
-      await page.locator("main").click({ position: { x: 5, y: 5 } });
-      await page.keyboard.type("x");
-
-      await expect.poll(() => composer.inputValue()).toBe("x");
-      await expect
-        .poll(() => composer.evaluate((element) => document.activeElement === element))
-        .toBe(true);
+      await expectFocus(composer);
     });
   });
 
@@ -202,9 +149,7 @@ suite.define(() => {
             }),
           );
         });
-        await expect
-          .poll(() => composer.evaluate((element) => document.activeElement === element))
-          .toBe(false);
+        await expectFocus(composer, false);
       }
     });
   });

@@ -141,7 +141,7 @@ export async function readCodexImageGenerationResponse(
     onOverflow: () => new Error("OpenAI Codex image generation response exceeded size limit"),
   });
   const events = parseCodexImageGenerationEvents(new TextDecoder().decode(body));
-  const outputItems: Array<NonNullable<OpenAICodexImageGenerationEvent["item"]>> = [];
+  const outputItems: OpenAICodexImageGenerationItem[] = [];
   let completedResponse: OpenAICodexImageGenerationEvent["response"];
   for (const event of events) {
     if (event.type === "response.failed" || event.type === "error") {
@@ -167,17 +167,16 @@ export async function readCodexImageGenerationResponse(
   if (!completedResponse) {
     throw new Error("OpenAI Codex image generation stream closed before response.completed");
   }
-  const completedOutputItems = (completedResponse.output ?? [])
-    .filter((entry) => entry.type === "image_generation_call")
-    .slice(0, OPENAI_MAX_IMAGE_RESULTS);
+  const completedOutputItems = (completedResponse.output ?? []).filter(
+    (entry) => entry.type === "image_generation_call",
+  );
   // The completed snapshot owns final provider state; done events only recover
   // compatible streams that omit their image from the terminal output.
-  const selectedOutputItems =
+  const selectedOutputItems = (
     completedOutputItems.length > 0
       ? completedOutputItems
-      : outputItems
-          .filter((entry) => entry.type === "image_generation_call")
-          .slice(0, OPENAI_MAX_IMAGE_RESULTS);
+      : outputItems.filter((entry) => entry.type === "image_generation_call")
+  ).slice(0, OPENAI_MAX_IMAGE_RESULTS);
   const images: ImageGenerationResult["images"] = [];
   for (const [index, item] of selectedOutputItems.entries()) {
     if (item.status && item.status !== "completed") {

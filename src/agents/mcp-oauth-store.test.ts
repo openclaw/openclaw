@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -14,7 +15,7 @@ import {
   clearMcpOAuthStore,
   consumeOAuthState,
   deleteMcpOAuthPendingAuthorizationsByPrefix,
-  readMcpOAuthPendingAuthorization,
+  readMcpOAuthPendingAuthorization as readPending,
   writeMcpOAuthPendingAuthorization,
 } from "./mcp-oauth-store.js";
 import { withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
@@ -30,42 +31,51 @@ async function withTempHome(run: () => Promise<void>): Promise<void> {
   });
 }
 
+function writePending(storeKey: string, state: string) {
+  return withMcpOAuthTestLease(storeKey, (lease, context) =>
+    writeMcpOAuthPendingAuthorization({ storeKey, lease, context }, state),
+  );
+}
+
+function consumePending(storeKey: string, state: string) {
+  return withMcpOAuthTestLease(storeKey, (lease, context) =>
+    consumeOAuthState({ storeKey, lease, context }, state),
+  );
+}
+
+function pendingTable(database: ReturnType<typeof openOpenClawStateDatabase>["db"]) {
+  return database
+    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+    .get("mcp_oauth_pending_authorizations");
+}
+
 describe("MCP OAuth pending authorization store", () => {
   it("rolls back first-use schema after refused grants and retries on the retained actor", async () => {
     await withTempHome(async () => {
       const database = openOpenClawStateDatabase().db;
-      const pendingTable = () =>
-        database
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("mcp_oauth_pending_authorizations");
-      expect(pendingTable()).toBeUndefined();
+      expect(pendingTable(database)).toBeUndefined();
       const store = operatorMcpOAuthIdentity("Pending grants", "https://pending.example.test/mcp");
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       await withMcpOAuthTestLease(store.storeKey, async (lease, context) => {
         const options = { storeKey: store.storeKey, lease, context };
         for (const stage of ["transaction", "commit"] as const) {
           let current = true;
           let observedGrant = false;
           const refusal = new Error(`Synthetic pending authority retired at ${stage}`);
-          const admission = vi
-            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                const facts = request.facts;
-                if (
-                  request.stage === stage &&
-                  isRecord(facts) &&
-                  facts.kind === "state-lease" &&
-                  isRecord(facts.identity) &&
-                  facts.identity.key === store.storeKey
-                ) {
-                  // Dispatch has passed; retire authority at the actual grant port.
-                  current = false;
-                  observedGrant = true;
-                }
-                admit(request, grant);
-              }, attachment),
-            );
+          const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+            const facts = request.facts;
+            if (
+              request.stage === stage &&
+              isRecord(facts) &&
+              facts.kind === "state-lease" &&
+              isRecord(facts.identity) &&
+              facts.identity.key === store.storeKey
+            ) {
+              // Dispatch has passed; retire authority at the actual grant port.
+              current = false;
+              observedGrant = true;
+            }
+            admit(request, grant);
+          });
           try {
             await expect(
               writeMcpOAuthPendingAuthorization(options, `refused-${stage}`, {
@@ -80,13 +90,11 @@ describe("MCP OAuth pending authorization store", () => {
             admission.mockRestore();
           }
           expect(observedGrant).toBe(true);
-          expect(pendingTable()).toBeUndefined();
+          expect(pendingTable(database)).toBeUndefined();
         }
         await writeMcpOAuthPendingAuthorization(options, "authorized-retry");
-        expect(await readMcpOAuthPendingAuthorization("authorized-retry", context)).toBe(
-          store.storeKey,
-        );
-        expect(pendingTable()).toEqual({ name: "mcp_oauth_pending_authorizations" });
+        expect(await readPending("authorized-retry", context)).toBe(store.storeKey);
+        expect(pendingTable(database)).toEqual({ name: "mcp_oauth_pending_authorizations" });
       });
     });
   });
@@ -94,30 +102,15 @@ describe("MCP OAuth pending authorization store", () => {
   it("lazily creates durable exact-state correlation without changing schema version", async () => {
     await withTempHome(async () => {
       const database = openOpenClawStateDatabase().db;
-      expect(
-        database
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("mcp_oauth_pending_authorizations"),
-      ).toBeUndefined();
+      expect(pendingTable(database)).toBeUndefined();
 
       // Public callback lookups are read-only: an unknown state must not
       // create the lazy table or any shared state.
-      expect(await readMcpOAuthPendingAuthorization("unknown-state")).toBeUndefined();
-      expect(
-        database
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("mcp_oauth_pending_authorizations"),
-      ).toBeUndefined();
+      expect(await readPending("unknown-state")).toBeUndefined();
+      expect(pendingTable(database)).toBeUndefined();
 
       const store = operatorMcpOAuthIdentity("Pending", "https://pending.example.com/mcp");
-      await withMcpOAuthTestLease(
-        store.storeKey,
-        async (lease, context) =>
-          await writeMcpOAuthPendingAuthorization(
-            { storeKey: store.storeKey, lease, context },
-            "first-state",
-          ),
-      );
+      await writePending(store.storeKey, "first-state");
       expect(
         database
           .prepare("SELECT strict FROM pragma_table_list WHERE name = ?")
@@ -126,70 +119,29 @@ describe("MCP OAuth pending authorization store", () => {
       expect(database.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
-      expect(await readMcpOAuthPendingAuthorization("first-state")).toBe(store.storeKey);
+      expect(await readPending("first-state")).toBe(store.storeKey);
 
-      await withMcpOAuthTestLease(
-        store.storeKey,
-        async (lease, context) =>
-          await writeMcpOAuthPendingAuthorization(
-            { storeKey: store.storeKey, lease, context },
-            "second-state",
-          ),
-      );
-      expect(await readMcpOAuthPendingAuthorization("first-state")).toBeUndefined();
-      expect(await readMcpOAuthPendingAuthorization("second-state")).toBe(store.storeKey);
-      expect(
-        await withMcpOAuthTestLease(
-          store.storeKey,
-          async (lease, context) =>
-            await consumeOAuthState({ storeKey: store.storeKey, lease, context }, "other-state"),
-        ),
-      ).toBe(false);
-      expect(
-        await withMcpOAuthTestLease(
-          store.storeKey,
-          async (lease, context) =>
-            await consumeOAuthState({ storeKey: store.storeKey, lease, context }, "second-state"),
-        ),
-      ).toBe(true);
-      expect(
-        await withMcpOAuthTestLease(
-          store.storeKey,
-          async (lease, context) =>
-            await consumeOAuthState({ storeKey: store.storeKey, lease, context }, "second-state"),
-        ),
-      ).toBe(false);
+      await writePending(store.storeKey, "second-state");
+      expect(await readPending("first-state")).toBeUndefined();
+      expect(await readPending("second-state")).toBe(store.storeKey);
+      expect(await consumePending(store.storeKey, "other-state")).toBe(false);
+      expect(await consumePending(store.storeKey, "second-state")).toBe(true);
+      expect(await consumePending(store.storeKey, "second-state")).toBe(false);
 
       await withMcpOAuthTestLease(
         store.storeKey,
         async (lease, context) =>
           await clearMcpOAuthStore({ storeKey: store.storeKey, lease, context }),
       );
-      expect(await readMcpOAuthPendingAuthorization("second-state")).toBeUndefined();
+      expect(await readPending("second-state")).toBeUndefined();
     });
   });
 
   it("uses exact state lookup and clears one requester prefix", async () => {
     await withTempHome(async () => {
       const database = openOpenClawStateDatabase().db;
-      await withMcpOAuthTestLease(
-        "schema-install",
-        async (lease, context) =>
-          await writeMcpOAuthPendingAuthorization(
-            { storeKey: "schema-install", lease, context },
-            "schema-install-state",
-          ),
-      );
-      expect(
-        await withMcpOAuthTestLease(
-          "schema-install",
-          async (lease, context) =>
-            await consumeOAuthState(
-              { storeKey: "schema-install", lease, context },
-              "schema-install-state",
-            ),
-        ),
-      ).toBe(true);
+      await writePending("schema-install", "schema-install-state");
+      expect(await consumePending("schema-install", "schema-install-state")).toBe(true);
       const insertPending = database.prepare(
         "INSERT INTO mcp_oauth_pending_authorizations (state, store_key, create_time) VALUES (?, ?, ?)",
       );
@@ -211,60 +163,31 @@ describe("MCP OAuth pending authorization store", () => {
         database.exec("ROLLBACK");
         throw error;
       }
-      expect(await readMcpOAuthPendingAuthorization("absent-state")).toBeUndefined();
+      expect(await readPending("absent-state")).toBeUndefined();
 
       // A copied sign-in link dies after the pending-state TTL, even unclaimed.
       insertPending.run("expired-state", "expired-store", Date.now() - 11 * 60 * 1000);
       insertPending.run("fresh-foreign-state", "fresh-foreign-store", Date.now());
-      expect(await readMcpOAuthPendingAuthorization("expired-state")).toBeUndefined();
-      expect(
-        await withMcpOAuthTestLease(
-          "expired-store",
-          async (lease, context) =>
-            await consumeOAuthState({ storeKey: "expired-store", lease, context }, "expired-state"),
-        ),
-      ).toBe(false);
+      expect(await readPending("expired-state")).toBeUndefined();
+      expect(await consumePending("expired-store", "expired-state")).toBe(false);
 
-      await withMcpOAuthTestLease(
-        "server-r-requester-a",
-        async (lease, context) =>
-          await writeMcpOAuthPendingAuthorization(
-            { storeKey: "server-r-requester-a", lease, context },
-            "requester-a-state",
-          ),
-      );
+      await writePending("server-r-requester-a", "requester-a-state");
       expect(
         database
           .prepare("SELECT state FROM mcp_oauth_pending_authorizations WHERE state = ?")
           .get("expired-state"),
       ).toBeUndefined();
-      expect(await readMcpOAuthPendingAuthorization("fresh-foreign-state")).toBe(
-        "fresh-foreign-store",
-      );
-      await withMcpOAuthTestLease(
-        "server-r-requester-b",
-        async (lease, context) =>
-          await writeMcpOAuthPendingAuthorization(
-            { storeKey: "server-r-requester-b", lease, context },
-            "requester-b-state",
-          ),
-      );
-      await withMcpOAuthTestLease(
-        "other-r-requester",
-        async (lease, context) =>
-          await writeMcpOAuthPendingAuthorization(
-            { storeKey: "other-r-requester", lease, context },
-            "other-state",
-          ),
-      );
+      expect(await readPending("fresh-foreign-state")).toBe("fresh-foreign-store");
+      await writePending("server-r-requester-b", "requester-b-state");
+      await writePending("other-r-requester", "other-state");
       await deleteMcpOAuthPendingAuthorizationsByPrefix(
         "server-r-",
         captureOpenClawStateWorkerContext(),
       );
 
-      expect(await readMcpOAuthPendingAuthorization("requester-a-state")).toBeUndefined();
-      expect(await readMcpOAuthPendingAuthorization("requester-b-state")).toBeUndefined();
-      expect(await readMcpOAuthPendingAuthorization("other-state")).toBe("other-r-requester");
+      expect(await readPending("requester-a-state")).toBeUndefined();
+      expect(await readPending("requester-b-state")).toBeUndefined();
+      expect(await readPending("other-state")).toBe("other-r-requester");
     });
   });
 });

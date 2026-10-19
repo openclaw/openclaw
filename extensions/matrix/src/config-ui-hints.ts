@@ -2,6 +2,18 @@ import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const matrixChannelConfigUiHints = {
+  requireMentionInBotThreads: {
+    label: "Mention in Bot Threads",
+    help: "Require a mention in threads rooted in this bot's own Matrix events. Set false to accept unmentioned follow-ups; omit to preserve the room's existing mention behavior.",
+  },
+  "rooms.*.requireMentionInBotThreads": {
+    label: "Mention in Bot Threads",
+    help: "Override the account's bot-created thread mention policy for this Matrix room. Exact room entries replace wildcard room settings.",
+  },
+  "groups.*.requireMentionInBotThreads": {
+    label: "Mention in Bot Threads",
+    help: "Override the account's bot-created thread mention policy for this Matrix room. Exact room entries replace wildcard room settings.",
+  },
   joinIntro: {
     label: "Matrix Group Join Introduction",
     help: "Post one brief introduction when the bot joins an allowed group room (default: true). Account settings override the channel-wide setting.",

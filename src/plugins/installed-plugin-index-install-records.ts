@@ -32,15 +32,15 @@ function restoreInstallRecordMap(
   return restored;
 }
 
-/** Extracts raw plugin install records from either current or legacy installed-index shapes. */
+/** Copies canonical install records out of the installed index. */
 export function extractPluginInstallRecordsFromInstalledPluginIndex(
   index: InstalledPluginIndex | null | undefined,
 ): Record<string, PluginInstallRecord> {
   const facts = index ? getInstalledPluginIndexFacts(index) : undefined;
   if (!facts) {
-    return restoreInstallRecordMap(indexInstallRecords(index));
+    return restoreInstallRecordMap(index?.installRecords);
   }
-  const parsed = (facts.installRecords ??= restoreInstallRecordMap(indexInstallRecords(index)));
+  const parsed = (facts.installRecords ??= restoreInstallRecordMap(index?.installRecords));
   const records = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, record] of Object.entries(parsed)) {
     // Match schema parsing's copies of known structured fields; passthrough fields stay intact.
@@ -53,19 +53,6 @@ export function extractPluginInstallRecordsFromInstalledPluginIndex(
         ? { acceptedSurface: structuredClone(record.acceptedSurface) }
         : {}),
     });
-  }
-  return records;
-}
-
-function indexInstallRecords(index: InstalledPluginIndex | null | undefined) {
-  if (index && Object.hasOwn(index, "installRecords")) {
-    return index.installRecords;
-  }
-  const records = createPluginInstallRecordMap<PluginInstallRecord>();
-  for (const plugin of index?.plugins ?? []) {
-    if (plugin.installRecord) {
-      setPluginInstallRecordMapEntry(records, plugin.pluginId, plugin.installRecord);
-    }
   }
   return records;
 }

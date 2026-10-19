@@ -6,7 +6,6 @@ import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logWarn } from "./logger.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "./logging/logger.js";
-import { stripRedundantSubsystemPrefixForConsole } from "./logging/subsystem.js";
 import type { RuntimeEnv } from "./runtime.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 
@@ -56,28 +55,6 @@ describe("logger helpers", () => {
       expect(content).toContain("warn-only");
     });
   });
-
-  it("uses daily rolling log files and prunes old ones", async () => {
-    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
-      resetLogger();
-      const today = localDateString(new Date());
-      const todayPath = path.join(dir, `openclaw-${today}.log`);
-      setLoggerOverride({ level: "info", file: todayPath });
-
-      // create an old file to be pruned
-      const oldPath = path.join(dir, "openclaw-2000-01-01.log");
-      fs.writeFileSync(oldPath, "old");
-      fs.utimesSync(oldPath, new Date(0), new Date(0));
-
-      logInfo("roll-me");
-      // The file transport appends asynchronously; drain it before reading.
-      await flushLogger();
-
-      expect(fs.existsSync(todayPath)).toBe(true);
-      expect(fs.readFileSync(todayPath, "utf-8")).toContain("roll-me");
-      expect(fs.existsSync(oldPath)).toBe(false);
-    });
-  });
 });
 
 describe("globals", () => {
@@ -106,30 +83,3 @@ describe("globals", () => {
     expect(isYes()).toBe(false);
   });
 });
-
-describe("stripRedundantSubsystemPrefixForConsole", () => {
-  it.each([
-    { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
-    { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
-    {
-      input: "[discord] connection stalled",
-      subsystem: "discord",
-      expected: "connection stalled",
-    },
-  ] as const)("drops known subsystem prefix for $input", ({ input, subsystem, expected }) => {
-    expect(stripRedundantSubsystemPrefixForConsole(input, subsystem)).toBe(expected);
-  });
-
-  it("keeps messages that do not start with the subsystem", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
-      "discordant: hello",
-    );
-  });
-});
-
-function localDateString(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}

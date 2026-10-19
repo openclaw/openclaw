@@ -6,10 +6,30 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
+import {
+  acquireSessionActorStorage,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import {
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
+import {
+  loadWorkerPlacementSessionRuntimeModule,
+  resolveWorkerPlacementSessionTarget,
+} from "./server-worker-placement-session-target.js";
 import type {
   CreateGatewaySessionParams,
   PreparedGatewaySessionLifecycle,
@@ -19,6 +39,13 @@ import {
   prepareSessionMutationFacts,
 } from "./session-sharing-preparation.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import { prepareSessionWorktree } from "./session-worktree-preparation.js";
+
+type PreparedLifecycleTarget = {
+  matchesCurrent(currentConfig: OpenClawConfig): boolean;
+  bindCreation: Awaited<ReturnType<typeof prepareSessionMutationFacts>>["bindCreation"];
+  release(): void | Promise<void>;
+};
 
 /** Retain the canonical targets across asynchronous authority preparation and mutation. */
 export function prepareGatewaySessionLifecycleTargets(params: {
@@ -28,6 +55,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
     ready: Promise<void>;
     assertCurrent: () => void;
     selectTargetInLifecycle?: boolean;
+    followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   };
   targets: readonly {
     target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
@@ -39,13 +67,13 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   const creationSelection = params.creation?.selectTargetInLifecycle
     ? createDeferredCore()
     : undefined;
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
   let preparedDatabase: { assertCurrent(): void } | undefined;
   const scopes = params.targets.map(({ target }) => ({
     agentId: target.agentId,
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   }));
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, scopes);
   const creationScope = scopes[0];
   if (params.creation && !creationScope) {
     throw new Error("Session creation preparation requires its original target");
@@ -58,6 +86,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
               scope: creationScope,
               assertCurrent: params.creation.assertCurrent,
               relatedScopes: scopes.slice(1),
+              followRegistration: params.creation.followRegistration,
             },
           ],
           params.creation.ready,
@@ -66,61 +95,87 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   const databasePreparation = databaseCustody?.preparations[0]!.then((prepared) => {
     preparedDatabase = prepared;
   });
-  const preparations = params.targets.map(async ({ target, entry, storageReady }, index) => {
-    let preparedStorage: { assertCurrent(): void } | undefined;
-    const targetStorageReady = storageReady?.then((prepared) => {
-      preparedStorage = prepared;
-    });
-    const selected = { ...target };
-    const originalIdentity = {
-      sessionId: entry?.sessionId,
-      lifecycleRevision: entry?.lifecycleRevision,
-    };
-    const selectOnEntry = index === 0 ? creationSelection : undefined;
-    if (selectOnEntry) {
-      await selectOnEntry.promise;
-      preparedDatabase?.assertCurrent();
-    }
-    const facts = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey: selected.canonicalKey,
-      agentId: selected.agentId,
-      allowMissing: true,
-      storageReady: targetStorageReady ?? databasePreparation,
-    });
-    let sessionId = originalIdentity.sessionId;
-    let lifecycleRevision = originalIdentity.lifecycleRevision;
-    if (selectOnEntry) {
-      try {
-        preparedDatabase?.assertCurrent();
-        const selectedEntry = facts.readCurrent(cfg).target?.entry;
-        sessionId = selectedEntry?.sessionId;
-        lifecycleRevision = selectedEntry?.lifecycleRevision;
-      } catch (error) {
-        facts.release();
-        throw error;
-      }
-    }
-    return {
-      matchesCurrent(currentConfig: OpenClawConfig) {
-        preparedStorage?.assertCurrent();
-        const current = facts.readCurrent(currentConfig).target;
-        return (
-          facts.storageTarget.agentId === selected.agentId &&
-          facts.storageTarget.storePath === selected.storePath &&
-          facts.storageTarget.canonicalKey === selected.canonicalKey &&
-          current?.entry.sessionId === sessionId &&
-          current?.entry.lifecycleRevision === lifecycleRevision &&
-          (!current ||
-            (current.agentId === selected.agentId &&
-              current.storePath === selected.storePath &&
-              current.canonicalKey === selected.canonicalKey))
+  const preparations = params.targets.map(
+    async ({ target, entry, storageReady }, index): Promise<PreparedLifecycleTarget> => {
+      const memory = isIncognitoSessionKey(target.canonicalKey)
+        ? getSessionActorStorageBinding({})
+        : undefined;
+      if (memory) {
+        const assertCurrent = () => memory.authority.assertCurrent();
+        const selected = expectDefined(
+          await acquireSessionActorStorage(
+            { ...target, sessionKey: target.canonicalKey },
+            {
+              authority: memory.authority,
+              lifetime: { assertCurrent, assertReadable: assertCurrent },
+            },
+          ),
+          "memory lifecycle target",
         );
-      },
-      bindCreation: facts.bindCreation,
-      release: facts.release,
-    };
-  });
+        return {
+          matchesCurrent() {
+            selected.actor.assertCurrent();
+            return true;
+          },
+          bindCreation() {},
+          release: () => selected.actor.release(),
+        };
+      }
+      let preparedStorage: { assertCurrent(): void } | undefined;
+      const targetStorageReady = storageReady?.then((prepared) => {
+        preparedStorage = prepared;
+      });
+      const selected = { ...target };
+      const originalIdentity = {
+        sessionId: entry?.sessionId,
+        lifecycleRevision: entry?.lifecycleRevision,
+      };
+      const selectOnEntry = index === 0 ? creationSelection : undefined;
+      if (selectOnEntry) {
+        await selectOnEntry.promise;
+        preparedDatabase?.assertCurrent();
+      }
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey: selected.canonicalKey,
+        agentId: selected.agentId,
+        allowMissing: true,
+        storageReady: targetStorageReady ?? databasePreparation,
+      });
+      let sessionId = originalIdentity.sessionId;
+      let lifecycleRevision = originalIdentity.lifecycleRevision;
+      if (selectOnEntry) {
+        try {
+          preparedDatabase?.assertCurrent();
+          const selectedEntry = facts.readCurrent(cfg).target?.entry;
+          sessionId = selectedEntry?.sessionId;
+          lifecycleRevision = selectedEntry?.lifecycleRevision;
+        } catch (error) {
+          facts.release();
+          throw error;
+        }
+      }
+      return {
+        matchesCurrent(currentConfig: OpenClawConfig) {
+          preparedStorage?.assertCurrent();
+          const current = facts.readCurrent(currentConfig).target;
+          return (
+            facts.storageTarget.agentId === selected.agentId &&
+            facts.storageTarget.storePath === selected.storePath &&
+            facts.storageTarget.canonicalKey === selected.canonicalKey &&
+            current?.entry.sessionId === sessionId &&
+            current?.entry.lifecycleRevision === lifecycleRevision &&
+            (!current ||
+              (current.agentId === selected.agentId &&
+                current.storePath === selected.storePath &&
+                current.canonicalKey === selected.canonicalKey))
+          );
+        },
+        bindCreation: facts.bindCreation,
+        release: facts.release,
+      };
+    },
+  );
   for (const preparation of preparations) {
     void preparation.catch(() => {});
   }
@@ -177,7 +232,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
       creationSelection?.reject(new Error("Session creation ended before target selection"));
       for (const result of await Promise.allSettled(preparations)) {
         if (result.status === "fulfilled") {
-          result.value.release();
+          await result.value.release();
         }
       }
       await databasePreparation?.catch(() => {});
@@ -344,4 +399,144 @@ export async function rollbackGatewaySessionPreparation(params: {
   } catch (error) {
     params.onError?.(error);
   }
+}
+
+/** Publish accepted workspace ownership before releasing preparation; roll back only unbound work. */
+export async function commitPreparedSessionWorkspace(params: {
+  prepared: PreparedGatewaySessionLifecycle;
+  target: { agentId: string; sessionKey: string; storePath: string };
+  assertCurrent: SessionSourceAssertion;
+  assertEntry: (entry: SessionEntry) => void;
+  projectId?: string;
+  clearPendingIntent?: boolean;
+  onCommitted?: () => void;
+  missingSessionMessage: string;
+}): Promise<SessionEntry> {
+  const { prepared } = params;
+  const bind = async (assertSourceCurrent: SessionSourceAssertion) => {
+    const assertCurrent = composeSessionSourceAssertion([
+      params.assertCurrent,
+      assertSourceCurrent,
+    ]);
+    return await patchSessionEntryCore(
+      params.target,
+      (entry) => {
+        assertCurrent();
+        params.assertEntry(entry);
+        return {
+          ...(params.projectId ? { projectId: params.projectId } : {}),
+          sessionRoot: prepared.sessionRoot,
+          spawnedCwd: prepared.spawnedCwd,
+          ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+          ...(params.clearPendingIntent
+            ? { pendingProjectGitUrl: undefined, pendingWorktree: undefined }
+            : {}),
+        };
+      },
+      {
+        ...sessionEntryCommitGuardOptions(assertCurrent),
+        requireWriteSuccess: true,
+        skipMaintenance: true,
+        onCommitted: params.onCommitted,
+      },
+    );
+  };
+  try {
+    const entry = prepared.withCommit ? await prepared.withCommit(bind) : await bind(() => {});
+    if (!entry) {
+      throw new Error(params.missingSessionMessage);
+    }
+    return entry;
+  } catch (error) {
+    await prepared.rollback?.();
+    throw error;
+  }
+}
+
+/** Adopt only a session-owned workspace; never replace an accepted external source. */
+export async function ensureSessionWorkspaceForPlacement(params: {
+  cfg: OpenClawConfig;
+  target: { agentId: string; canonicalKey: string; storePath: string; storeKeys: string[] };
+  entry: SessionEntry;
+  assertCurrent: SessionSourceAssertion;
+  signal?: AbortSignal;
+  onCommitted?: () => void;
+  canPrepare: () => boolean;
+}): Promise<SessionEntry> {
+  const { target, entry } = params;
+  return await runSessionMutation({
+    diagnosticLabel: "placement-dispatch",
+    target: captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.canonicalKey,
+      aliases: target.storeKeys,
+      agentId: target.agentId,
+      incarnation: entry.sessionId,
+    }),
+    policy: "allow-live",
+    signal: params.signal,
+    assertCurrent: params.assertCurrent,
+    run: async () => {
+      params.assertCurrent();
+      if (!params.canPrepare()) {
+        return entry;
+      }
+      if (entry.worktree || entry.repositoryWorkspaceId) {
+        const resolved = await resolveWorkerPlacementSessionTarget({
+          sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
+          config: params.cfg,
+          sessionId: entry.sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          readTarget: () => {
+            params.assertCurrent();
+            return { ...target, store: { [target.canonicalKey]: entry } };
+          },
+          errorMessage: "The session workspace owner is unavailable; repair it before retrying.",
+        });
+        resolved[Symbol.dispose]();
+        params.assertCurrent();
+        return entry;
+      }
+      if (entry.pendingWorktree || entry.pendingProjectGitUrl) {
+        throw new Error("The session workspace must finish preparation before worker setup.");
+      }
+      if (entry.spawnedCwd || entry.projectId || entry.sessionRoot) {
+        throw new Error(
+          "Worker execution needs a session-owned workspace; create a managed-workspace session rather than dropping the current workspace.",
+        );
+      }
+      const prepared = await prepareSessionWorktree({
+        cfg: params.cfg,
+        target: { ...target, key: target.canonicalKey, entry },
+        workspace: { kind: "empty" },
+        runSetupScript: false,
+        signal: params.signal,
+        commitGuard: params.assertCurrent,
+      });
+      if (!prepared.ok) {
+        throw new Error(prepared.error.message);
+      }
+      return await commitPreparedSessionWorkspace({
+        prepared: prepared.value,
+        onCommitted: params.onCommitted,
+        target: { ...target, sessionKey: target.canonicalKey },
+        assertCurrent: params.assertCurrent,
+        assertEntry: (saved) => {
+          if (
+            saved.sessionId !== entry.sessionId ||
+            saved.worktree ||
+            saved.repositoryWorkspaceId ||
+            saved.sessionRoot ||
+            saved.spawnedCwd ||
+            saved.pendingWorktree ||
+            saved.pendingProjectGitUrl
+          ) {
+            throw new Error("Session workspace changed during worker setup.");
+          }
+        },
+        missingSessionMessage: "Session disappeared during worker setup.",
+      });
+    },
+  });
 }

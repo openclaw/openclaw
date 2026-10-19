@@ -10,7 +10,7 @@ defineDiscordVoiceTests(
     createClient,
     createManager,
     configureVoiceStateGateway,
-    managerModule,
+    listenersModule,
     createRealtimeVoiceBridgeSessionMock,
     makeAgentProxyConfig,
     ChannelType,
@@ -85,9 +85,9 @@ defineDiscordVoiceTests(
           d: voiceState("human-one", "1001"),
         } as never);
         const listeners = {
-          Ready: new managerModule.DiscordVoiceReadyListener(manager),
-          Resumed: new managerModule.DiscordVoiceResumedListener(manager),
-          GuildCreate: new managerModule.DiscordVoiceGuildCreateListener(manager),
+          Ready: new listenersModule.DiscordVoiceReadyListener(manager),
+          Resumed: new listenersModule.DiscordVoiceResumedListener(manager),
+          GuildCreate: new listenersModule.DiscordVoiceGuildCreateListener(manager),
         };
         try {
           await listeners[event].handle({ id: "g1", unavailable: false } as never, client as never);

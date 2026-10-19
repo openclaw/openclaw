@@ -9,12 +9,14 @@ import {
   requestSessionCreate,
   resolveSessionCreateParams,
   type SessionCreateParams,
+  type SessionCreateRequestOptions,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
+  SessionConnectionScope,
   SessionCreateReconciliation,
   SessionRefreshOutcome,
   SessionResetOptions,
@@ -47,6 +49,11 @@ import {
 import { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 
 export function createSessionMutations(host: SessionMutationsHost) {
+  const reportError = (scope: SessionConnectionScope, error: unknown) => {
+    if (host.connection.isCurrent(scope)) {
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+    }
+  };
   const modelOverrides = createSessionModelOverrides(host);
   const archiveState = createSessionArchiveState(
     host.publishedRow,
@@ -84,7 +91,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
 
   const createResult = async (
     params: SessionCreateParams = {},
-    options: { reconciliation?: SessionCreateReconciliation } = {},
+    options: SessionCreateRequestOptions & { reconciliation?: SessionCreateReconciliation } = {},
   ) => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -92,10 +99,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
     try {
       const { currentSessionKey, ...requestParams } = params;
-      const result = await requestSessionCreate(scope.client, {
-        ...requestParams,
-        ...resolveSessionCreateParams(currentSessionKey, params.agentId),
-      });
+      const result = await requestSessionCreate(
+        scope.client,
+        {
+          ...requestParams,
+          ...resolveSessionCreateParams(currentSessionKey, params.agentId),
+        },
+        options,
+      );
       if (!host.connection.isCurrent(scope)) {
         return (await reconcileConfirmedPreviousConnection(scope, params.agentId)) ? result : null;
       }
@@ -110,13 +121,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       } else if (preparedWorkSessionKeys.has(result.key)) {
         host.publish({ ...host.readState() });
       }
-      const reconciliation = host.reconcileMutation(params.agentId);
+      const reconciliation = host.reconcileMutation(params.agentId, undefined, true);
       if (options.reconciliation === "background") {
-        void reconciliation.catch((error: unknown) => {
-          if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-          }
-        });
+        void reconciliation.catch((error: unknown) => reportError(scope, error));
       } else {
         await reconciliation;
         if (!host.connection.isCurrent(scope)) {
@@ -127,15 +134,15 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      if (!options.signal?.aborted) {
+        reportError(scope, error);
       }
       return null;
     }
   };
 
-  const create = async (params: SessionCreateParams = {}) =>
-    (await createResult(params))?.key ?? null;
+  const create = async (params: SessionCreateParams = {}, options?: SessionCreateRequestOptions) =>
+    (await createResult(params, options))?.key ?? null;
 
   const patch = async (
     key: string,
@@ -155,6 +162,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const patchSnapshot = host.snapshot();
     const pendingConversation =
       hasSettingsPatch ||
+      patchParams.label !== undefined ||
       patchParams.category !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
@@ -186,7 +194,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let rowPatchConfirmed = false;
     let writeConfirmed = false;
     let permissionProjection: SessionPermissionClaim | undefined;
-    const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const modelPatch = modelOverrides.preparePatch(key, patchParams, options, scope);
     const nextPinned = patchParams.pinned === true;
     let pinPatchToken: symbol | null = null;
@@ -375,7 +382,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // Commit and list reconciliation are separate outcomes. Callers must not
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
-      if (!options.deferListRefresh) {
+      // Read receipts settle their row fields; events still invalidate roster membership.
+      const confirmedRead =
+        rowPatchConfirmed && patchParams.unread === false && Object.keys(patchParams).length === 1;
+      if (!options.deferListRefresh && !confirmedRead) {
         if (Object.hasOwn(patchParams, "permissionMode")) {
           refreshOutcome = await host.reconcileMutation(
             options.agentId,
@@ -433,7 +443,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (uncertainCategory) {
         throw reportUncertainCategory(error, options.agentId);
       }
-      if (ownsModelOverride() && !settingsTargetWasReplaced()) {
+      if (options.ownsModelOverride?.() !== false && !settingsTargetWasReplaced()) {
         host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;
@@ -506,9 +516,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       await requestSessionReset(scope.client, key, options);
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";
     }
@@ -549,9 +557,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result.owner;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };
@@ -583,11 +589,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     patchMany,
     assignOwner,
     patchRowLocal,
-    /**
-     * Re-asserts in-flight row intents over Gateway events and list refreshes,
-     * which carry the pre-mutation value until the patch lands.
-     */
-    applyPendingRow,
+    /** Confirmed archive facts precede in-flight row intents on every presentation. */
+    applyRow: (row: GatewaySessionRow, sourceAgentId?: string | null) =>
+      applyPendingRow(archiveState.applyRow(row), sourceAgentId),
     observePendingFields(
       row: GatewaySessionRow,
       names: readonly string[],
@@ -596,26 +600,36 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!hasPendingRowPatches()) {
         return;
       }
-      const identity = pendingRowIdentity(host.snapshot(), row, sourceAgentId);
+      const snapshot = host.snapshot();
+      const identity = pendingRowIdentity(snapshot, row, sourceAgentId);
+      const current = host.findRow(
+        (candidate, agentId) =>
+          candidate.sessionId === row.sessionId &&
+          pendingRowIdentity(snapshot, candidate, agentId) === identity,
+      );
+      if (
+        current?.updatedAt != null &&
+        row.updatedAt != null &&
+        row.updatedAt < current.updatedAt
+      ) {
+        return;
+      }
       for (const owner of rowPatches) {
         owner.observe(row, names, identity);
       }
     },
-    applyPendingRows(
+    applyRows(
       result: SessionsListResult | null,
       sourceAgentId?: string | null,
     ): SessionsListResult | null {
-      if (!result || !hasPendingRowPatches()) {
-        return result;
+      const archived = archiveState.apply(result);
+      if (!archived || !hasPendingRowPatches()) {
+        return archived;
       }
-      return projectSessionResultRows(
-        result,
-        result.sessions.map((row) => applyPendingRow(row, sourceAgentId)),
-      );
+      return mapSessionResultRows(archived, (row) => applyPendingRow(row, sourceAgentId));
     },
-    applyConfirmedArchives: archiveState.apply,
-    applyConfirmedArchiveRow: archiveState.applyRow,
     observeArchiveState: archiveState.observe,
+    observeArchiveRead: archiveState.observeRead,
     confirmArchiveState: archiveState.confirm,
     reset,
     retireModelOverride: modelOverrides.retire,

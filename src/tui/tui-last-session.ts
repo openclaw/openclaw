@@ -1,4 +1,3 @@
-// Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -95,7 +94,7 @@ export async function writeTuiLastSessionKey(params: {
     captureOpenClawStateWorkerContext(stateDatabaseOptions(params.stateDir)),
     {
       type: "tui.lastSession.write",
-      input: { stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`, sessionKey },
+      input: { scopeKey: params.scopeKey, sessionKey },
     },
   );
 }
@@ -141,30 +140,13 @@ export async function clearTuiLastSessionPointers(params: {
   const retiredSessionKeys = [...params.sessionKeys];
   const options = stateDatabaseOptions(params.stateDir);
   const context = captureOpenClawStateWorkerContext(options);
-  const result = await executeExistingOpenClawStateRead(
-    options,
-    {
-      type: "tui.lastSession.retiredPointers",
-      retiredSessionKeys,
-    },
-    { context },
-  );
-  if (result === undefined) {
-    return 0;
-  }
-  if (!result.ok || result.type !== "tui.lastSession.retiredPointers") {
-    throw new Error("Unexpected retired TUI session pointer result");
-  }
-  if (result.stateKeys.length === 0) {
-    return 0;
-  }
   return (
     (await runOpenClawStateWorkerOperation(
       context,
       (scope) =>
         scope.execute({
           type: "tui.lastSession.clear",
-          input: { stateKeys: result.stateKeys, retiredSessionKeys },
+          input: { retiredSessionKeys },
         }),
       { existingOnly: true },
     )) ?? 0

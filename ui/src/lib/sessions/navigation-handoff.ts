@@ -33,15 +33,6 @@ const sessionNavigationHandoffs = new WeakMap<
 >();
 const sessionNavigationIntents = new WeakMap<SessionNavigationIntentOwner, object>();
 
-function announceSessionNavigationIntent(intent: SessionNavigationIntent): boolean {
-  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-    cancelable: true,
-    detail: intent,
-  });
-  globalThis.dispatchEvent(event);
-  return event.defaultPrevented;
-}
-
 export function runSessionNavigationIntent(
   owner: SessionNavigationIntentOwner,
   intent: SessionNavigationIntent,
@@ -65,7 +56,12 @@ export function runSessionNavigationIntent(
       return intent.commit();
     },
   };
-  if (!announceSessionNavigationIntent(guarded)) {
+  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+    cancelable: true,
+    detail: guarded,
+  });
+  globalThis.dispatchEvent(event);
+  if (!event.defaultPrevented) {
     guarded.commit();
   }
 }

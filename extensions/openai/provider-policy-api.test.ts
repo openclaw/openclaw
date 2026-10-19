@@ -3,11 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isResponseModelEquivalent,
   normalizeModelCatalogId,
-  resolveModelAuthPolicy,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
-import { OPENAI_AUTH_POLICY_CASES } from "./test-support/provider-policy.test-support.js";
 
 describe("OpenAI provider policy artifact", () => {
   beforeEach(() => {
@@ -18,18 +16,6 @@ describe("OpenAI provider policy artifact", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(OPENAI_AUTH_POLICY_CASES)(
-    "authorizes %s/%s for %s at %s as %s: %s",
-    (mode, authFlow, api, baseUrl, authRequirement, compatible) => {
-      expect(
-        resolveModelAuthPolicy({ provider: "openai", mode, authFlow, api, baseUrl }),
-      ).toMatchObject({
-        authRequirement,
-        compatible,
-      });
-    },
-  );
-
   it.each([
     ["openai", "gpt-5.6", "gpt-5.6-sol", true],
     ["openai", "gpt-5.6", "gpt-5.6-terra", false],
@@ -37,6 +23,13 @@ describe("OpenAI provider policy artifact", () => {
     ["openai", "gpt-5.6-sol", "gpt-5.6", false],
     ["openai", "gpt-5.5", "gpt-5.6-sol", false],
     ["anthropic", "gpt-5.6", "gpt-5.6-sol", false],
+    ["openai", "gpt-5.6", "gpt-5.6-sol-2026-08-01", true],
+    ["openai", "gpt-5.6-luna", "gpt-5.6-luna-2026-08-02", true],
+    ["openai", "gpt-5.6-luna", "gpt-5.6-luna-20260802", true],
+    ["openai", "gpt-5.6", "gpt-5.6-luna-2026-08-02", false],
+    ["openai", "gpt-5.6-sol", "gpt-5.6-2026-08-01", false],
+    ["openai", "gpt-5.6-sol-2026-08-01", "gpt-5.6-sol-2026-09-01", false],
+    ["anthropic", "gpt-5.6-luna", "gpt-5.6-luna-2026-08-02", false],
   ])(
     "declares response-model equivalence for %s/%s -> %s as %s",
     (provider, requestedModelId, responseModelId, expected) => {

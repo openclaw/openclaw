@@ -28,12 +28,11 @@ const SESSION_COMPANION_SWEEP_INTERVAL_MS = 10 * 60_000;
 
 export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompanionService {
   const { scheduler } = deps;
-  const now = deps.now ?? (() => scheduler.now());
   const threads = new Map<string, SessionCompanionThread>();
   let disposed = false;
   const askRuntime = createSessionCompanionAskRuntime({
     ...deps,
-    now,
+    now: () => scheduler.now(),
     threads,
     isDisposed: () => disposed,
   });
@@ -53,7 +52,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
   };
 
   const sweep = () => {
-    const cutoff = now() - SESSION_COMPANION_IDLE_TTL_MS;
+    const cutoff = scheduler.now() - SESSION_COMPANION_IDLE_TTL_MS;
     for (const [key, thread] of threads) {
       if (!thread.busy && thread.lastUsedAt <= cutoff) {
         threads.delete(key);
@@ -64,6 +63,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     id: "session-companion-sweep",
     atMs: scheduler.now() + SESSION_COMPANION_SWEEP_INTERVAL_MS,
     everyMs: SESSION_COMPANION_SWEEP_INTERVAL_MS,
+    phase: "maintenance",
     run: sweep,
   });
   const unsubscribeReset = onGatewaySessionReset((sessionKey, suppliedAgentId) => {
@@ -96,7 +96,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       if (!thread) {
         return { exchanges: [] };
       }
-      thread.lastUsedAt = now();
+      thread.lastUsedAt = scheduler.now();
       return {
         exchanges: thread.exchanges.map(({ question, answer, ts }) => ({ question, answer, ts })),
       };

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements bounded Baileys cache behavior.
 import type { GroupMetadata, proto } from "baileys";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 

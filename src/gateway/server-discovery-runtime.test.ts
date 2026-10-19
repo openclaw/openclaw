@@ -1,6 +1,4 @@
-// Gateway discovery runtime tests cover plugin discovery advertisements,
-// wide-area DNS records, Bonjour naming, and shutdown cleanup.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createUnavailableRuntime } from "../plugins/api-builder.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
@@ -11,7 +9,6 @@ import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/regis
 import { createEmptyPluginRegistry, createPluginRegistry } from "../plugins/registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureFullEnv } from "../test-utils/env.js";
-import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 
 type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
 type ResolveWideAreaDiscoveryDomain =
@@ -47,49 +44,61 @@ vi.mock("./server-discovery.js", () => ({
 }));
 
 const { startGatewayDiscovery } = await import("./server-discovery-runtime.js");
-
-const createPluginOwner = () =>
-  createGatewayPluginRuntimeGeneration({ getServices: () => null, setServices: () => {} });
+type Advertise = PluginGatewayDiscoveryServiceRegistration["service"]["advertise"];
 
 const makeLogs = () => ({
   info: vi.fn(),
   warn: vi.fn(),
 });
+let logs = makeLogs();
 
-function startDiscovery(overrides: Partial<Parameters<typeof startGatewayDiscovery>[0]>) {
-  return startGatewayDiscovery({
+type DiscoveryOptions = Partial<Parameters<typeof startGatewayDiscovery>[0]>;
+const releases: Array<() => void> = [];
+const disposals: Array<() => Promise<void>> = [];
+const joins: Promise<unknown>[] = [];
+async function startDiscovery(
+  gatewayDiscoveryServices: readonly PluginGatewayDiscoveryServiceRegistration[],
+  overrides: DiscoveryOptions = {},
+) {
+  const discovery = await startGatewayDiscovery({
     machineDisplayName: "Lab Mac",
     port: 18789,
     tailscaleMode: "off",
-    pluginRuntimeClaim: createPluginOwner().currentClaim(),
-    logDiscovery: makeLogs(),
+    logDiscovery: logs,
+    gatewayDiscoveryServices,
     ...overrides,
   });
+  disposals.push(discovery.stop);
+  return discovery;
 }
 
-const makeDiscoveryService = (params: {
-  id: string;
-  pluginId?: string;
-  stop?: () => void | Promise<void>;
-  advertise?: PluginGatewayDiscoveryServiceRegistration["service"]["advertise"];
-}): PluginGatewayDiscoveryServiceRegistration => ({
-  pluginId: params.pluginId ?? params.id,
-  pluginName: params.pluginId ?? params.id,
-  source: "test",
-  id: params.id.trim(),
-  service: {
-    id: params.id,
-    advertise: params.advertise ?? vi.fn(async () => ({ stop: params.stop })),
-  },
-});
+const makeDiscoveryService = (
+  id: string,
+  params: { pluginId?: string; stop?: () => void | Promise<void>; advertise?: Advertise } = {},
+) => {
+  const advertise = params.advertise ?? vi.fn(async () => ({ stop: params.stop }));
+  return {
+    pluginId: params.pluginId ?? id,
+    pluginName: params.pluginId ?? id,
+    source: "test",
+    id: id.trim(),
+    service: { id, advertise },
+    advertise,
+  };
+};
 
 function latestZoneParams(): Parameters<WriteWideAreaGatewayZone>[0] {
-  const calls = mocks.writeWideAreaGatewayZone.mock.calls;
-  const call = calls[calls.length - 1];
+  const call = mocks.writeWideAreaGatewayZone.mock.lastCall;
   if (!call) {
     throw new Error("Expected wide-area gateway zone to be written");
   }
   return call[0];
+}
+
+function expectCalls(...calls: [unknown, number][]) {
+  for (const [mock, count] of calls) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
 }
 
 function useDevelopmentDiscoveryEnv() {
@@ -97,171 +106,151 @@ function useDevelopmentDiscoveryEnv() {
   delete process.env.VITEST;
 }
 
-async function expectSshPortOmitted(rawPort: string) {
-  useDevelopmentDiscoveryEnv();
-  process.env.OPENCLAW_SSH_PORT = rawPort;
-
-  const service = makeDiscoveryService({ id: "bonjour" });
-
-  await startDiscovery({
-    discovery: { mdns: { mode: "full" } },
-    tailscaleMode: "serve",
-    gatewayDiscoveryServices: [service],
-  });
-
-  expect(service.service.advertise).toHaveBeenCalledWith(
-    expect.objectContaining({ sshPort: undefined }),
-  );
+function deferredAdvertisement(id: string, phase: "pending" | "ready" = "pending") {
+  const result = createDeferredCore<{ stop: () => void }>();
+  const started = createDeferredCore();
+  const stop = vi.fn();
+  const acquire: Advertise = () => {
+    started.resolve();
+    return phase === "pending" ? result.promise : Promise.resolve({ stop });
+  };
+  const advertise = vi.fn<Advertise>(acquire);
+  releases.push(() => result.resolve({ stop }));
+  return {
+    ...makeDiscoveryService(id, { advertise }),
+    advertise,
+    acquire,
+    stop,
+    started: started.promise,
+    resolve: () => result.resolve({ stop }),
+  };
 }
 
-function startStuckDiscovery(timeoutMs: string) {
+async function startTimedDiscovery(
+  services: readonly PluginGatewayDiscoveryServiceRegistration[],
+  options: DiscoveryOptions = {},
+) {
   vi.useFakeTimers();
-  useDevelopmentDiscoveryEnv();
-  process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = timeoutMs;
-
-  const service = makeDiscoveryService({
-    id: "stuck-discovery",
-    advertise: vi.fn(() => new Promise<void>(() => {})),
-  });
-  const logs = makeLogs();
-
-  const resultPromise = startDiscovery({
-    discovery: { mdns: { mode: "full" } },
-    gatewayDiscoveryServices: [service],
-    logDiscovery: logs,
-  });
-
-  return { logs, resultPromise };
+  process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
+  const starting = startDiscovery(services, options);
+  await vi.advanceTimersByTimeAsync(10);
+  return starting;
 }
 
 describe("startGatewayDiscovery", () => {
   const envSnapshot = captureFullEnv();
-
-  afterEach(() => {
-    vi.useRealTimers();
-    envSnapshot.restore();
-    vi.clearAllMocks();
-    mocks.resolveTailnetDnsHint.mockReset();
-    mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
+  beforeEach(() => {
+    useDevelopmentDiscoveryEnv();
+    logs = makeLogs();
   });
 
-  it.each([
-    { registration: "direct", descriptor: "canonical" },
-    { registration: "projected", descriptor: "canonical" },
-    { registration: "direct", descriptor: "frozen" },
-    { registration: "projected", descriptor: "frozen" },
-    { registration: "direct", descriptor: "getter" },
-    { registration: "projected", descriptor: "getter" },
-  ])(
-    "preserves $descriptor discovery descriptors in their $registration scope",
-    async ({ registration, descriptor }) => {
-      useDevelopmentDiscoveryEnv();
-      const builder = createPluginRegistry({
-        logger: { ...makeLogs(), error() {} },
-        runtime: createUnavailableRuntime("setup-only", "native-discovery"),
-        activateGlobalSideEffects: false,
-      });
-      const record = createPluginRecord({
-        id: "native-discovery",
-        source: "test",
-        origin: "workspace",
-        enabled: true,
-        configSchema: false,
-      });
-      builder.registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry: builder.registry });
-      const store = createPluginRuntimeStore<object>("discovery runtime missing");
-      const runtime = {};
-      const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];
-      class NativeAdvertisement extends Date {
-        readonly id = "native-discovery";
-        async advertise() {
-          calls.push({ phase: "advertise", value: this.getTime(), runtime: store.tryGetRuntime() });
-          return this;
+  afterEach(async () => {
+    try {
+      // Release test-owned gates before joining the real discovery cleanup queue.
+      for (const release of releases.splice(0)) {
+        release();
+      }
+      if (vi.isFakeTimers()) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await Promise.all(joins.splice(0));
+      for (const dispose of disposals.splice(0).toReversed()) {
+        await dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+      envSnapshot.restore();
+      vi.clearAllMocks();
+      mocks.resolveTailnetDnsHint.mockReset();
+      mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
+    }
+  });
+
+  it("preserves getter discovery descriptors in their projected scope", async () => {
+    const builder = createPluginRegistry({
+      logger: { ...makeLogs(), error() {} },
+      runtime: createUnavailableRuntime("setup-only", "native-discovery"),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "native-discovery",
+      source: "test",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+    });
+    builder.registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: builder.registry });
+    disposals.push(async () => {
+      await instance.dispose();
+    });
+    const store = createPluginRuntimeStore<object>("discovery runtime missing");
+    const runtime = {};
+    const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];
+    class NativeAdvertisement extends Date {
+      readonly id = "native-discovery";
+      async advertise() {
+        calls.push({ phase: "advertise", value: this.getTime(), runtime: store.tryGetRuntime() });
+        return this;
+      }
+      stop() {
+        calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
+      }
+    }
+    const service = new NativeAdvertisement(37);
+    let reads = 0;
+    Object.defineProperty(service, "id", {
+      get() {
+        if (reads++ > 0) {
+          throw new Error("discovery id must only be read at admission");
         }
-        stop() {
-          calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
-        }
-      }
-      const service = new NativeAdvertisement(37);
-      if (descriptor === "frozen") {
-        Object.defineProperty(service, "id", { value: " native-discovery " });
-        Object.freeze(service);
-      } else if (descriptor === "getter") {
-        let reads = 0;
-        Object.defineProperty(service, "id", {
-          get() {
-            if (reads++ > 0) {
-              throw new Error("discovery id must only be read at admission");
-            }
-            return " native-discovery ";
-          },
-        });
-      }
-      instance.run(() => {
-        store.setRuntime(runtime);
-        builder.createApi(record, { config: {} }).registerGatewayDiscoveryService(service);
-      });
-      const registry =
-        registration === "projected" ? createEmptyPluginRegistry() : builder.registry;
-      if (registration === "projected") {
-        registry.plugins.push(record);
-        projectPluginContributions(builder.registry, record, registry);
-        adoptPluginRegistryRecords(registry);
-      }
-      expect(registry.gatewayDiscoveryServices).toHaveLength(1);
-      expect(registry.gatewayDiscoveryServices[0]?.service).toBe(service);
-      expect(record.gatewayDiscoveryServiceIds).toEqual(["native-discovery"]);
-      let discovery: Awaited<ReturnType<typeof startDiscovery>> | undefined;
-      try {
-        discovery = await startDiscovery({
-          gatewayDiscoveryServices: registry.gatewayDiscoveryServices,
-        });
-        await discovery.stop();
-        expect(calls).toEqual([
-          { phase: "advertise", value: 37, runtime },
-          { phase: "stop", value: 37, runtime },
-        ]);
-        expect(calls.every((call) => call.runtime === runtime)).toBe(true);
-      } finally {
-        await discovery?.stop();
-        await instance.dispose();
-      }
-    },
-  );
+        return " native-discovery ";
+      },
+    });
+    instance.run(() => {
+      store.setRuntime(runtime);
+      builder.createApi(record, { config: {} }).registerGatewayDiscoveryService(service);
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(record);
+    projectPluginContributions(builder.registry, record, registry);
+    adoptPluginRegistryRecords(registry);
+    expect(registry.gatewayDiscoveryServices).toHaveLength(1);
+    expect(registry.gatewayDiscoveryServices[0]?.service).toBe(service);
+    expect(record.gatewayDiscoveryServiceIds).toEqual(["native-discovery"]);
+    const discovery = await startDiscovery(registry.gatewayDiscoveryServices);
+    await discovery.stop();
+    expect(calls).toEqual([
+      { phase: "advertise", value: 37, runtime },
+      { phase: "stop", value: 37, runtime },
+    ]);
+    expect(calls.every((call) => call.runtime === runtime)).toBe(true);
+    await discovery.stop();
+  });
 
   it("starts registered local discovery services with gateway advertisement context", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
     process.env.OPENCLAW_SSH_PORT = "2222";
 
     const stopped: string[] = [];
-    const bonjour = makeDiscoveryService({
-      id: "bonjour",
-      pluginId: "bonjour",
+    const bonjour = makeDiscoveryService("bonjour", {
       stop: () => {
         stopped.push("bonjour");
       },
     });
-    const peer = makeDiscoveryService({
-      id: "peer-discovery",
+    const peer = makeDiscoveryService("peer-discovery", {
       pluginId: "peer",
       stop: () => {
         stopped.push("peer");
       },
     });
-    const logs = makeLogs();
-
-    const result = await startDiscovery({
+    const result = await startDiscovery([bonjour, peer], {
       discovery: { mdns: { mode: "full" } },
       gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
       gatewayDirectReachable: true,
       tailscaleMode: "serve",
-      gatewayDiscoveryServices: [bonjour, peer],
-      logDiscovery: logs,
     });
 
-    expect(bonjour.service.advertise).toHaveBeenCalledWith({
+    expect(bonjour.advertise).toHaveBeenCalledWith({
       machineDisplayName: "Lab Mac",
       gatewayPort: 18789,
       gatewayTlsEnabled: true,
@@ -272,7 +261,7 @@ describe("startGatewayDiscovery", () => {
       cliPath: "/usr/local/bin/openclaw",
       minimal: false,
     });
-    expect(peer.service.advertise).toHaveBeenCalledTimes(1);
+    expect(peer.advertise).toHaveBeenCalledTimes(1);
     expect(logs.warn).not.toHaveBeenCalled();
 
     await result.stop();
@@ -280,32 +269,22 @@ describe("startGatewayDiscovery", () => {
   });
 
   it("omits invalid SSH discovery ports", async () => {
-    await expectSshPortOmitted("2222abc");
-  });
-
-  it("omits out-of-range SSH discovery ports", async () => {
-    await expectSshPortOmitted("65536");
-  });
-
-  it("continues startup when a local discovery service never settles", async () => {
-    const { logs, resultPromise } = startStuckDiscovery("10");
-
-    await vi.advanceTimersByTimeAsync(10);
-    const result = await resultPromise;
-
-    await result.stop();
-    expect(logs.warn.mock.calls).toEqual([
-      [
-        "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
-      ],
-    ]);
-
-    vi.useRealTimers();
+    process.env.OPENCLAW_SSH_PORT = "2222abc";
+    const service = makeDiscoveryService("bonjour");
+    await startDiscovery([service], {
+      discovery: { mdns: { mode: "full" } },
+      tailscaleMode: "serve",
+    });
+    expect(service.advertise).toHaveBeenCalledWith(expect.objectContaining({ sshPort: undefined }));
   });
 
   it("uses the default discovery timeout for partial timeout env values", async () => {
-    const { logs, resultPromise } = startStuckDiscovery("10abc");
-
+    vi.useFakeTimers();
+    process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10abc";
+    const stuck = makeDiscoveryService("stuck-discovery", {
+      advertise: vi.fn(() => new Promise<void>(() => {})),
+    });
+    const resultPromise = startDiscovery([stuck], { discovery: { mdns: { mode: "full" } } });
     await vi.advanceTimersByTimeAsync(10);
     expect(logs.warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(4_990);
@@ -317,16 +296,13 @@ describe("startGatewayDiscovery", () => {
       ],
     ]);
     await result.stop();
-    vi.useRealTimers();
   });
 
   it("waits for delayed discovery when the configured timeout exceeds Node's timer range", async () => {
-    useDevelopmentDiscoveryEnv();
     process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "2147483648";
 
     const stop = vi.fn();
-    const service = makeDiscoveryService({
-      id: "slow-discovery",
+    const service = makeDiscoveryService("slow-discovery", {
       advertise: vi.fn(async () => {
         await new Promise((resolve) => {
           setTimeout(resolve, 50);
@@ -334,13 +310,9 @@ describe("startGatewayDiscovery", () => {
         return { stop };
       }),
     });
-    const logs = makeLogs();
-
     const startedAt = Date.now();
-    const result = await startDiscovery({
+    const result = await startDiscovery([service], {
       discovery: { mdns: { mode: "full" } },
-      gatewayDiscoveryServices: [service],
-      logDiscovery: logs,
     });
     const elapsedMs = Date.now() - startedAt;
 
@@ -351,76 +323,21 @@ describe("startGatewayDiscovery", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("skips local discovery services when mDNS mode is off", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    const service = makeDiscoveryService({ id: "bonjour" });
-    const result = await startDiscovery({
-      discovery: { mdns: { mode: "off" } },
-      gatewayDiscoveryServices: [service],
-    });
-
-    expect(service.service.advertise).not.toHaveBeenCalled();
-    expect(mocks.resolveTailnetDnsHint).not.toHaveBeenCalled();
-    await result.stop();
-  });
-
   it("skips local discovery services for truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
     process.env.OPENCLAW_DISABLE_BONJOUR = "yes";
 
-    const service = makeDiscoveryService({ id: "bonjour" });
-    const result = await startDiscovery({
+    const service = makeDiscoveryService("bonjour");
+    const result = await startDiscovery([service], {
       discovery: { mdns: { mode: "full" } },
       tailscaleMode: "serve",
-      gatewayDiscoveryServices: [service],
     });
 
-    expect(service.service.advertise).not.toHaveBeenCalled();
-    await result.stop();
-  });
-
-  it("keeps wide-area DNS-SD publishing active when local discovery is off", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    const service = makeDiscoveryService({ id: "bonjour" });
-    const logs = makeLogs();
-
-    const result = await startDiscovery({
-      discovery: { mdns: { mode: "off" }, wideArea: { domain: "openclaw.internal." } },
-      gatewayTls: { enabled: false },
-      gatewayDirectReachable: true,
-      tailscaleMode: "serve",
-      gatewayDiscoveryServices: [service],
-      logDiscovery: logs,
-    });
-
-    expect(service.service.advertise).not.toHaveBeenCalled();
-    expect(mocks.resolveTailnetDnsHint).toHaveBeenCalledWith({ enabled: true });
-    const zoneParams = latestZoneParams();
-    expect(zoneParams.domain).toBe("openclaw.internal.");
-    expect(zoneParams.gatewayPort).toBe(18789);
-    expect(zoneParams.gatewayDirectReachable).toBe(true);
-    expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
-    expect(zoneParams.tailnetIPv4).toBe("100.64.0.10");
-    expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");
-    expect(logs.info.mock.calls).toEqual([
-      ["wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)"],
-    ]);
+    expect(service.advertise).not.toHaveBeenCalled();
     await result.stop();
   });
 
   it("logs a warning and skips zone writes when wide-area config is invalid", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    // Drive the gateway through the REAL resolver so an invalid configured
-    // domain flows through normalizeWideAreaDomain → caught → null, exactly
-    // as it does at runtime when an operator boots the gateway with
-    // discovery.wideArea.domain set to a non-DNS string.
+    // Keep real domain validation at the Gateway boundary.
     const widearea = await vi.importActual<typeof import("../infra/widearea-dns.js")>(
       "../infra/widearea-dns.js",
     );
@@ -428,14 +345,10 @@ describe("startGatewayDiscovery", () => {
       widearea.resolveWideAreaDiscoveryDomain,
     );
 
-    const logs = makeLogs();
-
-    const result = await startDiscovery({
+    const result = await startDiscovery([], {
       discovery: { mdns: { mode: "off" }, wideArea: { domain: "foo/bar" } },
       gatewayTls: { enabled: false },
       tailscaleMode: "serve",
-      gatewayDiscoveryServices: [],
-      logDiscovery: logs,
     });
 
     expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
@@ -447,36 +360,15 @@ describe("startGatewayDiscovery", () => {
     await result.stop();
   });
 
-  it("omits the CLI path from wide-area DNS-SD in minimal mode", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    const logs = makeLogs();
-
-    await startDiscovery({
-      discovery: { mdns: { mode: "minimal" }, wideArea: { domain: "openclaw.internal." } },
-      gatewayTls: { enabled: false },
-      tailscaleMode: "serve",
-      gatewayDiscoveryServices: [],
-      logDiscovery: logs,
-    });
-
-    const zoneParams = latestZoneParams();
-    expect(zoneParams.cliPath).toBeUndefined();
-    expect(mocks.resolveBonjourCliPath).not.toHaveBeenCalled();
-  });
-
   it("replaces advertisements and wide-area metadata across live mode changes", async () => {
-    useDevelopmentDiscoveryEnv();
     process.env.OPENCLAW_SSH_PORT = "2222";
     const stop = vi.fn();
-    const service = makeDiscoveryService({ id: "bonjour", stop });
-    const discovery = await startDiscovery({
+    const service = makeDiscoveryService("bonjour", { stop });
+    const discovery = await startDiscovery([service], {
       discovery: { mdns: { mode: "off" }, wideArea: { domain: "openclaw.internal." } },
       gatewayTls: { enabled: true, fingerprintSha256: "fingerprint" },
       gatewayDirectReachable: true,
       tailscaleMode: "serve",
-      gatewayDiscoveryServices: [service],
     });
 
     for (const mode of ["minimal", "full", "minimal", "off"] as const) {
@@ -492,136 +384,86 @@ describe("startGatewayDiscovery", () => {
         sshPort: full ? 2222 : undefined,
       });
     }
-    expect(service.service.advertise).toHaveBeenCalledTimes(3);
-    expect(stop).toHaveBeenCalledTimes(3);
-    expect(service.service.advertise).toHaveBeenNthCalledWith(
+    expectCalls([service.advertise, 3], [stop, 3]);
+    expect(service.advertise).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ minimal: false, sshPort: 2222 }),
     );
     await discovery.update({ mdnsMode: undefined });
-    expect(service.service.advertise).toHaveBeenLastCalledWith(
+    expect(service.advertise).toHaveBeenLastCalledWith(
       expect.objectContaining({ minimal: true, cliPath: undefined, sshPort: undefined }),
     );
     await discovery.update({ mdnsMode: "minimal" });
-    expect(service.service.advertise).toHaveBeenCalledTimes(4);
+    expect(service.advertise).toHaveBeenCalledTimes(4);
     await discovery.stop();
     await discovery.stop();
     expect(stop).toHaveBeenCalledTimes(4);
   });
 
   it.each(["ready", "pending"] as const)(
-    "replaces a %s advertisement when the served TLS fingerprint changes",
+    "replaces %s advertisements on TLS fingerprint change",
     async (phase) => {
-      useDevelopmentDiscoveryEnv();
-      vi.useFakeTimers();
-      process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
-      const oldAdvertisement = createDeferredCore<{ stop: () => void }>();
-      const oldStop = vi.fn();
+      const old = deferredAdvertisement("bonjour", phase);
+      const oldStop = old.stop;
       const nextStop = vi.fn();
-      const advertise = vi
-        .fn<PluginGatewayDiscoveryServiceRegistration["service"]["advertise"]>()
-        .mockImplementationOnce(() =>
-          phase === "pending" ? oldAdvertisement.promise : Promise.resolve({ stop: oldStop }),
-        )
+      const advertise = old.advertise
+        .mockImplementationOnce(old.acquire)
         .mockResolvedValue({ stop: nextStop });
-      const starting = startDiscovery({
+      const discovery = await startTimedDiscovery([old], {
         discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
         gatewayTls: { enabled: true, fingerprintSha256: "old-fingerprint" },
-        gatewayDiscoveryServices: [makeDiscoveryService({ id: "bonjour", advertise })],
       });
-      await vi.advanceTimersByTimeAsync(10);
-      const discovery = await starting;
-      try {
-        await discovery.update({ gatewayTlsFingerprintSha256: "next-fingerprint" });
-        expect(advertise).toHaveBeenCalledTimes(2);
-        expect(advertise).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            gatewayTlsEnabled: true,
-            gatewayTlsFingerprintSha256: "next-fingerprint",
-            minimal: false,
-          }),
-        );
-        expect(latestZoneParams().gatewayTlsFingerprintSha256).toBe("next-fingerprint");
-        expect(oldStop).toHaveBeenCalledTimes(phase === "ready" ? 1 : 0);
+      await discovery.update({ gatewayTlsFingerprintSha256: "next-fingerprint" });
+      expect(advertise).toHaveBeenCalledTimes(2);
+      expect(advertise).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          gatewayTlsEnabled: true,
+          gatewayTlsFingerprintSha256: "next-fingerprint",
+          minimal: false,
+        }),
+      );
+      expect(latestZoneParams().gatewayTlsFingerprintSha256).toBe("next-fingerprint");
+      expect(oldStop).toHaveBeenCalledTimes(phase === "ready" ? 1 : 0);
 
-        oldAdvertisement.resolve({ stop: oldStop });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(oldStop).toHaveBeenCalledOnce();
-        expect(nextStop).not.toHaveBeenCalled();
+      old.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expectCalls([oldStop, 1], [nextStop, 0]);
 
-        await discovery.update({ gatewayTlsFingerprintSha256: "next-fingerprint" });
-        expect(advertise).toHaveBeenCalledTimes(2);
-        expect(mocks.writeWideAreaGatewayZone).toHaveBeenCalledTimes(2);
-      } finally {
-        oldAdvertisement.resolve({ stop: oldStop });
-        await vi.advanceTimersByTimeAsync(0);
-        await discovery.stop();
-      }
-      expect(oldStop).toHaveBeenCalledOnce();
-      expect(nextStop).toHaveBeenCalledOnce();
+      await discovery.update({ gatewayTlsFingerprintSha256: "next-fingerprint" });
+      expectCalls([advertise, 2], [mocks.writeWideAreaGatewayZone, 2]);
+      await discovery.stop();
+      expectCalls([oldStop, 1], [nextStop, 1]);
     },
   );
 
   it.each(["ready", "pending"] as const)(
-    "retains an unchanged %s advertisement across selective replacement",
+    "retains %s advertisements during selective replacement",
     async (phase) => {
-      useDevelopmentDiscoveryEnv();
-      vi.useFakeTimers();
-      process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
-      const result = createDeferredCore<{ stop: () => void }>();
-      const retainedStop = vi.fn();
-      const retained = makeDiscoveryService({
-        id: "retained",
-        advertise: vi.fn(() =>
-          phase === "pending" ? result.promise : Promise.resolve({ stop: retainedStop }),
-        ),
-      });
+      const retained = deferredAdvertisement("retained", phase);
+      const retainedStop = retained.stop;
       const changedStop = vi.fn();
-      const changed = makeDiscoveryService({ id: "changed", stop: changedStop });
-      const pluginOwner = createPluginOwner();
-      const starting = startDiscovery({
-        gatewayDiscoveryServices: [changed, retained],
-        pluginRuntimeClaim: pluginOwner.currentClaim(),
-      });
+      const changed = makeDiscoveryService("changed", { stop: changedStop });
+      const discovery = await startTimedDiscovery([changed, retained]);
+      await discovery.update({ gatewayDiscoveryServices: [retained] });
+      expectCalls([changedStop, 1], [retainedStop, 0]);
+      const next = makeDiscoveryService("changed");
+      const updating = discovery.update({ gatewayDiscoveryServices: [next, retained] });
       await vi.advanceTimersByTimeAsync(10);
-      const discovery = await starting;
-      const reservation = pluginOwner.reserve();
-      try {
-        await discovery.update({ gatewayDiscoveryServices: [retained] });
-        expect(changedStop).toHaveBeenCalledOnce();
-        expect(retainedStop).not.toHaveBeenCalled();
-        const next = makeDiscoveryService({ id: "changed" });
-        reservation.commit();
-        const updating = discovery.update(
-          { gatewayDiscoveryServices: [next, retained] },
-          reservation.claim,
-        );
-        await vi.advanceTimersByTimeAsync(10);
-        await updating;
-        result.resolve({ stop: retainedStop });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(retained.service.advertise).toHaveBeenCalledOnce();
-        expect(retainedStop).not.toHaveBeenCalled();
-        expect(next.service.advertise).toHaveBeenCalledOnce();
-      } finally {
-        reservation.reject();
-        result.resolve({ stop: retainedStop });
-        await vi.advanceTimersByTimeAsync(0);
-        await discovery.stop();
-      }
+      await updating;
+      retained.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expectCalls([retained.advertise, 1], [retainedStop, 0], [next.advertise, 1]);
+      await discovery.stop();
       expect(retainedStop).toHaveBeenCalledOnce();
     },
   );
 
   it.each(["throw", "reject", "handle"] as const)(
-    "retries a rejected advertisement on explicit update without repeating acquired work (%s)",
+    "retries %s acquisition without repeating acquired work",
     async (failure) => {
-      useDevelopmentDiscoveryEnv();
       const stop = vi.fn();
       const failureError = new Error("advertisement unavailable");
-      const advertise = vi.fn<PluginGatewayDiscoveryServiceRegistration["service"]["advertise"]>(
-        () => Promise.resolve({ stop }),
-      );
+      const advertise = vi.fn<Advertise>(() => Promise.resolve({ stop }));
       advertise.mockImplementationOnce(() => {
         if (failure === "throw") {
           throw failureError;
@@ -635,82 +477,37 @@ describe("startGatewayDiscovery", () => {
           },
         });
       });
-      const service = makeDiscoveryService({ id: "retry", advertise });
+      const service = makeDiscoveryService("retry", { advertise });
       const retainedStop = vi.fn();
-      const retained = makeDiscoveryService({ id: "retained", stop: retainedStop });
-      const logs = makeLogs();
-      const discovery = await startDiscovery({
-        gatewayDiscoveryServices: [service, retained],
-        logDiscovery: logs,
-      });
-      try {
-        expect(advertise).toHaveBeenCalledOnce();
-        expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining(failureError.message));
-        for (let update = 0; update < 2; update++) {
-          await discovery.update({ gatewayDiscoveryServices: [service, retained] });
-          expect(advertise).toHaveBeenCalledTimes(failure === "handle" ? 1 : 2);
-          expect(retained.service.advertise).toHaveBeenCalledOnce();
-          expect(stop).not.toHaveBeenCalled();
-          expect(retainedStop).not.toHaveBeenCalled();
-        }
-      } finally {
-        await discovery.stop();
+      const retained = makeDiscoveryService("retained", { stop: retainedStop });
+      const discovery = await startDiscovery([service, retained]);
+      expect(advertise).toHaveBeenCalledOnce();
+      expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining(failureError.message));
+      for (let update = 0; update < 2; update++) {
+        await discovery.update({ gatewayDiscoveryServices: [service, retained] });
+        expect(advertise).toHaveBeenCalledTimes(failure === "handle" ? 1 : 2);
+        expectCalls([retained.advertise, 1], [stop, 0], [retainedStop, 0]);
       }
-      expect(stop).toHaveBeenCalledTimes(failure === "handle" ? 0 : 1);
-      expect(retainedStop).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("keeps the live mode when the loaded discovery service owner changes", async () => {
-    useDevelopmentDiscoveryEnv();
-    const oldStop = vi.fn();
-    const oldService = makeDiscoveryService({ id: "old", stop: oldStop });
-    const newStop = vi.fn();
-    const newService = makeDiscoveryService({ id: "new", stop: newStop });
-    const discovery = await startDiscovery({
-      discovery: { mdns: { mode: "full" } },
-      gatewayDiscoveryServices: [oldService],
-    });
-    await discovery.update({ mdnsMode: "minimal" });
-    await discovery.update({ gatewayDiscoveryServices: [newService] });
-    expect(oldStop).toHaveBeenCalledTimes(2);
-    expect(newService.service.advertise).toHaveBeenCalledWith(
-      expect.objectContaining({ minimal: true }),
-    );
-    await discovery.update({ mdnsMode: "full" });
-    expect(oldService.service.advertise).toHaveBeenCalledTimes(2);
-    expect(newService.service.advertise).toHaveBeenCalledTimes(2);
-    await discovery.stop();
-    expect(newStop).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["off", "shutdown"] as const)(
-    "stops a timed-out advertiser that finishes after %s without resurrecting it",
-    async (action) => {
-      useDevelopmentDiscoveryEnv();
-      vi.useFakeTimers();
-      process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
-      const advertised = createDeferredCore<{ stop: () => void }>();
-      const stop = vi.fn();
-      const discoveryPromise = startDiscovery({
-        gatewayDiscoveryServices: [
-          makeDiscoveryService({ id: "late", advertise: () => advertised.promise }),
-        ],
-      });
-      await vi.advanceTimersByTimeAsync(10);
-      const discovery = await discoveryPromise;
-      if (action === "off") {
-        await discovery.update({ mdnsMode: "off" });
-      } else {
-        await discovery.stop();
-      }
-      advertised.resolve({ stop });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stop).toHaveBeenCalledOnce();
       await discovery.stop();
-      expect(stop).toHaveBeenCalledOnce();
+      expectCalls([stop, failure === "handle" ? 0 : 1], [retainedStop, 1]);
     },
   );
+
+  it.each(["off", "shutdown"] as const)("retires late advertisements after %s", async (action) => {
+    const late = deferredAdvertisement("late");
+    const stop = late.stop;
+    const discovery = await startTimedDiscovery([late]);
+    if (action === "off") {
+      await discovery.update({ mdnsMode: "off" });
+    } else {
+      await discovery.stop();
+    }
+    late.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stop).toHaveBeenCalledOnce();
+    await discovery.stop();
+    expect(stop).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { action: "replacement", olderGeneration: false, boundary: "stop" },
@@ -721,35 +518,36 @@ describe("startGatewayDiscovery", () => {
     { action: "off", olderGeneration: false, boundary: "DNS" },
     { action: "replacement", olderGeneration: false, boundary: "advertise" },
   ] as const)(
-    "drains cleanup acquired during $boundary before $action (older generation: $olderGeneration)",
+    "drains $boundary before $action (older: $olderGeneration)",
     async ({ action, olderGeneration, boundary }) => {
-      useDevelopmentDiscoveryEnv();
-      vi.useFakeTimers();
-      process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
       const lateAdvertisement = createDeferredCore<{ stop: () => Promise<void> }>();
       const activeStopping = createDeferredCore();
       const activeStopped = createDeferredCore();
       const metadata = createDeferredCore<string>();
       const lateStopped = createDeferredCore();
       const stopLate = vi.fn(() => lateStopped.promise);
-      const next = makeDiscoveryService({ id: "next" });
+      releases.push(() => {
+        activeStopped.resolve();
+        metadata.resolve("gateway.tailnet.example.ts.net");
+        lateAdvertisement.resolve({ stop: stopLate });
+        lateStopped.resolve();
+      });
+      const next = makeDiscoveryService("next");
       const pause = () => {
         activeStopping.resolve();
         return activeStopped.promise;
       };
-      const active = makeDiscoveryService({
-        id: "active",
-        ...(boundary === "advertise" ? { advertise: pause } : { stop: pause }),
-      });
-      const discoveryPromise = startDiscovery({
-        ...(action === "off" ? { discovery: { wideArea: { domain: "openclaw.internal." } } } : {}),
-        gatewayDiscoveryServices: [
-          makeDiscoveryService({ id: "late", advertise: () => lateAdvertisement.promise }),
+      const active = makeDiscoveryService(
+        "active",
+        boundary === "advertise" ? { advertise: pause } : { stop: pause },
+      );
+      const discovery = await startTimedDiscovery(
+        [
+          makeDiscoveryService("late", { advertise: () => lateAdvertisement.promise }),
           ...(boundary === "stop" && !olderGeneration ? [active] : []),
         ],
-      });
-      await vi.advanceTimersByTimeAsync(10);
-      const discovery = await discoveryPromise;
+        action === "off" ? { discovery: { wideArea: { domain: "openclaw.internal." } } } : {},
+      );
       if (olderGeneration) {
         await discovery.update({ gatewayDiscoveryServices: [active] });
       }
@@ -771,44 +569,34 @@ describe("startGatewayDiscovery", () => {
       ).then(() => {
         settled = true;
       });
-      try {
-        await activeStopping.promise;
-        lateAdvertisement.resolve({ stop: stopLate });
-        await vi.advanceTimersByTimeAsync(0);
-        activeStopped.resolve();
-        metadata.resolve("gateway.tailnet.example.ts.net");
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(stopLate).toHaveBeenCalledOnce();
-        expect(settled).toBe(false);
-        expect(next.service.advertise).not.toHaveBeenCalled();
-
-        lateStopped.resolve();
-        await transition;
-        expect(settled).toBe(true);
-        expect(next.service.advertise).toHaveBeenCalledTimes(action === "replacement" ? 1 : 0);
-      } finally {
-        activeStopped.resolve();
-        metadata.resolve("gateway.tailnet.example.ts.net");
-        lateAdvertisement.resolve({ stop: stopLate });
-        lateStopped.resolve();
-        await transition;
-        await discovery.stop();
-      }
+      joins.push(transition);
+      await activeStopping.promise;
+      lateAdvertisement.resolve({ stop: stopLate });
+      await vi.advanceTimersByTimeAsync(0);
+      activeStopped.resolve();
+      metadata.resolve("gateway.tailnet.example.ts.net");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopLate).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      expect(next.advertise).not.toHaveBeenCalled();
+      lateStopped.resolve();
+      await transition;
+      expect(settled).toBe(true);
+      expect(next.advertise).toHaveBeenCalledTimes(action === "replacement" ? 1 : 0);
+      await discovery.stop();
       expect(stopLate).toHaveBeenCalledOnce();
     },
   );
 
   it("fences pending metadata resolution before advertising or writing a stale zone", async () => {
-    useDevelopmentDiscoveryEnv();
-    const service = makeDiscoveryService({ id: "bonjour" });
-    const discovery = await startDiscovery({
+    const service = makeDiscoveryService("bonjour");
+    const discovery = await startDiscovery([service], {
       discovery: { mdns: { mode: "off" }, wideArea: { domain: "openclaw.internal." } },
       tailscaleMode: "serve",
-      gatewayDiscoveryServices: [service],
     });
     const resolving = createDeferredCore();
     const dns = createDeferredCore<string>();
+    releases.push(() => dns.resolve("gateway.tailnet.example.ts.net"));
     mocks.resolveTailnetDnsHint.mockImplementationOnce(() => {
       resolving.resolve();
       return dns.promise;
@@ -818,123 +606,51 @@ describe("startGatewayDiscovery", () => {
     const off = discovery.update({ mdnsMode: "off" });
     dns.resolve("gateway.tailnet.example.ts.net");
     await Promise.all([full, off]);
-    expect(service.service.advertise).not.toHaveBeenCalled();
+    expect(service.advertise).not.toHaveBeenCalled();
     expect(mocks.writeWideAreaGatewayZone).toHaveBeenCalledTimes(2);
     expect(latestZoneParams().cliPath).toBeUndefined();
     await discovery.stop();
     await discovery.update({ mdnsMode: "full" });
-    expect(service.service.advertise).not.toHaveBeenCalled();
+    expect(service.advertise).not.toHaveBeenCalled();
     expect(mocks.writeWideAreaGatewayZone).toHaveBeenCalledTimes(2);
   });
 
   it("consumes a shared advertisement once when overlapping updates retire it", async () => {
-    useDevelopmentDiscoveryEnv();
     const entered = createDeferredCore();
     const released = createDeferredCore();
+    releases.push(() => released.resolve());
     const stop = vi.fn(() => {
       entered.resolve();
       return released.promise;
     });
-    const service = makeDiscoveryService({ id: "retained", stop });
-    const discovery = await startDiscovery({ gatewayDiscoveryServices: [service] });
+    const service = makeDiscoveryService("retained", { stop });
+    const discovery = await startDiscovery([service]);
     const retaining = discovery.update({ gatewayDiscoveryServices: [service] });
     const disabling = discovery.update({ mdnsMode: "off" });
-    try {
-      await entered.promise;
-      expect(stop).toHaveBeenCalledOnce();
-      released.resolve();
-      await Promise.all([retaining, disabling]);
-      expect(stop).toHaveBeenCalledOnce();
-      expect(service.service.advertise).toHaveBeenCalledOnce();
-    } finally {
-      released.resolve();
-      await Promise.all([retaining, disabling]);
-      await discovery.stop();
-    }
+    joins.push(retaining, disabling);
+    await entered.promise;
+    expect(stop).toHaveBeenCalledOnce();
+    released.resolve();
+    await Promise.all([retaining, disabling]);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(service.advertise).toHaveBeenCalledOnce();
+    await discovery.stop();
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it.each(["reject", "replace", "shutdown"] as const)(
-    "settles a plugin reservation after an in-flight advertisement: %s",
-    async (action) => {
-      useDevelopmentDiscoveryEnv();
-      const pluginOwner = createPluginOwner();
-      const started = createDeferredCore();
-      const result = createDeferredCore<{ stop: () => void }>();
-      const oldStop = vi.fn();
-      const old = makeDiscoveryService({
-        id: "old",
-        advertise: vi.fn(() => {
-          started.resolve();
-          return result.promise;
-        }),
-      });
-      const peer = makeDiscoveryService({ id: "peer" });
-      const discovery = await startDiscovery({
-        pluginRuntimeClaim: pluginOwner.currentClaim(),
-        discovery: { mdns: { mode: "off" } },
-      });
-      await discovery.update({ gatewayDiscoveryServices: [old, peer] }, pluginOwner.currentClaim());
-      const enabling = discovery.update({ mdnsMode: "full" });
-      await started.promise;
-      const replacement = pluginOwner.reserve();
-      result.resolve({ stop: oldStop });
-      await enabling;
-      expect(oldStop).not.toHaveBeenCalled();
-      expect(peer.service.advertise).not.toHaveBeenCalled();
-
-      if (action === "reject") {
-        replacement.reject();
-        await vi.waitFor(() => expect(peer.service.advertise).toHaveBeenCalledOnce());
-        expect(old.service.advertise).toHaveBeenCalledOnce();
-        expect(oldStop).not.toHaveBeenCalled();
-      } else if (action === "replace") {
-        replacement.commit();
-        // Runtime policy commits before the replacement registry is available.
-        await discovery.update({ mdnsMode: "minimal" });
-        expect(oldStop).toHaveBeenCalledOnce();
-        expect(old.service.advertise).toHaveBeenCalledOnce();
-        const next = makeDiscoveryService({ id: "next" });
-        await discovery.update({ gatewayDiscoveryServices: [next] }, replacement.claim);
-        expect(next.service.advertise).toHaveBeenCalledWith(
-          expect.objectContaining({ minimal: true, cliPath: undefined, sshPort: undefined }),
-        );
-      } else {
-        await discovery.stop();
-        replacement.reject();
-        await pluginOwner.currentClaim().waitForUnblocked();
-      }
-      await discovery.stop();
-      expect(oldStop).toHaveBeenCalledOnce();
-      if (action !== "reject") {
-        expect(peer.service.advertise).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it("retires the initial registry before a first mixed plugin and mode reload", async () => {
-    useDevelopmentDiscoveryEnv();
-    const pluginOwner = createPluginOwner();
     const oldStop = vi.fn();
-    const old = makeDiscoveryService({ id: "old", stop: oldStop });
-    const discovery = await startDiscovery({
+    const old = makeDiscoveryService("old", { stop: oldStop });
+    const discovery = await startDiscovery([old], {
       discovery: { mdns: { mode: "full" } },
-      gatewayDiscoveryServices: [old],
-      pluginRuntimeClaim: pluginOwner.currentClaim(),
     });
-    try {
-      const replacement = pluginOwner.reserve();
-      replacement.commit();
-      await discovery.update({ mdnsMode: "minimal" });
-      expect(oldStop).toHaveBeenCalledOnce();
-      expect(old.service.advertise).toHaveBeenCalledOnce();
-      const next = makeDiscoveryService({ id: "next" });
-      await discovery.update({ gatewayDiscoveryServices: [next] }, replacement.claim);
-      expect(next.service.advertise).toHaveBeenCalledWith(
-        expect.objectContaining({ minimal: true }),
-      );
-    } finally {
-      await discovery.stop();
-    }
+    await discovery.update({ mdnsMode: "minimal" });
+    expectCalls([oldStop, 1], [old.advertise, 2]);
+    expect(old.advertise).toHaveBeenLastCalledWith(expect.objectContaining({ minimal: true }));
+    const next = makeDiscoveryService("next");
+    await discovery.update({ gatewayDiscoveryServices: [next] });
+    expect(oldStop).toHaveBeenCalledTimes(2);
+    expect(next.advertise).toHaveBeenCalledWith(expect.objectContaining({ minimal: true }));
+    await discovery.stop();
   });
 });

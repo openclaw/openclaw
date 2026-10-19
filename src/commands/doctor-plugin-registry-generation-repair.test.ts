@@ -9,7 +9,7 @@ import {
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
@@ -99,7 +99,7 @@ describe("doctor managed npm generation repair", () => {
             seedInstalledPluginIndex({}, { stateDir, candidates: [] }),
           );
         await (independentWriter ? runOutsidePluginCache(write) : write());
-        const retained = readPersistedInstalledPluginIndexInstallRecords({ stateDir });
+        const retained = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });
         if (independentWriter) {
           expect(retained).toHaveProperty("stale");
         } else {
@@ -114,7 +114,7 @@ describe("doctor managed npm generation repair", () => {
         });
       });
 
-      expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
+      expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir })).toEqual({});
     },
   );
 
@@ -181,7 +181,7 @@ describe("doctor managed npm generation repair", () => {
       stateDir,
     });
 
-    const persisted = readPersistedInstalledPluginIndexInstallRecords({ stateDir });
+    const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });
     expect(persisted?.[PLUGIN_ID]?.installPath).toBe(activePackageDir);
     expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);

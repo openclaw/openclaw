@@ -9,10 +9,14 @@ import type {
   PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { comparePluginCatalogEntries } from "../../packages/plugin-package-contract/src/catalog-order.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ClawHubPluginCatalogEntry,
   ClawHubPluginDetail,
 } from "../infra/clawhub-plugin-catalog.js";
+import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import { emptyInstalledPluginComponents } from "./installed-plugin-components.js";
+import { projectPluginOverviewCapabilities } from "./installed-plugin-overview.js";
 
 const DISCOVERY_ID_PREFIX = "ch_";
 const LOCAL_DISCOVERY_ID_PREFIX = "local_";
@@ -35,13 +39,6 @@ function indexClawHubPlugins(
     }
   }
   return index;
-}
-
-function findLocalPlugin(
-  plugin: ClawHubPluginCatalogEntry,
-  index: ReadonlyMap<string, PluginCatalogEntry>,
-): PluginCatalogEntry | undefined {
-  return index.get(normalizedAlias(plugin.packageName) ?? "");
 }
 
 function projectLocalFacts(
@@ -132,7 +129,11 @@ export function joinClawHubPluginCatalog(params: {
 }): PluginDiscoveryEntry[] {
   const localIndex = indexClawHubPlugins(params.local.plugins);
   const remote = params.remote.map((plugin) => {
-    const localPlugin = findLocalPlugin(plugin, localIndex);
+    const localPlugin = localIndex.get(normalizedAlias(plugin.packageName) ?? "");
+    // Keep the registry purpose first; later pages must retain known local capabilities.
+    const categories = [
+      ...new Set([...plugin.categories, ...(localPlugin?.capabilityCategories ?? [])]),
+    ];
     return {
       id: encodePluginDiscoveryId(plugin.packageName),
       catalog: {
@@ -142,8 +143,8 @@ export function joinClawHubPluginCatalog(params: {
         family: plugin.family,
         ...(plugin.ownerHandle ? { author: plugin.ownerHandle } : {}),
         official: plugin.isOfficial,
-        categories: plugin.categories,
-        ...categoryPriorityFacts(plugin.packageName, plugin.categories, params.categories),
+        categories,
+        ...categoryPriorityFacts(plugin.packageName, categories, params.categories),
         ...(plugin.iconUrl ? { imageUrl: plugin.iconUrl } : {}),
         ...(plugin.latestVersion ? { latestVersion: plugin.latestVersion } : {}),
         ...(plugin.downloads !== undefined ? { downloads: plugin.downloads } : {}),
@@ -171,7 +172,11 @@ export function joinClawHubPluginCatalog(params: {
         !publishedPackages.has(normalizedAlias(localClawHubIdentity(plugin))) &&
         ((params.intent === "all" &&
           plugin.installed &&
-          (!params.categories || params.query?.trim())) ||
+          (!params.categories ||
+            params.query?.trim() ||
+            plugin.capabilityCategories?.some(
+              (category) => !params.category || category === params.category,
+            ))) ||
           (params.includeBundledOnly &&
             plugin.origin === "bundled" &&
             (params.intent !== "bundled" || !localClawHubIdentity(plugin)))),
@@ -204,7 +209,12 @@ export function joinClawHubPluginCatalog(params: {
 }
 
 function localDiscoveryCategories(plugin: PluginCatalogEntry): string[] {
-  return plugin.categories ?? (plugin.category ? [plugin.category] : []);
+  return [
+    ...new Set([
+      ...(plugin.categories ?? (plugin.category ? [plugin.category] : [])),
+      ...(plugin.capabilityCategories ?? []),
+    ]),
+  ];
 }
 
 function localClawHubIdentity(plugin: PluginCatalogEntry): string | undefined {
@@ -311,6 +321,11 @@ export function joinLocalPluginDetail(params: {
       mcpServers: inspection?.components.mcpServers ?? [],
       skills: (inspection?.components.skills ?? []).map((name) => ({ name })),
       versions: [],
+      selectedRelease: null,
+      downloadability: {
+        status: "unknown",
+        reason: "Local metadata does not establish ClawHub release downloadability.",
+      },
     },
   };
 }
@@ -326,6 +341,11 @@ export function joinClawHubPluginDetail(params: {
   const detail: PluginDiscoveryDetail = {
     origin: "clawhub",
     packageName: params.remote.packageName,
+    registry: params.remote.registry,
+    tags: params.remote.tags,
+    selectedRelease: params.remote.selectedRelease,
+    downloadability: params.remote.downloadability,
+    metadata: params.remote.metadata,
     ...(params.remote.owner ? { author: params.remote.owner } : {}),
     topics: params.remote.topics,
     ...(params.remote.createdAt !== undefined ? { createdAt: params.remote.createdAt } : {}),
@@ -342,10 +362,77 @@ export function joinClawHubPluginDetail(params: {
       : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
+    ...(params.remote.mcpServerDetails ? { mcpServerDetails: params.remote.mcpServerDetails } : {}),
     skills: params.remote.skills,
     versions: params.remote.versions,
     ...(params.remote.verification ? { verification: params.remote.verification } : {}),
     ...(params.remote.security ? { security: params.remote.security } : {}),
   };
   return { plugin, detail };
+}
+
+/** Project advisory registry metadata without issuing package capability consent. */
+export function projectClawHubPluginInspection(params: {
+  remote: ClawHubPluginDetail;
+  local: PluginsListResult;
+  config: OpenClawConfig;
+}): PluginsInspectResult {
+  const { remote, local, config } = params;
+  const localPlugin = findLocalPluginByIdentity(local, remote.packageName);
+  const installedPlugin = localPlugin?.installed ? localPlugin : undefined;
+  const runtimePlugin = remote.runtimeId
+    ? findLocalPluginByIdentity(
+        { ...local, plugins: local.plugins.filter((plugin) => plugin.id === remote.runtimeId) },
+        remote.packageName,
+      )
+    : undefined;
+  const summary = buildPluginCapabilitySummary({
+    manifest: {
+      contracts: remote.contracts,
+      channels: remote.channels,
+      providers: remote.providers,
+      mcpServers: Object.fromEntries(remote.mcpServers.map((name) => [name, {}])),
+      skills: remote.skills.map((skill) => skill.name),
+    },
+    origin: "global",
+    entryConfig: runtimePlugin?.installed ? config.plugins?.entries?.[runtimePlugin.id] : undefined,
+  });
+  const catalog = joinClawHubPluginDetail({ remote, local });
+  return {
+    ok: true,
+    plugin: {
+      id: installedPlugin?.id ?? catalog.plugin.id,
+      name: remote.displayName,
+      ...(remote.selectedRelease ? { version: remote.selectedRelease.version } : {}),
+      ...(remote.summary ? { description: remote.summary } : {}),
+      origin: "clawhub",
+      installed: Boolean(installedPlugin),
+      enabled: installedPlugin?.enabled ?? false,
+    },
+    source: {
+      kind: "clawhub",
+      packageName: remote.packageName,
+    },
+    ...summary,
+    // Registry summaries omit package siblings and some declared capability groups.
+    // Only staged or installed package inspection can issue capability consent.
+    declaredSurfaceStatus: remote.metadata.manifest === "available" ? "partial" : "unavailable",
+    components: emptyInstalledPluginComponents(),
+    overview: {
+      ...(remote.metadata.manifest === "available"
+        ? {
+            capabilities: projectPluginOverviewCapabilities(
+              summary.declared,
+              remote.uiCapabilities,
+            ),
+          }
+        : {}),
+      ...(remote.readme ? { readme: remote.readme } : {}),
+      ...(remote.repositoryUrl ? { repositoryUrl: remote.repositoryUrl } : {}),
+      ...(remote.documentationUrl ? { documentationUrl: remote.documentationUrl } : {}),
+      ...(remote.owner?.displayName ? { publisherName: remote.owner.displayName } : {}),
+    },
+    ...(remote.trust ? { trust: remote.trust } : {}),
+    catalog,
+  };
 }

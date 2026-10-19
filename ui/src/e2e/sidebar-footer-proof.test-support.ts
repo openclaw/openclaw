@@ -54,8 +54,6 @@ export async function setSidebarProofTheme(page: Page, mode: "dark" | "light") {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -77,7 +75,11 @@ export async function captureUnionProof(
     await locator.evaluate(async (element) => {
       const running = element
         .getAnimations({ subtree: true })
-        .filter((animation) => animation.playState === "running");
+        .filter(
+          (animation) =>
+            animation.playState === "running" &&
+            Number.isFinite(animation.effect?.getComputedTiming().endTime),
+        );
       await Promise.all(running.map((animation) => animation.finished.catch(() => undefined)));
     });
     const box = await locator.boundingBox();
@@ -103,6 +105,7 @@ export async function captureUnionProof(
   );
   const artifactDir = path.join(owner.artifactDir, directory);
   await page.screenshot({
+    animations: "disabled",
     clip: { x, y, width: right - x, height: bottom - y },
     path: path.join(artifactDir, fileName),
   });

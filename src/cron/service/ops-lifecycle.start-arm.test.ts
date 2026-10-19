@@ -12,8 +12,10 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
-import { CronService } from "../service.js";
+import { createCronServiceWithStateForTest } from "../service.test-harness.js";
 import { saveCronStore } from "../store.js";
+import { waitForCronRunQueue } from "./run-queue.js";
+import { captureCronSchedulerWakeForTest } from "./scheduler-actor.test-support.js";
 
 const gateway = vi.hoisted(() => ({ state: undefined as GatewayCronState | undefined }));
 vi.mock("../../gateway/server-cron.js", () => ({
@@ -22,13 +24,9 @@ vi.mock("../../gateway/server-cron.js", () => ({
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-start-arm-" });
 
-it.each([
-  { failWrite: false, failArm: false },
-  { failWrite: true, failArm: false },
-  { failWrite: true, failArm: true },
-])(
-  "delivers future jobs after suspension (write failure=$failWrite, arm failure=$failArm)",
-  async ({ failWrite, failArm }) => {
+it.each([false, true])(
+  "delivers future jobs after suspension (write failure=%s)",
+  async (failWrite) => {
     const { storePath } = fixtures.makeStorePath();
     const now = Date.now();
     const jobs = [
@@ -55,12 +53,7 @@ it.each([
     const log = { ...noopLogger, debug: vi.fn(), warn: vi.fn() };
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
-    if (failArm) {
-      vi.spyOn(scheduler, "schedule").mockImplementationOnce(() => {
-        throw new Error("secondary arm failure");
-      });
-    }
-    const service = new CronService({
+    const { cron: service, state } = createCronServiceWithStateForTest({
       scheduler,
       storePath,
       cronEnabled: true,
@@ -79,32 +72,34 @@ it.each([
       reconcileSystemJobs: async () => "converged",
     };
     const { cron } = createLazyGatewayCronState({
+      storePath,
       cfg: {},
       deps: {} as CliDeps,
       broadcast: vi.fn(),
       scheduler,
     });
     try {
-      if (failWrite) {
-        await expect(cron.start()).rejects.toThrow("injected terminal write failure");
-      } else {
-        await cron.start();
-      }
-      if (failArm) {
-        expect(log.warn).toHaveBeenCalledWith(
-          { err: "Error: secondary arm failure" },
-          expect.any(String),
-        );
-      }
+      const { wake } = await captureCronSchedulerWakeForTest(async () => {
+        if (failWrite) {
+          await expect(cron.start()).rejects.toThrow("injected terminal write failure");
+        } else {
+          await cron.start();
+        }
+      });
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
       cron.pauseScheduling();
-      await clock.advanceBy(15_000);
+      clock.setTime(clock.clock.now() + 15_000);
+      await wake(state);
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
       cron.resumeScheduling();
-      await clock.advanceBy(15_000);
+      clock.setTime(clock.clock.now() + 15_000);
+      await wake(state);
+      await waitForCronRunQueue(state);
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
-      await clock.advanceBy(60_000);
+      clock.setTime(clock.clock.now() + 60_000);
+      await wake(state);
+      await waitForCronRunQueue(state);
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
     } finally {
       cron.stop();

@@ -8,6 +8,7 @@ import {
   ReleaseRefusal,
   acquireReleaseLock,
   createReleaseRunner,
+  getReleasePhaseData,
   isReleasePhase,
   loadReleaseState,
   resetReleasePhases,
@@ -117,15 +118,7 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
 }
 
 export function printReleaseStatus(state: ReleaseState): void {
-  const data = {
-    cut: state.cut,
-    validate: state.validate,
-    publish: state.publish,
-    "sync-beta": state.syncBeta,
-    "flip-github": state.flipGithub,
-    macos: state.macos,
-    closeout: state.closeout,
-  };
+  const data = getReleasePhaseData(state);
   for (const phase of RELEASE_PHASES) {
     const details = Object.entries(data[phase])
       .filter(([key, value]) => /(?:Sha|Tag|Id|Attempt|At|By)$/u.test(key) && value !== undefined)

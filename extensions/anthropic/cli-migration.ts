@@ -6,27 +6,10 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   splitTrailingModelAuthProfile,
 } from "./claude-model-refs.js";
-import {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
-  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-} from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-
-function toAnthropicModelRef(raw: string): string | null {
-  return resolveClaudeCliAnthropicModelRefs(raw)?.rewriteRef ?? null;
-}
-
-function toAnthropicRuntimeRefs(raw: string): string[] {
-  return resolveClaudeCliAnthropicModelRefs(raw)?.runtimeRefs ?? [];
-}
-
-function toAnthropicSelectedModelRef(raw: string): string | undefined {
-  const resolved = resolveClaudeCliAnthropicModelRefs(raw);
-  return resolved?.rewriteRef ?? resolved?.selectedRef;
-}
 
 function rewriteModelSelection(config: OpenClawConfig): {
   value: AgentDefaultsModel;
@@ -49,8 +32,9 @@ function rewriteModelSelection(config: OpenClawConfig): {
       // Resolve before migrating the entry map: a legacy alias row can disappear
       // when its canonical target already exists with different metadata.
       const target = configured.ref.provider + "/" + configured.ref.model;
-      runtimeRefs.push(...toAnthropicRuntimeRefs(target));
-      const selected = toAnthropicSelectedModelRef(target);
+      const resolved = resolveClaudeCliAnthropicModelRefs(target);
+      runtimeRefs.push(...(resolved?.runtimeRefs ?? []));
+      const selected = resolved?.rewriteRef ?? resolved?.selectedRef;
       if (!selected) {
         return { value: raw, primary: raw };
       }
@@ -58,11 +42,12 @@ function rewriteModelSelection(config: OpenClawConfig): {
       const value = profile ? selected + "@" + profile : selected;
       return { value, primary: value, changed: value !== raw };
     }
-    runtimeRefs.push(...toAnthropicRuntimeRefs(raw));
-    const converted = toAnthropicModelRef(raw);
+    const resolved = resolveClaudeCliAnthropicModelRefs(raw);
+    runtimeRefs.push(...(resolved?.runtimeRefs ?? []));
+    const converted = resolved?.rewriteRef;
     return {
       value: converted ?? raw,
-      primary: converted ?? toAnthropicSelectedModelRef(raw),
+      primary: converted ?? resolved?.selectedRef,
       changed: Boolean(converted),
     };
   }
@@ -70,10 +55,10 @@ function rewriteModelSelection(config: OpenClawConfig): {
     const rewritten = rewrite(model);
     return { ...rewritten, runtimeRefs, changed: Boolean(rewritten.changed) };
   }
-  if (!model || typeof model !== "object" || Array.isArray(model)) {
+  if (!model) {
     return { value: model, runtimeRefs, changed: false };
   }
-  const primary = typeof model.primary === "string" ? rewrite(model.primary) : undefined;
+  const primary = model.primary !== undefined ? rewrite(model.primary) : undefined;
   const fallbacks = model.fallbacks?.map((entry) => rewrite(entry).value);
   const changed =
     Boolean(primary?.changed) ||
@@ -92,8 +77,8 @@ function rewriteModelSelection(config: OpenClawConfig): {
   };
 }
 
-function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
-  value: Record<string, unknown> | undefined;
+function rewriteModelEntryMap(models: AgentDefaultsModels): {
+  value: AgentDefaultsModels;
   migrated: string[];
   runtimeRefs: string[];
 } {
@@ -106,12 +91,10 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
   const runtimeRefs: string[] = [];
 
   for (const [rawKey, value] of Object.entries(models)) {
-    runtimeRefs.push(...toAnthropicRuntimeRefs(rawKey));
-    const converted = toAnthropicModelRef(rawKey);
-    if (!converted) {
-      continue;
-    }
-    if (converted === rawKey) {
+    const resolved = resolveClaudeCliAnthropicModelRefs(rawKey);
+    runtimeRefs.push(...(resolved?.runtimeRefs ?? []));
+    const converted = resolved?.rewriteRef;
+    if (!converted || converted === rawKey) {
       continue;
     }
     if (!Object.hasOwn(next, converted)) {
@@ -140,14 +123,12 @@ function seedClaudeCliAllowlist(
   selectedRefs: readonly string[] = [],
 ): NonNullable<AgentDefaultsModels> {
   const next = { ...models };
-  const runtimeRefs = new Set<string>();
-  for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
-    const canonicalRef = toAnthropicModelRef(ref) ?? ref;
-    runtimeRefs.add(canonicalRef);
-  }
-  for (const ref of selectedRefs) {
-    runtimeRefs.add(ref);
-  }
+  const runtimeRefs = new Set([
+    ...selectedRefs,
+    // Native login leaves no auth profile that could route other Claude IDs at
+    // run time, so cover IDs published after sign-in and typed IDs too.
+    "anthropic/*",
+  ]);
   for (const ref of runtimeRefs) {
     const current = Object.hasOwn(next, ref) ? next[ref] : undefined;
     Object.defineProperty(next, ref, {
@@ -160,19 +141,18 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
+export function buildAnthropicCliMigrationResult(config: OpenClawConfig) {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(config);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
-  const existingModels = (rewrittenModels.value ??
-    defaults?.models ??
-    {}) as NonNullable<AgentDefaultsModels>;
+  const existingModels = rewrittenModels.value ?? {};
+  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const nextModels = seedClaudeCliAllowlist(existingModels, [
     ...rewrittenModel.runtimeRefs,
+    defaultModel,
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
 
   return {
     profiles: [],
@@ -194,5 +174,5 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
         ? [`Migrated allowlist entries: ${rewrittenModels.migrated.join(", ")}.`]
         : []),
     ],
-  };
+  } satisfies ProviderAuthResult;
 }

@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { link, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readClawManifestFile } from "./reader.js";
-import { parseClawOpenClawProfile } from "./schema.js";
+import { parseClawOpenClawProfile, parseLegacyLocalUpdateClawOpenClawProfile } from "./schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -252,6 +253,130 @@ describe("OpenClaw profile reader", () => {
         }),
       ],
     });
+  });
+
+  it("validates and strips released v1 host settings only with local update authorization", async () => {
+    const { root, path } = await profileFixture();
+    const profilePath = join(root, "profiles", "openclaw.yml");
+    const raw = Buffer.from(
+      [
+        "schemaVersion: 1",
+        "agent:",
+        "  model: { primary: acme/primary, fallbacks: [acme/fallback] }",
+        "  subagents: { allowAgents: [researcher], delegationMode: prefer }",
+        "  tools: { allow: [read] }",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(profilePath, raw);
+
+    const fresh = await readClawManifestFile(path);
+    expect(fresh.ok).toBe(false);
+    if (fresh.ok) {
+      throw new Error("expected fresh legacy source to be rejected");
+    }
+    const conversion = fresh.diagnostics.find(
+      (entry) => entry.code === "legacy_openclaw_profile_requires_conversion",
+    );
+    expect(conversion).toMatchObject({
+      level: "error",
+      phase: "schema",
+      path: "$.profiles.openclaw.agent",
+    });
+    expect(conversion?.message).toContain("agent.model and agent.subagents");
+    expect(conversion?.message).toContain("profiles/openclaw.yml");
+    expect(conversion?.message).toContain("claws add --dry-run");
+    const authorized = await readClawManifestFile(path, {
+      authorizeLegacyLocalUpdateHostSettings: ({ manifest, source }) =>
+        manifest.agent.id === "triage" && source.kind === "development",
+    });
+    if (!authorized.ok) {
+      throw new Error("expected recorded-local profile compatibility to parse");
+    }
+    expect(authorized.openClawProfile).toEqual({
+      schemaVersion: 1,
+      agent: { tools: { allow: ["read"] } },
+      extensions: [],
+    });
+    expect(authorized.diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warning",
+        code: "legacy_openclaw_model_ignored",
+        path: "$.profiles.openclaw.agent.model",
+        message: expect.stringContaining("operator-owned"),
+      }),
+      expect.objectContaining({
+        level: "warning",
+        code: "legacy_openclaw_subagents_ignored",
+        path: "$.profiles.openclaw.agent.subagents",
+        message: expect.stringContaining("operator-owned"),
+      }),
+    ]);
+    expect(authorized.snapshot.openClawProfile?.digest).toBe(
+      `sha256:${createHash("sha256").update(raw).digest("hex")}`,
+    );
+    await writeFile(profilePath, raw.toString("utf8").replace("acme/primary", "acme/changed"));
+    const changed = await readClawManifestFile(path, {
+      authorizeLegacyLocalUpdateHostSettings: () => true,
+    });
+    if (!changed.ok) {
+      throw new Error("expected changed legacy profile to parse");
+    }
+    expect(changed.openClawProfile).toEqual(authorized.openClawProfile);
+    expect(changed.source.integrity).not.toBe(authorized.source.integrity);
+  });
+
+  it.each([
+    [{ model: { primary: "not-a-reference" } }, "$.agent.model.primary"],
+    [{ model: { primary: "acme/model", provider: "acme" } }, "$.agent.model"],
+    [{ subagents: { allowAgents: ["Invalid"] } }, "$.agent.subagents.allowAgents[0]"],
+    [{ subagents: { delegationMode: "always" } }, "$.agent.subagents.delegationMode"],
+  ])("rejects malformed released v1 host settings at %s", (agent, path) => {
+    const parsed = parseLegacyLocalUpdateClawOpenClawProfile({ schemaVersion: 1, agent });
+    expect(parsed).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ path })],
+    });
+  });
+
+  it("does not allow other host-owned profile fields through the legacy reader", () => {
+    const parsed = parseLegacyLocalUpdateClawOpenClawProfile({
+      schemaVersion: 1,
+      agent: { model: { primary: "acme/model" }, provider: "acme" },
+    });
+    expect(parsed).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ path: "$.agent" })],
+    });
+  });
+
+  it("combines released v1 host settings with the existing legacy tool migration", async () => {
+    const { root, path } = await profileFixture();
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      [
+        "schemaVersion: 1",
+        "agent:",
+        "  model: { primary: acme/model }",
+        "  subagents: { allowAgents: [researcher] }",
+        "  tools: { profile: coding }",
+        "",
+      ].join("\n"),
+    );
+    const migrated = await readClawManifestFile(path, {
+      allowLegacyDynamicToolProfile: true,
+      authorizeLegacyLocalUpdateHostSettings: () => true,
+    });
+    if (!migrated.ok) {
+      throw new Error("expected combined legacy profile to parse");
+    }
+    expect(migrated.openClawProfile?.agent).toMatchObject({
+      tools: { profile: "full", allow: expect.any(Array) },
+    });
+    expect(migrated.openClawProfile?.agent).not.toHaveProperty("model");
+    expect(migrated.openClawProfile?.agent).not.toHaveProperty("subagents");
+    expect(migrated.legacyOpenClawProfile?.agent).not.toHaveProperty("model");
+    expect(migrated.legacyOpenClawProfile?.agent).not.toHaveProperty("subagents");
   });
 
   it("rejects a hardlinked profile", async () => {

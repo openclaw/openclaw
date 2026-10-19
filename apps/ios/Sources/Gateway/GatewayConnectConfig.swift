@@ -12,11 +12,12 @@ import OpenClawKit
 struct GatewayConnectConfig: Sendable {
     let url: URL
     let stableID: String
-    let tls: GatewayTLSParams?
+    var tls: GatewayTLSParams?
     let token: String?
     let bootstrapToken: String?
     let password: String?
-    let nodeOptions: GatewayConnectOptions
+    var nodeOptions: GatewayConnectOptions
+    var ingressAuthorization: GatewayIngressAuthorization?
 
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
@@ -25,6 +26,8 @@ struct GatewayConnectConfig: Sendable {
     }
 
     struct ControlUIInputs: Hashable, Sendable {
+        let ingressRevision: UInt64?
+        let ingressRegistrationID: UUID?
         let url: URL
         let stableID: ExactOpaqueIdentifierKey
         let tlsRequired: Bool?
@@ -44,6 +47,8 @@ struct GatewayConnectConfig: Sendable {
     /// Keep bridge authority and WebView replacement on these same inputs.
     var controlUIInputs: ControlUIInputs {
         ControlUIInputs(
+            ingressRevision: self.ingressAuthorization?.revision,
+            ingressRegistrationID: self.ingressAuthorization?.registrationID,
             url: self.url,
             stableID: ExactOpaqueIdentifierKey(self.effectiveStableID),
             tlsRequired: self.tls?.required,
@@ -71,17 +76,25 @@ struct GatewayConnectConfig: Sendable {
             self.token == other.token &&
             self.bootstrapToken == other.bootstrapToken &&
             self.password == other.password &&
+            self.ingressAuthorization?.origin == other.ingressAuthorization?.origin &&
+            self.ingressAuthorization?.revision == other.ingressAuthorization?.revision &&
+            self.ingressAuthorization?.registrationID == other.ingressAuthorization?.registrationID &&
             Self.sameOptions(self.nodeOptions, other.nodeOptions)
     }
 
+    func webSocketSessionBox() -> WebSocketSessionBox? {
+        let params = self.tls ?? (self.ingressAuthorization == nil ? nil : GatewayTLSParams(
+            required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil))
+        return params.map {
+            WebSocketSessionBox(session: GatewayTLSPinningSession(
+                params: $0,
+                allowsRedirects: self.ingressAuthorization == nil,
+                allowsStoredCredentials: self.ingressAuthorization == nil))
+        }
+    }
+
     private static func sameOptions(_ lhs: GatewayConnectOptions, _ rhs: GatewayConnectOptions) -> Bool {
-        let lhsScopes = Self.normalizedValues(lhs.scopes)
-        let rhsScopes = Self.normalizedValues(rhs.scopes)
-        let lhsCaps = Self.normalizedValues(lhs.caps)
-        let rhsCaps = Self.normalizedValues(rhs.caps)
-        let lhsCommands = Self.normalizedValues(lhs.commands)
-        let rhsCommands = Self.normalizedValues(rhs.commands)
-        return lhs.role == rhs.role &&
+        lhs.role == rhs.role &&
             lhs.scopesAreExplicit == rhs.scopesAreExplicit &&
             lhs.clientId == rhs.clientId &&
             lhs.clientMode == rhs.clientMode &&
@@ -91,9 +104,9 @@ struct GatewayConnectConfig: Sendable {
             lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
             lhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) ==
             rhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) &&
-            lhsScopes == rhsScopes &&
-            lhsCaps == rhsCaps &&
-            lhsCommands == rhsCommands &&
+            self.normalizedValues(lhs.scopes) == self.normalizedValues(rhs.scopes) &&
+            self.normalizedValues(lhs.caps) == self.normalizedValues(rhs.caps) &&
+            self.normalizedValues(lhs.commands) == self.normalizedValues(rhs.commands) &&
             lhs.permissions == rhs.permissions
     }
 

@@ -1,10 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectChannelAccount } from "../account-inspection.js";
-import { resolveChannelAccount } from "../account-resolution.js";
+import { describeChannelAccount, resolveChannelAccount } from "../account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "../account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../account-summary.js";
 import {
@@ -17,7 +17,7 @@ import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelAccountSnapshot } from "./types.public.js";
 
 export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
   account: ResolvedAccount;
@@ -26,7 +26,9 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
   audit?: unknown;
   enabledFallback?: boolean;
   configuredFallback?: boolean;
+  assertActive?: () => void;
 }): Promise<ChannelAccountSnapshot> {
+  params.assertActive?.();
   let snapshot: ChannelAccountSnapshot;
   if (params.plugin.status?.buildAccountSnapshot) {
     snapshot = await params.plugin.status.buildAccountSnapshot({
@@ -44,19 +46,25 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
     };
   }
 
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+  params.assertActive?.();
+
+  const described = await describeChannelAccount(params);
+  params.assertActive?.();
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(params.account, params.cfg)
     : (described?.enabled ?? snapshot.enabled ?? params.enabledFallback ?? true);
+  params.assertActive?.();
   const configured =
     described?.configured ??
     (params.plugin.config.isConfigured
       ? await params.plugin.config.isConfigured(params.account, params.cfg)
       : (snapshot.configured ?? params.configuredFallback ?? true));
+  params.assertActive?.();
   const linkState =
     configured && params.plugin.config.isLinked
       ? await params.plugin.config.isLinked(params.account, params.cfg)
       : undefined;
+  params.assertActive?.();
   const state = resolveChannelAccountState({
     enabled,
     configured,
@@ -68,7 +76,7 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
   });
   const projectedSnapshot = { ...snapshot };
   applyChannelAccountState(projectedSnapshot, state);
-  return redactChannelAccountSnapshotBaseUrl({
+  return redactChannelStatusSummaryBaseUrl({
     ...projectedSnapshot,
     enabled,
     accountId: normalizeOptionalString(snapshot.accountId) ? snapshot.accountId : params.accountId,
@@ -77,7 +85,7 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
 }
 
 export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
   runtime?: ChannelAccountSnapshot;
@@ -95,7 +103,7 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
 }
 
 export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
   runtime?: ChannelAccountSnapshot;

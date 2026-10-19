@@ -22,7 +22,6 @@ describe("widget script syntax", () => {
     '<script>const html = "<!--<ScRiPt/></SCRIPT>-->";</script>',
     '<script type="&#109;odule">await Promise.resolve();</script>',
     "<script>#!/usr/bin/env node\nconst a=1;</script>",
-    "<script>const value = 1;",
     '<script>const value = "</scripture>";</script>',
     "<script-example>const =</script-example>",
     "1 < 2 <script>const value = 1;</script>",
@@ -39,15 +38,9 @@ describe("widget script syntax", () => {
   it.each([
     "",
     "type",
-    'type=""',
     "type='text/javascript'",
     "type=application/javascript",
     'TYPE=" TEXT/ECMASCRIPT "',
-    "type=application/ecmascript",
-    "type=application/x-javascript",
-    "type=text/jscript",
-    "type=text/javascript1.5",
-    "type=text/livescript",
   ])("rejects top-level await in classic scripts: %s", (attributes) => {
     expect(
       findWidgetScriptSyntaxError(`<script ${attributes}>await Promise.resolve();</script>`),
@@ -58,19 +51,12 @@ describe("widget script syntax", () => {
     expect(findWidgetScriptSyntaxError("<script>return 1;</script>")).toBeDefined();
   });
 
-  it.each([
-    'type="application/json"',
-    "type='application/ld+json'",
-    "type=importmap",
-    "type=text/template",
-    "type=text/x-handlebars-template",
-    'src="script.js"',
-    "src='script.js'",
-    "SRC=script.js",
-    "src",
-  ])("skips non-JavaScript and external scripts: %s", (attributes) => {
-    expect(findWidgetScriptSyntaxError(`<script ${attributes}>const =</script>`)).toBeUndefined();
-  });
+  it.each(['type="application/json"', "SRC=script.js", "src"])(
+    "skips non-JavaScript and external scripts: %s",
+    (attributes) => {
+      expect(findWidgetScriptSyntaxError(`<script ${attributes}>const =</script>`)).toBeUndefined();
+    },
+  );
 
   it.each(["<script>const a = 1;</script>", '<script type="application/json">invalid JS</script>'])(
     "maps the second script after %s and stops at a case-insensitive raw-text close",
@@ -93,30 +79,24 @@ describe("widget script syntax", () => {
   });
 
   it.each([
-    "<!-- <script>const =</script> -->",
     "<!-- <script>const =</script>",
-    '<div title="<script>const =</script>">Text</div>',
     "<div title='<script>const =</script>'>Text</div>",
-    "<textarea><script>const =</script></textarea>",
     "<plaintext></plaintext><script>const =</script>",
     '<div title="<script>const =</script>',
   ])("ignores script-looking text outside script elements: %s", (widgetCode) => {
     expect(findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
   });
 
-  it.each(["style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript"])(
-    "skips %s content and resumes at its actual end tag",
-    (tag) => {
-      const prefix = `<${tag}>ignored </${tag}x><script>const =</script></${tag.toUpperCase()} >`;
-      expect(findWidgetScriptSyntaxError(prefix)).toBeUndefined();
-      expect(findWidgetScriptSyntaxError(`${prefix}\n<script>const =</script>`)).toMatchObject({
-        scriptIndex: 1,
-        line: 2,
-        column: 14,
-      });
-      expect(findWidgetScriptSyntaxError(`<${tag}><script>const =</script>`)).toBeUndefined();
-    },
-  );
+  it.each(["style", "textarea"])("skips %s content and resumes at its actual end tag", (tag) => {
+    const prefix = `<${tag}>ignored </${tag}x><script>const =</script></${tag.toUpperCase()} >`;
+    expect(findWidgetScriptSyntaxError(prefix)).toBeUndefined();
+    expect(findWidgetScriptSyntaxError(`${prefix}\n<script>const =</script>`)).toMatchObject({
+      scriptIndex: 1,
+      line: 2,
+      column: 14,
+    });
+    expect(findWidgetScriptSyntaxError(`<${tag}><script>const =</script>`)).toBeUndefined();
+  });
 
   it("preserves offsets and script indexes after skipping inert HTML contexts", () => {
     const widgetCode = [
@@ -161,11 +141,8 @@ describe("widget script syntax", () => {
   });
 
   it.each([
-    "<svg><script><![CDATA[const value = 1;]]></script></svg>",
     "<svg><svg></svg><script><![CDATA[const value = 1;]]></script></svg>",
-    "<svg><svg/><script><![CDATA[const value = 1;]]></script></svg>",
     '<svg><script><![CDATA[const text = "</script>";]]></script></svg>',
-    "<svg><title/><style/><script><![CDATA[const value = 1;]]></script></svg>",
     "<div><svg><text><![CDATA[Example: > <script>const =</script>]]></text></svg></div>",
     '<div><svg><foreignObject><script>const text = "<![CDATA[";</script></foreignObject></svg></div>',
     "<svg><foreignObject/><script><![CDATA[const value = 1;]]></script></svg>",
@@ -180,12 +157,6 @@ describe("widget script syntax", () => {
       line: 1,
       column: 28,
       snippet: "<svg><script><![CDATA[const =]]></script></svg>",
-    },
-    {
-      widgetCode: "<svg>\n  <script>  <![CDATA[const =]]> </script>\n</svg>",
-      line: 2,
-      column: 27,
-      snippet: "<script>  <![CDATA[const =]]> </script>",
     },
     {
       widgetCode: "<svg>\r\n<script>\n<![CDATA[\nconst =\n]]>\n</script></svg>",

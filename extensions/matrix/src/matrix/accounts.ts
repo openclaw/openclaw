@@ -205,6 +205,7 @@ function isMatrixAccountConfigured(
   return prepared.hasHomeserver && (prepared.hasConfiguredAuth || hasStored);
 }
 
+/** @deprecated Use resolveMatrixAccountAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;

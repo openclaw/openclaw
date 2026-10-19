@@ -1,3 +1,4 @@
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
@@ -39,6 +40,27 @@ type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
   connected?: boolean;
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
+
+const listeners = new WeakMap<QueuedMessageEditHost, Set<() => void>>();
+
+export function subscribeQueuedMessageEdit(
+  host: QueuedMessageEditHost,
+  listener: () => void,
+): () => void {
+  let subscribers = listeners.get(host);
+  if (!subscribers) {
+    subscribers = new Set();
+    listeners.set(host, subscribers);
+  }
+  return registerListener(subscribers, listener);
+}
+
+/** Editing and custody changes publish the same token to views and retention owners. */
+export function publishQueuedMessageEdit(host: QueuedMessageEditHost): void {
+  for (const listener of listeners.get(host) ?? []) {
+    listener();
+  }
+}
 
 function currentQueuedMessageEditOwner(host: QueuedMessageEditHost) {
   // Recovery resolves after hello. While offline, the client retains its last
@@ -136,6 +158,7 @@ export function beginQueuedMessageEdit(
     source: { ...item },
     sourceWasDurable: chatOutboxOwner(host).durable(host, id) !== undefined,
   };
+  publishQueuedMessageEdit(host);
   return "started";
 }
 
@@ -151,16 +174,17 @@ export function updateQueuedMessageEdit(
   edit.mentions = mentions ?? updateHumanMentions(edit.draftText, draftText, edit.mentions);
   edit.draftText = draftText;
   edit.revision += 1;
+  publishQueuedMessageEdit(host);
   return true;
 }
 
 export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
-  const edit = activeQueuedMessageEdit(host);
-  if (!edit) {
+  if (!activeQueuedMessageEdit(host)) {
     return false;
   }
   // The durable row still owns its payloads; cancellation releases no attachments.
   host.chatQueuedEdit = null;
+  publishQueuedMessageEdit(host);
   return true;
 }
 
@@ -172,10 +196,7 @@ export function retireEditedQueuedMessageSource(
   editOverride?: QueuedMessageEdit,
 ): void {
   const edit = editOverride ?? activeQueuedMessageEdit(host);
-  if (editOverride && host.chatQueuedEdit !== edit) {
-    return;
-  }
-  if (!edit) {
+  if (!edit || (editOverride && host.chatQueuedEdit !== edit)) {
     return;
   }
   if (!admittedDurably) {
@@ -193,4 +214,5 @@ export function retireEditedQueuedMessageSource(
   chatOutboxOwner(host).remove(host, edit.id);
   // Read payloads from the token: durable admission already retired the stored row.
   releaseDisplacedChatAttachmentPayloads(edit.attachments, [nextAttachments]);
+  publishQueuedMessageEdit(host);
 }

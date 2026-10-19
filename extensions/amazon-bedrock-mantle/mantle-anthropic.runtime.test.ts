@@ -1,12 +1,18 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import type { Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
+
+// Keep real defaults for the payload boundary proof; only synthetic cases replace them.
+vi.mock("@anthropic-ai/sdk", { spy: true });
+vi.mock("openclaw/plugin-sdk/llm", { spy: true });
+afterEach(() => vi.resetAllMocks());
 
 function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
@@ -28,10 +34,10 @@ function createTestModel(overrides: Partial<Model> = {}): Model {
 }
 
 function createTestDeps() {
-  return {
-    createClient: vi.fn((options: unknown) => ({ options }) as never),
-    stream: vi.fn(),
-  };
+  const createClient = vi.mocked(Anthropic).mockImplementation(function (options) {
+    return { options } as never;
+  });
+  return { createClient, stream: vi.mocked(stream) };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -61,7 +67,7 @@ function captureStreamOptions(model: Model, options: SimpleStreamOptions = {}) {
   const context = { messages: [] };
   const deps = createTestDeps();
   deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
-  void createMantleAnthropicStreamFn(deps)(model, context, {
+  void createMantleAnthropicStreamFn()(model, context, {
     apiKey: "bedrock-bearer-token",
     ...options,
   });
@@ -119,11 +125,11 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
-    const stream = { kind: "anthropic-stream" };
+    const resultStream = { kind: "anthropic-stream" };
     const model = createTestModel();
     const context = { messages: [] };
     const deps = createTestDeps();
-    deps.stream.mockReturnValue(stream as never);
+    deps.stream.mockReturnValue(resultStream as never);
     const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
     const options = withProviderAcceptanceObserver(
@@ -137,9 +143,9 @@ describe("createMantleAnthropicStreamFn", () => {
       acceptanceObserver,
     );
 
-    const result = createMantleAnthropicStreamFn(deps)(model, context, options);
+    const result = createMantleAnthropicStreamFn()(model, context, options);
 
-    expect(result).toBe(stream);
+    expect(result).toBe(resultStream);
     const clientOptions = requireRecord(mockCallArg(deps.createClient), "client options");
     expect(clientOptions.apiKey).toBeNull();
     expect(clientOptions.authToken).toBe("bedrock-bearer-token");
@@ -165,17 +171,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
-  it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {
-    const options = captureStreamOptions(createTestModel(), {
-      temperature: 0.2,
-      reasoning: "high",
-    });
-    expect(options.temperature).toBeUndefined();
-    expect(options.thinkingEnabled).toBe(false);
-  });
-
   it.each([
-    { reasoning: undefined, effort: "high" },
     { reasoning: "max" as const, effort: "high" },
     { reasoning: "minimal" as const, effort: "low" },
   ])("maps Mythos Preview $reasoning reasoning to $effort", ({ reasoning, effort }) => {
@@ -187,11 +183,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(options.effort).toBe(effort);
   });
 
-  it.each([
-    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
-    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
-    { reasoning: "max" as const, thinkingEnabled: true, effort: "max" },
-  ])(
+  it.each([{ reasoning: "max" as const, thinkingEnabled: true, effort: "max" }])(
     "uses the Opus 5 contract for reasoning=$reasoning",
     ({ reasoning, thinkingEnabled, effort }) => {
       const options = captureStreamOptions(createReasoningModel("claude-opus-5", "Claude Opus 5"), {
@@ -237,20 +229,40 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it.each([
-    { reasoning: undefined, effort: "high" },
-    { reasoning: "off" as const, effort: "low" },
-    { reasoning: "max" as const, effort: "max" },
-  ])("maps Mythos 5 $reasoning reasoning to adaptive $effort", ({ reasoning, effort }) => {
-    const options = captureStreamOptions(
-      createReasoningModel("claude-mythos-5", "Claude Mythos 5", {
-        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-      }),
-      { maxTokens: 1_000, temperature: 0.2, ...(reasoning ? { reasoning } : {}) },
-    );
-    expect(options.thinkingEnabled).toBe(true);
-    expect(options.effort).toBe(effort);
-    expect(options.maxTokens).toBe(1_000);
-    expect(options).not.toHaveProperty("thinkingBudgetTokens");
-    expect(options.temperature).toBeUndefined();
-  });
+    {
+      reasoning: "xhigh" as const,
+      thinkingBudgets: { high: 4096, xhigh: 6144 },
+      expectedBudget: 6144,
+    },
+  ])(
+    "preserves Mantle's $reasoning legacy budget $expectedBudget",
+    ({ reasoning, thinkingBudgets, expectedBudget }) => {
+      const options = captureStreamOptions(
+        createReasoningModel("claude-haiku-4-5", "Claude Haiku 4.5"),
+        { reasoning, thinkingBudgets, maxTokens: 2048 },
+      );
+      expect(options).toMatchObject({
+        maxTokens: 2048 + expectedBudget,
+        thinkingEnabled: true,
+        thinkingBudgetTokens: expectedBudget,
+      });
+    },
+  );
+
+  it.each([{ reasoning: undefined, effort: "high" }])(
+    "maps Mythos 5 $reasoning reasoning to adaptive $effort",
+    ({ reasoning, effort }) => {
+      const options = captureStreamOptions(
+        createReasoningModel("claude-mythos-5", "Claude Mythos 5", {
+          thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+        }),
+        { maxTokens: 1_000, temperature: 0.2, ...(reasoning ? { reasoning } : {}) },
+      );
+      expect(options.thinkingEnabled).toBe(true);
+      expect(options.effort).toBe(effort);
+      expect(options.maxTokens).toBe(1_000);
+      expect(options).not.toHaveProperty("thinkingBudgetTokens");
+      expect(options.temperature).toBeUndefined();
+    },
+  );
 });

@@ -19,7 +19,7 @@ export function formatJsonConsoleLine(params: {
     ...(params.subsystem ? { subsystem: params.subsystem } : {}),
     message: params.message,
   };
-  return JSON.stringify(redactLogRecordForTransport(envelope, { format: "console" }));
+  return JSON.stringify(redactLogRecordForTransport(envelope));
 }
 
 /** Formats diagnostics that must bypass console capture without bypassing JSON console style. */

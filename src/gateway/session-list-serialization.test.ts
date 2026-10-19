@@ -1,0 +1,892 @@
+import { performance } from "node:perf_hooks";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  expandSessionRowFacts,
+  SESSION_ROW_DETAIL_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
+import { normalizeBoardWidgetPutParams } from "../boards/board-store.js";
+import {
+  ensureBoardSchema,
+  putBoardWidgetInDatabase,
+} from "../boards/sqlite-board-store.kernel.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  assignSessionOwner,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { serializeGatewayFrame } from "./serialized-json.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
+import {
+  initializeSessionReadContext,
+  listSessions,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
+import * as listFilters from "./session-list-filters.js";
+import { withCurrentSessionListRows } from "./session-list-read-result.js";
+import { beginSessionPermissionChange } from "./session-permission-change.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { shareSidebarSessionRows } from "./session-row-presentation.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+it("packs equal fields by their recipient rows without changing the input or wire facts", () => {
+  const rows = [
+    {
+      key: "one",
+      kind: "direct" as const,
+      updatedAt: 1,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: undefined,
+    },
+    {
+      key: "two",
+      kind: "direct" as const,
+      updatedAt: 2,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: "Unique",
+    },
+    { key: "three", kind: "direct" as const, updatedAt: 3, label: "Other", pinned: false },
+  ];
+  const original = structuredClone(rows);
+  const { rowsRevision, ...packed } = shareSidebarSessionRows(rows);
+  expect(rowsRevision).toEqual(expect.any(String));
+  expect(shareSidebarSessionRows(rows).sessions).toBe(packed.sessions);
+  expect(shareSidebarSessionRows(rows, rowsRevision)).toEqual({
+    sessions: [],
+    rowsRevision,
+    rowsUnchanged: true,
+  });
+  expect(packed).toEqual({
+    sessions: [
+      {
+        key: "one",
+        kind: "direct",
+        updatedAt: 1,
+        lastMessagePreview: undefined,
+        sharedFacts: [0, 1],
+      },
+      {
+        key: "two",
+        kind: "direct",
+        updatedAt: 2,
+        lastMessagePreview: "Unique",
+        sharedFacts: [0, 1],
+      },
+      { key: "three", kind: "direct", updatedAt: 3, label: "Other", sharedFacts: [1] },
+    ],
+    sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
+  });
+  expect(rows).toEqual(original);
+  expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
+  // A changed page must not reuse the previous page's recipient groups or fact indexes.
+  const changed = { ...rows[1]!, pinned: true, label: "Changed" };
+  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+    const next = shareSidebarSessionRows(page);
+    expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+  }
+  expect(packed.sessions[0]!.sharedFacts).toEqual([0, 1]);
+  expect(packed.sharedFacts).toEqual([
+    { label: "Shared", origin: { provider: "fixture" } },
+    { pinned: false },
+  ]);
+});
+
+it("keeps sidebar display facts while bounding the wire payload", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const benchmark = process.env.OPENCLAW_SIDEBAR_BENCH === "1";
+    const count = benchmark ? 5_000 : 8;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "sidebar-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const profiles = Array.from({ length: 4 }, (_value, index) =>
+      ensureProfileForEmail(`sidebar-${index}@example.test`),
+    );
+    for (let index = 0; index < count; index++) {
+      const actor = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
+      const scope = {
+        agentId: "main",
+        sessionKey: `agent:main:dashboard:synthetic-session-${index}`,
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: `synthetic-session-${index}`,
+        updatedAt: 1_800_000_000_000 + index,
+        createdAt: 1_800_000_000_000 + index,
+        label: `Review the synthetic workspace change ${index}`,
+        visibility: "shared",
+        modelProvider: "test-provider",
+        model: "test-model",
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        permissionMode: "full",
+        createdActor: actor,
+      });
+      if (index >= count - 200) {
+        assignSessionOwner(scope, {
+          owner: { type: "human", id: profiles[index % profiles.length]!.id },
+          assignedBy: actor,
+          assignedAt: 1_800_000_000_000,
+        });
+        for (const profile of profiles) {
+          recordSessionParticipant(scope, {
+            identity: { type: "profile", id: profile.id },
+            promptedAt: 1_800_000_000_000,
+          });
+        }
+      }
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "compact" | "sidebar") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { source: "sidebar", rowMode, limit: 200, agentId: "main" },
+      });
+    try {
+      const compact = await read("compact");
+      const result = await read("sidebar");
+      const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+      expect(result.sessions).toHaveLength(Math.min(count, 200));
+      expect(rows[0]).toMatchObject({
+        label: `Review the synthetic workspace change ${count - 1}`,
+        owner: { actor: { id: profiles[(count - 1) % profiles.length]!.id } },
+        participants: expect.arrayContaining(
+          profiles
+            .filter((_value, index) => index !== (count - 1) % profiles.length)
+            .map((profile) =>
+              expect.objectContaining({ identity: { type: "profile", id: profile.id } }),
+            ),
+        ),
+      });
+      for (const [index, row] of rows.entries()) {
+        expect(row.createdActor).toEqual(compact.sessions[index]!.createdActor);
+        expect(row.expandedParticipants).toEqual(compact.sessions[index]!.expandedParticipants);
+        expect(row).not.toHaveProperty("model");
+        expect(row).not.toHaveProperty("totalTokens");
+        expect(row).not.toHaveProperty("sharedFacts");
+      }
+      expect(result.sessions[0]).not.toHaveProperty("createdActor");
+      expect(result.sharedFacts).toBeDefined();
+      const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(frame.payload).not.toHaveProperty("rowsFullReason");
+      expect(
+        JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
+      ).toBe(JSON.stringify(rows));
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
+        Buffer.byteLength(JSON.stringify(compact)) * 0.5,
+      );
+      if (benchmark) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          const page = await read(rowMode);
+          if (process.env.OPENCLAW_SIDEBAR_BENCH_DIR) {
+            const { writeFile } = await import("node:fs/promises");
+            await writeFile(
+              `${process.env.OPENCLAW_SIDEBAR_BENCH_DIR}/${rowMode}.json`,
+              JSON.stringify(page),
+            );
+          }
+          const fields: Record<string, number> = {};
+          for (const row of page.sessions) {
+            for (const [key, value] of Object.entries(row)) {
+              fields[key] =
+                (fields[key] ?? 0) + Buffer.byteLength(JSON.stringify({ [key]: value }));
+            }
+          }
+          const samples = [];
+          for (let round = 0; round < 30; round++) {
+            const start = performance.now();
+            const payload = await read(rowMode);
+            const presented = performance.now();
+            const wire = serializeGatewayFrame({
+              type: "res",
+              id: "sidebar",
+              ok: true,
+              payload,
+            }).toString();
+            const serialized = performance.now();
+            const parsed = JSON.parse(wire);
+            expandSessionRowFacts(parsed.payload.sessions, parsed.payload.sharedFacts);
+            samples.push({
+              presentMs: presented - start,
+              serializeMs: serialized - presented,
+              parseMs: performance.now() - serialized,
+              bytes: Buffer.byteLength(wire),
+            });
+          }
+          console.log(
+            JSON.stringify({ benchmark: "sidebar-payload", rowMode, count, fields, samples }),
+          );
+        }
+      }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "page-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const keys = ["agent:main:off-page", "agent:main:selected-page"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt: index + 1, visibility: "shared" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (ifRowsRevision?: string) =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode: "sidebar", limit: 1, ifRowsRevision },
+      });
+    try {
+      const first = await read();
+      expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
+      sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+      const unchanged = await read(first.rowsRevision);
+      expect(unchanged.rowsRevision).toBe(first.rowsRevision);
+      expect(unchanged.rowsUnchanged).toBe(true);
+      expect(unchanged.sessions).toEqual([]);
+      sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
+      const changed = await read(first.rowsRevision);
+      expect(changed.rowsRevision).not.toBe(first.rowsRevision);
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("projects dashboard cards without sending session execution details", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const benchmark = process.env.OPENCLAW_DASHBOARD_BENCH === "1";
+    const count = benchmark ? 200 : 2;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "gallery-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    ensureBoardSchema(openOpenClawAgentDatabase({ agentId: "main" }));
+    for (let index = 0; index < count; index++) {
+      const sessionKey = `agent:main:dashboard-${index}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `dashboard-${index}`,
+          updatedAt: 1_800_000_000_000 + index,
+          label: `Dashboard ${index}`,
+          visibility: "shared",
+          boardFace: "dashboard",
+          modelProvider: "test-provider",
+          model: "test-model",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          inputTokens: 1000,
+          outputTokens: 500,
+          totalTokens: 1500,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          permissionMode: "full",
+          createdActor: { type: "system", label: "Synthetic author" },
+        },
+      );
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          putBoardWidgetInDatabase(
+            database,
+            sessionKey,
+            normalizeBoardWidgetPutParams({
+              sessionKey,
+              name: "status",
+              content: { kind: "html", html: "<p>Ready</p>" },
+            }),
+            "synthetic-view",
+          );
+        },
+        { agentId: "main" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "compact" | "dashboard") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: {
+          source: "dashboard",
+          rowMode,
+          limit: count,
+          hasBoard: true,
+          archived: "all",
+          excludeDock: true,
+          agentId: "main",
+        },
+      });
+    const wire = (payload: unknown) =>
+      serializeGatewayFrame({ type: "res", id: "gallery", ok: true, payload }).toString();
+    try {
+      const compact = await read("compact");
+      const dashboard = await read("dashboard");
+      expect(dashboard.sessions).toHaveLength(count);
+      expect(dashboard.sessions[0]).toMatchObject({
+        key: `agent:main:dashboard-${count - 1}`,
+        sessionId: `dashboard-${count - 1}`,
+        rowMode: "dashboard",
+        label: `Dashboard ${count - 1}`,
+        createdActor: { type: "system" },
+        boardFace: "dashboard",
+        hasBoard: true,
+      });
+      for (const field of [
+        "model",
+        "modelProvider",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "permissionMode",
+        "participants",
+      ]) {
+        expect(dashboard.sessions[0]).not.toHaveProperty(field);
+      }
+      expect(compact.sessions[0]).toMatchObject({
+        model: "test-model",
+        totalTokens: 1500,
+        permissionMode: "full",
+      });
+      expect((await read("compact")).sessions).toEqual(compact.sessions);
+      expect(Buffer.byteLength(wire(dashboard))).toBeLessThan(
+        Buffer.byteLength(wire(compact)) * 0.75,
+      );
+      if (benchmark) {
+        for (const rowMode of ["compact", "dashboard"] as const) {
+          const samples = [];
+          for (let round = 0; round < 5; round++) {
+            const cpu = process.threadCpuUsage();
+            const start = performance.now();
+            let bytes = 0;
+            for (let request = 0; request < 25; request++) {
+              bytes = Buffer.byteLength(wire(await read(rowMode)));
+            }
+            const elapsed = process.threadCpuUsage(cpu);
+            samples.push({
+              cpuMs: (elapsed.user + elapsed.system) / 25_000,
+              wallMs: (performance.now() - start) / 25,
+              bytes,
+            });
+          }
+          console.log(
+            JSON.stringify({ benchmark: "dashboard-sessions-list", rowMode, count, samples }),
+          );
+        }
+      }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const alice = roleClient("view", "cold-alice");
+    const bob = roleClient("view", "cold-bob");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(alice);
+    prepareGatewayRecipientProfile(bob);
+    const rows = 130;
+    for (let index = 0; index < rows; index++) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:cold-${index}` },
+        {
+          sessionId: `cold-${index}`,
+          updatedAt: index + 1,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: alice.authenticatedUserProfile!.profileId,
+          },
+          visibility: index === rows - 1 ? "draft" : "shared",
+        },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    try {
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.withSelectionPreparation(async () => {
+        await projection.prepareSelection();
+        const read = (client: typeof alice, limit = 100) =>
+          listSessions({
+            context,
+            client,
+            acceptsSerializedJson: true,
+            request: { limit, rowMode: "compact" },
+          });
+        const results = await Promise.all(
+          Array.from({ length: 6 }, (_value, index) =>
+            read({ ...alice, connId: `reconnect-${index}` }),
+          ),
+        );
+        expect(results[0]!.sessions).toHaveLength(100);
+        expect(results[0]!.totalCount).toBe(rows);
+        expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
+        for (const result of results) {
+          expect(result.sessions).toEqual(results[0]!.sessions);
+          expect(result.owners).toBe(results[0]!.owners);
+        }
+        const other = await read(bob);
+        expect(other.totalCount).toBe(rows - 1);
+        expect(other.sessions[0]!.sessionId).toBe("cold-128");
+        expect(other.owners).not.toBe(results[0]!.owners);
+        expect((await read(alice, 1)).sessions).toHaveLength(1);
+      });
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {
+  const start = 1_800_000_000_000;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const client = roleClient("view", "first-list");
+    const clients = [client, { ...client }, roleClient("view", "second-identity")];
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const recipient of clients) {
+      prepareGatewayRecipientProfile(recipient);
+    }
+    const scope = { agentId: "main", sessionKey: "agent:main:serialized" };
+    const entry = {
+      sessionId: "serialized",
+      updatedAt: start,
+      label: "Original label",
+      visibility: "shared" as const,
+      agentStatus: { note: "Working", expiresAt: start + 100 },
+      toolOverrides: { webSearch: false },
+    };
+    replaceSessionEntrySync(scope, entry);
+    const read = (index: number, compact = true) =>
+      listSessions({
+        client: clients[index]!,
+        context,
+        request: compact ? { rowMode: "compact" } : {},
+        acceptsSerializedJson: true,
+      });
+    // Admission work is not part of response encoding.
+    await read(0, false);
+    const stringify = vi.spyOn(JSON, "stringify");
+    const first = await read(0, false);
+    const frame = (payload: unknown) => ({ type: "res", id: "list", ok: true, payload });
+    const firstWire = serializeGatewayFrame(frame(first)).toString();
+    clock.mockReturnValue(start + 1);
+    const second = await read(1, false);
+    const secondWire = serializeGatewayFrame(frame(second)).toString();
+    const rowTraversals = stringify.mock.calls.reduce((count, [value]) => {
+      if (value && typeof value === "object" && "key" in value && value.key === scope.sessionKey) {
+        return count + 1;
+      }
+      // A generic response stringify traverses every row again at the socket boundary.
+      if (value && typeof value === "object" && "payload" in value) {
+        const payload = value.payload as { sessions?: unknown[] };
+        return count + (payload.sessions?.length ?? 0);
+      }
+      return count;
+    }, 0);
+    stringify.mockRestore();
+    expect(rowTraversals).toBe(0);
+    expect(JSON.parse(firstWire).payload.sessions).toEqual(JSON.parse(secondWire).payload.sessions);
+    expect(first.sessions).toBe(second.sessions);
+    expect(first.owners).toBe(second.owners);
+    const projection = getSessionRowProjection(context)!;
+    const present = vi.spyOn(projection, "present");
+    const filter = vi.spyOn(listFilters, "filterSessionEntries");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const unrelated = createSubagentRunRecord({
+      runId: "unrelated-presentation",
+      childSessionKey: "agent:main:subagent:unrelated-presentation",
+      requesterSessionKey: "agent:main:unrelated-parent",
+      createdAt: start,
+    });
+    try {
+      for (const publish of [false, true]) {
+        if (publish) {
+          subagentRuns.set(unrelated.runId, unrelated);
+          subagentRuns.commitOwnership(unrelated);
+          publishSubagentRunChanges();
+        }
+        const unchanged = await read(0, false);
+        expect(unchanged.sessions[0]).toBe(first.sessions[0]);
+        expect(unchanged.owners).toBe(first.owners);
+        expect(filter).not.toHaveBeenCalled();
+        expect(present).not.toHaveBeenCalled();
+        expect(
+          clone.mock.calls.filter(
+            ([value]) =>
+              value !== null &&
+              typeof value === "object" &&
+              "key" in value &&
+              value.key === scope.sessionKey,
+          ),
+        ).toHaveLength(0);
+      }
+    } finally {
+      present.mockRestore();
+      filter.mockRestore();
+      clone.mockRestore();
+      subagentRuns.delete(unrelated.runId);
+    }
+    const otherIdentity = await read(2, false);
+    expect(otherIdentity.sessions).not.toBe(first.sessions);
+    expect(otherIdentity.owners).not.toBe(first.owners);
+    expect(first.sessions[0]).toMatchObject({ snapshotAt: start, agentStatus: entry.agentStatus });
+    const compact = await read(0);
+    expect(compact.sessions[0]).toMatchObject({ rowMode: "compact", label: "Original label" });
+    for (const field of SESSION_ROW_DETAIL_FIELDS) {
+      expect(compact.sessions[0]).not.toHaveProperty(field);
+    }
+    expect((await read(0, false)).sessions[0]).toHaveProperty("toolOverrides", entry.toolOverrides);
+    clock.mockReturnValue(start + 101);
+    expect((await read(0)).sessions[0]?.agentStatus).toBeUndefined();
+    replaceSessionEntrySync(scope, { ...entry, label: "Published label" });
+    const changed = await read(1);
+    expect(
+      JSON.parse(serializeGatewayFrame(frame(changed)).toString()).payload.sessions[0],
+    ).toMatchObject({
+      label: "Published label",
+      permissionModePending: false,
+      hasActiveRun: false,
+      snapshotAt: start + 101,
+    });
+    const finishPermissionChange = beginSessionPermissionChange(entry.sessionId);
+    try {
+      clock.mockReturnValue(start + 102);
+      expect((await read(0)).sessions[0]).toMatchObject({
+        permissionModePending: true,
+        snapshotAt: start + 102,
+      });
+    } finally {
+      finishPermissionChange();
+    }
+    clock.mockReturnValue(start + 103);
+    expect.soft((await read(1)).sessions[0]).toMatchObject({
+      permissionModePending: false,
+      snapshotAt: start + 103,
+    });
+    clock.mockReturnValue(start + 104);
+    const readActive = () =>
+      listSessions({
+        client: clients[0]!,
+        context,
+        request: { activeOnly: true },
+        acceptsSerializedJson: true,
+      });
+    expect((await readActive()).sessions).toHaveLength(0);
+    const run = registerRpcSourceForTest({
+      storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
+      runId: "serialization-run",
+      sessionId: entry.sessionId,
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+    });
+    if (!run.entry) {
+      throw new Error("Expected a registered serialization run");
+    }
+    const releaseRun = await claimRpcSourceForTest(run.entry);
+    try {
+      expect((await readActive()).sessions).toHaveLength(1);
+      expect((await read(0)).sessions[0]).toMatchObject({
+        hasActiveRun: true,
+        activeRunIds: ["serialization-run"],
+        snapshotAt: start + 104,
+      });
+    } finally {
+      releaseRun();
+      run.cleanup();
+    }
+    clock.mockReturnValue(start + 105);
+    expect((await readActive()).sessions).toHaveLength(0);
+    expect.soft((await read(1)).sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      activeRunIds: [],
+      snapshotAt: start + 105,
+    });
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      totalTokens: 20,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      goal: {
+        schemaVersion: 1,
+        id: "budget",
+        objective: "Finish the task",
+        status: "active",
+        createdAt: start,
+        updatedAt: start,
+        tokenStart: 0,
+        tokensUsed: 0,
+        tokenBudget: 10,
+        continuationTurns: 0,
+      },
+    });
+    expect((await read(0)).sessions[0]?.goal).toMatchObject({
+      status: "budget_limited",
+      budgetLimitedAt: start + 105,
+    });
+    clock.mockReturnValue(start + 106);
+    expect((await read(1)).sessions[0]?.goal).toMatchObject({
+      status: "budget_limited",
+      budgetLimitedAt: start + 106,
+    });
+    const childKey = "agent:main:subagent:serialization-runtime";
+    replaceSessionEntrySync(
+      { agentId: scope.agentId, sessionKey: childKey },
+      { sessionId: "serialization-runtime", updatedAt: start, spawnedBy: scope.sessionKey },
+    );
+    const subagent = createSubagentRunRecord({
+      runId: "serialization-runtime",
+      childSessionKey: childKey,
+      requesterSessionKey: scope.sessionKey,
+      requesterAgentId: scope.agentId,
+      createdAt: start,
+      startedAt: start,
+    });
+    subagentRuns.set(subagent.runId, subagent);
+    subagentRuns.commitOwnership(subagent);
+    const claim = claimAgentRunContext(
+      subagent.runId,
+      { agentId: scope.agentId, sessionKey: childKey, sessionId: "serialization-runtime" },
+      { trackOwner: true, ownsContext: true },
+    );
+    const releaseForeground = retainSessionListForegroundWork();
+    try {
+      // Creation also dirties the parent; only the clock may change between measured reads.
+      await projection.ensureMaterialized();
+      const readChildren = () =>
+        listSessions({
+          client: clients[0]!,
+          context,
+          request: { rowMode: "compact", spawnedBy: scope.sessionKey },
+          acceptsSerializedJson: true,
+        });
+      clock.mockReturnValue(start + 1_000);
+      await readChildren();
+      const revision = projection.sharingRevision;
+      const rowContext = projection.state.rowContext;
+      for (const elapsed of [1_000, 2_000]) {
+        clock.mockReturnValue(start + elapsed);
+        const children = await readChildren();
+        expect(projection.sharingRevision).toBe(revision);
+        expect(projection.state.rowContext).toBe(rowContext);
+        expect(children.sessions).toHaveLength(1);
+        expect(children.sessions[0]).toMatchObject({
+          key: childKey,
+          status: "running",
+          runtimeMs: elapsed,
+          snapshotAt: start + elapsed,
+        });
+      }
+    } finally {
+      releaseForeground();
+      releaseAgentRunContext(subagent.runId, claim);
+      subagentRuns.delete(subagent.runId);
+    }
+  });
+});
+
+it("refreshes shared socket selection when the same viewer changes roles", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const client = roleClient("view", "selection-viewer");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const profileId = client.authenticatedUserProfile!.profileId;
+    for (const [suffix, creator] of [
+      ["owned", profileId],
+      ["foreign", "other-profile"],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:selection-${suffix}` },
+        {
+          sessionId: `selection-${suffix}`,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: creator },
+        },
+      );
+    }
+    const read = () =>
+      listSessions({
+        client,
+        context,
+        request: { rowMode: "compact" },
+        acceptsSerializedJson: true,
+      });
+    expect((await read()).totalCount).toBe(2);
+    setUserProfileRole(profileId, "none");
+    expect((await read()).sessions.map((row) => row.key)).toEqual(["agent:main:selection-owned"]);
+    setUserProfileRole(profileId, "view");
+    expect((await read()).totalCount).toBe(2);
+  });
+});
+
+it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const clients = [roleClient("view", "reader-a"), roleClient("view", "reader-b")];
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const recipient of clients) {
+      prepareGatewayRecipientProfile(recipient);
+    }
+    const scope = { agentId: "main", sessionKey: "agent:main:private-list" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "private-list",
+      updatedAt: Date.now(),
+      visibility: "shared",
+    });
+    const rows = [];
+    for (const client of clients) {
+      const result = await listSessions({
+        client,
+        context,
+        request: { rowMode: "compact" },
+        acceptsSerializedJson: false,
+      });
+      expect(result.sessions).toHaveLength(1);
+      rows.push(result.sessions[0]!);
+    }
+    setUserProfileRole(clients[1]!.authenticatedUserProfile!.profileId, "none");
+    expect(await withCurrentSessionListRows(rows, (visible) => visible, true)).toEqual([
+      true,
+      false,
+    ]);
+  });
+});
+
+it("omits swarm detail reads from sidebar and dashboard pages while authorizing compact members", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "swarm-list-reader");
+    const creator = ensureProfileForEmail("swarm-list-owner@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const parent = "agent:main:dashboard:swarm-parent";
+    const children = ["agent:main:subagent:visible", "agent:main:subagent:hidden"];
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "swarm-parent", updatedAt: Date.now(), visibility: "shared" },
+    );
+    for (const [index, child] of children.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        {
+          sessionId: `swarm-child-${index}`,
+          updatedAt: Date.now(),
+          visibility: index === 0 ? "shared" : "draft",
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        },
+      );
+      const runId = `swarm-list-${index}`;
+      subagentRuns.set(
+        runId,
+        createSubagentRunRecord({
+          runId,
+          childSessionKey: child,
+          requesterSessionKey: parent,
+          requesterAgentId: "main",
+          swarmRequesterSessionKey: parent,
+          collect: true,
+          groupId: "list-group",
+          execution: { status: "terminal", startedAt: 1, endedAt: 2 },
+          collectorCompletion: { status: "done" },
+        }),
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "sidebar" | "dashboard" | "compact") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode, excludeSubagents: true },
+      });
+    try {
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
+      for (const rowMode of ["sidebar", "dashboard"] as const) {
+        await read(rowMode);
+        const selections = vi.spyOn(projection, "selectEntries");
+        try {
+          const page = await read(rowMode);
+          expect(page.sessions).toHaveLength(1);
+          expect(expandSessionRowFacts(page.sessions, page.sharedFacts)[0]).not.toHaveProperty(
+            "swarm",
+          );
+          // A warmed page must not read children solely for omitted swarm detail.
+          expect(selections).not.toHaveBeenCalled();
+        } finally {
+          selections.mockRestore();
+        }
+      }
+      const sidebar = await read("sidebar");
+      const compact = await read("compact");
+      expect(compact.sessions[0]?.swarm?.groups).toMatchObject([
+        { groupId: "list-group", done: 2, children: [{ sessionKey: children[0], status: "done" }] },
+      ]);
+      expect(compact.sessions[0]?.swarm?.groups[0]?.children).toHaveLength(1);
+      expect((await read("sidebar")).sessions).toBe(sidebar.sessions);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+      for (let index = 0; index < children.length; index++) {
+        subagentRuns.delete(`swarm-list-${index}`);
+      }
+    }
+  });
+});

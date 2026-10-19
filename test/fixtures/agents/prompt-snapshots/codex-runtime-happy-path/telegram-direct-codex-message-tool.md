@@ -44,9 +44,7 @@
       "userTimezone": "UTC"
     },
     "entries": {
-      "main": {
-        "default": true
-      }
+      "main": {}
     }
   },
   "messages": {
@@ -96,6 +94,7 @@
     "tts",
     "web_fetch",
     "web_search",
+    "heartbeat_respond",
     "sessions_yield"
   ],
   "experimentalRawEvents": true,
@@ -154,7 +153,7 @@
     },
     "openclaw_source_delivery": {
       "kind": "application",
-      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere."
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for source output. For progress, set `final=false`. Set `final=true`, or omit it, for a completed reply to the current source. An added reaction to the current source message with `final=true` can also complete the reply. Do not repeat delivered content.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
     },
     "openclaw_temporal_context": {
       "kind": "application",
@@ -238,8 +237,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 1025,
-    "roughTokens": 257
+    "chars": 1338,
+    "roughTokens": 335
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -258,24 +257,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 68132,
-    "roughTokens": 17033
+    "chars": 75522,
+    "roughTokens": 18881
   },
   "openClawDeveloperInstructions": {
-    "chars": 2992,
-    "roughTokens": 748
+    "chars": 3490,
+    "roughTokens": 873
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27055,
-    "roughTokens": 6764
+    "chars": 27866,
+    "roughTokens": 6967
   },
   "totalWithDynamicToolsJson": {
-    "chars": 95189,
-    "roughTokens": 23798
+    "chars": 103390,
+    "roughTokens": 25848
   },
   "userInputText": {
     "chars": 879,
@@ -484,11 +483,11 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search.
+Deferred searchable OpenClaw dynamic tools available: openclaw.automations, openclaw.gateway, openclaw.nodes, openclaw.session_status, openclaw.sessions_history, openclaw.sessions_list, openclaw.sessions_search, openclaw.sessions_send, openclaw.subagents, openclaw.tts, openclaw.web_fetch, openclaw.web_search.
 
-Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
+Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
+Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spawn_agent` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas. For new delegated work that needs OpenClaw tools, use `sessions_spawn` with `runtime="subagent"` from the start. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
@@ -537,9 +536,11 @@ This turn asks Codex app-server to resolve its built-in Default collaboration-mo
 
 ```text
 <openclaw_source_delivery>Current source-delivery policy for this turn (replaces earlier source-delivery guidance):
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
+Visible source replies are not automatically delivered for this run. Use `message(action=send)` for source output. For progress, set `final=false`. Set `final=true`, or omit it, for a completed reply to the current source. An added reaction to the current source message with `final=true` can also complete the reply. Do not repeat delivered content.
 
-`send`: `message`; current source is default target. Set `target` only elsewhere.</openclaw_source_delivery>
+`send`: `message`; current source is default target. Set `target` only elsewhere.
+
+Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered.</openclaw_source_delivery>
 ```
 
 ### Developer: OpenClaw Additional Context (openclaw_temporal_context)
@@ -602,6 +603,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "tts",
   "web_fetch",
   "web_search",
+  "heartbeat_respond",
   "sessions_yield"
 ]
 ```
@@ -680,7 +682,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "final": {
-          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
+          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
           "type": "boolean"
         },
         "forceDocument": {
@@ -752,6 +754,45 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "type": "object"
     },
     "name": "message",
+    "type": "function"
+  },
+  {
+    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "nextCheck": {
+          "type": "string"
+        },
+        "notificationText": {
+          "type": "string"
+        },
+        "notify": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+          "type": "string"
+        },
+        "priority": {
+          "enum": ["low", "normal", "high"],
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "scratch": {
+          "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": ["outcome", "notify", "summary"],
+      "type": "object"
+    },
+    "name": "heartbeat_respond",
     "type": "function"
   }
 ]

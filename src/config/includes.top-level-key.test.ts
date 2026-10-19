@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { type IncludeResolver, resolveConfigIncludesForTopLevelKey } from "./includes.js";
+import {
+  type IncludeResolver,
+  resolveConfigIncludes,
+  resolveConfigIncludesForTopLevelKey,
+} from "./includes.js";
 
 const CONFIG_DIR = path.join(path.parse(process.cwd()).root, "config");
 const DEFAULT_BASE_PATH = path.join(CONFIG_DIR, "openclaw.json");
@@ -19,6 +23,32 @@ function createMockResolver(files: Record<string, unknown>): IncludeResolver {
     },
     parseJson: JSON.parse,
   };
+}
+
+function resolve(obj: unknown, files: Record<string, unknown> = {}) {
+  return resolveConfigIncludes(obj, DEFAULT_BASE_PATH, createMockResolver(files));
+}
+
+function nested(depth: number, key: "x" | "0", leaf: unknown = "leaf"): unknown {
+  let value = leaf;
+  for (let i = 0; i < depth; i += 1) {
+    value = key === "x" ? { x: value } : [value];
+  }
+  return value;
+}
+
+// Walks the resolved tree iteratively: a recursive toEqual would overflow the
+// test's own call stack at the depths under test.
+function expectNestedPath(value: unknown, depth: number, key: string, leaf: unknown): void {
+  let current = value;
+  for (let i = 0; i < depth; i += 1) {
+    expect(current).toBeTypeOf("object");
+    expect(current).not.toBeNull();
+    const container = current as Record<string, unknown>;
+    expect(Object.keys(container)).toEqual([key]);
+    current = container[key];
+  }
+  expect(current).toBe(leaf);
 }
 
 describe("resolveConfigIncludesForTopLevelKey", () => {
@@ -45,5 +75,19 @@ describe("resolveConfigIncludesForTopLevelKey", () => {
         createMockResolver(files),
       ),
     ).toEqual({ logging: { consoleStyle: "json", level: "info" } });
+  });
+});
+
+describe("resolveConfigIncludes deep nesting", () => {
+  it.each(["x", "0"] as const)("preserves 100,000 levels of nesting through %s", (key) => {
+    expectNestedPath(resolve(nested(100_000, key)), 100_000, key, "leaf");
+  });
+
+  it("resolves deep nesting carried across the include file chain", () => {
+    // The $include sits 480 levels deep and its file adds 100 more; the
+    // segments and their sum must resolve without any per-document budget.
+    const obj = nested(480, "x", { $include: "./deep.json" });
+    const files = { [configPath("deep.json")]: nested(100, "x") };
+    expectNestedPath(resolve(obj, files), 580, "x", "leaf");
   });
 });

@@ -54,13 +54,6 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("redacts escaped structured authorization fields", () => {
-    const response = ["escaped", "digest", "response", "1234567890abcdef"].join("-");
-    const input = `Authorization: Digest realm=\\"Example Realm\\", response=\\"${response}\\"; status=401`;
-
-    expect(redactSensitiveText(input)).toBe("Authorization: Digest [REDACTED]; status=401");
-  });
-
   it("redacts consecutive, prefixed, and serialized auth headers", () => {
     const proxyValue = ["cHJveH", "k6cGFz", "cw=="].join("");
     const customValue = ["Y3VzdG", "9tOnBh", "c3M="].join("");

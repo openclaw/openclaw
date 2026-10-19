@@ -1,18 +1,11 @@
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
+  resolveNewSessionShortcut,
   type KeyboardShortcutCombo,
 } from "./keyboard-shortcut-contract.ts";
 
 registerCommandPaletteEnglish();
-
-export {
-  formatKeyboardShortcutCombo,
-  formatKeyboardShortcutParts,
-  isApplePlatform,
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "./keyboard-shortcut-contract.ts";
 
 type KeyboardShortcutEntry = ReturnType<typeof keyboardShortcutEntry>;
 type KeyboardShortcutSection = ReturnType<typeof keyboardShortcutSection>;
@@ -59,7 +52,6 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("workspaceFiles", KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     keyboardShortcutEntry("sideChat", KEYBOARD_SHORTCUT_COMBOS.sideChat),
     keyboardShortcutEntry("browserPanel", KEYBOARD_SHORTCUT_COMBOS.browserPanel),
-    keyboardShortcutEntry("tasksPanel", KEYBOARD_SHORTCUT_COMBOS.tasksPanel),
     keyboardShortcutEntry("desktopPanel", KEYBOARD_SHORTCUT_COMBOS.desktopPanel),
     keyboardShortcutEntry("discussionPanel", KEYBOARD_SHORTCUT_COMBOS.discussionPanel),
     keyboardShortcutEntry("dashboardPanel", KEYBOARD_SHORTCUT_COMBOS.dashboardPanel),
@@ -98,16 +90,15 @@ const SEND_PREFERENCE_ENTRY_IDS = new Set(["sendMessage", "startNewSession"]);
 export function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
 ): readonly KeyboardShortcutSection[] {
-  if (sendShortcut !== "modifier-enter") {
-    return KEYBOARD_SHORTCUT_SECTIONS;
-  }
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
     keyboardShortcutSection(
       section.id,
       section.entries.map((entry) =>
-        SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
-          ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
-          : entry,
+        entry.id === "newSession"
+          ? keyboardShortcutEntry(entry.id, resolveNewSessionShortcut())
+          : sendShortcut === "modifier-enter" && SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
+            ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
+            : entry,
       ),
     ),
   );

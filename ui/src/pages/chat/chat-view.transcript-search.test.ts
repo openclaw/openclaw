@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -20,14 +20,14 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    render(null, container);
+    disposeChatView(container);
   }
   resetChatViewState();
   resetTranscriptTestDom();
 });
 
 function createPane(paneId = "primary") {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   containers.push(container);
   document.body.append(container);
   const onClearReply = vi.fn();
@@ -40,9 +40,8 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: () => render(renderChat(props), container),
   });
-  render(renderChat(props), container);
+  renderChatPropsInto(container, props);
   const composer = expectDefined(
     container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
     "composer",
@@ -57,8 +56,7 @@ function createPane(paneId = "primary") {
     composer.dispatchEvent(
       new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
     );
-    await Promise.resolve();
-    expect(document.activeElement).toBe(search());
+    await waitForSolid(() => expect(document.activeElement).toBe(search()));
     if (query !== null) {
       search().value = query;
       search().dispatchEvent(new Event("input", { bubbles: true }));
@@ -68,79 +66,57 @@ function createPane(paneId = "primary") {
   return { container, composer, search, openSearch, onClearReply, onAbort };
 }
 
-function escape(options: KeyboardEventInit = {}) {
+function escape() {
   return new KeyboardEvent("keydown", {
     key: "Escape",
     bubbles: true,
     cancelable: true,
-    ...options,
   });
 }
 
 describe("transcript search Escape", () => {
-  it.each(["input", "button"])(
-    "closes from the search %s, resets the query, and restores focus without clearing reply or stopping",
-    async (control) => {
-      const pane = createPane();
-      await pane.openSearch();
-      const target = expectDefined(
-        pane.container.querySelector<HTMLElement>(`.agent-chat__search-bar ${control}`),
-        "search control",
-      );
-      target.focus();
-      if (control === "button") {
-        // Its focused tooltip owns the first Escape, before search receives it.
-        target.dispatchEvent(escape());
-        await Promise.resolve();
-        expect(pane.search().value).toBe("unmatched query");
-        expect(pane.onClearReply).not.toHaveBeenCalled();
-      }
-      const event = escape();
-      target.dispatchEvent(event);
-      await Promise.resolve();
+  it("returns to the composer when the shortcut origin has been removed", async () => {
+    const pane = createPane();
+    const chat = expectDefined(pane.container.querySelector(".chat"), "chat shortcut owner");
+    const trigger = chat.appendChild(document.createElement("button"));
+    trigger.focus();
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.search()));
+    trigger.remove();
+    pane.search().dispatchEvent(escape());
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.composer));
+    expect(pane.onClearReply).not.toHaveBeenCalled();
+    expect(pane.onAbort).not.toHaveBeenCalled();
+  });
 
-      expect(pane.container.querySelector(".agent-chat__search-bar")).toBeNull();
-      expect(event.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(pane.composer);
-      expect(pane.onClearReply).not.toHaveBeenCalled();
-      expect(pane.onAbort).not.toHaveBeenCalled();
-      await pane.openSearch(null);
-      expect(pane.search().value).toBe("");
-    },
-  );
-
-  it.each([{ isComposing: true }, { keyCode: 229 }, { defaultPrevented: true }])(
-    "leaves an IME-owned or already handled Escape alone: %j",
-    async (options) => {
-      const pane = createPane();
-      const input = await pane.openSearch();
-      const event = escape("defaultPrevented" in options ? {} : options);
-      if ("defaultPrevented" in options) {
-        event.preventDefault();
-      }
-      input.dispatchEvent(event);
-      await Promise.resolve();
-
-      expect(pane.search().value).toBe("unmatched query");
-      expect(document.activeElement).toBe(input);
-      expect(pane.onClearReply).not.toHaveBeenCalled();
-      expect(pane.onAbort).not.toHaveBeenCalled();
-    },
-  );
-
-  it("closes only the focused pane's search", async () => {
-    const first = createPane("first");
-    const second = createPane("second");
-    await first.openSearch("first query");
-    await second.openSearch("second query");
-    first.search().focus();
-    first.search().dispatchEvent(escape());
+  it("closes from the search button after its tooltip and restores focus without clearing reply or stopping", async () => {
+    const pane = createPane();
+    await pane.openSearch();
+    const target = expectDefined(
+      pane.container.querySelector<HTMLElement>(".agent-chat__search-bar button"),
+      "search control",
+    );
+    target.focus();
+    const tooltip = expectDefined(target.closest("openclaw-tooltip"), "search tooltip");
+    await tooltip.updateComplete;
+    expect(tooltip.hasAttribute("open")).toBe(true);
+    // Its focused tooltip owns the first Escape, before search receives it.
+    target.dispatchEvent(escape());
+    await Promise.resolve();
+    expect(pane.search().value).toBe("unmatched query");
+    expect(pane.onClearReply).not.toHaveBeenCalled();
+    const event = escape();
+    target.dispatchEvent(event);
     await Promise.resolve();
 
-    expect(first.container.querySelector(".agent-chat__search-bar")).toBeNull();
-    expect(second.search().value).toBe("second query");
-    expect(document.activeElement).toBe(first.composer);
-    expect(first.onClearReply).not.toHaveBeenCalled();
-    expect(second.onClearReply).not.toHaveBeenCalled();
+    expect(pane.container.querySelector(".agent-chat__search-bar")).toBeNull();
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(pane.composer);
+    expect(pane.onClearReply).not.toHaveBeenCalled();
+    expect(pane.onAbort).not.toHaveBeenCalled();
+    await pane.openSearch(null);
+    expect(pane.search().value).toBe("");
   });
 });

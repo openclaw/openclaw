@@ -1,14 +1,15 @@
 import type { ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { nextcloudTalkPlugin } from "../channel-plugin-api.js";
 
 const transport = vi.hoisted(() => ({
   beforeLookup: undefined as ((url: string) => Promise<void> | void) | undefined,
 }));
-
 vi.mock("../runtime-api.js", async (original) => {
   const actual = await original<typeof import("../runtime-api.js")>();
   return {
@@ -37,295 +38,188 @@ type SendContext = Pick<
   | "assertDirectAdapterHandoff"
 >;
 
-const registrations = [
-  {
-    name: "message text",
-    media: false,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.message?.send?.text?.(ctx),
-  },
-  {
-    name: "message media",
-    media: true,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.message?.send?.media?.(ctx),
-  },
-  {
-    name: "outbound text",
-    media: false,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.outbound?.sendText?.(ctx),
-  },
-  {
-    name: "outbound media",
-    media: true,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.outbound?.sendMedia?.(ctx),
-  },
-];
+const sendText = expectDefined(nextcloudTalkPlugin.message?.send?.text, "text sender");
+const sendMedia = expectDefined(nextcloudTalkPlugin.outbound?.sendMedia, "media sender");
+const MESSAGE_PATH = "/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message";
+const MEDIA_MESSAGE = "hello\n\nAttachment: https://example.com/image.png";
 
-function sendContext(baseUrl: string): SendContext {
-  return {
-    cfg: {
-      channels: {
-        "nextcloud-talk": {
-          accounts: {
-            work: {
-              baseUrl,
-              botSecret: "synthetic-bot-secret",
-              network: { dangerouslyAllowPrivateNetwork: true },
-            },
-          },
+type RecordedRequest = { method?: string; url?: string; body: string };
+async function withTalkServer(
+  run: (ctx: SendContext, requests: RecordedRequest[]) => Promise<void>,
+  respond: (response: ServerResponse, requests: RecordedRequest[]) => void = (response) =>
+    acceptMessage(response),
+) {
+  const requests: RecordedRequest[] = [];
+  await withServer(
+    (request, response) => {
+      const recorded = { method: request.method, url: request.url, body: "" };
+      requests.push(recorded);
+      void text(request).then(
+        (body) => {
+          recorded.body = body;
+          respond(response, requests);
         },
-      },
+        () => response.destroy(),
+      );
     },
-    accountId: "work",
-    to: "room:allowed",
-    text: "hello",
-    mediaUrl: "https://example.com/image.png",
-    replyToId: "parent-1",
+    async (baseUrl) => {
+      const work = {
+        baseUrl,
+        botSecret: "synthetic-bot-secret",
+        network: { dangerouslyAllowPrivateNetwork: true },
+      };
+      await run(
+        {
+          cfg: { channels: { "nextcloud-talk": { accounts: { work } } } },
+          accountId: "work",
+          to: "room:allowed",
+          text: "hello",
+          mediaUrl: "https://example.com/image.png",
+          replyToId: "parent-1",
+        },
+        requests,
+      );
+    },
+  );
+  return requests;
+}
+
+function createGate() {
+  const started = createDeferred<void>();
+  const resume = createDeferred<void>();
+  return {
+    async block() {
+      started.resolve();
+      await resume.promise;
+    },
+    async during(pending: Promise<unknown>, check: () => void | Promise<void>) {
+      const result = pending.catch((error: unknown) => error);
+      try {
+        expect(
+          await Promise.race([started.promise.then(() => true), result.then(() => false)]),
+        ).toBe(true);
+        await check();
+      } finally {
+        resume.resolve();
+        await result;
+      }
+      return result;
+    },
   };
 }
 
 function createHandoff() {
-  let current = true;
+  const controller = new AbortController();
   const error = new Error("Nextcloud delivery cancelled");
   return {
     error,
-    cancel: () => {
-      current = false;
-    },
+    cancel: () => controller.abort(error),
     callbacks: {
       onPlatformSendDispatch: vi.fn(async () => {}),
-      assertDirectAdapterHandoff: () => {
-        if (!current) {
-          throw error;
-        }
-      },
+      assertDirectAdapterHandoff: () => controller.signal.throwIfAborted(),
     },
   };
 }
-
 function acceptMessage(response: ServerResponse, validBody = true) {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(validBody ? JSON.stringify({ ocs: { data: { id: 42 } } }) : "invalid-json");
 }
-
 afterEach(() => {
   transport.beforeLookup = undefined;
 });
 
-describe.each(registrations)("Nextcloud Talk $name handoff", ({ send, media }) => {
-  it("preserves message content, the dispatch hook, and the accepted receipt", async () => {
-    const handoff = createHandoff();
-    const requests: Array<{ method?: string; url?: string; body: string }> = [];
-    await withServer(
-      (request, response) => {
-        let body = "";
-        request.setEncoding("utf8");
-        request.on("data", (chunk: string) => {
-          body += chunk;
-        });
-        request.once("end", () => {
-          requests.push({ method: request.method, url: request.url, body });
-          acceptMessage(response);
-        });
-        request.once("error", () => response.destroy());
-      },
-      async (baseUrl) => {
-        await expect(
-          send({ ...sendContext(baseUrl), ...handoff.callbacks }),
-        ).resolves.toMatchObject({
-          messageId: "42",
-          receipt: { platformMessageIds: ["42"], replyToId: "parent-1" },
-        });
-      },
-    );
-    expect(requests).toEqual([
-      {
-        method: "POST",
-        url: "/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message",
-        body: JSON.stringify({
-          message: media ? "hello\n\nAttachment: https://example.com/image.png" : "hello",
-          replyTo: "parent-1",
-        }),
-      },
-    ]);
-    expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
-  });
-
-  it("blocks the POST when delivery is cancelled during DNS preparation", async () => {
-    const handoff = createHandoff();
-    const started = createDeferred<void>();
-    const resume = createDeferred<void>();
-    const requests: string[] = [];
-    transport.beforeLookup = async () => {
-      started.resolve();
-      await resume.promise;
+it.each([
+  { name: "message text", media: false, send: sendText },
+  { name: "outbound media", media: true, send: sendMedia },
+])(
+  "blocks $name cancelled during DNS without cancelling a concurrent delivery",
+  async ({ send, media }) => {
+    const cancelled = createHandoff();
+    const current = createHandoff();
+    const gate = createGate();
+    transport.beforeLookup = async (url) => {
+      if (url.includes("/held/")) {
+        await gate.block();
+      }
     };
-    await withServer(
-      (request, response) => {
-        requests.push(request.url ?? "");
-        request.resume();
-        acceptMessage(response);
-      },
-      async (baseUrl) => {
-        const pending = Promise.resolve(send({ ...sendContext(baseUrl), ...handoff.callbacks }));
-        const result = pending.catch((error: unknown) => error);
-        try {
-          const ready = await Promise.race([
-            started.promise.then(() => true),
-            result.then(() => false),
-          ]);
-          expect(ready).toBe(true);
-          handoff.cancel();
-        } finally {
-          resume.resolve();
-          await result;
-        }
-        expect(await result).toBe(handoff.error);
-      },
-    );
-    expect(requests).toEqual([]);
-  });
-
-  it.each([false, true])("rechecks redirects with delivery cancelled=%s", async (cancelled) => {
-    const handoff = createHandoff();
-    const requests: string[] = [];
-    await withServer(
-      (request, response) => {
-        requests.push(`${request.method} ${request.url}`);
-        request.resume();
-        if (requests.length === 1) {
-          if (cancelled) {
-            handoff.cancel();
-          }
-          response.writeHead(307, { location: "/redirected-message" });
-          response.end();
-        } else {
-          acceptMessage(response);
-        }
-      },
-      async (baseUrl) => {
-        const pending = Promise.resolve(send({ ...sendContext(baseUrl), ...handoff.callbacks }));
-        if (cancelled) {
-          await expect(pending).rejects.toBe(handoff.error);
-        } else {
-          await expect(pending).resolves.toMatchObject({ messageId: "42" });
-        }
-      },
-    );
-    expect(requests).toEqual([
-      "POST /ocs/v2.php/apps/spreed/api/v1/bot/allowed/message",
-      ...(!cancelled ? ["POST /redirected-message"] : []),
-    ]);
-  });
-
-  it.each([false, true])(
-    "preserves an accepted send after cancellation with valid body=%s",
-    async (validBody) => {
-      const handoff = createHandoff();
-      await withServer(
-        (request, response) => {
-          request.resume();
-          handoff.cancel();
-          acceptMessage(response, validBody);
-        },
-        async (baseUrl) => {
-          await expect(
-            send({ ...sendContext(baseUrl), ...handoff.callbacks }),
-          ).resolves.toMatchObject({
-            messageId: validBody ? "42" : "unknown",
-            receipt: { platformMessageIds: validBody ? ["42"] : [] },
+    const requests = await withTalkServer(async (ctx) => {
+      const result = await gate.during(
+        send({ ...ctx, ...cancelled.callbacks, to: "room:held" }),
+        async () => {
+          cancelled.cancel();
+          await expect(send({ ...ctx, ...current.callbacks })).resolves.toMatchObject({
+            messageId: "42",
+            receipt: { platformMessageIds: ["42"], replyToId: "parent-1" },
           });
         },
       );
+      expect(result).toBe(cancelled.error);
+    });
+    const message = media ? MEDIA_MESSAGE : "hello";
+    const body = JSON.stringify({ message, replyTo: "parent-1" });
+    expect(requests).toEqual([{ method: "POST", url: MESSAGE_PATH, body }]);
+    expect(current.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
+  },
+);
+
+it("rejects a redirect after delivery cancellation", async () => {
+  const handoff = createHandoff();
+  const requests = await withTalkServer(
+    (ctx) => expect(sendMedia({ ...ctx, ...handoff.callbacks })).rejects.toBe(handoff.error),
+    (response, received) => {
+      if (received.length === 1) {
+        handoff.cancel();
+        response.writeHead(307, { location: "/redirected-message" });
+        response.end();
+      } else {
+        acceptMessage(response);
+      }
     },
   );
+  expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
+    `POST ${MESSAGE_PATH}`,
+  ]);
 });
+
+it.each([false, true])(
+  "preserves an accepted send after cancellation with valid body=%s",
+  async (validBody) => {
+    const handoff = createHandoff();
+    await withTalkServer(
+      (ctx) =>
+        expect(sendMedia({ ...ctx, ...handoff.callbacks })).resolves.toMatchObject({
+          messageId: validBody ? "42" : "unknown",
+          receipt: { platformMessageIds: validBody ? ["42"] : [] },
+        }),
+      (response) => {
+        handoff.cancel();
+        acceptMessage(response, validBody);
+      },
+    );
+  },
+);
 
 it.each(["reject", "cancel"])(
   "settles an asynchronous dispatch hook before HTTP (%s)",
   async (mode) => {
     const handoff = createHandoff();
-    const started = createDeferred<void>();
-    const resume = createDeferred<void>();
-    const requests: string[] = [];
+    const gate = createGate();
     handoff.callbacks.onPlatformSendDispatch.mockImplementation(async () => {
-      started.resolve();
-      await resume.promise;
+      await gate.block();
       if (mode === "reject") {
         throw handoff.error;
       }
     });
-    await withServer(
-      (request, response) => {
-        requests.push(request.url ?? "");
-        request.resume();
-        acceptMessage(response);
-      },
-      async (baseUrl) => {
-        const pending = nextcloudTalkPlugin.message?.send?.text?.({
-          ...sendContext(baseUrl),
-          ...handoff.callbacks,
-        });
-        const result = Promise.resolve(pending).catch((error: unknown) => error);
-        try {
-          await Promise.race([started.promise, result]);
-          expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
-          expect(requests).toEqual([]);
+    const requests = await withTalkServer(async (ctx, received) => {
+      const result = await gate.during(sendText({ ...ctx, ...handoff.callbacks }), () => {
+        expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
+        expect(received).toEqual([]);
+        if (mode === "cancel") {
           handoff.cancel();
-        } finally {
-          resume.resolve();
-          await result;
         }
-        expect(await result).toBe(handoff.error);
-      },
-    );
+      });
+      expect(result).toBe(handoff.error);
+    });
     expect(requests).toEqual([]);
   },
 );
-
-it("keeps a cancelled send's authority separate from a concurrent delivery", async () => {
-  const cancelled = createHandoff();
-  const current = createHandoff();
-  const started = createDeferred<void>();
-  const resume = createDeferred<void>();
-  const requests: string[] = [];
-  transport.beforeLookup = async (url) => {
-    if (url.includes("/held/")) {
-      started.resolve();
-      await resume.promise;
-    }
-  };
-  await withServer(
-    (request, response) => {
-      requests.push(request.url ?? "");
-      request.resume();
-      acceptMessage(response);
-    },
-    async (baseUrl) => {
-      const held = nextcloudTalkPlugin.message?.send?.text?.({
-        ...sendContext(baseUrl),
-        ...cancelled.callbacks,
-        to: "room:held",
-      });
-      const result = Promise.resolve(held).catch((error: unknown) => error);
-      try {
-        const ready = await Promise.race([
-          started.promise.then(() => true),
-          result.then(() => false),
-        ]);
-        expect(ready).toBe(true);
-        cancelled.cancel();
-        await expect(
-          nextcloudTalkPlugin.outbound?.sendMedia?.({
-            ...sendContext(baseUrl),
-            ...current.callbacks,
-          }),
-        ).resolves.toMatchObject({ messageId: "42" });
-      } finally {
-        resume.resolve();
-        await result;
-      }
-      expect(await result).toBe(cancelled.error);
-    },
-  );
-  expect(requests).toEqual(["/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message"]);
-});

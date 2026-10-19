@@ -45,10 +45,6 @@ vi.mock("./mcp-http.js", () => {
   state.loaded.push("mcp-http");
   return { closeMcpLoopbackServer: vi.fn() };
 });
-vi.mock("../tasks/task-registry.maintenance.js", () => {
-  state.loaded.push("task-maintenance");
-  return { stopTaskRegistryMaintenance: vi.fn() };
-});
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => {
   state.loaded.push("restart-recovery");
   return { markRestartAbortedMainSessions: vi.fn() };
@@ -67,6 +63,10 @@ vi.mock("./embeddings-provider-lifetime.js", () => {
 vi.mock("../hooks/gmail-watcher.js", () => {
   state.loaded.push("gmail-watcher");
   return { stopGmailWatcher: vi.fn() };
+});
+vi.mock("../cron/maintenance.js", () => {
+  state.loaded.push("cron-maintenance");
+  return { stopCronMaintenance: vi.fn() };
 });
 vi.mock("../agents/code-mode-state.js", () => {
   state.loaded.push("code-mode");
@@ -93,6 +93,9 @@ vi.mock("../plugins/plugin-cache.js", () => {
     },
   };
 });
+vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
+  loadSubagentSessionCleanupRuntime: async () => undefined,
+}));
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
@@ -107,11 +110,11 @@ describe("gateway shutdown runtime", () => {
         "session-change-events",
         "session-event-publications",
         "mcp-http",
-        "task-maintenance",
         "restart-recovery",
         "bundle-lsp",
         "embeddings",
         "gmail-watcher",
+        "cron-maintenance",
         "code-mode",
         "provider-transports",
         "plugin-runtime",

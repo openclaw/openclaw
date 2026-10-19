@@ -17,6 +17,8 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",
   "mediaUnderstandingProviders",
+  "transcriptSourceProviders",
+  // Retain legacy installed indexes until their next normal manifest rebuild.
   "meetingNotesSourceProviders",
   "imageGenerationProviders",
   "videoGenerationProviders",
@@ -24,6 +26,7 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "webFetchProviders",
   "webSearchProviders",
   "workerProviders",
+  "storageProviders",
   "usageProviders",
 ] as const;
 
@@ -57,10 +60,6 @@ function createOwnerLookup() {
     },
     has: (ids: readonly string[]) => ids.every((id) => resolve(id) !== undefined),
   };
-}
-
-function listValues(value: readonly string[] | undefined): readonly string[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function modelSupportOwnerMatches(owner: ModelSupportOwner, modelId: string): boolean {
@@ -99,22 +98,22 @@ export function createInstalledPluginIndexScopeLookup(
     channelContributionOwners.index(plugin.pluginId, [
       plugin.pluginId,
       plugin.packageChannel?.id,
-      ...listValues(plugin.contributions?.channels),
-      ...listValues(plugin.contributions?.channelConfigs),
+      ...(plugin.contributions?.channels ?? []),
+      ...(plugin.contributions?.channelConfigs ?? []),
     ]);
     providerContributionOwners.index(plugin.pluginId, [
       plugin.pluginId,
-      ...listValues(plugin.contributions?.providers),
-      ...listValues(plugin.contributions?.modelCatalogProviders),
-      ...listValues(plugin.contributions?.autoEnableProviderIds),
-      ...PROVIDER_CONTRIBUTION_CONTRACTS.flatMap((contract) =>
-        listValues(plugin.contributions?.contracts?.[contract]),
+      ...(plugin.contributions?.providers ?? []),
+      ...(plugin.contributions?.modelCatalogProviders ?? []),
+      ...(plugin.contributions?.autoEnableProviderIds ?? []),
+      ...PROVIDER_CONTRIBUTION_CONTRACTS.flatMap(
+        (contract) => plugin.contributions?.contracts?.[contract] ?? [],
       ),
     ]);
     modelSupportOwners.push({
       pluginId: plugin.pluginId,
-      prefixes: listValues(plugin.contributions?.modelSupportPrefixes),
-      patterns: listValues(plugin.contributions?.modelSupportPatterns).flatMap((pattern) => {
+      prefixes: plugin.contributions?.modelSupportPrefixes ?? [],
+      patterns: (plugin.contributions?.modelSupportPatterns ?? []).flatMap((pattern) => {
         const regex = compileSafeRegex(pattern, "u");
         return regex ? [regex] : [];
       }),

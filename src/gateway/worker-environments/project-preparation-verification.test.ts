@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
-  readWorkerProjectSetupRecipe,
+  readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
@@ -24,7 +24,7 @@ describe("prepared workspace completion and verification", () => {
       const f = await fixture(
         recipe === "skipped" ? '#!/bin/sh\nprintf unexpected > "$HOME/setup-ran"\n' : undefined,
       );
-      const setupRecipe = await readWorkerProjectSetupRecipe(f.project);
+      const setupRecipe = (await readWorkerProjectEnvironmentRecipe(f.project)).identity;
       expect(Boolean(setupRecipe)).toBe(recipe === "skipped");
       const prepare = (project: typeof f.project, key: string) =>
         createWorkerProjectPreparation({
@@ -43,6 +43,7 @@ describe("prepared workspace completion and verification", () => {
       const operation = prepare(f.project, "a".repeat(64));
       expect(operation.getPreparedWorkspace()).toBeUndefined();
       const result = await operation.project.prepare(f);
+      expect(result.recipePreparation?.source).toBe(recipe === "skipped" ? "script" : "none");
       operation.close();
       const prepared = result.preparedWorkspace!;
       expect(result.captureRequired).toBe(true);
@@ -98,20 +99,26 @@ describe("prepared workspace completion and verification", () => {
     },
   );
 
-  it.each(["removed", "HEAD", "completion", "standalone"])(
-    "rejects a retained workspace whose %s identity changes before setup",
+  it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
+    "rejects a workspace whose %s identity changes after inspection",
     async (changed) => {
       const f = await fixture();
-      const first = await f.preparedOperation();
+      const first = changed === "appeared" ? f.operation() : await f.preparedOperation();
       const prepared = (await first.project.prepare(f)).preparedWorkspace!;
       first.close();
-      await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
-      await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
-      const b = (await prepareWorkerProjectSnapshot({
-        localPath: f.repository,
-        namespace: "gateway",
-      }))!;
-      const next = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
+      let project = f.project;
+      if (changed !== "appeared") {
+        await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
+        await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
+        project = (await prepareWorkerProjectSnapshot({
+          localPath: f.repository,
+          namespace: "gateway",
+        }))!;
+      }
+      const next =
+        changed === "appeared"
+          ? await f.preparedOperation()
+          : await f.preparedOperation(undefined, { project, key: "b".repeat(64) });
       let calls = 0;
       await expect(
         next.project.prepare({
@@ -120,7 +127,11 @@ describe("prepared workspace completion and verification", () => {
           runScript: async (script) => {
             calls++;
             const result = await f.runScript(script);
-            if (calls === 1) {
+            if (changed === "appeared") {
+              const replacement = await f.preparedOperation();
+              await replacement.project.prepare(f);
+              replacement.close();
+            } else if (calls === 1) {
               if (changed === "removed") {
                 await fs.rename(path.dirname(prepared.workspaceDir), path.join(f.home, "retired"));
               } else if (changed === "HEAD") {
@@ -129,9 +140,13 @@ describe("prepared workspace completion and verification", () => {
                   "--depth=1",
                   "--update-shallow",
                   f.repository,
-                  b.baseCommit,
+                  project.baseCommit,
                 ]);
-                await requireGit(prepared.workspaceDir, ["checkout", "--detach", b.baseCommit]);
+                await requireGit(prepared.workspaceDir, [
+                  "checkout",
+                  "--detach",
+                  project.baseCommit,
+                ]);
               } else if (changed === "completion") {
                 const completionRoot = path.join(
                   prepared.homeDir,
@@ -157,31 +172,10 @@ describe("prepared workspace completion and verification", () => {
         changed === "standalone" ? "Git base is not standalone" : "changed during preparation",
       );
       next.close();
-      expect(calls).toBe(2);
+      if (changed !== "appeared") {
+        expect(calls).toBe(2);
+      }
       expect(next.getPreparedWorkspace()).toBeUndefined();
     },
   );
-
-  it("does not adopt a prepared workspace that appeared after verifying its absence", async () => {
-    const f = await fixture();
-    const seed = f.operation();
-    await seed.project.prepare(f);
-    seed.close();
-    const operation = await f.preparedOperation();
-    await expect(
-      operation.project.prepare({
-        ...f,
-        runScriptWithBudget: (createScript) => f.runScriptWithBudget(createScript),
-        runScript: async (script) => {
-          const result = await f.runScript(script);
-          const replacement = await f.preparedOperation();
-          await replacement.project.prepare(f);
-          replacement.close();
-          return result;
-        },
-      }),
-    ).rejects.toThrow("changed during preparation");
-    operation.close();
-    expect(operation.getPreparedWorkspace()).toBeUndefined();
-  });
 });

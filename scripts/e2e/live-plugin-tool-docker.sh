@@ -10,7 +10,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-live-plugin-tool-e2e" OPENCLAW_LIVE_PLUGIN_TOOL_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_LIVE_PLUGIN_TOOL_DOCKER_TARGET:-bare}"
@@ -23,15 +22,7 @@ AGENT_OUTPUT_DUMP_BYTES="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_LIVE_P
 SESSION_SCAN_MAX_ENTRIES="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES 50000)"
 run_log=""
 
-cleanup() {
-  if [ -n "${PACKAGE_TGZ:-}" ]; then
-    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
-  fi
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then
   PROFILE_FILE="$HOME/.profile"
@@ -39,19 +30,11 @@ fi
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" live-plugin-tool "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz live-plugin-tool "$PACKAGE_TGZ")"
-    return 0
-  fi
-  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
-    echo "OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
-    exit 1
-  fi
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz live-plugin-tool)"
-}
-
-prepare_package_tgz
+if [ -z "$PACKAGE_TGZ" ] && [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+  echo "OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
+  exit 1
+fi
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz live-plugin-tool "$PACKAGE_TGZ")"
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"

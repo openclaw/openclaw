@@ -1,5 +1,5 @@
 diff --git a/lib/Utils/messages-media.js b/lib/Utils/messages-media.js
-index a3d2fa6bae6af021a4a50b4270584fed08623f34..436162b2a11406663c6ade8e55bb2e0ce9998634 100644
+index a3d2fa6bae6af021a4a50b4270584fed08623f34..8770b8f9e65f6dc45037245e196d2647265829f9 100644
 --- a/lib/Utils/messages-media.js
 +++ b/lib/Utils/messages-media.js
 @@ -209,7 +209,7 @@ export async function getAudioWaveform(buffer, logger) {
@@ -11,6 +11,48 @@ index a3d2fa6bae6af021a4a50b4270584fed08623f34..436162b2a11406663c6ade8e55bb2e0c
          const samples = 64; // Number of samples we want to have in our final data set
          const blockSize = Math.floor(rawData.length / samples); // the number of samples in each subdivision
          const filteredData = [];
+@@ -527,10 +527,9 @@ export function extensionForMediaMessage(message) {
+     }
+     return extension;
+ }
+-const isNodeRuntime = () => {
++const supportsNodeHttpUpload = () => {
+     return (typeof process !== 'undefined' &&
+-        process.versions?.node !== null &&
+-        typeof process.versions.bun === 'undefined' &&
++        typeof process.versions?.node === 'string' &&
+         typeof globalThis.Deno === 'undefined');
+ };
+ export const uploadWithNodeHttp = async ({ url, filePath, headers, timeoutMs, agent }, redirectCount = 0) => {
+@@ -623,15 +622,12 @@ const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) =>
+  * This causes memory issues with large files (e.g., 1GB file = 1GB+ memory usage).
+  * See: https://github.com/nodejs/undici/issues/4058
+  *
+- * Other runtimes (Bun, Deno, browsers) correctly stream the request body without
+- * buffering, so we can use the web-standard Fetch API there.
+- *
+- * ## Future considerations:
+- * Once the undici bug is fixed, we can simplify this to use only the Fetch API
+- * across all runtimes. Monitor the GitHub issue for updates.
++ * Bun also uses Node HTTP to retain agent routing and replay files on redirects.
++ * Other runtimes use the web-standard Fetch API.
++ * Native fetch cannot consume generic Node agents or replay streamed bodies.
+  */
+ const uploadMedia = async (params, logger) => {
+-    if (isNodeRuntime()) {
++    if (supportsNodeHttpUpload()) {
+         logger?.debug('Using Node.js https module for upload (avoids undici buffering bug)');
+         return uploadWithNodeHttp(params);
+     }
+@@ -689,7 +685,7 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger, opt
+             }
+             catch (error) {
+                 const isLast = hostname === hosts[uploadInfo.hosts.length - 1]?.hostname;
+-                logger.warn({ trace: error?.stack, uploadResult: result }, `Error in uploading to ${hostname} ${isLast ? '' : ', retrying...'}`);
++                logger.warn({ trace: error?.stack ?? error?.message ?? String(error), uploadResult: result }, `Error in uploading to ${hostname} ${isLast ? '' : ', retrying...'}`);
+             }
+         }
+         if (!urls) {
 diff --git a/package.json b/package.json
 index 473e37b3af1221f4b3813ada01f9ff00e01f9da7..0162a53d0285e361e1f7d4f59ce8466eef7b6e50 100644
 --- a/package.json

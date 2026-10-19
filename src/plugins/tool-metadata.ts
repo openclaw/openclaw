@@ -30,13 +30,14 @@ type PluginToolMeta = {
   pluginId: string;
   kind?: PluginManifestRecord["kind"];
   optional: boolean;
+  workspaceAccess?: boolean | "execute";
   replaySafe?: boolean;
   sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
   mcp?: PluginToolMcpMeta;
 };
 
-const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+const pluginToolMeta = new WeakMap<object, PluginToolMeta>();
 
 /** Attaches plugin ownership metadata to a concrete agent tool instance. */
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
@@ -46,6 +47,24 @@ export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): voi
 /** Reads plugin ownership metadata for a concrete agent tool instance. */
 export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
+}
+
+/** Shared catalog/report provenance; names never establish a tool's owner. */
+export function classifyAgentToolSource(tool: object): {
+  source: "openclaw" | "mcp";
+  sourceName: string;
+  mcp?: PluginToolMcpMeta;
+} {
+  const meta = pluginToolMeta.get(tool);
+  const pluginId = meta?.pluginId?.trim();
+  const mcp = meta?.mcp;
+  if (mcp) {
+    return { source: "mcp", sourceName: mcp.safeServerName || pluginId || "mcp", mcp };
+  }
+  if (pluginId === "bundle-mcp") {
+    return { source: "mcp", sourceName: pluginId };
+  }
+  return { source: "openclaw", sourceName: pluginId || "core" };
 }
 
 /** Copies plugin ownership metadata when wrappers replace a tool object. */

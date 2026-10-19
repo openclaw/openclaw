@@ -2,12 +2,7 @@ import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
-import {
-  hasPathAncestor,
-  manifestNodes,
-  sameEntry,
-  type WorkspaceNode,
-} from "./workspace-manifest-comparison.js";
+import { hasPathAncestor, manifestNodes, sameEntry } from "./workspace-manifest-comparison.js";
 import {
   captureWorkspaceManifest,
   preflightWorkspaceApply,
@@ -17,6 +12,7 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
 import { removeEmptyWorkspaceDirectory } from "./workspace-reconcile-fs.js";
 export { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
@@ -46,11 +42,7 @@ export async function assertWorkspaceMatchesManifest(params: {
   entries?: readonly WorkerWorkspaceManifestEntry[];
 }): Promise<void> {
   const root = await fs.realpath(params.root);
-  const expectedNodes = params.entries
-    ? params.entries
-    : [...manifestNodes(params.manifest).values()].filter(
-        (entry): entry is Exclude<WorkspaceNode, undefined> => entry !== undefined,
-      );
+  const expectedNodes = params.entries ?? [...manifestNodes(params.manifest).values()];
   const actual = await readWorkspaceNodes(
     root,
     expectedNodes.map((entry) => entry.path),
@@ -64,39 +56,39 @@ export async function assertWorkspaceMatchesManifest(params: {
   }
 }
 
-export async function readActualWorkspaceManifest(params: {
-  root: string;
-  baseCommit: string | null;
-  preserveDirectories?: ReadonlySet<string>;
-  includePaths?: ReadonlySet<string>;
-  signal?: AbortSignal;
-}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
-  return await captureWorkspaceManifest(params);
-}
-
 export async function inspectAcceptedWorkerWorkspace(params: {
   root: string;
   expectedManifestRef: string;
   allowAdvancedLocalState?: boolean;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  additionalPaths?: ReadonlySet<string>;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
   const root = await fs.realpath(params.root);
-  const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
   const preserveDirectories = new Set(
     reconciliationDirectories(
       params.current.directories,
       stagedInputDirectoriesFromEntries(params.current.entries),
+      params.current.buildCacheInputs,
     ),
   );
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
-  const actual = await readActualWorkspaceManifest({
+  params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+  const buildCacheInputs =
+    params.base.buildCacheInputs === undefined && params.current.buildCacheInputs === undefined
+      ? undefined
+      : new Set([
+          ...(params.base.buildCacheInputs ?? []),
+          ...(params.current.buildCacheInputs ?? []),
+        ]);
+  const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
     preserveDirectories,
     includePaths,
+    buildCacheInputs,
   });
   if (actual.manifestRef !== params.expectedManifestRef && !params.allowAdvancedLocalState) {
     return undefined;
@@ -109,21 +101,17 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const conflictPaths = params.allowAdvancedLocalState
     ? retainedConflictPaths(preflight)
     : preflight.conflictPaths;
-  const verifyLocalStable = async () =>
-    await assertActualWorkspaceManifest({
+  return {
+    ...actual,
+    conflictPaths,
+    verifyLocalStable: createWorkspaceManifestVerifier({
       root,
       expectedRef: actual.manifestRef,
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
       includePaths,
-    });
-  return {
-    ...actual,
-    conflictPaths,
-    verifyLocalStable: async () =>
-      hashMemo
-        ? await withWorkspaceHashMemo(hashMemo, verifyLocalStable, metrics)
-        : await verifyLocalStable(),
+      buildCacheInputs,
+    }),
   };
 }
 
@@ -133,11 +121,20 @@ export async function assertActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  buildCacheInputs?: ReadonlySet<string>;
 }): Promise<void> {
-  const actual = await readActualWorkspaceManifest(params);
+  const actual = await captureWorkspaceManifest(params);
   if (actual.manifestRef !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }
+}
+
+export function createWorkspaceManifestVerifier(
+  params: Parameters<typeof assertActualWorkspaceManifest>[0],
+): () => Promise<void> {
+  const { memo, metrics } = activeWorkspaceHashContext() ?? {};
+  const verify = () => assertActualWorkspaceManifest(params);
+  return () => (memo ? withWorkspaceHashMemo(memo, verify, metrics) : verify());
 }
 
 export async function applyWorkspaceDirectoryChanges(params: {
@@ -158,7 +155,17 @@ export async function applyWorkspaceDirectoryChanges(params: {
       baseNodes.get(entryPath)?.type === "directory" ||
       currentNodes.get(entryPath)?.type === "directory",
   );
-  for (const entryPath of directoryPaths.toSorted()) {
+  const retainedDirectories = new Set(directoryPaths);
+  // Git prunes empty ancestors when deleting their last leaf. Recreate only
+  // ancestors of admitted changes that the worker still retains as directories.
+  for (const entryPath of params.applyPaths) {
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      if (currentNodes.get(ancestor)?.type === "directory") {
+        retainedDirectories.add(ancestor);
+      }
+    }
+  }
+  for (const entryPath of [...retainedDirectories].toSorted()) {
     const currentDirectory = currentNodes.get(entryPath);
     if (currentDirectory?.type === "directory") {
       await workspaceRoot.mkdir(entryPath);
@@ -170,7 +177,6 @@ export async function applyWorkspaceDirectoryChanges(params: {
   for (const entryPath of removedDirectoryPaths.toSorted((left, right) =>
     right.localeCompare(left),
   )) {
-    const baseDirectory = baseNodes.get(entryPath);
     let directoryState;
     try {
       directoryState = await workspaceRoot.stat(entryPath);
@@ -180,28 +186,12 @@ export async function applyWorkspaceDirectoryChanges(params: {
       }
       throw error;
     }
-    if (!directoryState.isDirectory || baseDirectory?.type !== "directory") {
-      // A concurrent local replacement or chmod wins and becomes a conflict.
+    if (!directoryState.isDirectory) {
+      // A concurrent local replacement wins and becomes a conflict.
       continue;
     }
     await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
-}
-
-export function hasReplacedBaseEntryAncestor(
-  entryPath: string,
-  baseByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-  currentByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-): boolean {
-  const segments = entryPath.split("/");
-  for (let index = 1; index < segments.length; index += 1) {
-    const ancestor = segments.slice(0, index).join("/");
-    const baseEntry = baseByPath.get(ancestor);
-    if (baseEntry && !sameEntry(baseEntry, currentByPath.get(ancestor))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function retainedConflictPaths(

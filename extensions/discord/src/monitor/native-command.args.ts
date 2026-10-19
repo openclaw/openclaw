@@ -16,14 +16,13 @@ export function readDiscordCommandArgs(
   }
   const values: CommandArgValues = {};
   for (const definition of definitions) {
-    let value: string | number | boolean | null | undefined;
-    if (definition.type === "number") {
-      value = interaction.options.getNumber(definition.name) ?? null;
-    } else if (definition.type === "boolean") {
-      value = interaction.options.getBoolean(definition.name) ?? null;
-    } else {
-      value = interaction.options.getString(definition.name) ?? null;
-    }
+    const getter =
+      definition.type === "number"
+        ? "getNumber"
+        : definition.type === "boolean"
+          ? "getBoolean"
+          : "getString";
+    const value = interaction.options[getter](definition.name);
     if (value != null) {
       values[definition.name] = value;
     }

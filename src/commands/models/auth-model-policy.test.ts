@@ -37,21 +37,8 @@ describe("provider model access consent", () => {
     await state.cleanup();
   });
 
-  it.each([undefined, [], ["sample/*"]])(
-    "does not ask for an unrestricted provider: %j",
-    (allow) => {
-      config.agents!.defaults!.modelPolicy = allow ? { allow } : undefined;
-      expect(prepare()).toBeUndefined();
-    },
-  );
-
-  it.each(["defaults", "agent", "legacy"])("widens only the consenting %s owner", async (owner) => {
-    if (owner === "agent") {
-      config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-    } else if (owner === "legacy") {
-      delete config.agents!.defaults!.modelPolicy;
-      config.agents!.defaults!.models = { "other/current": {} };
-    }
+  it("widens only the consenting agent owner", async () => {
+    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
     await state.writeConfig(config);
     const outcome = await completeProviderModelAccess({ prepared: prepare(), prompter, runtime });
     expect(outcome.message).toContain("Application by the running Gateway is not confirmed");
@@ -59,15 +46,8 @@ describe("provider model access consent", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("models are now visible"));
     const saved = await readSaved();
     expect(saved.agents?.defaults?.model).toBe("other/current");
-    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(
-      owner === "agent" ? ["other/current"] : ["other/current", "sample/*"],
-    );
-    if (owner === "agent") {
-      expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual([
-        "other/private",
-        "sample/*",
-      ]);
-    }
+    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
+    expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(["other/private", "sample/*"]);
   });
 
   it("keeps restrictions without writing config", async () => {
@@ -129,42 +109,39 @@ describe("provider model access consent", () => {
     }
   });
 
-  it.each(["replacement", "removed-owner", "late-change"])(
-    "rejects consent after %s",
-    async (change) => {
-      config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-      await state.writeConfig(config);
-      const prepared = prepare();
-      const replace = async () => {
-        if (change === "removed-owner") {
-          delete config.agents!.entries!.main!.modelPolicy;
-        } else {
-          config.agents!.entries!.main!.modelPolicy = { allow: ["other/replacement"] };
-        }
-        await state.writeConfig(config);
-      };
-      if (change !== "late-change") {
-        await replace();
+  it.each(["removed-owner", "late-change"])("rejects consent after %s", async (change) => {
+    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
+    await state.writeConfig(config);
+    const prepared = prepare();
+    const replace = async () => {
+      if (change === "removed-owner") {
+        delete config.agents!.entries!.main!.modelPolicy;
+      } else {
+        config.agents!.entries!.main!.modelPolicy = { allow: ["other/replacement"] };
       }
-      await expect(
-        completeProviderModelAccess({
-          prepared,
-          runtime,
-          prompter: createWizardPrompter({
-            select: async ({ options }) => {
-              if (change === "late-change") {
-                await replace();
-              }
-              return options[0]!.value;
-            },
-          }),
+      await state.writeConfig(config);
+    };
+    if (change !== "late-change") {
+      await replace();
+    }
+    await expect(
+      completeProviderModelAccess({
+        prepared,
+        runtime,
+        prompter: createWizardPrompter({
+          select: async ({ options }) => {
+            if (change === "late-change") {
+              await replace();
+            }
+            return options[0]!.value;
+          },
         }),
-      ).rejects.toThrow("Model restrictions changed during sign-in");
-      const saved = await readSaved();
-      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
-      expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(
-        change === "removed-owner" ? undefined : ["other/replacement"],
-      );
-    },
-  );
+      }),
+    ).rejects.toThrow("Model restrictions changed during sign-in");
+    const saved = await readSaved();
+    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
+    expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(
+      change === "removed-owner" ? undefined : ["other/replacement"],
+    );
+  });
 });

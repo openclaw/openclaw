@@ -1,5 +1,6 @@
 // WebSocket auth-context state tests cover shared-auth fallback and device-token candidate selection.
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
@@ -150,12 +151,15 @@ describe("resolveConnectAuthDecision", () => {
   });
 
   it("does not let valid device reconnects consume remote shared-secret attempts", async () => {
-    const limiter = createGatewayAuthRateLimiter({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      pruneIntervalMs: 0,
-    });
+    const limiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     try {
       limiter.recordFailure(CLIENT_IP, "shared-secret");
       for (let attempt = 0; attempt < 3; attempt += 1) {

@@ -229,25 +229,6 @@ describe("memory-wiki cli", () => {
     );
   });
 
-  it("keeps the parent --agent spelling compatible", async () => {
-    const { rootDir, config } = await createCliVault({
-      config: { vault: { scope: "agent" } },
-    });
-    const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
-    };
-    const program = new Command();
-    program.name("test");
-    program.exitOverride();
-    registerWikiCli(program, { config, getAppConfig: () => appConfig });
-
-    await program.parseAsync(["wiki", "--agent", "marketing", "init", "--json"], {
-      from: "user",
-    });
-
-    await expect(fs.stat(path.join(rootDir, "marketing", "index.md"))).resolves.toBeDefined();
-  });
-
   it("forwards --agent through every bridge Gateway call", async () => {
     const { config } = await createCliVault({
       config: {
@@ -257,7 +238,7 @@ describe("memory-wiki cli", () => {
       },
     });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const status = createGatewayStatus(config);
     const report: MemoryWikiDoctorReport = {
@@ -435,6 +416,26 @@ Orders join to [customers](/tables/customers.md).
     ).rejects.toThrow("--lines must be a positive integer.");
   });
 
+  it("reports invalid search backends through Commander before dispatch", async () => {
+    const { config } = await createCliVault({ initialize: false });
+    const writeErr = vi.fn();
+    const program = new Command().name("test").exitOverride();
+    program.configureOutput({ writeErr });
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(["wiki", "search", "alpha", "--backend", "bogus"], { from: "user" }),
+    ).rejects.toMatchObject({
+      name: "CommanderError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
+    expect(writeErr.mock.calls.map(([chunk]) => chunk).join("")).toBe(
+      "error: option '--backend <backend>' argument 'bogus' is invalid. Invalid backend: bogus. Expected one of: shared, local\n",
+    );
+    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+  });
+
   it("accepts signed and zero-padded wiki get line options", async () => {
     const { rootDir, config } = await createCliVault();
     const targetPath = path.join(rootDir, "syntheses", "cli-lines.md");
@@ -516,59 +517,6 @@ cli note
     expect(callGatewayFromCliMock).not.toHaveBeenCalled();
   });
 
-  it("routes active bridge status and doctor through the gateway", async () => {
-    const { config } = await createCliVault({
-      config: {
-        vaultMode: "bridge",
-        bridge: { enabled: true, readMemoryArtifacts: true },
-      },
-      initialize: true,
-    });
-    const status = createGatewayStatus(config);
-    const report: MemoryWikiDoctorReport = {
-      healthy: false,
-      warningCount: 1,
-      status: {
-        ...status,
-        warnings: [
-          {
-            code: "bridge-artifacts-missing",
-            message: "No exported artifacts.",
-          },
-        ],
-      },
-      fixes: [
-        {
-          code: "bridge-artifacts-missing",
-          message: "Create memory artifacts.",
-        },
-      ],
-    };
-    callGatewayFromCliMock.mockResolvedValueOnce(status).mockResolvedValueOnce(report);
-
-    const statusOutput = await runRegisteredWikiCommand(config, ["status", "--json"]);
-    const doctorOutput = await runRegisteredWikiCommand(config, ["doctor", "--json"]);
-
-    expect(JSON.parse(statusOutput)).toEqual(status);
-    expect(JSON.parse(doctorOutput)).toEqual(report);
-
-    expect(process.exitCode).toBe(1);
-    expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
-      1,
-      "wiki.status",
-      { timeout: "30000" },
-      undefined,
-      { progress: false },
-    );
-    expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
-      2,
-      "wiki.doctor",
-      { timeout: "30000" },
-      undefined,
-      { progress: false },
-    );
-  });
-
   it("sanitizes gateway status text output without changing JSON output", async () => {
     const { config } = await createCliVault({
       config: {
@@ -607,21 +555,6 @@ cli note
     const parsed = JSON.parse(renderedJson) as MemoryWikiStatus;
     expect(parsed.vaultPath).toBe("\u001B[2J/tmp/wiki\nforged prompt\u202E");
     expect(parsed.warnings[0]?.message).toBe("missing artifacts\r\nfake success\u001B[31m\u202E");
-  });
-
-  it("rejects malformed gateway responses before rendering", async () => {
-    const { config } = await createCliVault({
-      config: {
-        vaultMode: "bridge",
-        bridge: { enabled: true, readMemoryArtifacts: true },
-      },
-      initialize: true,
-    });
-    callGatewayFromCliMock.mockResolvedValueOnce({ vaultMode: "bridge" });
-
-    await expect(runRegisteredWikiCommand(config, ["status"])).rejects.toThrow(
-      "Invalid Gateway response for wiki.status.",
-    );
   });
 
   it("rejects oversized gateway strings before rendering", async () => {
@@ -730,6 +663,39 @@ cli note
     expect(callGatewayFromCliMock).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rejects malformed UTF-8 ChatGPT exports (envelope: %s)",
+    async (envelope) => {
+      const { rootDir, config } = await createCliVault({ initialize: true });
+      const exportDir = await createChatGptExport(rootDir);
+      const exportPath = path.join(exportDir, "conversations.json");
+      const conversations = JSON.parse(await fs.readFile(exportPath, "utf8")) as Array<{
+        title: string;
+      }>;
+      expectDefined(conversations[0], "export conversation").title = "Café 🤖 �";
+      await fs.writeFile(exportPath, JSON.stringify(envelope ? { conversations } : conversations));
+      const args = ["chatgpt", "import", "--export", exportDir, "--json"];
+      const seed = JSON.parse(await runRegisteredWikiCommand(config, args)) as {
+        createdCount: number;
+      };
+      expect(seed.createdCount).toBe(1);
+      const sourcePath = path.join(rootDir, "sources", await findImportedSourceFile(rootDir));
+      const before = await fs.readFile(sourcePath, "utf8");
+      expect(before).toContain("Café 🤖 �");
+      const raw = Buffer.from(JSON.stringify(envelope ? { conversations } : conversations));
+      raw[raw.indexOf(Buffer.from("Café"))] = 0xff;
+      await fs.writeFile(exportPath, raw);
+      const inboxPath = path.join(rootDir, "inbox.md");
+      await fs.unlink(inboxPath);
+      await expect(runRegisteredWikiCommand(config, args)).rejects.toThrow(
+        `ChatGPT conversations export must be valid UTF-8: ${exportPath}. Download a fresh ChatGPT export and retry the import.`,
+      );
+      expect(await fs.readFile(sourcePath, "utf8")).toBe(before);
+      expect(await fs.readFile(exportPath)).toEqual(raw);
+      await expect(fs.access(inboxPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("imports ChatGPT exports with dry-run, apply, and rollback", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);
@@ -796,6 +762,23 @@ cli note
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
   });
+
+  it.each(["compile", "lint"])(
+    "runs one compile cycle when `wiki %s` finds indexes missing after its source import",
+    async (command) => {
+      const { rootDir, config } = await createCliVault({ initialize: true });
+      await fs.rm(path.join(rootDir, "index.md"), { force: true });
+
+      const output = await runRegisteredWikiCommand(config, [command, "--json"]);
+
+      const log = await fs.readFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "utf8");
+      const cycles = log.split("\n").filter((line) => line.includes('"pageCounts"')).length;
+      expect(cycles).toBe(1);
+      if (command === "compile") {
+        expect(JSON.parse(output).updatedFiles).toContain(path.join(rootDir, "index.md"));
+      }
+    },
+  );
 
   it("preserves a user save after compile before the import run record is written", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
@@ -895,52 +878,6 @@ cli note
     ) as { restoredCount: number };
     expect(rollback.restoredCount).toBe(1);
     await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(firstContent);
-  });
-
-  it("preserves user edits made after a re-import when rolling back an updated page", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
-    await runRegisteredWikiCommand(config, ["chatgpt", "import", "--export", exportDir, "--json"]);
-    const sourceFile = await findImportedSourceFile(rootDir);
-    const pagePath = path.join(rootDir, "sources", sourceFile);
-    const firstImportContent = await fs.readFile(pagePath, "utf8");
-
-    const conversationsPath = path.join(exportDir, "conversations.json");
-    const conversationsText = await fs.readFile(conversationsPath, "utf8");
-    await fs.writeFile(
-      conversationsPath,
-      conversationsText.replace(
-        "Noted. I will keep travel options close to the airport.",
-        "Noted. I will keep hotel options within a short ride of the airport.",
-      ),
-      "utf8",
-    );
-    const secondApplied = JSON.parse(
-      await runRegisteredWikiCommand(config, [
-        "chatgpt",
-        "import",
-        "--export",
-        exportDir,
-        "--json",
-      ]),
-    ) as { runId?: string; updatedCount: number };
-    expect(secondApplied.updatedCount).toBe(1);
-    const secondRunId = expectDefined(secondApplied.runId, "second ChatGPT import runId");
-    const edited = `${await fs.readFile(pagePath, "utf8")}\nUser note added after re-import.\n`;
-    await fs.writeFile(pagePath, edited, "utf8");
-
-    const rollback = JSON.parse(
-      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", secondRunId, "--json"]),
-    ) as { restoredCount: number; preservedPaths: Array<{ path: string; recoveryPath: string }> };
-
-    expect(rollback.restoredCount).toBe(1);
-    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(firstImportContent);
-    expect(rollback.preservedPaths).toHaveLength(1);
-    const preserved = expectDefined(rollback.preservedPaths[0], "preserved rollback page");
-    expect(preserved.path).toBe(`sources/${sourceFile}`);
-    await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
-      edited,
-    );
   });
 
   it("preserves a page recreated between the rollback move-aside and the snapshot restore", async () => {

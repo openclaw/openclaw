@@ -1,4 +1,3 @@
-// Android Pin Version tests cover android pin version script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,31 +11,25 @@ import {
 installAndroidFixtureCleanup();
 
 describe("parseArgs", () => {
-  it("requires exactly one pin source", () => {
-    expect(() => parseArgs([])).toThrow(
-      "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
-    );
-    expect(() => parseArgs(["--from-gateway", "--version", "2026.6.5"])).toThrow(
-      "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
-    );
-  });
-
   it("parses explicit version codes strictly", () => {
     expect(parseArgs(["--version", "2026.6.5", "--version-code", "2026060502"])).toMatchObject({
       explicitVersion: "2026.6.5",
       explicitVersionCode: 2026060502,
       fromGateway: false,
     });
-
-    for (const value of ["2026060502abc", "2026060502.5", "2e9", "0"]) {
-      expect(() => parseArgs(["--version", "2026.6.5", "--version-code", value])).toThrow(
-        `Invalid value for --version-code: ${value}. Expected a positive integer.`,
-      );
-    }
   });
 
-  it("rejects flags where option values are required", () => {
-    for (const { args, message } of [
+  it("rejects invalid pin sources, version codes, and missing option values", () => {
+    const cases: { args: string[]; message: string }[] = [
+      { args: [], message: "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>" },
+      {
+        args: ["--from-gateway", "--version", "2026.6.5"],
+        message: "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
+      },
+      ...["2026060502abc", "2026060502.5", "2e9", "0"].map((value) => ({
+        args: ["--version", "2026.6.5", "--version-code", value],
+        message: `Invalid value for --version-code: ${value}. Expected a positive integer.`,
+      })),
       { args: ["--version", "--no-sync"], message: "Missing value for --version." },
       {
         args: ["--version", "2026.6.5", "--version-code", "--no-sync"],
@@ -46,110 +39,87 @@ describe("parseArgs", () => {
         args: ["--version", "2026.6.5", "--root", "--no-sync"],
         message: "Missing value for --root.",
       },
-    ]) {
+    ];
+    for (const { args, message } of cases) {
       expect(() => parseArgs(args)).toThrow(message);
     }
   });
 });
 
-describe("pinAndroidVersion", () => {
-  it("pins an explicit Android release version and syncs generated artifacts", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-      prefix: "openclaw-android-pin-",
-    });
+type PinCase = {
+  name: string;
+  options?: Partial<Parameters<typeof pinAndroidVersion>[0]>;
+  packageVersion?: string;
+  expectedVersion: string;
+  expectedCode: number;
+};
+const pinCases: PinCase[] = [
+  {
+    name: "explicit release with generated artifacts",
+    expectedVersion: "2026.6.5",
+    expectedCode: 2026060501,
+  },
+  {
+    name: "Gateway release without prerelease suffixes",
+    options: { explicitVersion: null, fromGateway: true },
+    packageVersion: "2026.6.5-beta.3",
+    expectedVersion: "2026.6.5",
+    expectedCode: 2026060501,
+  },
+  {
+    name: "explicit versionCode increment on the same train",
+    options: { explicitVersion: "2026.6.2", explicitVersionCode: 2026060202 },
+    expectedVersion: "2026.6.2",
+    expectedCode: 2026060202,
+  },
+  {
+    name: "release without syncing checked-in artifacts",
+    options: { sync: false },
+    expectedVersion: "2026.6.5",
+    expectedCode: 2026060501,
+  },
+];
 
-    const result = pinAndroidVersion({
-      explicitVersion: "2026.6.5",
-      explicitVersionCode: null,
-      fromGateway: false,
-      rootDir,
-      sync: true,
-    });
-
-    expect(result.previousVersion).toBe("2026.6.2");
-    expect(result.previousVersionCode).toBe(2026060201);
-    expect(result.nextVersion).toBe("2026.6.5");
-    expect(result.nextVersionCode).toBe(2026060501);
-    expect(result.packageVersion).toBeNull();
-    expect(resolveAndroidVersion(rootDir).canonicalVersion).toBe("2026.6.5");
-    expect(
-      fs.readFileSync(path.join(rootDir, "apps", "android", "version.json"), "utf8"),
-    ).toContain('"versionCode": 2026060501');
-    expect(
-      fs.readFileSync(
-        path.join(rootDir, "apps", "android", "Config", "Version.properties"),
-        "utf8",
-      ),
-    ).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.5");
+it.each(pinCases)("pins $name", ({ options, packageVersion, expectedVersion, expectedCode }) => {
+  const sync = options?.sync ?? true;
+  const rootDir = writeAndroidFixture({
+    version: "2026.6.2",
+    versionCode: 2026060201,
+    packageVersion,
+    versionProperties: sync ? "" : "stale\n",
+    prefix: "openclaw-android-pin-",
+  });
+  const result = pinAndroidVersion({
+    explicitVersion: "2026.6.5",
+    explicitVersionCode: null,
+    fromGateway: false,
+    rootDir,
+    sync,
+    ...options,
+  });
+  expect(result).toMatchObject({
+    previousVersion: "2026.6.2",
+    previousVersionCode: 2026060201,
+    nextVersion: expectedVersion,
+    nextVersionCode: expectedCode,
+    packageVersion: packageVersion ?? null,
+  });
+  expect(resolveAndroidVersion(rootDir)).toMatchObject({
+    canonicalVersion: expectedVersion,
+    versionCode: expectedCode,
+  });
+  expect(fs.readFileSync(path.join(rootDir, "apps", "android", "version.json"), "utf8")).toContain(
+    `"versionCode": ${expectedCode}`,
+  );
+  const properties = fs.readFileSync(
+    path.join(rootDir, "apps", "android", "Config", "Version.properties"),
+    "utf8",
+  );
+  if (sync) {
+    expect(properties).toContain(`OPENCLAW_ANDROID_VERSION_NAME=${expectedVersion}`);
     expect(result.syncedPaths).toHaveLength(1);
-  });
-
-  it("pins from the current gateway version without carrying prerelease suffixes", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-      packageVersion: "2026.6.5-beta.3",
-      prefix: "openclaw-android-pin-",
-    });
-
-    const result = pinAndroidVersion({
-      explicitVersion: null,
-      explicitVersionCode: null,
-      fromGateway: true,
-      rootDir,
-      sync: true,
-    });
-
-    expect(result.nextVersion).toBe("2026.6.5");
-    expect(result.nextVersionCode).toBe(2026060501);
-    expect(result.packageVersion).toBe("2026.6.5-beta.3");
-    expect(resolveAndroidVersion(rootDir).canonicalVersion).toBe("2026.6.5");
-  });
-
-  it("allows explicit versionCode increments for another build on the same train", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-      prefix: "openclaw-android-pin-",
-    });
-
-    const result = pinAndroidVersion({
-      explicitVersion: "2026.6.2",
-      explicitVersionCode: 2026060202,
-      fromGateway: false,
-      rootDir,
-      sync: true,
-    });
-
-    expect(result.nextVersion).toBe("2026.6.2");
-    expect(result.nextVersionCode).toBe(2026060202);
-    expect(resolveAndroidVersion(rootDir).versionCode).toBe(2026060202);
-  });
-
-  it("can skip syncing checked-in artifacts when requested", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-      versionProperties: "stale\n",
-      prefix: "openclaw-android-pin-",
-    });
-
-    const result = pinAndroidVersion({
-      explicitVersion: "2026.6.5",
-      explicitVersionCode: null,
-      fromGateway: false,
-      rootDir,
-      sync: false,
-    });
-
+  } else {
+    expect(properties).toBe("stale\n");
     expect(result.syncedPaths).toHaveLength(0);
-    expect(
-      fs.readFileSync(
-        path.join(rootDir, "apps", "android", "Config", "Version.properties"),
-        "utf8",
-      ),
-    ).toBe("stale\n");
-  });
+  }
 });

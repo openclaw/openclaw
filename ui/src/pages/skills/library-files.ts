@@ -7,28 +7,20 @@ import {
   SKILL_LIBRARY_MAX_FILES,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 
 registerSkillLibraryEnglish();
 
-export function libraryFileText(file: SkillLibraryFile): string | null {
-  if (file.encoding !== "base64") {
-    return file.content;
-  }
-  try {
-    const bytes = Uint8Array.from(atob(file.content), (character) => character.charCodeAt(0));
-    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    return text.includes("\0") ? null : text;
-  } catch {
-    return null;
-  }
-}
-
+// Local reads may finish after uploads are disabled; publication and each request recheck policy.
 export async function readLibraryFiles(
   input: File[],
+  config?: ApplicationConfigCapability,
 ): Promise<{ content: string; files: SkillLibraryFile[] }> {
+  assertUploadsEnabled(config);
   if (
     input.length > SKILL_LIBRARY_MAX_FILES ||
     input.some((file) => file.size > SKILL_LIBRARY_MAX_FILE_BYTES) ||
@@ -39,6 +31,7 @@ export async function readLibraryFiles(
   let content: string | undefined;
   const files: SkillLibraryFile[] = [];
   for (const file of input) {
+    assertUploadsEnabled(config);
     const path = file.webkitRelativePath
       ? file.webkitRelativePath.split("/").slice(1).join("/")
       : file.name;
@@ -60,7 +53,9 @@ export async function uploadLibraryArchive(
   file: File,
   slug: string,
   isCurrent: () => boolean,
+  config?: ApplicationConfigCapability,
 ): Promise<SkillsLibraryReceipt> {
+  assertUploadsEnabled(config);
   if (file.size < 1 || file.size > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
     throw new Error(t("skillLibrary.bundleLimit"));
   }
@@ -69,6 +64,7 @@ export async function uploadLibraryArchive(
     byte.toString(16).padStart(2, "0"),
   ).join("");
   const request = (params: unknown) => {
+    assertUploadsEnabled(config);
     if (!isCurrent()) {
       throw new Error(t("skillLibrary.connectionChanged"));
     }

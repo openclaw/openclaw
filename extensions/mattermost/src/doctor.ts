@@ -17,7 +17,7 @@ const collectMattermostMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "mattermost",
     detector: isMattermostMutableAllowEntry,
-    collectLists: (scope) => collectStandardAllowlistLists(scope),
+    collectLists: collectStandardAllowlistLists,
   });
 
 export const mattermostDoctor: ChannelDoctorAdapter = {

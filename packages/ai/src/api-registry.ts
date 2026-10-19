@@ -1,7 +1,5 @@
 import type {
   Api,
-  AssistantMessageEventStreamContract,
-  Context,
   Model,
   SimpleStreamOptions,
   StreamFunction,
@@ -9,18 +7,10 @@ import type {
 } from "@openclaw/llm-core";
 
 /** Runtime stream adapter signature stored in the API provider registry. */
-export type ApiStreamFunction = (
-  model: Model,
-  context: Context,
-  options?: StreamOptions,
-) => AssistantMessageEventStreamContract;
+export type ApiStreamFunction = StreamFunction;
 
 /** Runtime simple-stream adapter signature stored in the API provider registry. */
-export type ApiStreamSimpleFunction = (
-  model: Model,
-  context: Context,
-  options?: SimpleStreamOptions,
-) => AssistantMessageEventStreamContract;
+export type ApiStreamSimpleFunction = StreamFunction<Api, SimpleStreamOptions>;
 
 /** Provider implementation registered by core or plugins for a specific model API. */
 export interface ApiProvider<

@@ -90,6 +90,7 @@ function openRequest(
     path?: string;
     host?: string;
     body?: string;
+    authorization?: string;
     owner?: SecretEgressProxyWorkerHandle;
   } = {},
 ): Promise<IncomingMessage> {
@@ -107,7 +108,7 @@ function openRequest(
         path: `https://${options.host ?? "localhost"}:${originPort}${options.path ?? "/"}`,
         headers: {
           "Proxy-Authorization": `Basic ${Buffer.from(`openclaw:${credentials.password}`).toString("base64")}`,
-          Authorization: `Bearer ${sentinel}`,
+          Authorization: options.authorization ?? `Bearer ${sentinel}`,
           "Content-Length": Buffer.byteLength(body),
         },
       },
@@ -180,6 +181,37 @@ afterEach(async () => {
 });
 
 describe("secret egress Worker boundary", () => {
+  it("keeps a multi-secret job's Basic credentials scoped to its registered grant", async () => {
+    const password = sealSecretSentinel("synthetic-worker-password", { label: "WORKER_PASSWORD" });
+    const unrelated = sealSecretSentinel("synthetic-unrelated-worker-secret", {
+      label: "UNRELATED_SECRET",
+    });
+    const grant = await proxy.registerProcess([
+      ...bindings,
+      { name: "WORKER_PASSWORD", sentinel: password, allowedHosts: ["localhost"] },
+    ]);
+    grants.add(grant);
+    const authorization = `Basic ${Buffer.from(`${sentinel}:${password}`).toString("base64")}`;
+    expect((await readResponse(await openRequest(grant, { authorization }))).status).toBe(200);
+    expect(observed).toEqual([
+      {
+        authorization: `Basic ${Buffer.from(`${secret}:synthetic-worker-password`).toString("base64")}`,
+        body: "",
+      },
+    ]);
+    expect(
+      (
+        await readResponse(
+          await openRequest(grant, {
+            authorization: `Basic ${Buffer.from(`user:${unrelated}`).toString("base64")}`,
+          }),
+        )
+      ).status,
+    ).toBe(502);
+    grant.revoke();
+    expect((await readResponse(await openRequest(grant, { authorization }))).status).toBe(407);
+    expect(observed).toHaveLength(1);
+  });
   it("acknowledges usable grants while keeping bindings, host policy, and audit data scoped", async () => {
     const grant = await register();
     expect(await readResponse(await openRequest(grant, { body: `${sentinel}:body` }))).toEqual({

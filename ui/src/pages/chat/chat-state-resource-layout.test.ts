@@ -1,8 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { openSlot } from "./sidebar-layout.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
 
 it.each(["minimize", "close-resource", "explicit-desktop"])(
   "preserves resource layout intent through %s",
@@ -11,11 +11,10 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
     saveSettings({ ...savedSettings, sidebarSessionLayouts: {} });
     try {
       const context = createChatPageStateContext();
-      const renderLifecycle = { invalidate: vi.fn(), afterCommit: () => () => {} };
+      const renderLifecycle = { afterCommit: () => () => {} };
       const host = {
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
-        querySelector: () => null,
       };
       const state = createPageState(context, renderLifecycle, host);
       state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
@@ -24,10 +23,6 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
       });
       const beforeDismissalReload = createPageState(context, renderLifecycle, host);
       expect(beforeDismissalReload.sidebarLayout.columns).toEqual([]);
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"), {
-        persist: false,
-        automaticResource: "browser",
-      });
       state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
       const afterLayoutChange = createPageState(context, renderLifecycle, host);
       expect(
@@ -70,3 +65,49 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
     }
   },
 );
+
+it("owns attachment views in Files without replacing Detail content", () => {
+  const state = createPageState(
+    createChatPageStateContext(),
+    { afterCommit: () => () => {} },
+    {
+      dispatchEvent: () => true,
+      getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
+    },
+  );
+  const detailContent = {
+    kind: "markdown" as const,
+    content: "Existing review",
+    rawText: "Existing review",
+  };
+  state.sidebarContent = detailContent;
+  state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
+
+  state.handleOpenSidebar({
+    kind: "attachment",
+    attachmentKind: "document",
+    title: "report.pdf",
+    src: "/media/report.pdf",
+  });
+
+  expect(
+    state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+  ).toEqual(["detail", "workspace"]);
+  expect(state.sessionWorkspaceState?.previews.at(-1)?.content.kind).toBe("attachment");
+  expect(state.sidebarContent).toBe(detailContent);
+
+  state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
+  state.handleCloseSidebar("detail");
+
+  expect(
+    state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+  ).toEqual(["workspace"]);
+  expect(state.sessionWorkspaceState?.previews.at(-1)?.content.kind).toBe("attachment");
+  expect(state.sidebarContent).toBe(detailContent);
+
+  state.handleCloseSidebar("workspace");
+
+  expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
+  expect(state.sessionWorkspaceState?.previews ?? []).toEqual([]);
+  expect(state.sidebarContent).toBe(detailContent);
+});

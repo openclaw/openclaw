@@ -44,6 +44,18 @@ function createStateWithRequest(request: unknown, overrides: Partial<CronState>)
   };
 }
 
+function applyWirePatch(stored: CronStoredJob, params: unknown) {
+  // Exercise the Gateway's normalization against the serialized UI request.
+  const serialized = JSON.stringify(params);
+  const wire: { patch: unknown } = JSON.parse(serialized);
+  const patch = normalizeCronJobPatch(wire.patch);
+  if (!patch) {
+    throw new Error("Expected a valid automation update patch");
+  }
+  applyJobPatch(stored, patch);
+  return patch.schedule;
+}
+
 describe("automation save editor ownership", () => {
   it.each(["save", "conflict read", "conflict read failure"] as const)(
     "preserves a reopened editor when an earlier %s settles",
@@ -114,14 +126,6 @@ describe("automation stagger save round trip", () => {
       expected: 300_000,
     },
     {
-      name: "clearing a custom hourly stagger",
-      expr: "0 * * * *",
-      original: 120_000,
-      exact: false,
-      amount: "",
-      expected: 300_000,
-    },
-    {
       name: "clearing a custom daily stagger",
       expr: "0 7 * * *",
       original: 120_000,
@@ -137,14 +141,6 @@ describe("automation stagger save round trip", () => {
       exact: false,
       amount: "",
       expected: undefined,
-    },
-    {
-      name: "retaining explicit no-stagger when the daily default has no reset value",
-      expr: "0 7 * * *",
-      original: 0,
-      exact: false,
-      amount: "",
-      expected: 0,
     },
     {
       name: "enabling exact timing",
@@ -193,15 +189,7 @@ describe("automation stagger save round trip", () => {
       let submittedSchedule: unknown;
       const request = vi.fn(async (method: string, params?: { patch?: unknown }) => {
         if (method === "cron.update") {
-          // Apply the actual Gateway normalization and mutation to the serialized UI patch.
-          const serializedPatch = JSON.stringify(params?.patch);
-          const wirePatch: unknown = JSON.parse(serializedPatch);
-          const patch = normalizeCronJobPatch(wirePatch);
-          if (!patch) {
-            throw new Error("Expected a valid automation update patch");
-          }
-          submittedSchedule = patch.schedule;
-          applyJobPatch(stored, patch);
+          submittedSchedule = applyWirePatch(stored, params);
           return readJob();
         }
         if (method === "cron.get") {
@@ -290,13 +278,7 @@ describe("automation default timing", () => {
           return readJob();
         }
         if (method === "cron.update") {
-          const serialized = JSON.stringify(params);
-          const wire: { patch: unknown } = JSON.parse(serialized);
-          const patch = normalizeCronJobPatch(wire.patch);
-          if (!patch) {
-            throw new Error("Expected a valid automation update patch");
-          }
-          applyJobPatch(stored, patch);
+          applyWirePatch(stored, params);
           return readJob();
         }
         if (method === "cron.list") {

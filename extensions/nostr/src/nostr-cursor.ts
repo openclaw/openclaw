@@ -122,13 +122,10 @@ export function createNostrCursorStateWriter(options: {
     if (activeFlush) {
       return activeFlush;
     }
-    const tracked = runFlush().finally(() => {
-      if (activeFlush === tracked) {
-        activeFlush = undefined;
-      }
+    activeFlush = runFlush().finally(() => {
+      activeFlush = undefined;
     });
-    activeFlush = tracked;
-    return tracked;
+    return activeFlush;
   };
 
   const setDesiredCursor = (cursor: number): void => {

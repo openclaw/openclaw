@@ -14,7 +14,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 it("bounds native ESM payloads across alternating unchanged loader workspaces", async () => {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await createCatalogFixture(makeTempDir, 0);
   for (const key of [
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
     "OPENCLAW_STATE_DIR",

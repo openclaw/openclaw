@@ -60,15 +60,8 @@ impl ChromeSetup {
 
     fn request(&self, app: AppHandle, cli: Option<OpenClawCli>, open_store: bool) {
         let outcome = self.enqueue(Box::new(move || {
-            let current = || !app.state::<crate::DesktopState>().is_quitting();
-            let spawn = |command: &mut Command| {
-                if !current() {
-                    return Err("OpenClaw is quitting.".into());
-                }
-                command.spawn().map_err(|error| error.to_string())
-            };
-            let result = perform(&app, cli, Action::Install, &current, &spawn);
-            if !current() {
+            let result = perform(&app, cli, Action::Install, None);
+            if app.state::<crate::DesktopState>().is_quitting() {
                 return;
             }
             if let Err(error) = &result {
@@ -78,16 +71,15 @@ impl ChromeSetup {
             if !open_store {
                 return;
             }
-            let error = match result {
-                Ok(report) if store_allowed(&report) => app
-                    .opener()
+            let result = result.and_then(|report| {
+                if !store_allowed(&report) {
+                    return Err("Chrome registration needs attention. Check local setup before opening the Store.".into());
+                }
+                app.opener()
                     .open_url(STORE_URL, None::<&str>)
-                    .err()
-                    .map(|_| "Could not open the Chrome Web Store.".to_string()),
-                Ok(_) => Some("Chrome registration needs attention. Check local setup before opening the Store.".into()),
-                Err(error) => Some(error),
-            };
-            if let Some(error) = error {
+                    .map_err(|_| "Could not open the Chrome Web Store.".to_string())
+            });
+            if let Err(error) = result {
                 crate::notify::notify(&app, "Chrome setup needs attention", &error);
             }
         }));
@@ -104,22 +96,7 @@ impl ChromeSetup {
     ) -> Result<Value, String> {
         let (tx, rx) = mpsc::sync_channel(1);
         self.enqueue(Box::new(move || {
-            let current = || {
-                !app.state::<crate::DesktopState>().is_quitting()
-                    && crate::native_browser_bridge::request_is_current(&app, generation)
-            };
-            let spawn = |command: &mut Command| {
-                // Hold document authority through spawn, then let admitted work
-                // settle without blocking navigation.
-                app.state::<crate::native_browser_bridge::NativeBrowserBridgeState>()
-                    .with_document_authority(generation, || {
-                        if app.state::<crate::DesktopState>().is_quitting() {
-                            return Err("OpenClaw is quitting.".into());
-                        }
-                        command.spawn().map_err(|error| error.to_string())
-                    })
-            };
-            let result = perform(&app, None, action, &current, &spawn);
+            let result = perform(&app, None, action, Some(generation));
             let _ = tx.send(result);
         }))?;
         rx.recv()
@@ -131,40 +108,59 @@ fn perform(
     app: &AppHandle,
     cli: Option<OpenClawCli>,
     action: Action,
-    is_current: &dyn Fn() -> bool,
-    spawn: &SpawnCommand<'_>,
+    document: Option<u64>,
 ) -> Result<Value, String> {
+    let is_current = || {
+        !app.state::<crate::DesktopState>().is_quitting()
+            && document.is_none_or(|generation| {
+                crate::native_browser_bridge::request_is_current(app, generation)
+            })
+    };
+    let spawn = |command: &mut Command| {
+        let mut spawn_current = || {
+            if app.state::<crate::DesktopState>().is_quitting() {
+                return Err("OpenClaw is quitting.".into());
+            }
+            command.spawn().map_err(|error| error.to_string())
+        };
+        match document {
+            // Hold document authority through spawn, then let admitted work
+            // settle without blocking navigation.
+            Some(generation) => app
+                .state::<crate::native_browser_bridge::NativeBrowserBridgeState>()
+                .with_document_authority(generation, spawn_current),
+            None => spawn_current(),
+        }
+    };
     if !is_current() {
         return Err("The native browser document changed.".into());
     }
     let cli = match cli {
         Some(cli) => cli,
         None => {
-            crate::installer::browser_runtime(app, action == Action::Install, is_current, spawn)
+            crate::installer::browser_runtime(app, action == Action::Install, &is_current, &spawn)
                 .map_err(|_| {
-                    "The local browser runtime is unavailable. Check the local installation."
-                        .to_string()
-                })?
+                "The local browser runtime is unavailable. Check the local installation."
+                    .to_string()
+            })?
         }
     };
     // Runtime discovery/provisioning may await a process: revalidate before registration.
     if !is_current() {
         return Err("The native browser document changed.".into());
     }
-    run(&cli, action, spawn)
+    run(&cli, action, &spawn)
 }
 
 fn store_allowed(report: &Value) -> bool {
     report.get("action").and_then(Value::as_str) == Some("install")
         && report.pointer("/target/kind").and_then(Value::as_str) == Some("local-host")
-        && report
-            .pointer("/installation/nativeHostRegistered")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && report
-            .pointer("/installation/automaticBootstrapSupported")
-            .and_then(Value::as_bool)
-            == Some(true)
+        && [
+            "/installation/nativeHostRegistered",
+            "/installation/automaticBootstrapSupported",
+        ]
+        .iter()
+        .all(|pointer| report.pointer(pointer).and_then(Value::as_bool) == Some(true))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
