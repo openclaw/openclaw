@@ -478,7 +478,7 @@ export async function recoverStore(params: {
       if (
         !recoverableHarnessCompletion &&
         !completionSource &&
-        !requesterOrigin &&
+        (source === "cron" || !requesterOrigin) &&
         requiresDelegatedRecoverySource(entry, source)
       ) {
         const outcome = await finishDelegatedRestartRecovery({

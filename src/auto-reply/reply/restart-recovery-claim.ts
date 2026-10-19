@@ -43,11 +43,12 @@ import {
 } from "../../infra/agent-lifecycle-error.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
 import type {
+  ReplyAdmissionPatch,
   ReplyRestartRecoveryClaimController,
   ReplyRestartRecoveryClaimControllerParams,
+  ReplyRecoveryAdoption,
 } from "./restart-recovery-claim.types.js";
 import { readReplyAdmissionSession } from "./restart-recovery-placement.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
@@ -55,9 +56,7 @@ import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-sou
 export function createReplyRestartRecoveryClaimController(
   params: ReplyRestartRecoveryClaimControllerParams,
 ): ReplyRestartRecoveryClaimController {
-  const requesterOrigin = params.requesterOrigin
-    ? captureRequesterOrigin({ requesterOrigin: params.requesterOrigin })
-    : undefined;
+  const requesterOrigin = captureRequesterOrigin({ requesterOrigin: params.requesterOrigin });
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   // The retry shares delivery correlation with its parent, but owns one internal admission.
   const strandedRetryRunId =
@@ -144,14 +143,7 @@ export function createReplyRestartRecoveryClaimController(
       recordReadTarget,
     );
   };
-  const adoptLifecycle = async (options: {
-    entry: SessionEntry;
-    patch: SessionTranscriptTurnLifecyclePatch;
-    writer?: { runId: string; assertCurrent?: () => void };
-    validate?: (entry: SessionEntry | undefined) => boolean;
-    committed: (entry: SessionEntry) => void;
-    rolledBack?: () => void;
-  }): Promise<SessionEntry> => {
+  const adoptLifecycle = async (options: ReplyRecoveryAdoption): Promise<SessionEntry> => {
     const actor = await acquireActor();
     const sessionId = options.entry.sessionId;
     const expectedState = buildRestartRecoveryExpectedState(options.entry);
@@ -258,14 +250,7 @@ export function createReplyRestartRecoveryClaimController(
     throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
   };
 
-  const persistAdmissionPatch = async (options: {
-    entry: SessionEntry;
-    patch: SessionTranscriptTurnLifecyclePatch;
-    recorder?: UserTurnTranscriptRecorder;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }): Promise<SessionEntry> => {
+  const persistAdmissionPatch = async (options: ReplyAdmissionPatch): Promise<SessionEntry> => {
     const expectedSessionState = buildRestartRecoveryExpectedState(options.entry);
     // A staged event remains durable while waiting for the execution lane. Promoting
     // it here would let an earlier completion mistake the queued input for an orphan.
@@ -638,10 +623,9 @@ export function createReplyRestartRecoveryClaimController(
     if (sessionId !== trackedSessionId) {
       return undefined;
     }
-    const expected = { sessionId, lifecycleRevision: trackedLifecycleRevision };
     return {
       kind: "restart-claim-clear",
-      expected,
+      expected: { sessionId, lifecycleRevision: trackedLifecycleRevision },
       sessionId,
       recoveryRunId,
       recoverySourceRunId,

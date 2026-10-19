@@ -9,6 +9,10 @@ import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runn
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { markRestartAbortedMainSessions } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "../../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import {
+  createRestartRecoveryRequesterSource,
+  readRestartRecoveryRequesterSource,
+} from "../../agents/requester-run-recovery-source.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
@@ -309,6 +313,19 @@ describe("same-conversation scheduled operator continuation", () => {
       delete entry.restartRecoverySourceIngress;
       delete entry.restartRecoveryOperatorSource;
       await accessor.replaceSessionEntry(recovery.target, entry);
+    } else if (restarting) {
+      // A prior human admission can leave requester facts beside its operator source.
+      await accessor.replaceSessionEntry(recovery.target, {
+        ...recovery.entry,
+        restartRecoveryRequesterSource: expectDefined(
+          createRestartRecoveryRequesterSource({
+            ...recovery.target,
+            entry: recovery.entry,
+            requesterOrigin: { sessionKey: SESSION, operatorProfileId: profile.id },
+          }),
+          "prior human requester source",
+        ),
+      });
     }
     // No operator request, original admitted run or human follow-up survives this point.
     const job = expectDefined((await fixture.read())[0], "durably stored continuation");
@@ -627,6 +644,11 @@ describe("same-conversation scheduled operator continuation", () => {
             expect(interrupted.restartRecoveryDeliverySourceRunId).toBe(
               scenario === "restart" ? interruptedRunId : recovery.target.sourceRunId,
             );
+            if (scenario !== "restart") {
+              expect(
+                readRestartRecoveryRequesterSource({ ...recovery.target, entry: interrupted }),
+              ).toMatchObject({ sessionKey: SESSION, operatorProfileId: profile.id });
+            }
             expect(interrupted.restartRecoveryRuns).toContainEqual({
               runId: interruptedRunId,
               lifecycleGeneration: getAgentEventLifecycleGeneration(),
