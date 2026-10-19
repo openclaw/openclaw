@@ -14,6 +14,7 @@ import {
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
@@ -35,6 +36,7 @@ const pairedDevice = {
 };
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 const cleanups: Array<() => void> = [];
+const emptySnapshot = createApplicationGateway().gateway.snapshot;
 
 function stubLocalDeviceIdentity() {
   localStorage.setItem(
@@ -51,14 +53,10 @@ function gatewaySnapshot(
   scopes = ["operator.read", "operator.pairing"],
 ): ApplicationGatewaySnapshot {
   return {
+    ...emptySnapshot,
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -69,38 +67,34 @@ function gatewaySnapshot(
   } as ApplicationGatewaySnapshot;
 }
 
-function subscribe<T>(listeners: Set<(value: T) => void>) {
-  return (listener: (value: T) => void) => {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
-  };
-}
-
 function gatewayFixture(initial: ApplicationGatewaySnapshot) {
-  let snapshot = initial;
-  const snapshots = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const events = new Set<(event: { event: string; payload?: unknown }) => void>();
-  const source = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: "http://gateway.test" },
-    subscribe: subscribe(snapshots),
-    subscribeEvents: subscribe(events),
-  } as unknown as ApplicationContext["gateway"];
+  const { gateway: source, publish, publishEvent } = createApplicationGateway(initial);
+  const active = new Set<() => void>();
+  function track<T>(listen: (callback: (value: T) => void) => () => void) {
+    return (callback: (value: T) => void) => {
+      const unsubscribe = listen(callback);
+      const stop = () => {
+        active.delete(stop);
+        unsubscribe();
+      };
+      active.add(stop);
+      return stop;
+    };
+  }
+  source.subscribe = track(source.subscribe.bind(source));
+  source.subscribeEvents = track(source.subscribeEvents.bind(source));
   return {
     source,
     emitSnapshot(next: ApplicationGatewaySnapshot) {
-      snapshot = next;
-      snapshots.forEach((listener) => listener(next));
+      publish(next);
       flush();
     },
     emitEvent(event: string, payload?: unknown) {
-      events.forEach((listener) => listener({ event, payload }));
+      publishEvent({ type: "event", event, payload });
       flush();
     },
     get subscriptions() {
-      return snapshots.size + events.size;
+      return active.size;
     },
   };
 }
@@ -142,11 +136,7 @@ function mountPage(
   ));
   const { container } = mounted;
   flush();
-  const dispose = () => {
-    mounted.unmount();
-    flush();
-  };
-  cleanups.push(dispose);
+  cleanups.push(mounted.unmount);
   return {
     container,
     get text() {
@@ -154,7 +144,7 @@ function mountPage(
     },
     query: <T extends Element = Element>(selector: string) => container.querySelector<T>(selector),
     config: context.runtimeConfig.state,
-    dispose,
+    dispose: mounted.unmount,
     refreshPresentation() {
       setPresentation({ routeData });
       flush();
@@ -167,24 +157,20 @@ function mountPage(
 }
 
 function responseFor(method: string): unknown {
-  if (method === "system-presence") {
-    return [gatewayPresence];
-  }
-  if (method === "system.info") {
-    return deviceSystemInfo;
-  }
-  if (method === "environments.list") {
-    return { environments: deviceDesktopEnvironments };
-  }
-  if (method === "exec.approvals.get") {
-    return {
+  const responses: Record<string, unknown> = {
+    "system-presence": [gatewayPresence],
+    "system.info": deviceSystemInfo,
+    "environments.list": { environments: deviceDesktopEnvironments },
+    "exec.approvals.get": {
       path: "/synthetic/exec-approvals.json",
       exists: true,
       hash: "initial",
       file: { version: 1 },
-    };
-  }
-  return { nodes: [], paired: [], pending: [] };
+    },
+  };
+  return Object.hasOwn(responses, method)
+    ? responses[method]
+    : { nodes: [], paired: [], pending: [] };
 }
 
 function clientFor(request = vi.fn(async (method: string) => responseFor(method))) {
@@ -250,7 +236,8 @@ const select = (container: ParentNode, label: string) =>
 const requested = (request: ReturnType<typeof clientFor>["request"]) =>
   request.mock.calls.map(([method]) => method);
 const currentModal = () => document.body.querySelector("openclaw-modal-dialog");
-const hostAccess = { methods: ["system.info", "desktop.observe"], scopes: ["operator.admin"] };
+const hostMethods = ["system.info", "desktop.observe"];
+const hostAccess = { methods: hostMethods, scopes: ["operator.admin"] };
 const preloadedInventory = () => ({
   nodes: [{ nodeId: "node-1" }],
   devicesList: { paired: [], pending: [] },
@@ -288,7 +275,7 @@ async function expectNoModal() {
   await vi.waitFor(() => expect(currentModal()).toBeNull());
 }
 
-function mountPaired(request: Parameters<typeof clientFor>[0]) {
+function mountPaired(request?: Parameters<typeof clientFor>[0]) {
   return mountConnected(
     {
       devicesList: { paired: [pairedDevice], pending: [] },
@@ -304,15 +291,19 @@ function rotatingRequest(token: string | null) {
       return responseFor(method);
     }
     const { deviceId, role } = params as { deviceId: string; role: string };
-    return {
-      deviceId,
-      role,
-      scopes: [],
-      rotatedAtMs: 1_700_000_000_000,
-      ...(token ? { token } : {}),
-      tokenDelivery: token ? "in-band" : "withheld-cross-device",
-    };
+    return rotationOutcome(token, deviceId, role);
   });
+}
+
+function rotationOutcome(token: string | null, deviceId = "device-1", role = "operator") {
+  return {
+    deviceId,
+    role,
+    scopes: [],
+    rotatedAtMs: 1_700_000_000_000,
+    ...(token ? { token } : {}),
+    tokenDelivery: token ? "in-band" : "withheld-cross-device",
+  };
 }
 
 beforeEach(() => {
@@ -427,13 +418,13 @@ it.each(["node.runnerInventory.changed", "node.hostStats"])(
 );
 
 it.each([
-  ["advertised", ["system.info", "desktop.observe"], ["operator.admin"], true, true, true],
+  ["advertised", hostMethods, ["operator.admin"], true, true, true],
   ["unadvertised", [], undefined, true, false, false],
   ["unknown features", undefined, undefined, true, false, false],
-  ["read-only", ["system.info", "desktop.observe"], ["operator.read"], true, true, false],
+  ["read-only", hostMethods, ["operator.read"], true, true, false],
   [
     "session-only",
-    ["system.info", "desktop.observe"],
+    hostMethods,
     ["operator.sessions.read", "operator.sessions.write"],
     false,
     false,
@@ -644,36 +635,29 @@ it.each([
   "refreshes mixed-role inventory only for connectivity changes: %s",
   async (_name, role, nodeRoles, operatorRoles) => {
     const { fixture, request } = mountConnected(preloadedInventory());
-    const node: PresenceEntry = {
+    const presence: PresenceEntry[] = [nodeRoles, operatorRoles].map((roles, index) => ({
       deviceId: "mixed-role-device",
-      instanceId: role === "activity" ? undefined : "node",
-      roles: nodeRoles,
+      roles,
       reason: "connect",
-      ts: 2_000,
-    };
-    const operator: PresenceEntry = {
-      deviceId: "mixed-role-device",
-      instanceId: role === "activity" ? undefined : "operator-session",
-      roles: operatorRoles,
-      reason: "connect",
-      ts: 1_000,
-    };
-    fixture.emitEvent("presence", { presence: [node, operator] });
+      ts: index === 0 ? 2_000 : 1_000,
+      instanceId: role === "activity" ? undefined : index === 0 ? "node" : "operator-session",
+    }));
+    fixture.emitEvent("presence", { presence });
     await expectRequest(request, "device.pair.list");
     await Promise.resolve();
     flush();
     request.mockClear();
-    const presence = [node, operator];
     fixture.emitEvent("presence", {
       presence:
         role === "activity"
           ? presence.map((entry) =>
               Object.assign({}, entry, { lastInputSeconds: 3, ts: entry.ts + 100 }),
             )
-          : [
-              role === "node" ? { ...node, reason: "disconnect" } : node,
-              role === "operator" ? { ...operator, reason: "disconnect" } : operator,
-            ],
+          : presence.map((entry, index) =>
+              (index === 0 ? role === "node" : role === "operator")
+                ? Object.assign({}, entry, { reason: "disconnect" })
+                : entry,
+            ),
     });
     if (role === "activity") {
       await Promise.resolve();
@@ -686,41 +670,67 @@ it.each([
   },
 );
 
-it.each(["removal", "alias"])(
-  "retains a pending %s dialog through reconnect and cancels it on fresh pairing denial",
+it.each(["removal", "alias", "revoke-reset", "revoke-denial"])(
+  "gates pending %s actions on current connection and pairing authority",
   async (kind) => {
-    const request = vi.fn(async (method: string) => responseFor(method));
-    const page = mountPaired(request);
-    await selectEntryAction(page.container, kind === "alias" ? "editAlias" : "remove");
-    await waitForDialog(document.body);
+    const page = mountPaired();
+    const { request, client, fixture } = page;
+    const revoking = kind.startsWith("revoke");
+    const label =
+      kind === "alias"
+        ? t("common.save")
+        : t(revoking ? "devices.inventory.revoke" : "devices.inventory.remove");
+    if (revoking) {
+      button(page.container, label).click();
+    } else {
+      await selectEntryAction(page.container, kind === "alias" ? "editAlias" : "remove");
+    }
+    const { dialog } = await waitForDialog(document.body);
+    if (revoking) {
+      expect(dialog.getAttribute("aria-label")).toBe(
+        t("devices.inventory.revokePromptTitle", { role: "operator" }),
+      );
+    }
+    const alias = () => document.body.querySelector<HTMLInputElement>('input[name="value"]');
     if (kind === "alias") {
-      const input = document.body.querySelector<HTMLInputElement>('input[name="value"]')!;
+      const input = expectDefined(alias(), "alias input");
       input.value = "Draft device alias";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
     }
-    const label = kind === "alias" ? t("common.save") : t("devices.inventory.remove");
     expect(dialogButton(label).disabled).toBe(false);
     request.mockClear();
-    page.fixture.emitSnapshot(gatewaySnapshot(page.client, false));
-    expect(currentModal()).not.toBeNull();
-    expect(dialogButton(label).disabled).toBe(true);
-    expect(request).not.toHaveBeenCalled();
-    page.fixture.emitSnapshot(gatewaySnapshot(page.client));
-    expect(dialogButton(label).disabled).toBe(false);
-    if (kind === "alias") {
-      expect(document.body.querySelector<HTMLInputElement>('input[name="value"]')?.value).toBe(
-        "Draft device alias",
-      );
+    if (kind !== "revoke-denial") {
+      fixture.emitSnapshot(gatewaySnapshot(client, false));
+      expect(currentModal()).not.toBeNull();
+      expect(dialogButton(label).disabled).toBe(true);
+      expect(request).not.toHaveBeenCalled();
+      if (kind === "revoke-reset") {
+        dialogButton(label).click();
+        expect(currentModal()).not.toBeNull();
+        dialogButton(t("common.cancel")).click();
+      } else {
+        fixture.emitSnapshot(gatewaySnapshot(client));
+        expect(dialogButton(label).disabled).toBe(false);
+        if (kind === "alias") {
+          expect(alias()?.value).toBe("Draft device alias");
+        }
+      }
     }
-    page.fixture.emitSnapshot(gatewaySnapshot(page.client, true, [], ["operator.read"]));
+    if (kind !== "revoke-reset") {
+      fixture.emitSnapshot(
+        gatewaySnapshot(client, true, revoking ? ["device.token.revoke"] : [], ["operator.read"]),
+      );
+      await expectNoModal();
+      expect(page.text).not.toContain("MacBook Pro");
+      expect(page.text).toContain("Office Mac");
+      fixture.emitSnapshot(gatewaySnapshot(client, true, [], []));
+      expect(page.query(".device-entry")).toBeNull();
+    }
     await expectNoModal();
-    expect(page.text).not.toContain("MacBook Pro");
-    expect(page.text).toContain("Office Mac");
-    page.fixture.emitSnapshot(gatewaySnapshot(page.client, true, [], []));
-    expect(page.query(".device-entry")).toBeNull();
-    expect(requested(request)).not.toContain("device.pair.remove");
-    expect(requested(request)).not.toContain("device.pair.rename");
+    for (const method of ["device.pair.remove", "device.pair.rename", "device.token.revoke"]) {
+      expect(requested(request)).not.toContain(method);
+    }
   },
 );
 
@@ -760,35 +770,6 @@ it("issues no node pairing request when the dialog is cancelled", async () => {
   expect(page.request).not.toHaveBeenCalled();
 });
 
-it.each(["connection resets", "pairing access is lost"])(
-  "drops a token revoke after %s during confirmation",
-  async (transition) => {
-    const request = vi.fn(async (method: string) => responseFor(method));
-    const page = mountPaired(request);
-    button(page.container, t("devices.inventory.revoke")).click();
-    const { dialog } = await waitForDialog(document.body);
-    expect(dialog.getAttribute("aria-label")).toBe(
-      t("devices.inventory.revokePromptTitle", { role: "operator" }),
-    );
-    request.mockClear();
-    if (transition === "connection resets") {
-      page.fixture.emitSnapshot(gatewaySnapshot(page.client, false));
-    } else {
-      page.fixture.emitSnapshot(
-        gatewaySnapshot(page.client, true, ["device.token.revoke"], ["operator.read"]),
-      );
-    }
-    if (transition === "connection resets") {
-      expect(dialogButton(t("devices.inventory.revoke")).disabled).toBe(true);
-      dialogButton(t("devices.inventory.revoke")).click();
-      expect(currentModal()).not.toBeNull();
-      dialogButton(t("common.cancel")).click();
-    }
-    await expectNoModal();
-    expect(requested(request)).not.toContain("device.token.revoke");
-  },
-);
-
 it("reveals a rotated token with a copy control until it is acknowledged", async () => {
   const { dialog, modal } = await openRotation(ROTATED_TOKEN);
   expect(dialog.getAttribute("aria-label")).toBe(
@@ -812,14 +793,7 @@ it("reveals a rotated token that lands after a connection reset", async () => {
     method === "device.token.rotate" ? rotated.promise : responseFor(method),
   );
   const page = mountPaired(request);
-  const outcome = {
-    deviceId: "device-1",
-    role: "operator",
-    scopes: [],
-    rotatedAtMs: 1_700_000_000_000,
-    token: ROTATED_TOKEN,
-    tokenDelivery: "in-band",
-  };
+  const outcome = rotationOutcome(ROTATED_TOKEN);
   try {
     button(page.container, t("devices.inventory.rotate")).click();
     await vi.waitFor(() => expect(requested(request)).toContain("device.token.rotate"));
