@@ -7,6 +7,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
+  queuePluginNativeAdmissionPublication,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
@@ -405,30 +406,17 @@ export function createPluginNativeAdmission(
       startNativeAdmissionPublication(state, key);
       return;
     }
-    const roots = [...state.roots].filter((root) => used.has(root.directory));
-    const publication = () =>
-      publishAdmission({
+    queuePluginNativeAdmissionPublication(
+      state,
+      {
         pluginId: owner.pluginId,
         rootDir: owner.rootDir,
         installRecordHash: owner.installRecordHash,
         key,
         receipt: next,
-      })
-        .then((accepted) => {
-          if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
-            if (state.publications.get(key) === publication) {
-              state.publications.delete(key);
-            }
-          }
-        })
-        .catch((error: unknown) =>
-          process.emitWarning(`Plugin source receipt was not recorded: ${String(error)}`),
-        );
-    state.publications.set(key, publication);
-    startNativeAdmissionPublication(state, key);
+      },
+      publishAdmission,
+    );
   };
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
     const namespace = state.namespaces.get(fact.namespace)!;

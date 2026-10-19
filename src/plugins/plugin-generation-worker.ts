@@ -23,6 +23,7 @@ import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js
 import {
   adoptPluginNativeAdmissions,
   nativeAdmissionStateFor,
+  settlePluginNativeAdmissionState,
   type PluginNativeAdmissionTransfer,
 } from "./plugin-native-admission-state.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
@@ -77,7 +78,7 @@ export async function preparePluginGenerationArtifact(
   });
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
-  const nativeRoots = createPluginGenerationNativeRoots(storage, admission);
+  const nativeRoots = createPluginGenerationNativeRoots(storage);
   const admissionRoot = path.resolve(params.rootDir);
   const admissionOwner = admission.owners.get(admissionRoot);
   const root = createPluginSourceCaptureRoot(
@@ -112,30 +113,6 @@ export async function preparePluginGenerationArtifact(
     }
   });
   function callback(message: GenerationWorkerCallback): void {
-    if (message.kind === "publish") {
-      void Promise.resolve()
-        .then(() =>
-          nativeRoots.publish(
-            message.publication,
-            async (publication) => publishAdmission?.(publication) ?? false,
-          ),
-        )
-        .then(
-          (accepted) =>
-            port1.postMessage({
-              kind: "published",
-              id: message.id,
-              accepted,
-            } satisfies GenerationWorkerCallback),
-          (error: unknown) =>
-            port1.postMessage({
-              kind: "published",
-              id: message.id,
-              error: String(error),
-            } satisfies GenerationWorkerCallback),
-        );
-      return;
-    }
     if (message.kind !== "mapping" && message.kind !== "native-root") {
       return;
     }
@@ -214,6 +191,7 @@ export async function preparePluginGenerationArtifact(
         admission,
         // SAFETY: The matching worker encodes only PluginNativeAdmissionTransfer in this field.
         codec.decode(reply.admission) as PluginNativeAdmissionTransfer,
+        publishAdmission,
       );
     }
     return codec.decode(reply.value);
@@ -236,7 +214,11 @@ export async function preparePluginGenerationArtifact(
         },
       );
       pendingNativeLoads.clear();
-      return accept(await task.result);
+      const value = accept(await task.result);
+      // Async preparation/disposal joins the captured admission owner. Sync lazy
+      // imports only queue facts, so they cannot block the host's async writes.
+      await settlePluginNativeAdmissionState(admission);
+      return value;
     } finally {
       try {
         if (task) {

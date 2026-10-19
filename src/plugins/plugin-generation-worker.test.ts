@@ -25,8 +25,10 @@ import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import {
   nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
+  settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
+import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -194,6 +196,73 @@ it("releases host preparation custody after unexpected worker exit with an outst
     }
   });
 });
+
+it.each(["deferred", "superseded", "terminal"] as const)(
+  "hands %s lazy-capture publication to the host before retiring its worker",
+  async (mode) => {
+    await withOpenClawTestState({ label: "worker-lazy-admission" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), false);
+      const neighbor = createFixture(state.path("dependency"), false);
+      const cache = createPluginCache();
+      const accepted: PluginSourceAdmissionReceipt[] = [];
+      let writable = false;
+      try {
+        await withPluginCache(cache, () =>
+          withPluginSourceCaptureStorage({ stateDir: state.stateDir, placement: "temporary" }, () =>
+            withPluginSourceAdmissionPublisher(
+              async (publication) => {
+                if (writable) {
+                  accepted.push(publication.receipt);
+                }
+                return writable;
+              },
+              async () => {
+                preparePluginNativeAdmissions(fixture.index, cache);
+                preparePluginNativeAdmissions(neighbor.index, cache);
+                const prepared = await preparePluginGenerationArtifact({
+                  rootDir: fixture.root,
+                  source: fixture.entry,
+                });
+                writable = mode === "superseded";
+                let captured: string;
+                try {
+                  // Synchronous lookup hands off the latest receipt without waiting on
+                  // its write. Terminal disposal must not strand a retry in the worker.
+                  captured = fs.realpathSync(
+                    prepared.artifact.captureResolvedModule(neighbor.filename)!,
+                  );
+                  expect(fs.readFileSync(captured)).toEqual(neighbor.bytes);
+                } finally {
+                  if (mode === "terminal") {
+                    await closeDefaultRetainedNativeWorkerSource();
+                  }
+                  await prepared.artifact.disposeAsync();
+                }
+                expect(
+                  captureRetainedNativeWorkerSource({ runtimeGeneration: undefined })
+                    .hasActiveWorkers,
+                ).toBe(false);
+                if (mode !== "superseded") {
+                  expect(accepted).toEqual([]);
+                }
+                writable = true;
+                await settlePluginNativeAdmissions(cache);
+                expect(accepted.at(-1)?.nativeArtifacts[neighbor.filename]).toBeDefined();
+                expect(
+                  accepted.every((receipt) => receipt.nativeArtifacts[neighbor.filename]),
+                ).toBe(true);
+                await retirePluginCache(cache);
+                expect(fs.readFileSync(captured!)).toEqual(neighbor.bytes);
+              },
+            ),
+          ),
+        );
+      } finally {
+        await retirePluginCache(cache);
+      }
+    });
+  },
+);
 
 it("joins retained capture workers before terminal native-source shutdown", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-shutdown-"));

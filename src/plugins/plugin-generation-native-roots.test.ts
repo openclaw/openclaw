@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
@@ -12,17 +12,25 @@ import {
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
-it.each(["fresh", "reused"] as const)(
-  "holds %s native bytes until publication settles after preparation closes",
-  async (mode) => {
+it.each([
+  ["fresh", "accepted"],
+  ["reused", "accepted"],
+  ["fresh", "declined"],
+  ["reused", "declined"],
+  ["fresh", "failed"],
+  ["reused", "failed"],
+] as const)(
+  "holds %s native bytes until a %s publication settles after preparation closes",
+  async (mode, outcome) => {
     await withOpenClawTestState({ label: "native-publication-custody" }, async (state) => {
       const cache = createPluginCache();
       const storage = { stateDir: state.stateDir, placement: "temporary" as const };
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
       try {
         await withPluginCache(cache, () =>
           withPluginSourceCaptureStorage(storage, async () => {
             const admission = nativeAdmissionStateFor();
-            const original = createPluginGenerationNativeRoots(storage, admission);
+            const original = createPluginGenerationNativeRoots(storage);
             const reference = original.allocate();
             const filename = path.join(reference.directory, "addon.node");
             fs.writeFileSync(filename, "native bytes");
@@ -47,86 +55,47 @@ it.each(["fresh", "reused"] as const)(
             if (mode === "reused") {
               adoptPluginNativeAdmissions(admission, {
                 receipts: new Map(),
+                publications: [],
                 roots: [original.retain(reference.id)],
               });
               await original.close();
             }
             const preparing =
-              mode === "fresh" ? original : createPluginGenerationNativeRoots(storage, admission);
+              mode === "fresh" ? original : createPluginGenerationNativeRoots(storage);
             const gate = createDeferredCore<boolean>();
-            const publishing = preparing.publish(publication, () => gate.promise);
-            try {
-              await preparing.close();
-              await retirePluginCache(cache);
-              expect(fs.readFileSync(filename, "utf8")).toBe("native bytes");
-            } finally {
-              gate.resolve(true);
-              await publishing;
-            }
-            await expect(publishing).resolves.toBe(true);
-            expect(fs.readFileSync(filename, "utf8")).toBe("native bytes");
-            await expect(preparing.publish(publication, async () => true)).resolves.toBe(false);
-          }),
-        );
-      } finally {
-        await retirePluginCache(cache);
-      }
-    });
-  },
-);
-
-it.each(["declined", "failed"] as const)(
-  "releases unpublished bytes when a pending write is %s after preparation exits",
-  async (outcome) => {
-    await withOpenClawTestState({ label: "native-publication-failure" }, async (state) => {
-      const cache = createPluginCache();
-      const storage = { stateDir: state.stateDir, placement: "temporary" as const };
-      try {
-        await withPluginCache(cache, () =>
-          withPluginSourceCaptureStorage(storage, async () => {
-            const roots = createPluginGenerationNativeRoots(storage, nativeAdmissionStateFor());
-            const reference = roots.allocate();
-            const gate = createDeferredCore<boolean>();
-            const publishing = roots.publish(
+            adoptPluginNativeAdmissions(
+              admission,
               {
-                pluginId: "fixture",
-                rootDir: state.path("installed"),
-                key: "fixture",
-                receipt: {
-                  signature: "fixture",
-                  sourceDigest: "a".repeat(64),
-                  nativeArtifacts: {},
-                  nativeNamespaces: {
-                    [reference.directory]: {
-                      sourceDirectory: state.path("installed"),
-                      capturedRoot: reference.directory,
-                      managed: false,
-                      members: {},
-                    },
-                  },
-                },
+                receipts: new Map([[publication.key, publication.receipt]]),
+                roots: mode === "fresh" ? [original.retain(reference.id)] : [],
+                publications: [publication],
               },
               () => gate.promise,
             );
-            void publishing.catch(() => {});
+            await preparing.close();
+            let retired = false;
+            const retiring = retirePluginCache(cache).then(() => {
+              retired = true;
+            });
             try {
-              await roots.close();
-              expect(fs.existsSync(reference.directory)).toBe(true);
+              await Promise.resolve();
+              expect(retired).toBe(false);
+              expect(fs.readFileSync(filename, "utf8")).toBe("native bytes");
               if (outcome === "failed") {
                 gate.reject(new Error("receipt write failed"));
-                await expect(publishing).rejects.toThrow("receipt write failed");
               } else {
-                gate.resolve(false);
-                await expect(publishing).resolves.toBe(false);
+                gate.resolve(outcome === "accepted");
               }
             } finally {
               gate.resolve(false);
-              await publishing.catch(() => {});
+              await retiring;
             }
-            expect(fs.existsSync(reference.directory)).toBe(false);
+            expect(fs.existsSync(filename)).toBe(outcome === "accepted");
+            expect(warning.mock.calls.length > 0).toBe(outcome === "failed");
           }),
         );
       } finally {
+        warning.mockRestore();
         await retirePluginCache(cache);
       }
     });

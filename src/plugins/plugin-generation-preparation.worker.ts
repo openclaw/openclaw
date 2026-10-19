@@ -22,7 +22,6 @@ import {
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
-import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
 
@@ -39,7 +38,8 @@ function admissionChanges() {
   const receipts = new Map(
     [...state.receipts].filter(([key, receipt]) => sentReceipts.get(key) !== receipt),
   );
-  if (!receipts.size) {
+  const publications = [...state.publications];
+  if (!receipts.size && !publications.length) {
     return undefined;
   }
   const directories = new Set(
@@ -54,7 +54,19 @@ function admissionChanges() {
   for (const [key, receipt] of receipts) {
     sentReceipts.set(key, receipt);
   }
-  return codec.encode({ receipts, roots } satisfies PluginNativeAdmissionTransfer);
+  const encoded = codec.encode({
+    receipts,
+    roots,
+    publications: publications.map(([, publication]) => publication.data),
+  } satisfies PluginNativeAdmissionTransfer);
+  // Install leases can defer writes beyond source retirement. Hand retry intent
+  // to the admission owner with its native custody, never worker callbacks.
+  for (const [key, publication] of publications) {
+    if (state.publications.get(key) === publication) {
+      state.publications.delete(key);
+    }
+  }
+  return encoded;
 }
 function own<T extends Resource>(resource: T): T {
   if (owned.has(resource)) {
@@ -108,33 +120,7 @@ const codec = new GenerationCodec(
 let context: Extract<GenerationWorkerInput, { operation: "capture" }> | undefined;
 let callbacks: MessagePort | undefined;
 let nextCallback = 0;
-const publications = new Map<
-  number,
-  { resolve(value: boolean): void; reject(error: Error): void }
->();
-function publishAdmission(publication: PluginSourceAdmissionPublication): Promise<boolean> {
-  if (!callbacks) {
-    return Promise.reject(new Error("Plugin admission publisher is unavailable"));
-  }
-  const id = ++nextCallback;
-  return new Promise((resolve, reject) => {
-    publications.set(id, { resolve, reject });
-    callbacks!.postMessage(
-      { kind: "publish", id, publication } satisfies GenerationWorkerCallback,
-      [],
-    );
-  });
-}
 function observe(message: GenerationWorkerCallback): void {
-  if (message.kind === "published") {
-    const pending = publications.get(message.id);
-    publications.delete(message.id);
-    if (message.error) {
-      pending?.reject(new Error(message.error));
-    } else {
-      pending?.resolve(message.accepted === true);
-    }
-  }
   if (message.kind === "native-load") {
     recordPluginNativeLoad(message.filename);
   }
@@ -204,16 +190,20 @@ function scoped<T>(run: () => T): T {
   const current = context;
   // A worker captures one artifact; a management-phase cache would retain an
   // unused second source tree. Explicit recovery forks own their own custody.
-  return withPluginSourceAdmissionPublisher(publishAdmission, () =>
-    withPluginInstallRoots(current.installRoots, () =>
-      withPluginSourceCaptureStorage(current.storage, () =>
-        withPluginSourceCaptureDirectory(
-          current.scratch,
-          () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
-          current.managedRoot,
+  // Successful replies transfer every write intent to the host. Keeping writes
+  // in one admission owner prevents stale worker retries replacing newer receipts.
+  return withPluginSourceAdmissionPublisher(
+    async () => false,
+    () =>
+      withPluginInstallRoots(current.installRoots, () =>
+        withPluginSourceCaptureStorage(current.storage, () =>
+          withPluginSourceCaptureDirectory(
+            current.scratch,
+            () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
+            current.managedRoot,
+          ),
         ),
       ),
-    ),
   );
 }
 async function close(): Promise<void> {
