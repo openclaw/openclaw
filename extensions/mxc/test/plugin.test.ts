@@ -83,12 +83,6 @@ function setProcessPlatformForTest(platform: NodeJS.Platform): void {
   });
 }
 
-function restoreProcessPlatformForTest(): void {
-  if (originalPlatform) {
-    Object.defineProperty(process, "platform", originalPlatform);
-  }
-}
-
 function createApi(
   pluginConfig: Record<string, unknown> | undefined = {},
   registrationMode: OpenClawPluginApi["registrationMode"] = "full",
@@ -115,6 +109,24 @@ function createApi(
   return { api, registerService, lifecycles, cleanup, stop };
 }
 
+function expectDormant(
+  original: ReturnType<typeof readBackend>,
+  fixture: ReturnType<typeof createApi>,
+) {
+  expect(readBackend()).toEqual(original);
+  expect(fixture.lifecycles).toEqual([]);
+  expect(fixture.registerService).not.toHaveBeenCalled();
+}
+
+function expectProbe(binary: string, call: number) {
+  expect(resolveMxcBinaryPathMock).toHaveBeenNthCalledWith(call, binary);
+  expect(readinessProbeExecMock).toHaveBeenCalledWith(
+    binary,
+    ["--probe"],
+    expect.objectContaining({ encoding: "utf-8" }),
+  );
+}
+
 describe("registerMxcPlugin", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -134,40 +146,38 @@ describe("registerMxcPlugin", () => {
       await stop();
     }
     warnSpy.mockRestore();
-    restoreProcessPlatformForTest();
+    if (originalPlatform) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
   });
 
   test("warns and stays dormant on non-Windows platforms", () => {
     setProcessPlatformForTest("darwin");
     const original = readBackend();
-    const { api, registerService, lifecycles } = createApi();
+    const fixture = createApi();
 
-    registerMxcPlugin(api);
+    registerMxcPlugin(fixture.api);
 
     expect(warnSpy).toHaveBeenCalledWith(
       "[mxc] Sandbox backend is Windows-only and not available on darwin. Plugin will be dormant.",
     );
     expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
-    expect(readBackend()).toEqual(original);
-    expect(lifecycles).toEqual([]);
-    expect(registerService).not.toHaveBeenCalled();
+    expectDormant(original, fixture);
   });
 
   test("does not register runtime hooks during discovery", () => {
     const original = readBackend();
-    const { api, registerService, lifecycles } = createApi({ timeoutSeconds: 60 }, "discovery");
+    const fixture = createApi({ timeoutSeconds: 60 }, "discovery");
 
-    registerMxcPlugin(api);
+    registerMxcPlugin(fixture.api);
 
     expect(warnSpy).not.toHaveBeenCalled();
     expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
     expect(warnMxcHostPrepIfNeededMock).not.toHaveBeenCalled();
     expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
-    expect(readBackend()).toEqual(original);
-    expect(lifecycles).toEqual([]);
-    expect(registerService).not.toHaveBeenCalled();
+    expectDormant(original, fixture);
   });
 
   test("blocks an older override and registers after selecting a compatible executor", async () => {
@@ -191,15 +201,9 @@ describe("registerMxcPlugin", () => {
     expect(() => registerMxcPlugin(legacy.api)).toThrow(
       /selected executor must be compatible with MXC 0\.8\.0.*unset plugins\.entries\.mxc\.config\.mxcBinaryPath.*restart the Gateway/u,
     );
-    expect(resolveMxcBinaryPathMock).toHaveBeenNthCalledWith(1, legacyOverride);
-    expect(readinessProbeExecMock).toHaveBeenCalledWith(
-      legacyOverride,
-      ["--probe"],
-      expect.objectContaining({ encoding: "utf-8" }),
-    );
-    expect(readBackend()).toEqual(original);
+    expectProbe(legacyOverride, 1);
+    expectDormant(original, legacy);
     expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
-    expect(legacy.lifecycles).toEqual([]);
 
     const recovered = createApi({ mxcBinaryPath: compatibleOverride });
     resolveMxcBinaryPathMock.mockReturnValueOnce(compatibleOverride);
@@ -211,38 +215,29 @@ describe("registerMxcPlugin", () => {
     });
 
     expect(() => registerMxcPlugin(recovered.api)).not.toThrow();
-    expect(resolveMxcBinaryPathMock).toHaveBeenNthCalledWith(2, compatibleOverride);
-    expect(readinessProbeExecMock).toHaveBeenCalledWith(
-      compatibleOverride,
-      ["--probe"],
-      expect.objectContaining({ encoding: "utf-8" }),
-    );
+    expectProbe(compatibleOverride, 2);
     expect(readBackend().factory).toEqual(expect.any(Function));
     await recovered.cleanup({ reason: "restart" });
     expect(readBackend()).toEqual(original);
   });
 
-  test.each(["reset"] as const)(
-    "preserves backend hooks during scoped %s cleanup",
-    async (reason) => {
-      const generation = createApi();
-      registerMxcPlugin(generation.api);
-      const backend = readBackend();
-      for (const scope of [
-        { sessionKey: "agent:other:main" },
-        { runId: "other-run" },
-        { sessionKey: "" },
-        { runId: "" },
-      ]) {
-        await generation.cleanup({ reason, ...scope });
-        expect(readBackend()).toEqual(backend);
-      }
-      if (reason === "reset") {
-        await generation.cleanup({ reason });
-        expect(readBackend()).toEqual(backend);
-      }
-    },
-  );
+  test("preserves backend hooks during scoped reset cleanup", async () => {
+    const reason = "reset";
+    const generation = createApi();
+    registerMxcPlugin(generation.api);
+    const backend = readBackend();
+    for (const scope of [
+      { sessionKey: "agent:other:main" },
+      { runId: "other-run" },
+      { sessionKey: "" },
+      { runId: "" },
+    ]) {
+      await generation.cleanup({ reason, ...scope });
+      expect(readBackend()).toEqual(backend);
+    }
+    await generation.cleanup({ reason });
+    expect(readBackend()).toEqual(backend);
+  });
 
   test.each(["older-first", "newer-first"] as const)(
     "preserves live registrations when generations retire %s",
@@ -302,16 +297,14 @@ describe("registerMxcPlugin", () => {
       throw new Error("missing binary");
     });
     const original = readBackend();
-    const { api, registerService, lifecycles } = createApi();
+    const fixture = createApi();
 
-    expect(() => registerMxcPlugin(api)).toThrow(
+    expect(() => registerMxcPlugin(fixture.api)).toThrow(
       "[mxc] MXC sandbox backend cannot load: missing binary. Install @microsoft/mxc-sdk or set mxcBinaryPath.",
     );
 
     expect(warnSpy).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
-    expect(readBackend()).toEqual(original);
-    expect(lifecycles).toEqual([]);
-    expect(registerService).not.toHaveBeenCalled();
+    expectDormant(original, fixture);
   });
 });
