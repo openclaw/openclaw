@@ -37,16 +37,19 @@ describe("async capture store", () => {
   it("persists immutable FIFO input on a worker and preserves shared blob custody", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("capture-async-") };
     const native = requireNodeSqlite();
-    const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
-    const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
-    const compress = vi.spyOn(zlib, "gzipSync");
-    const decompress = vi.spyOn(zlib, "gunzipSync");
+    const mainThreadWork = [
+      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
+      vi.spyOn(native.DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      ),
+      vi.spyOn(zlib, "gzipSync"),
+      vi.spyOn(zlib, "gunzipSync"),
+    ];
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     syncBuiltinESMExports();
     const lease = await acquireDebugProxyCaptureStoreAsync({ env });
+    const { store } = lease;
     try {
       const session = {
         id: "first",
@@ -55,22 +58,22 @@ describe("async capture store", () => {
         sourceScope: "openclaw" as const,
         sourceProcess: "fixture",
       };
-      const sessionWrite = lease.store.upsertSession(session);
+      const sessionWrite = store.upsertSession(session);
       session.sourceProcess = "mutated";
       const bytes = Buffer.from("shared café");
-      const payloadWrite = lease.store.persistPayload(bytes, "text/plain");
+      const payloadWrite = store.persistPayload(bytes, "text/plain");
       const submitted = event("first", "accepted-first");
-      const firstWrite = lease.store.recordEventWithPayload(submitted, {
+      const firstWrite = store.recordEventWithPayload(submitted, {
         data: bytes,
         contentType: "text/plain",
         previewLimit: 10,
       });
       submitted.flowId = "mutated";
       bytes.fill(0);
-      const secondWrite = lease.store.recordEventWithPayload(event("first", "accepted-second"), {
+      const secondWrite = store.recordEventWithPayload(event("first", "accepted-second"), {
         data: "shared café",
       });
-      const orderedRead = lease.store.getSessionEvents("first");
+      const orderedRead = store.getSessionEvents("first");
       await Promise.all([sessionWrite, firstWrite, secondWrite]);
       const rows = await orderedRead;
       expect(rows.map((row) => row.flowId)).toEqual(["accepted-second", "accepted-first"]);
@@ -82,36 +85,28 @@ describe("async capture store", () => {
       }
       expect(rows[1]!.dataBlobId).toBe(blobId);
       expect((await payloadWrite).blobId).toBe(blobId);
-      expect(await lease.store.readBlob(blobId)).toBe("shared café");
-      expect(await lease.store.listSessions()).toEqual([
+      expect(await store.readBlob(blobId)).toBe("shared café");
+      expect(await store.listSessions()).toEqual([
         expect.objectContaining({ id: "first", sourceProcess: "fixture", eventCount: 2 }),
       ]);
-      await lease.store.recordEventWithPayload(event("second", "shared-reference"), {
+      await store.recordEventWithPayload(event("second", "shared-reference"), {
         data: "shared café",
       });
-      expect(await lease.store.deleteSessions(["first"])).toEqual({
-        sessions: 1,
-        events: 2,
-        blobs: 0,
-      });
-      expect(await lease.store.readBlob(blobId)).toBe("shared café");
-      expect(await lease.store.purgeAll()).toEqual({ sessions: 1, events: 1, blobs: 1 });
-      expect(await lease.store.getSessionEvents("second")).toEqual([]);
-      expect(await lease.store.readBlob(blobId)).toBeNull();
-      expect(await lease.store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: 0 });
+      expect(await store.deleteSessions(["first"])).toEqual({ sessions: 1, events: 2, blobs: 0 });
+      expect(await store.readBlob(blobId)).toBe("shared café");
+      expect(await store.purgeAll()).toEqual({ sessions: 1, events: 1, blobs: 1 });
+      expect(await store.getSessionEvents("second")).toEqual([]);
+      expect(await store.readBlob(blobId)).toBeNull();
+      expect(await store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: 0 });
       expect(
         messages.mock.contexts.some((worker) => worker instanceof Worker && worker.threadId > 0),
       ).toBe(true);
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-      for (const statement of statements) {
-        expect(statement).not.toHaveBeenCalled();
+      for (const work of mainThreadWork) {
+        expect(work).not.toHaveBeenCalled();
       }
-      expect(compress).not.toHaveBeenCalled();
-      expect(decompress).not.toHaveBeenCalled();
     } finally {
       await lease.release();
-      await closeOpenClawStateDatabaseByPathAsync(lease.store.dbPath);
+      await closeOpenClawStateDatabaseByPathAsync(store.dbPath);
     }
   });
 
