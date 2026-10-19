@@ -1,11 +1,53 @@
-import { createSignal, flush } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { toStreamingMarkdownParts } from "./markdown.ts";
+import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 
 describe("Solid Markdown island", () => {
+  it("publishes current hovercard controls before onUpdate and retires a replaced island", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const controls = controlsForHovercard(container);
+    const [html, setHtml] = createSignal('<a href="#first">First</a>');
+    const onUpdate = vi.fn(() => controls.read().map((element) => element.textContent));
+    let bind!: (element: ParentNode) => void;
+    const view = mountSolid(
+      () =>
+        createComponent(HovercardControlsContext, {
+          value: controls,
+          get children() {
+            const region = document.createElement("div");
+            bind = createMarkdownRef(() => ({ content: html(), onUpdate }));
+            bind(region);
+            return region;
+          },
+        }),
+      { container },
+    );
+    try {
+      expect(onUpdate).toHaveLastReturnedWith(["First"]);
+      const original = controls.read()[0]!;
+      const replacement = container.appendChild(document.createElement("section"));
+      bind(replacement);
+      setHtml('<a href="#second">Second</a>');
+      flush();
+      expect(onUpdate).toHaveLastReturnedWith(["Second"]);
+      expect(original.isConnected).toBe(false);
+      const current = controls.read()[0]!;
+      expect(replacement.contains(current)).toBe(true);
+
+      view.unmount();
+      container.append(original, current);
+      expect(controls.read()).toEqual([]);
+    } finally {
+      view.unmount();
+      container.remove();
+    }
+  });
+
   it.each([
     ["paragraph", "A growing reply", "p"],
     ["list", "- First item\n- Growing item", "ul"],
