@@ -14,12 +14,13 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearIMessageApprovalReactionTargetsForTest,
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import { imessagePlugin } from "./channel.js";
+import * as cliOutput from "./cli-output.js";
 import type { IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { sendMessageIMessage } from "./send.js";
@@ -27,6 +28,16 @@ import { sendMessageIMessage } from "./send.js";
 beforeEach(() => {
   clearIMessageApprovalReactionTargetsForTest();
 });
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function mockCliSend() {
+  const run = vi.fn<(args: readonly string[]) => Promise<Record<string, unknown>>>();
+  vi.spyOn(cliOutput, "runIMessageCliJsonCommand").mockImplementation(({ args }) => run(args));
+  return run;
+}
 
 type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
 type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
@@ -414,9 +425,8 @@ describe("imessagePlugin contracts", () => {
         fs.writeFileSync(path.resolve(workspaceDir, filename), contents);
         const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
         const conflictingReader = vi.fn(async () => Buffer.from("conflicting reader"));
-        const runCliJson = vi.fn(async () => ({ messageId: "must-not-send" }));
-        const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
-          await sendMessageIMessage(to, text, { ...options, runCliJson });
+        const runCliJson = mockCliSend().mockResolvedValue({ messageId: "must-not-send" });
+        const nativeSend = sendMessageIMessage;
         const sendMedia = requireMessageSendMedia(requireMessageAdapter());
 
         await expect(
@@ -483,7 +493,7 @@ describe("imessagePlugin contracts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
     const attachmentBytes = IMESSAGE_WORKSPACE_PNG;
-    const runCliJson = vi.fn(async (args: readonly string[]) => {
+    const runCliJson = mockCliSend().mockImplementation(async (args) => {
       const attachmentPath = args[args.indexOf("--file") + 1];
       expect(attachmentPath).toBeDefined();
       expect(fs.readFileSync(attachmentPath!)).toEqual(attachmentBytes);
@@ -493,7 +503,6 @@ describe("imessagePlugin contracts", () => {
       sendMessageIMessage(to, text, {
         ...options,
         client: captionClient,
-        runCliJson,
       }),
     );
     const onDeliveryResult = vi.fn();
@@ -572,9 +581,11 @@ describe("imessagePlugin contracts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
     const attachmentBytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
-    const runCliJson = vi.fn(async () => ({ messageId: "p:0/durable-custody-attachment" }));
+    const runCliJson = mockCliSend().mockResolvedValue({
+      messageId: "p:0/durable-custody-attachment",
+    });
     const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
-      await sendMessageIMessage(to, text, { ...options, client: captionClient, runCliJson });
+      await sendMessageIMessage(to, text, { ...options, client: captionClient });
     const onDeliveryResult = vi.fn(async () => {
       throw custodyError;
     });

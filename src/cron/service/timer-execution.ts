@@ -1,3 +1,4 @@
+import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -327,6 +328,8 @@ async function executeDetachedCronJob(
       status: "error" as const,
       error,
       errorClassification: cronAbortErrorClassification(abortSignal),
+      interruptedByRestart:
+        resolveAgentRunAbortLifecycleFields(abortSignal).stopReason === "restart",
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
@@ -420,6 +423,7 @@ async function executeDetachedCronJob(
     error: res.error,
     errorClassification: res.errorClassification,
     executionStarted: res.executionStarted,
+    interruptedByRestart: res.interruptedByRestart,
     // Forward the post-run delivery failure recorded on an otherwise
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).

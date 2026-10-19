@@ -24,10 +24,8 @@ import {
 } from "./update-command-fixtures.test-support.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import { captureUpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
-import {
-  publishUpdateCommandTerminalResult,
-  resolveSettledUpdateCommandResult,
-} from "./update-command-terminal.js";
+import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const after = { version: "2026.9.5", buildId: "synthetic-verified-candidate" };

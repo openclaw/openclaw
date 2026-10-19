@@ -1,4 +1,3 @@
-import { ChannelType } from "discord-api-types/v10";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -10,6 +9,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, vi } from "vitest";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import { setDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
@@ -29,10 +29,7 @@ const hoisted = vi.hoisted(() => {
     token: "tok-created",
   }));
   const createDiscordRestClient = vi.fn((..._args: unknown[]) => ({
-    rest: {
-      get: restGet,
-      post: restPost,
-    },
+    rest: { get: restGet, post: restPost },
   }));
   const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
   const readAcpSessionEntryAsync = vi.fn();
@@ -48,9 +45,8 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../send.js", async () => {
-  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../send.js")>("../send.js")),
     addRoleDiscord: vi.fn(),
     sendMessageDiscord: hoisted.sendMessageDiscord,
     sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
@@ -62,18 +58,25 @@ vi.mock("../send.messages.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  );
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+      "openclaw/plugin-sdk/acp-runtime",
+    )),
     readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
   };
 });
 
 const { createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const discordClientModule = await import("../client.js");
-const discordThreadBindingApi = await import("./thread-bindings.discord-api.js");
+const api = await import("./thread-bindings.discord-api.js");
+
+type RestContext = { accountId: string; token?: string; cfg: OpenClawConfig };
+function mockRest(params: RestContext) {
+  return hoisted.createDiscordRestClient(
+    { accountId: params.accountId, token: params.token },
+    params.cfg,
+  ).rest;
+}
 
 export function createTestThreadBindingManager(
   params: Omit<Parameters<typeof createThreadBindingManager>[0], "cfg"> & {
@@ -105,123 +108,58 @@ export function installThreadBindingLifecycleTestHooks() {
     } as unknown as DiscordRuntime);
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
-    hoisted.sendMessageDiscord.mockReset().mockResolvedValue({});
-    hoisted.sendWebhookMessageDiscord.mockReset().mockResolvedValue({});
-    hoisted.restGet.mockReset().mockResolvedValue({
-      id: "thread-1",
-      type: 11,
-      parent_id: "parent-1",
-    });
-    hoisted.restPost.mockReset().mockResolvedValue({
-      id: "wh-created",
-      token: "tok-created",
-    });
-    hoisted.createDiscordRestClient.mockReset().mockImplementation((..._args: unknown[]) => ({
-      rest: {
-        get: hoisted.restGet,
-        post: hoisted.restPost,
-      },
-    }));
-    hoisted.createThreadDiscord.mockReset().mockResolvedValue({ id: "thread-created" });
-    hoisted.readAcpSessionEntryAsync.mockReset().mockResolvedValue(null);
+    // mockReset restores each vi.fn(implementation), including one-shot overrides.
+    for (const mock of Object.values(hoisted)) {
+      mock.mockReset();
+    }
+    hoisted.readAcpSessionEntryAsync.mockResolvedValue(null);
     vi.spyOn(discordClientModule, "createDiscordRestClient").mockImplementation(
       (...args) =>
         hoisted.createDiscordRestClient(...args) as unknown as ReturnType<
           typeof discordClientModule.createDiscordRestClient
         >,
     );
-    vi.spyOn(discordThreadBindingApi, "createWebhookForChannel").mockImplementation(
-      async (params) => {
-        const rest = hoisted.createDiscordRestClient(
-          {
-            accountId: params.accountId,
-            token: params.token,
-          },
-          params.cfg,
-        ).rest;
-        const created = (await rest.post("mock:channel-webhook")) as {
-          id?: string;
-          token?: string;
-        };
-        return {
-          webhookId: typeof created?.id === "string" ? created.id.trim() || undefined : undefined,
-          webhookToken:
-            typeof created?.token === "string" ? created.token.trim() || undefined : undefined,
-        };
-      },
-    );
-    vi.spyOn(discordThreadBindingApi, "resolveChannelIdForBinding").mockImplementation(
-      async (params) => {
-        const explicit = params.channelId?.trim();
-        if (explicit) {
-          return explicit;
-        }
-        const rest = hoisted.createDiscordRestClient(
-          {
-            accountId: params.accountId,
-            token: params.token,
-          },
-          params.cfg,
-        ).rest;
-        const channel = (await rest.get("mock:channel-resolve")) as {
-          id?: string;
-          type?: number;
-          parent_id?: string;
-          parentId?: string;
-        };
-        const channelId = typeof channel?.id === "string" ? channel.id.trim() : "";
-        const parentId =
-          typeof channel?.parent_id === "string"
-            ? channel.parent_id.trim()
-            : typeof channel?.parentId === "string"
-              ? channel.parentId.trim()
-              : "";
-        const isThreadType =
-          channel?.type === ChannelType.PublicThread ||
-          channel?.type === ChannelType.PrivateThread ||
-          channel?.type === ChannelType.AnnouncementThread;
-        if (parentId && isThreadType) {
-          return parentId;
-        }
-        return channelId || null;
-      },
-    );
-    vi.spyOn(discordThreadBindingApi, "createThreadForBinding").mockImplementation(
-      async (params) => {
-        const created = await hoisted.createThreadDiscord(
-          params.channelId,
-          {
-            name: params.threadName,
-          },
-          {
-            accountId: params.accountId,
-            token: params.token,
-            cfg: params.cfg,
-          },
-        );
-        return typeof created?.id === "string" ? created.id.trim() || null : null;
-      },
-    );
-    vi.spyOn(discordThreadBindingApi, "maybeSendBindingMessage").mockImplementation(
-      async (params) => {
-        if (
-          params.preferWebhook !== false &&
-          params.record.webhookId &&
-          params.record.webhookToken
-        ) {
-          await hoisted.sendWebhookMessageDiscord(params.text, {
-            cfg: params.cfg,
-            webhookId: params.record.webhookId,
-            webhookToken: params.record.webhookToken,
-            accountId: params.record.accountId,
-            threadId: params.record.threadId,
+    vi.spyOn(api, "createWebhookForChannel").mockImplementation(async (params) => {
+      const created = await mockRest(params).post("mock:channel-webhook");
+      return {
+        webhookId: created.id.trim() || undefined,
+        webhookToken: created.token.trim() || undefined,
+      };
+    });
+    vi.spyOn(api, "resolveChannelIdForBinding").mockImplementation(async (params) => {
+      const explicit = params.channelId?.trim();
+      if (explicit) {
+        return explicit;
+      }
+      const channel = await mockRest(params).get("mock:channel-resolve");
+      const parentId = channel.parent_id.trim();
+      return (
+        (parentId && isDiscordThreadChannelType(channel.type) ? parentId : channel.id.trim()) ||
+        null
+      );
+    });
+    vi.spyOn(api, "createThreadForBinding").mockImplementation(async (params) => {
+      const created = await hoisted.createThreadDiscord(
+        params.channelId,
+        { name: params.threadName },
+        { accountId: params.accountId, token: params.token, cfg: params.cfg },
+      );
+      return created.id.trim() || null;
+    });
+    vi.spyOn(api, "maybeSendBindingMessage").mockImplementation(
+      async ({ record, text, cfg, preferWebhook }) => {
+        const { webhookId, webhookToken, accountId, threadId } = record;
+        if (preferWebhook !== false && webhookId && webhookToken) {
+          await hoisted.sendWebhookMessageDiscord(text, {
+            cfg,
+            webhookId,
+            webhookToken,
+            accountId,
+            threadId,
           });
           return;
         }
-        await hoisted.sendMessageDiscord(`channel:${params.record.threadId}`, params.text, {
-          cfg: params.cfg,
-          accountId: params.record.accountId,
-        });
+        await hoisted.sendMessageDiscord(`channel:${threadId}`, text, { cfg, accountId });
       },
     );
     vi.useRealTimers();

@@ -14,7 +14,6 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
-import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -353,13 +352,11 @@ it.each(["unchanged", "revoked"] as const)(
               held = true;
               return {
                 ...owned,
-                startRead(...args) {
-                  return startAwaitedReadMock(async () => {
-                    const result = await owned.startRead(...args).result;
-                    entered.resolve();
-                    await release.promise;
-                    return result;
-                  });
+                async startRead(...args) {
+                  const result = await owned.startRead(...args);
+                  entered.resolve();
+                  await release.promise;
+                  return result;
                 },
               };
             },

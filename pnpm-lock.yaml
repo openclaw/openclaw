@@ -1496,6 +1496,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/levanto:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/line:
     dependencies:
       '@line/bot-sdk':
@@ -2244,9 +2250,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.26.8
         version: 0.26.8
-      ws:
-        specifier: 8.22.0
-        version: 8.22.0
       zod:
         specifier: 4.6.6
         version: 4.6.6

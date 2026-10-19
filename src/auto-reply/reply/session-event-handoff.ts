@@ -58,11 +58,7 @@ export {
   captureSessionEventTargetForHost,
   combineSessionEventTargetsForHost,
 } from "./session-event-target.js";
-export type {
-  SessionEventReceipt,
-  SessionEventSource,
-  SessionEventTarget,
-} from "./session-event-contract.js";
+export type { SessionEventReceipt, SessionEventTarget } from "./session-event-contract.js";
 
 const log = createSubsystemLogger("session-events");
 

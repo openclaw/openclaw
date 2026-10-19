@@ -14,7 +14,7 @@ export function registerMcpAppUnmountTarget(target: McpAppUnmountTarget): () => 
   };
 }
 
-function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
+export function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
   const leavingRoots = [...roots];
   return [...registeredTargets].filter((target) =>
     leavingRoots.some((root) => root.contains(target)),

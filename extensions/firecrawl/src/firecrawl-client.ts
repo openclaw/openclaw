@@ -19,6 +19,7 @@ import {
   withStrictWebToolsEndpoint,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import {
+  externalContentStamp,
   readCachedSearchPayload,
   resolveSiteName,
   writeCachedSearchPayload,
@@ -465,12 +466,7 @@ export async function runFirecrawlSearch(
     provider: providerId,
     count: items.length,
     tookMs,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: providerId,
-      wrapped: true,
-    },
+    externalContent: externalContentStamp(providerId),
     results,
     ...(truncated ? { truncated: true } : {}),
   };

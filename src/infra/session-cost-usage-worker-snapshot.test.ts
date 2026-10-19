@@ -141,7 +141,7 @@ it.for([
             } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
               output = value.input.map(() => undefined);
             }
-            return { input: { ok: true, value: output }, consumed() {} };
+            return { input: output, consumed() {} };
           },
         },
         { runNativeSection: async (operation) => operation(), throwIfCancelled() {} },

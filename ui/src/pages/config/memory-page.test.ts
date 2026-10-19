@@ -351,6 +351,36 @@ it("keeps Dreams empty when no configured agent is available", async () => {
   expect(element.textContent).not.toContain("Dreaming frequency");
 });
 
+it("loads each Dreams target once when the existing agent key changes", async () => {
+  const { element, request, settingsAgentSelection } = createPage({
+    agents: [{ id: "main" }, { id: "support" }],
+    selectedAgentId: "main",
+    routeData: memoryTabRoute("dreams"),
+    methods: ["doctor.memory.status", "doctor.memory.dreamDiary"],
+    settingsRequest: async (method) =>
+      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
+  });
+  const memoryCalls = () =>
+    request.mock.calls.filter(
+      ([method]) => method === "doctor.memory.status" || method === "doctor.memory.dreamDiary",
+    );
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(2));
+  const originalPanel = element.querySelector("openclaw-agent-memory-panel");
+  expect(originalPanel).not.toBeNull();
+
+  settingsAgentSelection.set("support");
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(4));
+  expect(element.querySelector("openclaw-agent-memory-panel")).not.toBe(originalPanel);
+  for (const agentId of ["main", "support"]) {
+    expect(memoryCalls()).toEqual(
+      expect.arrayContaining([
+        ["doctor.memory.status", { agentId }],
+        ["doctor.memory.dreamDiary", { agentId }],
+      ]),
+    );
+  }
+});
+
 it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
   const navigate = vi.fn();
   const { element } = createPage({

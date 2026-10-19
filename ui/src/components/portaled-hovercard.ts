@@ -2,6 +2,7 @@ import { onSettled } from "solid-js";
 import { composedAncestors, composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
 import type { TooltipElement } from "./tooltip.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
@@ -224,16 +225,7 @@ export function createPortaledHovercardOwner(
     },
 
     focusables(): HTMLElement[] {
-      // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
-      return [
-        ...(portal.card?.querySelectorAll<HTMLElement>(
-          'a[href]:not([tabindex="-1"]), button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
-        ) ?? []),
-      ].filter((element) => {
-        // Slotted inspection controls join native Tab traversal only while their tooltip is open.
-        const content = element.closest('[slot="content"]');
-        return !content?.parentElement?.matches("openclaw-tooltip:not([open])");
-      });
+      return portal.card ? controlsForHovercard(portal.card).read() : [];
     },
 
     scheduleOpen(delay: number, open: () => void, trigger = triggerElement): void {

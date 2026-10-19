@@ -155,6 +155,16 @@ export abstract class AppSidebarBase {
   declare readonly removeEventListener: HTMLElement["removeEventListener"];
   declare readonly contains: HTMLElement["contains"];
 
+  readonly navigationViewElements = new Map<AppSidebarProps["navigationView"], HTMLElement>();
+
+  activeNavigationViewElement(): HTMLElement | undefined {
+    if (!this.navigationVisible || this.navigationCollapsed) {
+      return undefined;
+    }
+    const element = this.navigationViewElements.get(this.navigationView);
+    return element?.isConnected ? element : undefined;
+  }
+
   private readonly listeners = new Set<() => void>();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);

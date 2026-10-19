@@ -1,5 +1,40 @@
 # Team-shaped synthetic state
 
+## Startup with one checking agent
+
+The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
+sequentially before the measurement window, then run one cold startup per fixture:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case slowAgentDatabase --fixture-root /path/to/new-fixture --seed-only \
+  --agent-database-mib 512 --agent-gate-delay-ms 10000
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case slowAgentDatabase --fixture-root /path/to/new-fixture \
+  --runs 1 --warmup 0 --timeout-ms 90000 --output /path/to/result.json
+```
+
+The fixture contains five agents with one interrupted subagent each. All runs
+belong to independent requester sessions owned by the first healthy agent, so
+one parent's unrelated conversations must recover independently. Four agent
+databases are small; the fifth contains the requested MiB of synthetic cache
+payload. Its clean-close seal is removed under offline fixture custody, forcing
+the real integrity scan. A benchmark-only preload delays that scan by the
+requested duration, then executes the original SQLite statement. Use zero delay
+to measure the native scan separately. This simulates a long check without
+writing the incident's tens of gigabytes onto a shared host.
+
+Results retain `/readyz`, the integrity gate's start and completion times, and
+each agent's recovered session status event. The driver waits for all five
+recovery events before teardown and rejects missing observations. No models or
+external channels run. Generate a fresh fixture for every sample; recovery
+mutates the synthetic records. Use separate roots and identical inputs for
+concurrent A/B pairs, with the host's measurement lock and alternating CPU halves.
+The case also requires every healthy agent to recover before the slow integrity
+gate passes, the slow agent to recover afterward, and zero admission errors.
+An unfixed baseline exits nonzero for the ordering failure while still writing
+its measurements; distinguish this expected result from setup or missing data.
+
 Use one fixture for local and sandbox performance repros:
 
 ```sh
@@ -169,6 +204,19 @@ workload. Every forced run must finish and its event must reach the browser.
 A separate configuration-edit phase verifies that a changed job name becomes
 visible. Only browser list requests are counted; the controller socket is
 excluded, and the created jobs are removed on exit.
+
+For board/chat document loads, use `--load-runs 5 --load-path /dashboard --duration 12`.
+This mode retains synthetic `cron.list`, `models.list`, and `users.self` parameters,
+response bytes, `models.snapshot` event counts, paint entries, and native Long Task
+blocking (the sum of each task's duration above 50 ms). It records the first cold
+browser context separately from later documents that retain browser cache and
+storage. `--phase-seed` selects deterministic randomized reload delays; paired
+sides must use matching seeds, routes, and `--start-at` times. Reloads use fixed
+slots from that shared start time; a missed slot fails the run. Use
+`--expect-session <key>` to assert the committed session and `--open-details` for
+chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
+leave it off for paired timing. Use only synthetic requests:
+parameters and stacks are retained, while auth and response payloads are omitted.
 
 For paired activity measurements, use `--start-at <epoch-ms>` with the same future
 time on both sides; it gates the runtime window after browser readiness and
@@ -346,7 +394,8 @@ announcements and utility requests receive one short acknowledgement and are
 counted separately. A fixed 10-second post-readiness delay allows retained-run
 startup recovery to settle before setup. One concurrent round
 warms the Gateway before five measured rounds. `--port`, `--mock-port`,
-`--chunks`, `--clients`, `--runs`, and `--rounds` adjust the workload.
+`--chunks`, `--chunk-interval-ms` (default 10), `--clients`, `--runs`, and
+`--rounds` adjust the workload.
 Warmup and each measured round drain until no model streams remain and all
 subscriber events have been quiet for one second, with a 15-second timeout.
 
@@ -381,6 +430,13 @@ change events; the model fixture serves the recaps without external inference.
 `--list-interval-ms 1000` adds concurrent compact `sessions.list` polling, one
 request at a time per client, and reports successful latency samples and
 p50/p95/p99. Invalid or failed list responses reject the run.
+Add `--poll-seed <seed>` to randomize each client's initial poll phase across the
+list interval and jitter subsequent intervals uniformly from 0.5 to 1.5 times
+that interval. The deterministic sequence is independent per client and round;
+use the same seed on both sides of a pair. Polls remain sequential per client,
+so a slow response delays its next poll. The report retains initial phases and
+all request timestamps for seeded runs. Without this flag, polling retains its
+original synchronized start and fixed interval.
 Add `--diagnostics` identically on both sides to capture per-round Gateway and
 replay-controller event-loop delay (20 ms sampling), GC pause totals, and bounded
 internal operation aggregates without starting CPU or heap profiling. List
@@ -390,6 +446,58 @@ pair, sort all `sessionsList.requests` by duration to identify its pooled p99.
 These records contain timing and identity only, never RPC payloads. Gateway
 metrics cover its main isolate, not worker isolates. Capture adds overhead, so
 compare equally instrumented pairs and keep earlier uncaptured runs distinct.
+
+To isolate a stream-start burst, use `--stream-start-diagnostics`. It captures
+main-isolate diagnostics from immediately before turn admission until every
+primary mock request has arrived, then separately for the first 500 ms after
+the mock releases those responses together. Stopping admission capture and
+starting release capture adds two private IPC round trips before release on
+both revisions. Each new capture waits 25 ms and then samples the owned child's
+CPU counter as a checkpoint, priming the 20 ms loop-delay timer before admission
+or release. Capture timestamps include this priming interval. A delayed stop can extend the window; use the reported capture
+timestamps and duration. These captures can run alongside whole-round
+`--diagnostics` without CPU sampling. `streamStart.phases` records controller
+epoch timestamps for admission, first/last classified primary request, cohort
+release, first primary SSE write, and completion of all turns. Request/write
+timestamps are observed by the mock, not by the Gateway's SSE consumer.
+
+Add `--cpu-profile` for attribution runs. The private IPC profiler samples only
+the Gateway main isolate from before admission through release plus 500 ms,
+writing `stream-start-<round>.cpuprofile` and its diagnostics sidecars. The result
+includes the 40 hottest functions by sampled self time; raw samples remain for
+windowed or caller analysis. Sampling and profile serialization add overhead,
+so omit this flag for acceptance timing. `--active-work-diagnostics` enables the
+real diagnostics Prometheus plugin and scrapes its endpoint while all primary
+responses remain held. Each round must report exactly `--runs` running sessions
+and zero queued sessions before release; this scrape is included in admission
+timing. For example, run on each authorized 16-core measurement half:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --clients 8 --exact-clients 1 \
+  --runs 80 --rounds 5 --chunks 500 --chunk-interval-ms 10 \
+  --list-interval-ms 2000 --poll-seed stream-start-1 \
+  --diagnostics --stream-start-diagnostics --active-work-diagnostics
+```
+
+Compare release-window event-loop max/p99 and pooled list p95 across concurrent
+pairs, swapping CPU halves and changing the shared poll seed between pairs.
+Use list request timestamps to identify polls overlapping release; whole-round
+latency alone can hide a burst. Existing completion, concurrency, event-order,
+and fanout checks still apply. This fixture uses synthetic model streams;
+provider latency and external tool execution are outside this comparison.
+
+Use `--stream-start-allocations` to sample main-isolate allocations, including
+collected objects, from before admission through release plus 500 ms. This writes
+`stream-start-<round>.heapprofile` and diagnostics sidecars. It cannot be combined
+with whole-round `--allocations`. Divide sampled bytes by `runCount` for bytes per
+started stream; `observedSessionPublications` counts `session.message` and
+`sessions.changed` received by the first viewer during capture. This is a received
+publication denominator, so events still in flight at the boundary are excluded.
+Sampling and stopping/serializing the profile add overhead; keep these attribution
+runs separate from unprofiled acceptance timing. `--trace-gc` adds V8 GC logging to
+the owned Gateway's log only. With `--active-work-diagnostics`, each successful
+held-stream scrape is retained as `held-streams-<cohort>.prom` for GC counter context.
 
 `eventBytes` measures the exact received, uncompressed JSON frame bytes,
 including the event envelope, before parsing. `sessionEventSizes` splits session
@@ -647,6 +755,43 @@ does not count later work. `nativeTaskInputs`, `transcriptQueueMetrics`,
 submission counts include work before the diagnostics exporter starts; queue
 metrics do not. Record the kind breakdown and verify memory catch-up actually
 ran before attributing an improvement to it. Use a fresh fixture for each revision.
+
+## Checkout diff command fan-out
+
+`checkout-diff-measure.ts` exercises the production Git worker or its read-cache
+owner against a small synthetic checkout, without a Gateway or model:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-diff-fixture --seed
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-diff-fixture --boundary worker --summary --mutate \
+  --samples 40 --output /path/to/summary-result.json
+```
+
+The seed refuses an existing directory. It creates 100 untracked files,
+including binary, large, empty, and symlink cases, three tracked changes, and an
+ignored file. `--untracked` adjusts the count. Omit `--summary` to measure full
+patches. `--mutate` changes one tracked file before each request; omit it for
+unchanged polls. `--boundary read` uses `loadCheckoutDiff`, including revision
+validation and caching. Use `--poll-ms 10050` to cross the former summary cache's
+ten-second TTL; immediate repeated reads alone cannot demonstrate that change.
+
+Run identical separate fixtures concurrently with `--start-at <epoch-ms>` under
+the host's exclusive measurement lock, then swap CPU halves for the next pair.
+The report includes per-request latency, actual Git process counts from trace2,
+command families, payload size, and a SHA-256 of each response with the fixture's
+absolute root removed. Compare matching sample hashes across revisions before
+attributing speedups. Setup and worker warmup are separate from measured samples;
+trace2's small write overhead is included identically on both sides. These are
+Git owner timings, not end-to-end `sessions.diff` RPC or browser latency.
+
+Acceptance for untracked batching is a Git command bound independent of the
+untracked-file count, byte-identical returned file statistics and patches, and
+paired p50/p99 that improve or remain within noise for a simplification. An
+unchanged checkout eligible for revision caching should issue zero Git commands,
+including after the prior TTL. Compare B minus A within each concurrent pair;
+use at least two pairs with swapped CPU halves and record outside load for context.
 
 ## Sandbox measurements
 

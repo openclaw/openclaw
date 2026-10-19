@@ -386,7 +386,7 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registryPath = path.join(ROOT, "src", "shared", "control-ui-locale.ts");
   const registry = (await import(pathToFileURL(registryPath).href)) as {
     SUPPORTED_LOCALES: readonly string[];
   };

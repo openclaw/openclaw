@@ -1,12 +1,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UrbitSSEClient } from "./sse-client.js";
 
 const proofCookie = "urbauth-~zod=synthetic-reconnect-proof";
-const lookupLoopback = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 const runningServers: Server[] = [];
 
 async function listen(server: Server): Promise<string> {
@@ -29,7 +27,6 @@ function createClient(
   return new UrbitSSEClient(baseUrl, proofCookie, {
     ship: "zod",
     ssrfPolicy: { allowPrivateNetwork: true },
-    lookupFn: lookupLoopback,
     ...options,
   });
 }

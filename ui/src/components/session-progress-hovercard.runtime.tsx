@@ -21,6 +21,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.
 import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
+import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 import { SessionLinkTitler } from "./session-link-titling.ts";
@@ -474,7 +475,11 @@ function createSessionProgressHovercard(
         });
         // A second settle follows the Markdown islands' DOM-writing effects.
         onSettled(() => onSettled(commit));
-        return <SessionHovercard {...snapshot()} />;
+        return (
+          <HovercardControlsContext value={controlsForHovercard(card)}>
+            <SessionHovercard {...snapshot()} />
+          </HovercardControlsContext>
+        );
       }, card),
     );
     // An empty initial render can retire its portal before render() returns its disposer.

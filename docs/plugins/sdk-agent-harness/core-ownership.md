@@ -46,6 +46,11 @@ policy synchronously. Apply turn-specific tool restrictions separately; this sna
 does not grant execution authority or replace live native-action checks. Existing
 harnesses may ignore the field.
 
+When an attempt uses an independent `sandboxSessionKey`, prepared search policy
+uses that session's agent owner. Use `sandboxAgentId` when an unscoped key belongs
+to a different policy owner; the execution agent continues to own the attempt's
+credentials and transcript.
+
 For native-owned models, core uses the prepared native model reference. Codex
 rejects a changed tuple or requester facts before applying the prepared search
 policy; retrying the turn prepares current policy. Native admission retains the

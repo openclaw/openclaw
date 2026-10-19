@@ -45,7 +45,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     };
     return {
       ...page.actions,
-      onHighlightedRun: page.highlightRun,
+      onRunMount: page.registerRun,
       loading: page.cron().cronLoading,
       hasLoaded: page.cron().cronJobsSnapshotRevision !== null,
       listError: page.cron().cronJobsError,

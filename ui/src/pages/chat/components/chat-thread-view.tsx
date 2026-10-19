@@ -280,6 +280,7 @@ export function ChatThread(input: {
           {(threadState) => (
             <ChatCommentPins
               threadState={threadState}
+              transcript={current().session}
               attachments={input.props.commentAttachments}
               sessionKey={input.props.sessionKey}
               disabled={input.props.commentsDisabled ?? false}

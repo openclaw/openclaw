@@ -771,7 +771,7 @@ suite.define(() => {
         for (const metric of olderPages) {
           expect(metric.receivedMs).toBeDefined();
           expect(metric.offset).toBe(nextOffset);
-          expect(metric.maxBytes).toBe(2 * 1024 * 1024);
+          expect(metric.maxBytes).toBe(3 * 1024 * 1024);
           expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           const messages = metric.messages ?? 0;
           expect(messages).toBeGreaterThan(0);

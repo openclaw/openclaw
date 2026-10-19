@@ -35,6 +35,15 @@ export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
+export function externalContentStamp(provider: string): {
+  untrusted: true;
+  source: "web_search";
+  wrapped: true;
+  provider: string;
+} {
+  return { untrusted: true, source: "web_search", wrapped: true, provider };
+}
+
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
 }

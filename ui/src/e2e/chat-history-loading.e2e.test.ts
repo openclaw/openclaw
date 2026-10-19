@@ -158,7 +158,7 @@ suite.define(() => {
         .toBe(2);
       expect(await offsets()).toEqual([2, 6]);
       for (const request of await gateway.getRequests("chat.history")) {
-        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 2 * 1024 * 1024 });
+        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 3 * 1024 * 1024 });
       }
     },
   );

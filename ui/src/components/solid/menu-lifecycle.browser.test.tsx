@@ -12,7 +12,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import type { MenuItem, MenuItemBindings } from "./menu.tsx";
+import { createMenuControls, type MenuItem, type MenuItemBindings } from "./menu.tsx";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -193,19 +193,26 @@ describe("Solid menu branch lifetime", () => {
   it("opens custom form content and retains it when generated items become empty", async () => {
     const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
     let input!: HTMLInputElement;
-    const view = mountMenu({
-      get items() {
-        return entries();
-      },
-      children: (
-        <input
-          autofocus
-          aria-label="Filter"
-          ref={(element) => {
-            input = element;
-          }}
-        />
-      ),
+    const view = mountMenu(() => {
+      const controls = createMenuControls();
+      return {
+        controls,
+        get items() {
+          return entries();
+        },
+        children: (
+          <input
+            autofocus
+            aria-label="Filter"
+            ref={[
+              controls.ref(),
+              (element) => {
+                input = element;
+              },
+            ]}
+          />
+        ),
+      };
     });
     expect(view.handle.open()).toBe(true);
     expect(document.activeElement).toBe(input);

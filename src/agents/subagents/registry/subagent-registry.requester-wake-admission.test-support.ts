@@ -237,59 +237,77 @@ export function registerRequesterStartupAdmissionTests({
     }
     await registry.resetSubagentRegistryForTests({ persist: false });
     const pathname = openOpenClawAgentDatabase({ agentId: "main" }).path;
-    await withAgentDatabaseStartupAdmission(async (admission) => {
-      const inspection = createDeferred<{ incompatible: []; indeterminate: [] }>();
-      recordAgentDatabaseAdmissions(
-        admission.defer({
-          env: testState.env,
-          inspections: [
-            { target: { agentId: "main", path: pathname }, result: inspection.promise },
-          ],
-          reason: "Requester fixture is waiting for startup inspection.",
-        }),
-        { env: testState.env, source: "startup" },
-      );
-      const owner = admission.adopt();
-      admission.activate({
-        isCurrent: () => true,
-        preparationReady: Promise.resolve(),
-        openAgent: async () => {
-          openOpenClawAgentDatabase({ agentId: "main" });
-        },
-        migrateAgent: async () => {},
-        publishAgent: async () => {},
-      });
-      // Session reads are supplied by this suite; retain their real startup admission boundary.
-      vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockImplementation((params) => {
-        assertAgentDatabaseAdmitted("main");
-        return wakeRequester(params);
-      });
-      try {
-        await activate();
-        await flushOwnedWork();
-        expect(getRequesterWakeCalls()).toHaveLength(0);
-        expect(runIds.map(readWake)).toEqual(expectedWakes);
-        // A restart preserves the cohort without admitting work or consuming a timed retry.
-        await registry.resetSubagentRegistryForTests({ persist: false });
-        await activate();
-        await advance(30_000, 0);
-        expect(runIds.map(readWake)).toEqual(expectedWakes);
-        const prepared = admission.waitForAgentPreparation("main", { env: testState.env });
-        expect(prepared).toBeDefined();
-        inspection.resolve({ incompatible: [], indeterminate: [] });
-        await prepared;
-        await flushOwnedWork();
-        expect(getRequesterWakeCalls()).toHaveLength(1);
-        expect(registry.getSubagentRunByRunId(runIds[0]!)).toBeUndefined();
-        expect(registry.getSubagentRunByRunId(runIds[1]!)).toBeDefined();
-        for (const runId of runIds) {
-          expect(readWake(runId)).toBeUndefined();
+    for (const restart of [true, false]) {
+      await withAgentDatabaseStartupAdmission(async (admission) => {
+        const inspection = createDeferred<{ incompatible: []; indeterminate: [] }>();
+        recordAgentDatabaseAdmissions(
+          admission.defer({
+            env: testState.env,
+            inspections: [
+              { target: { agentId: "main", path: pathname }, result: inspection.promise },
+            ],
+            reason: "Requester fixture is waiting for startup inspection.",
+          }),
+          { env: testState.env, source: "startup" },
+        );
+        const owner = admission.adopt();
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          openAgent: async () => {
+            openOpenClawAgentDatabase({ agentId: "main" });
+          },
+          migrateAgent: async () => {},
+          publishAgent: async () => {},
+        });
+        // Session reads are supplied by this suite; retain their real startup admission boundary.
+        vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockImplementation((params) => {
+          assertAgentDatabaseAdmitted("main");
+          return wakeRequester(params);
+        });
+        let activation: Promise<PromiseSettledResult<void>[]> | undefined;
+        try {
+          await registry.initSubagentRegistry();
+          const context = createGatewayContext();
+          activation = Promise.allSettled([registry.activateSubagentRegistry(() => context)]);
+          await advance(30_000, 0);
+          expect(runIds.map(readWake)).toEqual(expectedWakes);
+          if (restart) {
+            // Stop the old owner before releasing its gate; reset must not inherit live recovery.
+            const stopped = owner.stop();
+            inspection.resolve({ incompatible: [], indeterminate: [] });
+            await stopped;
+            expect(await activation).toMatchObject([
+              {
+                status: "rejected",
+                reason: { name: "AbortError" },
+              },
+            ]);
+          } else {
+            const prepared = admission.waitForAgentPreparation("main", { env: testState.env });
+            expect(prepared).toBeDefined();
+            inspection.resolve({ incompatible: [], indeterminate: [] });
+            await prepared;
+            expect(await activation).toEqual([{ status: "fulfilled", value: undefined }]);
+            await flushOwnedWork();
+            expect(getRequesterWakeCalls()).toHaveLength(1);
+            expect(registry.getSubagentRunByRunId(runIds[0]!)).toBeUndefined();
+            expect(registry.getSubagentRunByRunId(runIds[1]!)).toBeDefined();
+            for (const runId of runIds) {
+              expect(readWake(runId)).toBeUndefined();
+            }
+            await advance(120_000, 1);
+          }
+        } finally {
+          const stopped = owner.stop();
+          inspection.resolve({ incompatible: [], indeterminate: [] });
+          await stopped;
+          await activation;
         }
-        await advance(120_000, 1);
-      } finally {
-        inspection.resolve({ incompatible: [], indeterminate: [] });
-        await owner.stop();
+      });
+      if (restart) {
+        await registry.resetSubagentRegistryForTests({ persist: false });
       }
-    });
+    }
   });
 }

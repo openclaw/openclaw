@@ -529,6 +529,7 @@ export class SqliteWorkerBroker {
         databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
       },
       bytes: reservedBytes,
+      result: result.promise,
       resolve: result.resolve,
       reject: result.reject,
       detach: () => signal?.removeEventListener("abort", abort),

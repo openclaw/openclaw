@@ -102,6 +102,7 @@ function summarizeMetrics(metrics: Record<string, Metric>) {
 export function startGatewayBenchDiagnostics() {
   const startedAt = performance.now();
   const startedAtEpochMs = performance.timeOrigin + startedAt;
+  const startedAtMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
   const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
   eventLoopDelay.enable();
   const groups = new Map<string, Group>();
@@ -217,6 +218,7 @@ export function startGatewayBenchDiagnostics() {
     return {
       scope: "main-isolate",
       startedAtEpochMs,
+      startedAtMonotonicMicros,
       endedAtEpochMs: performance.timeOrigin + endedAt,
       durationMs: endedAt - startedAt,
       eventLoopDelay: {

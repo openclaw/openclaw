@@ -9,6 +9,7 @@ type CommandPaletteInputProps = {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
+  onAutofocusRef?: (element: HTMLTextAreaElement) => void;
   onValueChange: (value: string, event: InputEvent) => void;
   onBeforeInput?: (event: InputEvent) => void;
   onSelectionChange?: (event: Event) => void;
@@ -111,10 +112,13 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
     <div ref={(element) => (entry = element)} class="cmd-palette__entry">
       <div class="cmd-palette__input-scroll">
         <textarea
-          ref={(element) => {
-            textarea = element;
-            bindValue(element);
-          }}
+          ref={[
+            (element) => {
+              textarea = element;
+              bindValue(element);
+            },
+            props.onAutofocusRef,
+          ]}
           autofocus
           rows={1}
           id={COMMAND_PALETTE_INPUT_ID}

@@ -6,6 +6,7 @@ import {
   dualRoutes,
   platformRoute,
   routeResolverFactory,
+  mockRouteResolverFactory,
   subscriptionRoute,
 } from "../../agents/model-auth-availability.test-support.js";
 import { resolveSelectedModelCredential } from "../../agents/model-auth-selected-credential.js";
@@ -72,11 +73,11 @@ async function installAccountCatalog(
 }
 
 function preparePublic(context: ReturnType<typeof createModelsListTestContext>) {
+  mockRouteResolverFactory(routeResolverFactory(dualRoutes));
   return prepareModelsListResult({
     source: { kind: "gateway", context },
     agentId: "main",
     params: { view: "all", preparedOnly: true, includeDefaultModels: false },
-    routeResolverFactory: routeResolverFactory(dualRoutes),
   });
 }
 
@@ -215,8 +216,9 @@ it.for(["codex", "openclaw"] as const)(
         });
         let current = true;
         await installAccountCatalog(context, () => current);
-        const prepare = (profile: string, preparedOnly = false, refresh = false) =>
-          prepareModelsListResult({
+        const prepare = (profile: string, preparedOnly = false, refresh = false) => {
+          mockRouteResolverFactory(routeResolverFactory(dualRoutes));
+          return prepareModelsListResult({
             source: { kind: "gateway", context },
             agentId: "main",
             params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
@@ -230,8 +232,8 @@ it.for(["codex", "openclaw"] as const)(
                 modelOverride: model.id,
               },
             },
-            routeResolverFactory: routeResolverFactory(dualRoutes),
           });
+        };
         const a = await prepare(accountA, false, true);
         const readRuntime = (result: typeof a, runtimeId: string) => {
           const row = result.read().models.find((entry) => entry.id === model.id);

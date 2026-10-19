@@ -339,6 +339,7 @@
     "!dist/extensions/irc/**",
     "!dist/extensions/kilocode/**",
     "!dist/extensions/kimi-coding/**",
+    "!dist/extensions/levanto/**",
     "!dist/extensions/line/**",
     "!dist/extensions/llama-cpp/**",
     "!dist/extensions/lobster/**",

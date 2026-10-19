@@ -20,6 +20,7 @@ import { ShellOwner } from "./app-host.tsx";
 import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
+import { registerRouteElement } from "./route-elements.ts";
 
 setupSidebarTest();
 
@@ -111,6 +112,34 @@ it("updates native history buttons only while connected and refreshes them on re
     expect(back.disabled).toBe(false);
     expect(forward.disabled).toBe(true);
   });
+});
+
+it("passes the assistant a live lookup of the selected registered chat pane", async () => {
+  const { owner, view } = await mountShell();
+  const panel = view.container.querySelector("openclaw-assistant-panel")!;
+  const outlet = owner.routeOutlet!;
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+    sessionKey: "agent:main:main",
+    presented: true,
+  });
+  pane.classList.add("chat-pane-cache__pane--active");
+  outlet.append(pane);
+  const unregister = registerRouteElement(pane);
+  onTestFinished(() => unregister?.());
+
+  expect(panel.getPrimaryChatPane?.("main")).toBe(pane);
+  for (const sessionKey of ["", "agent:other:main"]) {
+    expect(panel.getPrimaryChatPane?.(sessionKey)).toBeUndefined();
+  }
+  pane.presented = false;
+  expect(panel.getPrimaryChatPane?.("main")).toBeUndefined();
+  pane.presented = true;
+  pane.classList.remove("chat-pane-cache__pane--active");
+  expect(panel.getPrimaryChatPane?.("main")).toBeUndefined();
+  pane.classList.add("chat-pane-cache__pane--active");
+  expect(panel.getPrimaryChatPane?.("main")).toBe(pane);
+  pane.remove();
+  expect(panel.getPrimaryChatPane?.("main")).toBeUndefined();
 });
 
 it("reserves session geometry before page mount and clears it on other routes", async () => {

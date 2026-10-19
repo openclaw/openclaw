@@ -64,6 +64,7 @@ export const LobsterPet = defineSolidBridge<LobsterPetProps>(
   {
     propertyChanged: (host) => inputUpdates.get(host)?.(),
     properties: {
+      composerElements: { default: undefined, attribute: false },
       seed: { default: 0, attribute: false },
       mode: { default: "idle", attribute: false },
       visitsEnabled: { default: true, attribute: false },

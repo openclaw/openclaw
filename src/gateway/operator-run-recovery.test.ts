@@ -497,21 +497,31 @@ describe("restart recovery authenticated operator source", () => {
         }
       }),
   );
-  it("keeps restored authority when a same-device handshake reissues its token", () =>
-    withRecovery(async (fixture) => {
-      const restored = expectDefined(await fixture.restore(), "original device source");
-      using _ = { [Symbol.dispose]: restored.release };
+  it.each(["before restoration", "after restoration"] as const)(
+    "checks the original credential when a same-device handshake reissues its token %s",
+    (timing) =>
+      withRecovery(async (fixture) => {
+        const restored =
+          timing === "after restoration"
+            ? expectDefined(await fixture.restore(), "original device source")
+            : undefined;
+        using _ = restored ? { [Symbol.dispose]: restored.release } : undefined;
 
-      expect(
-        await ensureDeviceToken({
-          deviceId: "recovery-device",
-          role: "operator",
-          scopes: ["operator.admin"],
-          issuer: { kind: "shared-gateway-auth", generation: "replacement-issuer" },
-        }),
-      ).not.toBeNull();
-      expectCurrent(restored.authority);
-    }));
+        expect(
+          await ensureDeviceToken({
+            deviceId: "recovery-device",
+            role: "operator",
+            scopes: ["operator.admin"],
+            issuer: { kind: "shared-gateway-auth", generation: "replacement-issuer" },
+          }),
+        ).not.toBeNull();
+        if (restored) {
+          expectCurrent(restored.authority);
+        } else {
+          await expect(fixture.restore()).rejects.toThrow("operator authority changed");
+        }
+      }),
+  );
   it("keeps accepted device authority through unrelated pairing traffic until Gateway retirement", () =>
     withRecovery(async (fixture, stateDir) => {
       const device = pairedOperator();

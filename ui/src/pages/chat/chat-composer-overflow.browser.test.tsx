@@ -150,6 +150,7 @@ describe("composer overflow presentation", () => {
           )!,
         )
         .click();
+      await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
       await page
         .elementLocator(container.querySelector<HTMLElement>('[data-value="open-skills"]')!)
         .click();

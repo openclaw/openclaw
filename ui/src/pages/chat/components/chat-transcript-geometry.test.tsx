@@ -15,6 +15,7 @@ import {
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -96,17 +97,21 @@ describe("chat transcript geometry", () => {
     },
   );
 
-  it("measures fractional layout height instead of a containing transform", () => {
+  it("measures newly committed rows before observer registration using fractional layout height", () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.innerHTML =
-      '<div class="chat-virtual-row" data-index="0" style="height: 100.375px"></div>';
-    const row = expectDefined(container.firstElementChild, "measured row");
+      '<div class="chat-virtual-row" data-index="0" data-virtual-row-key="fractional" style="height: 100.375px"></div>';
+    const row = expectDefined(
+      container.querySelector<HTMLElement>(".chat-virtual-row"),
+      "measured row",
+    );
     vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
       count: 1,
       estimateSize: () => 100,
       getScrollElement: () => container,
       getItemKey: () => "fractional",
+      measureElement: () => 100,
       observeElementRect: (_, callback) => {
         callback({ width: 800, height: 600 });
       },
@@ -122,13 +127,20 @@ describe("chat transcript geometry", () => {
     // eslint-disable-next-line no-underscore-dangle -- TanStack requires adapter updates to bind observed elements.
     virtualizer._willUpdate();
     virtualizer.getVirtualItems();
+    const rowRefs = new TranscriptRowRefs(virtualizer, {
+      isCurrentRow: () => true,
+      onMount: () => {},
+    });
     try {
-      const commit = readConnectedTranscriptRows(container, virtualizer);
+      rowRefs.forKey("fractional")(row);
+      const commit = readConnectedTranscriptRows(container, virtualizer, rowRefs.elements);
+      expect(virtualizer.elementsCache.size).toBe(0);
       expect(virtualizer.itemSizeCache.has("fractional")).toBe(false);
       expect(commit?.()).toBe(true);
       expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
-      expect(readConnectedTranscriptRows(container, virtualizer)?.()).toBe(false);
+      expect(readConnectedTranscriptRows(container, virtualizer, rowRefs.elements)?.()).toBe(false);
     } finally {
+      rowRefs.clear();
       dispose();
     }
   });

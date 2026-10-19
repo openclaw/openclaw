@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type { SearchConfigRecord } from "openclaw/plugin-sdk/provider-web-search";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   formatCliCommand,
@@ -408,12 +409,7 @@ export async function executeBraveSearch(
       ...(response.mode === "llm-context" ? { mode: response.mode } : {}),
       count: results.length,
       tookMs: Date.now() - start,
-      externalContent: {
-        untrusted: true,
-        source: "web_search",
-        provider: "brave",
-        wrapped: true,
-      },
+      externalContent: externalContentStamp("brave"),
       results,
       ...(response.mode === "llm-context" ? { sources: response.sources } : {}),
     };

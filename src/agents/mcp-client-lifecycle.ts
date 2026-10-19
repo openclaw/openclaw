@@ -25,7 +25,7 @@ type LifecycleSession = {
   onCleanupError?: (error: unknown) => void;
 };
 
-export class McpClientConnectTimeoutError extends Error {}
+class McpClientConnectTimeoutError extends Error {}
 
 /** Matches an expired HTTP session without treating stateless HTTP 404s as expiration. */
 export function isMcpHttpSessionExpired(

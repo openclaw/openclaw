@@ -50,6 +50,7 @@ export function receiptFromRow(row: CronRunReceiptRow): CronRunReceipt {
     startedAtMs: row.started_at_ms,
     finishedAtMs: row.finished_at_ms,
     ...(row.error_text ? { error: row.error_text } : {}),
+    ...(row.delivery_attempt_state === "not-started" ? { deliveryNotStarted: true as const } : {}),
   };
 }
 

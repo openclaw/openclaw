@@ -1,4 +1,5 @@
 import { Portal, render } from "@solidjs/web";
+import { registerModalSurface } from "../../../components/overlay-registry.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -200,7 +201,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
     ),
     owner.ownerDocument.createDocumentFragment(),
   );
-
+  const releaseModalSurface = registerModalSurface(popover);
   confirmedActions.set(owner, { popover, dismiss: dismissPopover });
   placeConfirmedActionPopover(btn, popover);
 
@@ -212,6 +213,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
       return;
     }
     dismissed = true;
+    releaseModalSurface();
     ownerObserver?.disconnect();
     stopOutsideClick?.();
     stopContextMenu();

@@ -12,7 +12,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-types.ts";
-import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
+import type { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -210,10 +210,10 @@ export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpe
       });
       return {
         isOpenFor: (key: CatalogSessionKey) => matchesMenu(snapshot.read()?.menu, key),
-        render: () => (
+        render: (CatalogMenu: typeof CatalogSessionMenu) => (
           <Show when={snapshot.read()?.menu} keyed>
             {(menu) => (
-              <CatalogSessionMenu
+              <CatalogMenu
                 x={menu.x}
                 y={menu.y}
                 trigger={snapshot.read()?.trigger ?? null}

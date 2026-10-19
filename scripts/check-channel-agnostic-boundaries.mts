@@ -19,6 +19,7 @@ const acpCoreProtectedSources = [
   path.join(repoRoot, "src", "acp"),
   path.join(repoRoot, "src", "agents", "subagents", "spawn", "acp-spawn.ts"),
   path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
+  path.join(repoRoot, "src", "auto-reply", "reply", "commands-session.ts"),
   path.join(repoRoot, "src", "infra", "outbound", "conversation-id.ts"),
 ];
 
