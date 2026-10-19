@@ -3,7 +3,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import "../agents/model-fallback-runner.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
 import "./summary-model.runtime.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -12,20 +11,18 @@ const { runIsolatedCompletion, resolveSimpleCompletionSelectionForAgent } = vi.h
   runIsolatedCompletion: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
-vi.mock("../agents/isolated-completion.js", () => ({
-  runIsolatedCompletion,
-}));
+vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion }));
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   resolveSimpleCompletionSelectionForAgent,
 }));
 
-const session: TranscriptSessionDescriptor = {
+const session = {
   sessionId: "meeting",
   title: "Design review",
   startedAt: "2026-09-02T10:00:00.000Z",
   source: { providerId: "manual-transcript" },
 };
-const utterances: TranscriptUtterance[] = [
+const utterances = [
   { text: "We agreed to ship the CLI.", speaker: { label: "Zoe" } },
   { text: "I will send the announcement.", speaker: { label: "Alex" } },
   { text: "The deadline is a risk.", speaker: { label: "Zoe" } },
@@ -37,18 +34,29 @@ const notes = {
   risks: ["Release deadline"],
 };
 const params = {
-  cfg: {
-    agents: {
-      defaults: { utilityModel: "openai/gpt-5.6-luna", model: "openai/primary-test-model" },
-    },
-  },
+  cfg: { agents: modelConfig("openai/gpt-5.6-luna").agents },
   agentId: "resident",
   session,
   utterances,
 };
 
+function modelConfig(
+  utilityModel: string | { primary: string; fallbacks: string[] },
+  model: string | { primary: string; fallbacks: string[] } = "openai/primary-test-model",
+) {
+  return { agents: { defaults: { utilityModel, model } }, plugins: { enabled: false } };
+}
+
 function completion(text: string, model = "gpt-5.6-luna") {
   return { text, provider: "openai", model };
+}
+
+function summarize(overrides: Partial<Parameters<typeof summarizeTranscriptsWithModel>[0]> = {}) {
+  return summarizeTranscriptsWithModel({ ...params, ...overrides });
+}
+
+function attemptedModels() {
+  return runIsolatedCompletion.mock.calls.map(([request]) => request.model);
 }
 
 beforeEach(() => {
@@ -70,46 +78,23 @@ describe("model-backed transcript summaries", () => {
     runIsolatedCompletion.mockRejectedValue(
       new FailoverError("Fixture server unavailable", { reason: "server_error" }),
     );
-    const summary = await summarizeTranscriptsWithModel({
-      ...params,
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/primary-test-model",
-            utilityModel: {
-              primary: "openai/utility-test-model",
-              fallbacks: ["openai/primary-test-model"],
-            },
-          },
-        },
-        plugins: { enabled: false },
-      },
+    const summary = await summarize({
+      cfg: modelConfig({
+        primary: "openai/utility-test-model",
+        fallbacks: ["openai/primary-test-model"],
+      }),
     });
     expect(summary).toBeUndefined();
-    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
-      "utility-test-model",
-      "primary-test-model",
-    ]);
+    expect(attemptedModels()).toEqual(["utility-test-model", "primary-test-model"]);
   });
 
   it.each(["utility backup", "primary", "exhausted"] as const)(
     "tries utility fallbacks before existing transcript recovery: %s",
     async (outcome) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/primary-test-model",
-              fallbacks: ["openai/main-backup"],
-            },
-            utilityModel: {
-              primary: "openai/utility-test-model",
-              fallbacks: ["openai/utility-backup"],
-            },
-          },
-        },
-        plugins: { enabled: false },
-      };
+      const cfg = modelConfig(
+        { primary: "openai/utility-test-model", fallbacks: ["openai/utility-backup"] },
+        { primary: "openai/primary-test-model", fallbacks: ["openai/main-backup"] },
+      );
       runIsolatedCompletion.mockImplementation(async ({ model }) => {
         if (
           (model === "utility-backup" && outcome === "utility backup") ||
@@ -120,7 +105,7 @@ describe("model-backed transcript summaries", () => {
         throw new FailoverError("Fixture server unavailable", { reason: "server_error" });
       });
 
-      const summary = await summarizeTranscriptsWithModel({ ...params, cfg });
+      const summary = await summarize({ cfg });
 
       if (outcome === "exhausted") {
         expect(summary).toBeUndefined();
@@ -133,7 +118,7 @@ describe("model-backed transcript summaries", () => {
             outcome === "utility backup" ? "openai/utility-backup" : "openai/primary-test-model",
         });
       }
-      expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual(
+      expect(attemptedModels()).toEqual(
         outcome === "utility backup"
           ? ["utility-test-model", "utility-backup"]
           : ["utility-test-model", "utility-backup", "primary-test-model"],
@@ -142,8 +127,7 @@ describe("model-backed transcript summaries", () => {
   );
 
   it("does not request model notes for an artifact-only transcript", async () => {
-    const summary = await summarizeTranscriptsWithModel({
-      ...params,
+    const summary = await summarize({
       utterances: [{ text: "context:" }, { text: "###" }, { text: "Transcribe the audio." }],
     });
     expect(summary).toBeUndefined();
@@ -157,17 +141,14 @@ describe("model-backed transcript summaries", () => {
         return completion("invalid notes");
       }),
     );
-    const pending = summarizeTranscriptsWithModel(params);
+    const pending = summarize();
     try {
       await vi.waitFor(() => expect(runIsolatedCompletion).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(0);
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
       cleanup.resolve();
       expect(await pending).toMatchObject({ source: "model" });
-      expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
-        "gpt-5.6-luna",
-        "primary-test-model",
-      ]);
+      expect(attemptedModels()).toEqual(["gpt-5.6-luna", "primary-test-model"]);
     } finally {
       cleanup.resolve();
       await pending;
@@ -179,7 +160,7 @@ describe("model-backed transcript summaries", () => {
         `<think>Private draft</think>${JSON.stringify({ ...notes, participants: ["Invented"] })}\nDiagnostics: {"tokens":12}`,
       ),
     );
-    const summary = await summarizeTranscriptsWithModel(params);
+    const summary = await summarize();
     expect(summary).toMatchObject({
       sessionId: "meeting",
       title: "Design review",
@@ -208,17 +189,14 @@ describe("model-backed transcript summaries", () => {
   });
 
   it("bounds and sanitizes every model note field before persistence", async () => {
-    runIsolatedCompletion.mockResolvedValue(
-      completion(
-        JSON.stringify({
-          overview: `\u001b[31m${"o".repeat(2_100)}\u001b[0m`,
-          decisions: Array.from({ length: 30 }, () => ` ${"d".repeat(450)} `),
-          actionItems: ["   ", " Alex: follow up "],
-          risks: [],
-        }),
-      ),
-    );
-    const summary = await summarizeTranscriptsWithModel(params);
+    const unsafeNotes = {
+      overview: `\u001b[31m${"o".repeat(2_100)}\u001b[0m`,
+      decisions: Array.from({ length: 30 }, () => ` ${"d".repeat(450)} `),
+      actionItems: ["   ", " Alex: follow up "],
+      risks: [],
+    };
+    runIsolatedCompletion.mockResolvedValue(completion(JSON.stringify(unsafeNotes)));
+    const summary = await summarize();
     expect(summary?.overview).toBe("o".repeat(2_000));
     expect(summary?.decisions).toEqual(Array.from({ length: 25 }, () => "d".repeat(400)));
     expect(summary?.actionItems).toEqual(["Alex: follow up"]);
@@ -226,7 +204,7 @@ describe("model-backed transcript summaries", () => {
 
   it("leaves heuristic notes available when no model is selected", async () => {
     resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
-    const enhanced = await summarizeTranscriptsWithModel(params);
+    const enhanced = await summarize();
     expect(enhanced).toBeUndefined();
     const summary = enhanced ?? summarizeTranscripts(params);
     expect(summary.source).toBe("heuristic");
@@ -236,7 +214,7 @@ describe("model-backed transcript summaries", () => {
   it("aborts timed-out inference and joins its cleanup before returning", async () => {
     const held = createDeferred<ReturnType<typeof completion>>();
     runIsolatedCompletion.mockReturnValue(held.promise);
-    const pending = summarizeTranscriptsWithModel(params);
+    const pending = summarize();
     let completed = false;
     void pending.then(() => {
       completed = true;
@@ -263,14 +241,13 @@ describe("model-backed transcript summaries", () => {
       agentDir: "/tmp/meeting-agent",
     });
     runIsolatedCompletion.mockRejectedValue(new Error("unavailable"));
-    expect(await summarizeTranscriptsWithModel(params)).toBeUndefined();
+    expect(await summarize()).toBeUndefined();
     expect(runIsolatedCompletion).toHaveBeenCalledOnce();
   });
 
   it("skips inference when utility routing is disabled and no primary is configured", async () => {
     expect(
-      await summarizeTranscriptsWithModel({
-        ...params,
+      await summarize({
         cfg: { agents: { defaults: { utilityModel: "" } } },
       }),
     ).toBeUndefined();
@@ -283,7 +260,7 @@ describe("model-backed transcript summaries", () => {
       text: `remark-${index} ${"x".repeat(1_000)}`,
       speaker: { label: "Sam" },
     }));
-    await summarizeTranscriptsWithModel({ ...params, utterances: longTranscript });
+    await summarize({ utterances: longTranscript });
     const prompt = runIsolatedCompletion.mock.calls[0]![0].prompt;
     expect(prompt.length).toBeLessThanOrEqual(48_000);
     expect(prompt).toContain("Title: Design review\nStarted: 2026-09-02T10:00:00.000Z");

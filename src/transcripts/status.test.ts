@@ -32,7 +32,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture-startup.js";
-import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
+import type {
+  TranscriptOccupancyWatchRequest,
+  TranscriptSessionDescriptor,
+  TranscriptSourceProvider,
+  TranscriptStartRequest,
+} from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import {
   transcriptStatusRoom as room,
@@ -54,22 +59,36 @@ function createStore() {
   });
 }
 
+function recordCapture(
+  session: TranscriptSessionDescriptor,
+  providerId = session.source.providerId,
+) {
+  activeSessions.set(session.sessionId, {
+    appends: createTranscriptCaptureAppends(() => {}),
+    session,
+    providerId,
+    phase: "active",
+    stopProvider: async () => {
+      throw new Error("Reading transcript status must not stop capture");
+    },
+    releaseProvider: async () => {},
+  });
+}
+
+function providerRegistry(pluginId: string, provider: TranscriptSourceProvider) {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(createPluginRecord({ id: pluginId }));
+  registry.transcriptSourceProviders.push({ pluginId, source: "fixture", provider });
+  return registry;
+}
+
 describe("transcript library capture health", () => {
   it("uses the successful capture's requested alias even when its provider is absent from the active registry", async () => {
     const store = createStore();
     const source = { providerId: "caption-alias", channelId: "room" };
     const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
-    activeSessions.set(session.sessionId, {
-      appends: createTranscriptCaptureAppends(() => {}),
-      session,
-      providerId: "canonical-captions",
-      stopProvider: async () => {
-        throw new Error("Reading transcript status must not stop capture");
-      },
-      releaseProvider: async () => {},
-      phase: "active",
-    });
+    recordCapture(session, "canonical-captions");
     const result = await readTranscriptLibraryStatus(store, {
       transcripts: { autoStart: [source] },
     });
@@ -101,16 +120,7 @@ describe("transcript library capture health", () => {
       lastUtteranceAt: "2026-08-20T10:10:00.000Z",
       activeSubscription: false,
     });
-    activeSessions.set(session.sessionId, {
-      appends: createTranscriptCaptureAppends(() => {}),
-      session,
-      providerId: source.providerId,
-      phase: "active",
-      stopProvider: async () => {
-        throw new Error("Reading transcript status must not stop capture");
-      },
-      releaseProvider: async () => {},
-    });
+    recordCapture(session);
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({
       state: "armed",
@@ -156,22 +166,16 @@ describe("transcript library capture health", () => {
         })),
       };
       const previous = captureActivePluginRegistrySnapshot();
-      const registry = createEmptyPluginRegistry();
       const start = vi.fn();
       const stop = vi.fn();
       const status = vi.fn();
-      registry.plugins.push(createPluginRecord({ id: "live-plugin" }));
-      registry.transcriptSourceProviders.push({
-        pluginId: "live-plugin",
-        source: "fixture",
-        provider: {
-          id: "live-source",
-          name: "Fixture source",
-          sourceKinds: ["live-caption"],
-          start,
-          stop,
-          status,
-        },
+      const registry = providerRegistry("live-plugin", {
+        id: "live-source",
+        name: "Fixture source",
+        sourceKinds: ["live-caption"],
+        start,
+        stop,
+        status,
       });
       setActivePluginRegistry(registry);
       try {
@@ -264,31 +268,19 @@ it("keeps transcript provider health bound to its live Gateway registry", async 
     manifests.plugins[0]!.contracts = { transcriptSourceProviders: ["request-source"] };
     const metadata = createPluginMetadataSnapshot({ config: cfg, manifestRegistry: manifests });
     const previous = captureActivePluginRegistrySnapshot();
-    const requestRegistry = createEmptyPluginRegistry();
-    const unrelatedRegistry = createEmptyPluginRegistry();
     const start = vi.fn();
     const unrelatedStart = vi.fn();
-    requestRegistry.plugins.push(createPluginRecord({ id: "request-plugin" }));
-    unrelatedRegistry.plugins.push(createPluginRecord({ id: "unrelated-plugin" }));
-    requestRegistry.transcriptSourceProviders.push({
-      pluginId: "request-plugin",
-      source: "fixture",
-      provider: {
-        id: "request-source",
-        name: "Request source",
-        sourceKinds: ["live-caption"],
-        start,
-      },
+    const requestRegistry = providerRegistry("request-plugin", {
+      id: "request-source",
+      name: "Request source",
+      sourceKinds: ["live-caption"],
+      start,
     });
-    unrelatedRegistry.transcriptSourceProviders.push({
-      pluginId: "unrelated-plugin",
-      source: "fixture",
-      provider: {
-        id: "unrelated-source",
-        name: "Unrelated source",
-        sourceKinds: ["live-audio"],
-        start: unrelatedStart,
-      },
+    const unrelatedRegistry = providerRegistry("unrelated-plugin", {
+      id: "unrelated-source",
+      name: "Unrelated source",
+      sourceKinds: ["live-audio"],
+      start: unrelatedStart,
     });
     setActivePluginRegistry(requestRegistry);
     const requestOwner = createPluginRegistryOwner(requestRegistry);

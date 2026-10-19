@@ -20,12 +20,39 @@ import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeDatabase();
     cleanup();
   }),
 );
 let suiteStateDir: string;
+let store: TranscriptsStore;
+
+function databaseOptions(stateDir = suiteStateDir) {
+  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+}
+
+async function closeDatabase() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
+
+function stateDatabase() {
+  return openOpenClawStateDatabase(databaseOptions()).db;
+}
+
+function writeNotes(target: TranscriptSessionDescriptor, text: string) {
+  return store.writeSummary(
+    summarizeTranscripts({ session: target, utterances: [{ text }] }),
+    target,
+  );
+}
+
+function writeLegacyArtifact(directory: string, text = "legacy\n", name = "transcript.jsonl") {
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, name);
+  fs.writeFileSync(file, text);
+  return file;
+}
 
 beforeAll(() => {
   suiteStateDir = tempDirs.make("openclaw-transcript-test-");
@@ -37,19 +64,15 @@ beforeEach(() => {
     ({ db }) => {
       executeSqliteQuerySync(db, meetingTranscriptDb(db).deleteFrom("meeting_transcript_sessions"));
     },
-    { env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir } },
+    databaseOptions(),
     { operationLabel: "test.transcripts.reset" },
   );
   fs.rmSync(path.join(suiteStateDir, "transcripts"), { recursive: true, force: true });
+  store = createStore();
 });
 
-function createStore(): { stateDir: string; store: TranscriptsStore } {
-  return {
-    stateDir: suiteStateDir,
-    store: new TranscriptsStore(path.join(suiteStateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir },
-    }),
-  };
+function createStore() {
+  return new TranscriptsStore(path.join(suiteStateDir, "transcripts"), databaseOptions());
 }
 
 async function probeExclusiveDatabaseAccess(databasePath: string): Promise<void> {
@@ -81,8 +104,7 @@ function session(
 
 describe("TranscriptsStore", () => {
   it("reuses list pages without worker requests and observes another store's writes", async () => {
-    const { store } = createStore();
-    const writer = createStore().store;
+    const writer = createStore();
     const target = { ...session(), title: "Initial title" };
     await writer.writeSession(target);
     const options = { limit: 50, projection: "public" } as const;
@@ -93,7 +115,7 @@ describe("TranscriptsStore", () => {
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     const sql = observeMainThreadSql();
     try {
-      expect((await createStore().store.listReadEntries(options)).entries).toMatchObject([
+      expect((await createStore().listReadEntries(options)).entries).toMatchObject([
         { title: "Initial title", utteranceCount: 0 },
       ]);
       expect(requests).not.toHaveBeenCalled();
@@ -119,7 +141,6 @@ describe("TranscriptsStore", () => {
   it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] as const)(
     "discards only unchanged empty failed admissions (%s)",
     async (state) => {
-      const { store, stateDir } = createStore();
       const target = { ...session("abandoned"), stoppedAt: "2026-07-01T10:00:01.000Z" };
       await store.writeSession(target);
       const expectedInputRevision = await store.readSummaryInputRevision(target);
@@ -145,7 +166,7 @@ describe("TranscriptsStore", () => {
                 .where("started_at", "=", target.startedAt),
             );
           },
-          { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+          { env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir } },
           { operationLabel: "test.transcripts.pending-export" },
         );
       } else if (state === "rewritten") {
@@ -172,7 +193,6 @@ describe("TranscriptsStore", () => {
   );
 
   it("keeps selector and overview columns aligned on insert, replacement, and removal", async () => {
-    const { store } = createStore();
     const target = {
       ...session(),
       source: {
@@ -186,12 +206,8 @@ describe("TranscriptsStore", () => {
       },
       metadata: { agentId: "agent" },
     };
-    const database = () =>
-      openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir },
-      }).db;
     const readColumns = () =>
-      database()
+      stateDatabase()
         .prepare(
           `SELECT source_account_id, source_guild_id, source_channel_id, source_meeting_url,
                   source_thread_ts, source_file_id, metadata_agent_id
@@ -226,14 +242,13 @@ describe("TranscriptsStore", () => {
     await store.writeSummary({ ...summary, overview: "Initial overview" }, target);
     await store.writeSummary({ ...summary, overview: "Replacement overview" }, target);
     expect(
-      database()
+      stateDatabase()
         .prepare("SELECT overview FROM meeting_transcript_summaries WHERE session_id = ?")
         .get(target.sessionId),
     ).toEqual({ overview: "Replacement overview" });
   });
 
   it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
-    const { store } = createStore();
     const first = session("summary-first");
     const second = { ...session("summary-second"), title: "Second meeting" };
     const later = session("summary-first", "2026-07-02T10:00:00.000Z");
@@ -269,7 +284,6 @@ describe("TranscriptsStore", () => {
   it.each(["cancel", "consumer-error"] as const)(
     "releases its worker snapshot after %s",
     async (finish) => {
-      const { store, stateDir } = createStore();
       const target = session();
       await store.writeSession(target);
       await store.appendUtteranceForSession(target, { text: "first" });
@@ -291,7 +305,7 @@ describe("TranscriptsStore", () => {
       );
       await expect(reading).rejects.toThrow("consumer stopped reading");
       await expect(
-        probeExclusiveDatabaseAccess(path.join(stateDir, "state", "openclaw.sqlite")),
+        probeExclusiveDatabaseAccess(path.join(suiteStateDir, "state", "openclaw.sqlite")),
       ).resolves.toBeUndefined();
       expect((await store.readUtterancesForSession(target)).map((row) => row.text)).toEqual([
         "first",
@@ -303,10 +317,9 @@ describe("TranscriptsStore", () => {
   it.each(["rewrite", "reset"] as const)(
     "keeps rows and notes on one worker snapshot across foreign %s and appends",
     async (change) => {
-      const { store, stateDir } = createStore();
       const target = { ...session(), title: "Original meeting" };
       await store.writeSession(target);
-      const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+      const options = databaseOptions();
       const database = openOpenClawStateDatabase(options);
       runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -323,10 +336,7 @@ describe("TranscriptsStore", () => {
         options,
         { operationLabel: "test.transcripts.export.seed" },
       );
-      await store.writeSummary(
-        summarizeTranscripts({ session: target, utterances: [{ text: "Original note" }] }),
-        target,
-      );
+      await writeNotes(target, "Original note");
       const texts: string[] = [];
       let batches = 0;
       const result = await store.streamExport(
@@ -352,10 +362,7 @@ describe("TranscriptsStore", () => {
             }
             await store.writeSession({ ...target, title: "New meeting" });
             await store.appendUtteranceForSession(target, { text: "Later append" });
-            await store.writeSummary(
-              summarizeTranscripts({ session: target, utterances: [{ text: "New note" }] }),
-              target,
-            );
+            await writeNotes(target, "New note");
           }
         },
       );
@@ -377,7 +384,6 @@ describe("TranscriptsStore", () => {
   );
 
   it("retains admitted ID origins across updates, reopen, and Doctor restoration", async () => {
-    const { store } = createStore();
     const cases = [undefined, null, "invalid", "generated", "supplied"].map((origin) => ({
       origin,
       target: {
@@ -392,8 +398,7 @@ describe("TranscriptsStore", () => {
       await store.writeSession(target);
       await store.appendUtteranceForSession(target, { text: "Saved history" });
     }
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeDatabase();
     const canonical = new Map<string, TranscriptSessionDescriptor | undefined>();
     const restoredState = tempDirs.make("transcript-origin-restore-");
     fs.mkdirSync(path.join(restoredState, "transcripts", "2026-07-01"), { recursive: true });
@@ -418,8 +423,7 @@ describe("TranscriptsStore", () => {
         { recursive: true },
       );
     }
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeDatabase();
     const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
       await import("../infra/state-migrations.meeting-transcripts.js");
     const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
@@ -444,7 +448,6 @@ describe("TranscriptsStore", () => {
   });
 
   it("bounds exact retry lookups to one caption ID without adding statements", async () => {
-    const { store, stateDir } = createStore();
     const target = session();
     await store.writeSession(target);
     runOpenClawStateWriteTransaction(
@@ -487,13 +490,12 @@ describe("TranscriptsStore", () => {
           sql.restore();
         }
       },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+      databaseOptions(),
       { operationLabel: "test.transcripts.retry-plan" },
     );
   });
 
   it("deduplicates exact retries but preserves same-id revisions", async () => {
-    const { store } = createStore();
     const target = session();
     const interim = { id: "utterance-1", text: "draft" };
     const revisions: TranscriptUtterance[] = [
@@ -533,7 +535,6 @@ describe("TranscriptsStore", () => {
   });
 
   it("does not treat SQLite's replacement of lone surrogates as an exact retry", async () => {
-    const { store } = createStore();
     const target = session();
     await store.writeSession(target);
     const revisions: TranscriptUtterance[] = [
@@ -556,7 +557,6 @@ describe("TranscriptsStore", () => {
   });
 
   it.each(["standup"])("requires dated selectors for repeated %s", async (id) => {
-    const { store } = createStore();
     await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
     await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
 
@@ -569,14 +569,12 @@ describe("TranscriptsStore", () => {
   it.each([false, true])(
     "prioritizes qualified targets regardless of insertion order %s",
     async (reverse) => {
-      const { store } = createStore();
       const raw = session("2026-07-03/raw-id", "2026-07-04T10:00:00.000Z");
       const qualified = session("raw-id", "2026-07-03T10:00:00.000Z");
       for (const target of reverse ? [qualified, raw] : [raw, qualified]) {
         await store.writeSession(target);
       }
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeDatabase();
       await expect(store.readSession(raw.sessionId)).resolves.toEqual(qualified);
       await expect(store.readSession("2026-07-04/2026-07-03-raw-id")).resolves.toEqual(raw);
       await expect(store.readSession(`2026-07-04/${raw.sessionId}`)).resolves.toEqual(raw);
@@ -586,7 +584,6 @@ describe("TranscriptsStore", () => {
   it.each(["exported", "concurrent"] as const)(
     "reports a typed conflict for a selector with a %s owner",
     async (mode) => {
-      const { store } = createStore();
       const original = session("standup", "2026-07-01T10:00:00.000Z");
       const firstWrite = store.writeSession(original);
       if (mode !== "concurrent") {
@@ -611,7 +608,6 @@ describe("TranscriptsStore", () => {
   );
 
   it("stores case-distinct sessions and rejects only unsafe export collisions", async () => {
-    const { store } = createStore();
     const upper = session("Capital", "2026-07-01T10:00:00.000Z");
     const lower = session("capital", "2026-07-01T11:00:00.000Z");
     await store.writeSession(lower);
@@ -636,31 +632,26 @@ describe("TranscriptsStore", () => {
   });
 
   it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
-    const { stateDir, store } = createStore();
     const upper = session("Capital", "2026-07-01T10:00:00.000Z");
     const lower = session("capital", "2026-07-01T11:00:00.000Z");
     await store.writeSession(upper);
-    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
-      .db.prepare(
+    stateDatabase()
+      .prepare(
         "UPDATE meeting_transcript_sessions SET export_pending_json = ? WHERE session_id = ?",
       )
       .run('["metadata.json","transcript.jsonl"]', upper.sessionId);
-    fs.mkdirSync(store.sessionDir(lower), { recursive: true });
-    fs.writeFileSync(path.join(store.sessionDir(lower), "transcript.jsonl"), "legacy\n");
+    writeLegacyArtifact(store.sessionDir(lower));
 
     await expect(store.writeSession(lower)).rejects.toThrow("run openclaw doctor --fix");
     await expect(store.readSession(lower.sessionId)).resolves.toBeUndefined();
   });
 
   it("recognizes case-variant artifact names only when the filesystem aliases them", async () => {
-    const { store } = createStore();
     const upper = session("Capital", "2026-07-01T10:00:00.000Z");
     const lower = session("capital", "2026-07-01T11:00:00.000Z");
     await store.writeSession(upper);
     expect(fs.existsSync(store.sessionDir(upper))).toBe(false);
-    fs.mkdirSync(store.sessionDir(lower), { recursive: true });
-    fs.rmSync(path.join(store.sessionDir(lower), "transcript.jsonl"), { force: true });
-    fs.writeFileSync(path.join(store.sessionDir(lower), "TRANSCRIPT.JSONL"), "legacy\n");
+    writeLegacyArtifact(store.sessionDir(lower), "legacy\n", "TRANSCRIPT.JSONL");
     expect(fs.readdirSync(store.sessionDir(lower))).toContain("TRANSCRIPT.JSONL");
 
     if (fs.existsSync(path.join(store.sessionDir(lower), "transcript.jsonl"))) {
@@ -674,12 +665,9 @@ describe("TranscriptsStore", () => {
   });
 
   it("refuses to overwrite an unclaimed legacy export directory", async () => {
-    const { store } = createStore();
     const target = session("legacy-collision");
     const sessionDir = store.sessionDir(target);
-    fs.mkdirSync(sessionDir, { recursive: true });
-    const transcriptPath = path.join(sessionDir, "transcript.jsonl");
-    fs.writeFileSync(transcriptPath, '{"text":"legacy line"}\n');
+    const transcriptPath = writeLegacyArtifact(sessionDir, '{"text":"legacy line"}\n');
 
     await expect(store.writeSession(target)).rejects.toThrow("run openclaw doctor --fix");
     expect(fs.readFileSync(transcriptPath, "utf8")).toContain("legacy line");
@@ -688,11 +676,9 @@ describe("TranscriptsStore", () => {
   it.runIf(process.platform !== "win32")(
     "checks the shipped slug path before inserting a portable encoded session",
     async () => {
-      const { stateDir, store } = createStore();
       const target = session("trailing-dot.");
-      const legacyDir = path.join(stateDir, "transcripts", "2026-07-01", "trailing-dot.");
-      fs.mkdirSync(legacyDir, { recursive: true });
-      fs.writeFileSync(path.join(legacyDir, "transcript.jsonl"), "legacy\n");
+      const legacyDir = path.join(suiteStateDir, "transcripts", "2026-07-01", "trailing-dot.");
+      writeLegacyArtifact(legacyDir);
 
       await expect(store.writeSession(target)).rejects.toThrow("run openclaw doctor --fix");
       await expect(store.readSession(target.sessionId)).resolves.toBeUndefined();
@@ -700,18 +686,15 @@ describe("TranscriptsStore", () => {
   );
 
   it("does not let a dot session mask the shipped dot-dot root layout", async () => {
-    const { stateDir, store } = createStore();
     await store.writeSession(session("."));
-    const transcriptRoot = path.join(stateDir, "transcripts");
-    fs.mkdirSync(transcriptRoot, { recursive: true });
-    fs.writeFileSync(path.join(transcriptRoot, "transcript.jsonl"), "legacy root transcript\n");
+    const transcriptRoot = path.join(suiteStateDir, "transcripts");
+    writeLegacyArtifact(transcriptRoot, "legacy root transcript\n");
 
     await expect(store.writeSession(session(".."))).rejects.toThrow("run openclaw doctor --fix");
     await expect(store.readSession("..")).resolves.toBeUndefined();
   });
 
   it("does not let a modified export block canonical session updates", async () => {
-    const { store } = createStore();
     const target = session("mutable-export");
     await store.writeSession(target);
     await store.appendUtteranceForSession(target, { text: "canonical" });
@@ -737,7 +720,6 @@ describe("TranscriptsStore", () => {
   });
 
   it("resolves descriptor exports through canonical SQLite identity", async () => {
-    const { store } = createStore();
     const target = { ...session("canonical-export"), title: "Canonical title" };
     await store.writeSession(target);
 
@@ -754,8 +736,7 @@ describe("TranscriptsStore", () => {
   });
 
   it("stores summaries in SQLite and materializes artifacts beneath a shared export parent", async () => {
-    const { stateDir, store } = createStore();
-    const exportRoot = path.join(stateDir, "transcripts");
+    const exportRoot = path.join(suiteStateDir, "transcripts");
     fs.mkdirSync(exportRoot, { recursive: true });
     fs.chmodSync(exportRoot, 0o770);
     const target = {
@@ -781,10 +762,9 @@ describe("TranscriptsStore", () => {
     expect(fs.readFileSync(artifacts.transcriptPath, "utf8")).toContain(
       '"text":"We decided to ship the CLI."',
     );
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const reopened = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    await closeDatabase();
+    const reopened = new TranscriptsStore(path.join(suiteStateDir, "transcripts"), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir },
     });
     await expect(reopened.readSummary(target)).resolves.toMatchObject({
       summary: { sessionId: target.sessionId },
@@ -792,17 +772,13 @@ describe("TranscriptsStore", () => {
   });
 
   it("repairs an interrupted manifest update and serializes concurrent exports", async () => {
-    const { stateDir, store } = createStore();
     const target = session("recover-export");
     await store.writeSession(target);
     await store.appendUtteranceForSession(target, { text: "recover me" });
-    await store.writeSummary(
-      summarizeTranscripts({ session: target, utterances: [{ text: "recover me" }] }),
-      target,
-    );
+    await writeNotes(target, "recover me");
     await store.materializeSessionArtifacts(target, "all");
-    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
-      .db.prepare(
+    stateDatabase()
+      .prepare(
         "UPDATE meeting_transcript_sessions SET export_manifest_json = '{}' WHERE session_id = ?",
       )
       .run(target.sessionId);
@@ -814,12 +790,8 @@ describe("TranscriptsStore", () => {
       ]),
     ).resolves.toHaveLength(2);
 
-    const manifest = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    })
-      .db.prepare(
-        "SELECT export_manifest_json FROM meeting_transcript_sessions WHERE session_id = ?",
-      )
+    const manifest = stateDatabase()
+      .prepare("SELECT export_manifest_json FROM meeting_transcript_sessions WHERE session_id = ?")
       .get(target.sessionId) as { export_manifest_json: string };
     expect(JSON.parse(manifest.export_manifest_json)).toMatchObject({
       "metadata.json": expect.any(String),
