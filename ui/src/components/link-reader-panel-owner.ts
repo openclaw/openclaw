@@ -690,6 +690,7 @@ export function createLinkReaderPanel(
     connect() {
       dockLayout.connect();
       lifecycle.connect();
+      publish();
     },
     inputsChanged: publish,
     get updateComplete() {
