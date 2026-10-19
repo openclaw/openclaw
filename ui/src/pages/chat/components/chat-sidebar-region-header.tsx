@@ -4,7 +4,7 @@ import {
   createMemo,
   createUniqueId,
   createSignal,
-  flush,
+  onSettled,
   mapArray,
   onCleanup,
 } from "solid-js";
@@ -403,10 +403,14 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     return { tabs, activeId, active, activeHosted, resolveHostedTab, column };
   });
   const settle = async () => {
-    flush();
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
     await props.host.updateComplete;
     props.refreshHostedTabs();
-    flush();
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
   };
   const hasPanel = (id: string) => props.layout.columns[0]?.panels.some((panel) => panel.id === id);
   async function closeTab(id: string): Promise<boolean> {
