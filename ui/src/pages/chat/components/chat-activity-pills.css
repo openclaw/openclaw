@@ -52,7 +52,7 @@
   font: 500 13px/18px var(--font-body);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   scroll-margin-inline: 22px;
 }
 .chat-activity-pills .activity-pill:focus-visible {
