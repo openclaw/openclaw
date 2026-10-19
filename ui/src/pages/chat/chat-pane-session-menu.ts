@@ -264,7 +264,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const scope = this.captureHeaderSessionActionScope(
-      action.kind === "set-icon" ||
+      action.kind === "rename" ||
+        action.kind === "set-icon" ||
         action.kind === "set-color" ||
         action.kind === "reset-appearance" ||
         action.kind === "move-to-group",
@@ -327,7 +328,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
               if (this.state !== state || !this.presented) {
                 return null;
               }
-              const currentScope = this.captureHeaderSessionActionScope();
+              const currentScope = this.captureHeaderSessionActionScope(true);
               if (!currentScope) {
                 return null;
               }

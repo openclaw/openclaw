@@ -778,11 +778,27 @@ describe("chat pane session menu boundary", () => {
       await cancelled;
       expect(patch).not.toHaveBeenCalled();
 
+      const connected = { ...pane.context.gateway.snapshot };
+      pane.applyGatewaySnapshot({ ...connected, phase: "offline" });
+      patch.mockResolvedValueOnce({ queued: true });
+      const queued = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const offlineInput = await waitForInputDialog();
+      expect(offlineInput.value).toBe("Research notes");
+      expect(pane.context.gateway.snapshot.phase).toBe("offline");
+      await submitInputDialog("  Queued offline notes  ");
+      await queued;
+      expect(patch).toHaveBeenCalledExactlyOnceWith(
+        "global",
+        { label: "Queued offline notes" },
+        { agentId: "research", expectedSessionId: "research-global" },
+      );
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      pane.applyGatewaySnapshot(connected);
+
       const saved = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
       const input = await waitForInputDialog();
       expect(input.value).toBe("Research notes");
       expect(pane.headerPresentation.renameSession).toBeNull();
-      const connected = { ...pane.context.gateway.snapshot };
       input.value = "Unsent notes";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
@@ -796,14 +812,16 @@ describe("chat pane session menu boundary", () => {
       input
         .closest("form")!
         .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      expect(patch).not.toHaveBeenCalled();
+      expect(patch).toHaveBeenCalledTimes(1);
       pane.applyGatewaySnapshot(connected);
       // A roster refresh must not retarget the draft to a new session instance.
       row.sessionId = "replacement-global";
       row.label = "Replacement title";
       await submitInputDialog("  Renamed notes  ");
       await saved;
-      expect(patch).toHaveBeenCalledExactlyOnceWith(
+      expect(patch).toHaveBeenCalledTimes(2);
+      expect(patch).toHaveBeenNthCalledWith(
+        2,
         "global",
         { label: "Renamed notes" },
         { agentId: "research", expectedSessionId: "research-global" },
@@ -821,7 +839,7 @@ describe("chat pane session menu boundary", () => {
       });
       await retired;
       expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(patch).toHaveBeenCalledOnce();
+      expect(patch).toHaveBeenCalledTimes(2);
     } finally {
       await modal.cleanup();
     }

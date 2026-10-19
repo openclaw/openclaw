@@ -160,6 +160,7 @@ export async function renameSession(
     params: { key: row.key, label: null },
     sessionScope: true,
     session: row,
+    allowDeferred: true,
   });
   if (!access.allowed) {
     host.sessionData.publishSessionMutationError(scope, access.reason);
