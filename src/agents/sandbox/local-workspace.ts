@@ -126,6 +126,8 @@ export async function prepareLocalSandboxWorkspace(params: {
         const release = retainOwner();
         try {
           await withLocalWorkspaceProjection(owner, run, { provision: true });
+          // TERM handlers may write after an already-running final checkpoint has completed.
+          await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
         } finally {
           release();
         }

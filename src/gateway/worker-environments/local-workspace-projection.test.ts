@@ -655,11 +655,14 @@ it.for([false, true])(
       containerName: entry.containerName,
       containerId: "a".repeat(64),
     });
-    vi.spyOn(docker, "execContainerRaw").mockImplementation(async () => {
+    vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
         return { code: 125, stdout: Buffer.alloc(0), stderr: Buffer.from("Container is paused") };
       }
       events.push("cleanup");
+      if (args.some((arg) => arg.includes("kill -TERM"))) {
+        await writeText(projection.workspaceDir, "term-output.txt", "final descendant output\n");
+      }
       return { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
     });
     const container = await createDockerSandboxBackend({
@@ -696,10 +699,17 @@ it.for([false, true])(
       usePty: false,
     });
     events.length = 0;
-    const checkpoint = projection.checkpoint();
+    const checkpoint = stopped
+      ? backend.finalizeExec!({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: accepted.finalizeToken,
+        })
+      : projection.checkpoint();
     let commands: Promise<unknown>[] = [];
     let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
-    let acceptedFinalization: Promise<void> | undefined;
+    const acceptedFinalization = stopped ? checkpoint : undefined;
     try {
       await awaitGateBeforeSettlement(
         paused.promise,
@@ -723,12 +733,6 @@ it.for([false, true])(
       if (stopped) {
         execution.abort(stop);
         projection[Symbol.dispose]();
-        acceptedFinalization = backend.finalizeExec!({
-          status: "failed",
-          exitCode: 0,
-          timedOut: true,
-          token: accepted.finalizeToken,
-        });
       }
       commands.push(cleanup.terminate(), cleanup.interrupt(1000));
       const outcomes = Promise.allSettled(commands);
@@ -742,6 +746,7 @@ it.for([false, true])(
         }
       }
       await acceptedFinalization;
+      await expectText(canonical, "term-output.txt", "final descendant output\n");
       expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
       expect(
         events.filter((event) => event !== "paused" && event !== "resumed").toSorted(),
