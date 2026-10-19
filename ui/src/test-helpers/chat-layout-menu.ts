@@ -197,8 +197,8 @@ export async function selectChatLayoutAction(
   const nativeControl = nativePanelControl(scope, name);
   if (
     nativeControl &&
-    // Layout Focus targets the main pane; keep that action while its entry is available.
-    (name !== "Focus" ||
+    // Main-pane Focus and Restore belong to Layout while that entry is available.
+    (name === "Expand Side panel" ||
       !(await scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first().isVisible()))
   ) {
     await nativeControl.click();
