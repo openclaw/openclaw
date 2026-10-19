@@ -21,98 +21,83 @@ function resolveCommand(argv: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   return resolveSafeChildProcessInvocation({ argv, env, cwd });
 }
 
-async function writeArgvFixture(
-  cwd: string,
-  file: string,
-  script = "process.stdout.write(JSON.stringify(process.argv.slice(2)))",
-) {
+const stdoutScript = "process.stdout.write(JSON.stringify(process.argv.slice(2)))";
+async function writeArgvFixture(cwd: string, file: string, script = stdoutScript) {
   await writeFile(path.join(cwd, "argv.cjs"), script);
-  if (file === "node.exe") {
-    return process.execPath;
-  }
   const command = path.join(cwd, file);
-  await writeFile(command, `@"${process.execPath}" "%~dp0argv.cjs" %*\r\n`);
-  return command;
+  if (file !== "node.exe") {
+    await writeFile(command, `@"${process.execPath}" "%~dp0argv.cjs" %*\r\n`);
+  }
+  return file === "node.exe" ? process.execPath : command;
 }
 
-describe("Windows command helpers", () => {
-  it("leaves Linux commands unchanged", () => {
-    const platform = "linux";
-    const cmdCommands = ["pnpm"];
-    expect(resolveWindowsCommandShim({ command: "pnpm", platform, cmdCommands })).toBe("pnpm");
+it("leaves Linux commands unchanged", () => {
+  const platform = "linux";
+  const cmdCommands = ["pnpm"];
+  expect(resolveWindowsCommandShim({ command: "pnpm", platform, cmdCommands })).toBe("pnpm");
+});
+
+type Dir = string | undefined;
+type Resolution = [string, string, string, Dir, Dir, string | RegExp];
+const resolutions: Resolution[] = [
+  ["relative suffix probing", "./bin/tool", ".EXE", undefined, ".", "bin/tool.exe"],
+  ["PATH beats child cwd", "tool.exe", ".EXE", "bin", "cwd", "bin/tool.exe"],
+  ["extensionless PATH file", "runner", ".EXE;.CMD;", ".", undefined, /spawn runner ENOENT/],
+  ["no implicit cwd search", "tool.exe", ".EXE", "", ".", /ENOENT/],
+];
+for (const [name, command, PATHEXT, searchDir, childDir, expected] of resolutions) {
+  windowsIt(name, ({ cwd }) => {
+    const env: NodeJS.ProcessEnv = { PATHEXT };
+    if (searchDir !== undefined) {
+      env.PATH = searchDir ? path.join(cwd, searchDir) : "";
+    }
+    const childCwd = childDir === undefined ? undefined : path.join(cwd, childDir);
+    const run = () => resolveCommand([command], env, childCwd);
+    if (expected instanceof RegExp) {
+      expect(run).toThrow(expected);
+    } else {
+      expect(run().command).toBe(path.join(cwd, expected));
+    }
   });
+}
 
-  type Dir = string | undefined;
-  type Resolution = [string, string, string, Dir, Dir, string | RegExp];
-  const resolutions: Resolution[] = [
-    ["relative suffix probing", "./bin/tool", ".EXE", undefined, ".", "bin/tool.exe"],
-    ["PATH beats child cwd", "tool.exe", ".EXE", "bin", "cwd", "bin/tool.exe"],
-    ["extensionless PATH file", "runner", ".EXE;.CMD;", ".", undefined, /spawn runner ENOENT/],
-    ["no implicit cwd search", "tool.exe", ".EXE", "", ".", /ENOENT/],
-  ];
-  for (const [name, command, PATHEXT, searchDir, childDir, expected] of resolutions) {
-    windowsIt(name, ({ cwd }) => {
-      const env: NodeJS.ProcessEnv = { PATHEXT };
-      if (searchDir !== undefined) {
-        env.PATH = searchDir ? path.join(cwd, searchDir) : "";
-      }
-      const childCwd = childDir === undefined ? undefined : path.join(cwd, childDir);
-      const run = () => resolveCommand([command], env, childCwd);
-      if (expected instanceof RegExp) {
-        expect(run).toThrow(expected);
-      } else {
-        expect(run().command).toBe(path.join(cwd, expected));
-      }
-    });
-  }
+windowsIt("explicit paths ignore PATHEXT", ({ cwd }) => {
+  const exe = path.join(cwd, "tool.exe");
+  expect(resolveCommand([exe], { PATH: "", PATHEXT: ".CMD;.BAT" }, cwd).command).toBe(exe);
+});
 
-  windowsIt("explicit paths ignore PATHEXT", ({ cwd }) => {
-    const exe = path.join(cwd, "tool.exe");
-    expect(resolveCommand([exe], { PATH: "", PATHEXT: ".CMD;.BAT" }, cwd).command).toBe(exe);
-  });
-
-  windowsIt("honors PATHEXT precedence before package-manager shim fallback", ({ cwd }) => {
-    expect(
-      resolveCommand(["pnpm", "--version"], { PATH: cwd, PATHEXT: ".EXE;.CMD" }),
-    ).toMatchObject({
-      args: ["--version"],
-      command: path.join(cwd, "pnpm.exe"),
-      usesWindowsExitCodeShim: false,
-    });
+windowsIt("honors PATHEXT precedence before package-manager shim fallback", ({ cwd }) => {
+  expect(resolveCommand(["pnpm", "--version"], { PATH: cwd, PATHEXT: ".EXE;.CMD" })).toMatchObject({
+    args: ["--version"],
+    command: path.join(cwd, "pnpm.exe"),
+    usesWindowsExitCodeShim: false,
   });
 });
 
 describe.runIf(process.platform === "win32")("Windows batch argv preservation", () => {
+  const ordinary = ["alpha", "omega"];
   const cases = [
-    { name: "ordinary arguments", args: ["alpha", "omega"] },
-    { name: "spaces", args: ["two words", "omega"] },
-    { name: "a leading empty argument", args: ["", "omega"] },
-    { name: "a middle empty argument", args: ["alpha", "", "omega"] },
-    { name: "a trailing empty argument", args: ["alpha", ""] },
-    { name: "an embedded tab", args: ["two\twords", "omega"] },
-    { name: "a tab-only argument", args: ["\t", "omega"] },
-    { name: "double quotes", args: ['say "hello"', "omega"] },
-    { name: "a caret", args: ["left^right", "omega"] },
-    { name: "a quoted trailing backslash", args: ["C:\\two words\\", "omega"] },
-    { name: "a caret beside a quote", args: ['left^"right', "omega"] },
-    { name: "a backslash before a quote", args: ['left\\"right', "omega"] },
-    { name: "two backslashes before a quote", args: ['left\\\\"right', "omega"] },
-    {
-      name: "permitted cmd punctuation",
-      args: ["(round)", "[square]", "{curly}", "semi;colon", "eq=sign", "comma,value", "bang!"],
-    },
+    ordinary,
+    ["two words", "omega"],
+    ["", "omega"],
+    ["alpha", "", "omega"],
+    ["alpha", ""],
+    ["two\twords", "omega"],
+    ["\t", "omega"],
+    ['say "hello"', "omega"],
+    ["left^right", "omega"],
+    ["C:\\two words\\", "omega"],
+    ['left^"right', "omega"],
+    ['left\\"right', "omega"],
+    ['left\\\\"right', "omega"],
+    ["(round)", "[square]", "{curly}", "semi;colon", "eq=sign", "comma,value", "bang!"],
   ];
-
   it.each([
-    ...cases.map((testCase) => ({ ...testCase, file: "argv with ^caret.cmd" })),
-    ...["argv.cmd", "argv with spaces.cmd"].map((file) => ({
-      name: cases[0].name,
-      args: cases[0].args,
-      file,
-    })),
+    ...cases.map((args) => ["argv with ^caret.cmd", args] as const),
+    ...["argv.cmd", "argv with spaces.cmd"].map((file) => [file, ordinary] as const),
   ])(
-    "preserves $name through $file",
-    ({ args, file }) =>
+    "preserves argv through %s: %j",
+    (file, args) =>
       withTempDir("openclaw-batch-argv-", async (cwd) => {
         const command = await writeArgvFixture(cwd, file);
         const result = await runCommandWithTimeout([command, ...args], { cwd, timeoutMs: 5_000 });
@@ -129,21 +114,20 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
         const args =
           file === "node.exe"
             ? ["alpha", "", "two words", "two\twords", "A&B", "100%", "left|right", "<in", ">out"]
-            : cases.flatMap((testCase) => testCase.args);
+            : cases.flat();
         const script = path.join(cwd, "argv.cjs");
         const output = path.join(cwd, "received.json");
         const source =
           'require("node:fs").writeFileSync(require("node:path").join(__dirname, "received.json"), JSON.stringify(process.argv.slice(2)))';
         const command = await writeArgvFixture(cwd, file, source);
+        const entries = Object.entries(process.env).filter(
+          (e): e is [string, string] => typeof e[1] === "string",
+        );
         const pty = await spawnTerminalPty({
           file: command,
           args: file === "node.exe" ? [script, ...args] : args,
           cwd,
-          env: Object.fromEntries(
-            Object.entries(process.env).filter(
-              (e): e is [string, string] => typeof e[1] === "string",
-            ),
-          ),
+          env: Object.fromEntries(entries),
           cols: 120,
           rows: 24,
         });
