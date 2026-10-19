@@ -685,4 +685,49 @@ describe("Claude migration provider", () => {
       }
     },
   );
+
+  it("rejects a project MCP config that is not valid UTF-8", async () => {
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, ".mcp.json"),
+      Buffer.concat([
+        Buffer.from('{"mcpServers":{"filesystem":{"url":"https://mcp.example/café'),
+        Buffer.from([0xff]),
+        Buffer.from('"}}}'),
+      ]),
+    );
+
+    await expect(provider.plan(contextFor(projectDir))).rejects.toThrow(
+      /Source file is not valid UTF-8: .*\.mcp\.json\. Re-encode it as UTF-8 and retry migration\./,
+    );
+  });
+
+  it("rejects Claude settings that are not valid UTF-8", async () => {
+    await fs.mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, ".claude", "settings.json"),
+      Buffer.concat([
+        Buffer.from('{"env":{"API_TOKEN":"token-'),
+        Buffer.from([0xff]),
+        Buffer.from('"}}'),
+      ]),
+    );
+
+    await expect(provider.plan(contextFor(projectDir))).rejects.toThrow(
+      /Source file is not valid UTF-8: .*settings\.json\. Re-encode it as UTF-8 and retry migration\./,
+    );
+  });
+
+  it("keeps valid multibyte MCP config text intact", async () => {
+    await fs.mkdir(projectDir, { recursive: true });
+    await writeJson(path.join(projectDir, ".mcp.json"), {
+      mcpServers: { filesystem: { url: "https://mcp.example/café-😀/v1" } },
+    });
+
+    const plan = await provider.plan(contextFor(projectDir));
+
+    expect(
+      planItemById(plan.items, "config:mcp-server:project-mcp:filesystem").details?.value,
+    ).toEqual({ filesystem: { url: "https://mcp.example/café-😀/v1" } });
+  });
 });

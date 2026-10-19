@@ -38,14 +38,26 @@ export function sanitizeName(name: string): string {
     .replaceAll(/^-+|-+$/g, "");
 }
 
+// Sources read here become OpenClaw config. Decoding invalid bytes would
+// import U+FFFD replacement characters instead of the user's text, so reject
+// them; an absent or unreadable optional source still returns {}.
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
   if (!filePath) {
     return {};
   }
+  const bytes = await fs.readFile(filePath).catch(() => undefined);
+  if (bytes === undefined) {
+    return {};
+  }
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Source file is not valid UTF-8: ${filePath}. Re-encode it as UTF-8 and retry migration.`,
+    );
+  }
   try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
