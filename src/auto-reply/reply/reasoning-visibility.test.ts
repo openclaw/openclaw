@@ -23,6 +23,7 @@ import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   markFollowupRunEnqueued,
+  refuseCollaborativeSteering,
 } from "./queue/lifecycle.js";
 import {
   bindReplyReasoningVisibility,
@@ -253,6 +254,32 @@ describe("durable reasoning visibility", () => {
     expect(isReplyReasoningVisible(payload)).toBe(false);
     completeFollowupRunLifecycle(queued);
     await captureSessionControllerSourceSettlement(queued.controllerInput!);
+  });
+
+  it("closes reasoning when a captured source refuses collaborative steering", async () => {
+    const { owner, payload, queued } = await createQueuedTurn();
+    expect(markFollowupRunEnqueued(queued)).toBe(true);
+    owner.releaseDispatch();
+    const input = queued.controllerInput!;
+    const source = {
+      controllerInput: input,
+      operatorAuthority: queued.operatorAuthority,
+      turnAdoptionLifecycle: queued.turnAdoptionLifecycle,
+      userTurnTranscriptRecorder: queued.userTurnTranscriptRecorder,
+    };
+    const close = vi.spyOn(owner, "close");
+    try {
+      await refuseCollaborativeSteering(source, undefined);
+      expect(isReplyReasoningVisible(payload)).toBe(false);
+      expect(close).toHaveBeenCalledOnce();
+      expect(input.custody.failure).toBeUndefined();
+      await expect(captureSessionControllerSourceSettlement(input)).resolves.toBeUndefined();
+      completeFollowupRunLifecycle(source);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      retireSessionControllerInput(input);
+      await captureSessionControllerSourceSettlement(input).catch(() => {});
+    }
   });
 
   it.each(["controller-cancel", "restart-clear"] as const)(

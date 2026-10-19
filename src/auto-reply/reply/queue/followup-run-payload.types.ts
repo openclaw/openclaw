@@ -35,7 +35,7 @@ import type {
   VerboseLevel,
 } from "../../thinking.shared.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
-import type { ReplyReasoningVisibility } from "../reasoning-visibility.js";
+import type { ReplyReasoningVisibility } from "../reasoning-visibility.types.js";
 import type { SessionEventExecution } from "../session-event-contract.js";
 
 type FollowupQueueDisposition = Parameters<

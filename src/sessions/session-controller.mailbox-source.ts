@@ -564,7 +564,7 @@ export function completeSessionControllerSourceLifecycle(
   state.completed = true;
   if (state.enqueued) {
     try {
-      run.run.reasoningVisibility?.close();
+      run.controllerInput?.source?.run.reasoningVisibility?.close();
     } catch (error) {
       state.failure = error;
     }
