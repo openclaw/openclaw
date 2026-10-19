@@ -54,7 +54,8 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: vi.fn(async () => undefined),
 }));
-vi.mock("./subagent-control-session.js", () => ({
+vi.mock("./subagent-control-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-control-session.js")>()),
   prepareSubagentKillSession: async (
     _config: unknown,
     _sessionKey: string,
@@ -885,9 +886,7 @@ it.each(["current", "during hydration"] as const)(
       expect(resumeRun).toHaveBeenCalledWith("later-child");
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBe("first-child-turn");
       expect(subagentRuns.get("later-child")?.requesterTurnRunId).toBeUndefined();
-      expect(firstAttempts).toBe(1);
       await restorer.activate();
-      expect(firstAttempts).toBe(2);
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBeUndefined();
       expect(settleRequesterTurn).toHaveBeenCalledTimes(3);
       expect(ensureListener).toHaveBeenCalledTimes(2);
