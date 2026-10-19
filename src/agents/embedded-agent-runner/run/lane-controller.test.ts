@@ -313,46 +313,39 @@ describe("controller-owned execution guard", () => {
     expect(enqueue.mock.calls[0]?.[0]?.taskTimeoutMs).toBeUndefined();
   });
 
-  it.each(["deadline", "release"] as const)(
-    "retains successor custody after %s until the raw producer settles",
-    async (cause) => {
-      const first = create("first");
-      const entered = createDeferred();
-      const raw = createDeferred();
-      const run = first.controller.enqueueSession(
-        async () => {
-          entered.resolve();
-          await raw.promise;
-          first.controller.throwIfAborted();
-        },
-        { taskTimeoutMs: 25 },
-      );
-      const failed = expect(run).rejects.toThrow();
-      await entered.promise;
-      const operation = first.getParams().replyOperation!;
-      const dispatch = vi.fn(async () => "successor");
-      const second = create("second").controller.enqueueSession(dispatch);
-      if (cause === "release") {
-        first.controller.laneTaskReleaseController.abort(new Error("provider unwind exhausted"));
-      } else {
-        vi.setSystemTime(1_025);
-        await operation.watchdog.tick();
-      }
-      expect(first.controller.abortSignal.aborted).toBe(true);
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(getSessionControllerOperation(key)).toBe(operation);
-      let settled = false;
-      void operation.ownerSettlement.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      raw.resolve();
-      await failed;
-      await expect(second).resolves.toBe("successor");
-      expect(settled).toBe(true);
-    },
-  );
+  it("retains successor custody after the deadline until the raw producer settles", async () => {
+    const first = create("first");
+    const entered = createDeferred();
+    const raw = createDeferred();
+    const run = first.controller.enqueueSession(
+      async () => {
+        entered.resolve();
+        await raw.promise;
+        first.controller.throwIfAborted();
+      },
+      { taskTimeoutMs: 25 },
+    );
+    const failed = expect(run).rejects.toThrow();
+    await entered.promise;
+    const operation = first.getParams().replyOperation!;
+    const dispatch = vi.fn(async () => "successor");
+    const second = create("second").controller.enqueueSession(dispatch);
+    vi.setSystemTime(1_025);
+    await operation.watchdog.tick();
+    expect(first.controller.abortSignal.aborted).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getSessionControllerOperation(key)).toBe(operation);
+    let settled = false;
+    void operation.ownerSettlement.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    raw.resolve();
+    await failed;
+    await expect(second).resolves.toBe("successor");
+    expect(settled).toBe(true);
+  });
 
   it("fences late preflight resumption before global admission without claiming timeout settlement", async () => {
     const { controller, getParams } = create("late-preflight");

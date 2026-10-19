@@ -216,16 +216,14 @@ function loadRemoteSlashCommands(
   };
   const inFlight = requestRemoteSlashCommands(client, agentId, sessionKey)
     .then((commands) => {
-      if (commands && cache.get(key) === entry) {
+      if (commands) {
         entry.commands = commands;
         entry.expiresAt = Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS;
       }
       return commands ?? cached?.commands ?? buildFallbackSlashCommands();
     })
     .finally(() => {
-      if (cache.get(key) === entry) {
-        delete entry.inFlight;
-      }
+      delete entry.inFlight;
     });
   entry.inFlight = inFlight;
   cache.set(key, entry);
