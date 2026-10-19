@@ -78,8 +78,6 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
         day,
         path: file,
         screenIndex: 0,
-        width: 1280,
-        height: 720,
         byteSize: 14,
         contentHash: `synthetic-${capturedAtMs}-${idle}`,
         idle,
@@ -98,20 +96,16 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     return result;
   }
 
-  function card(overrides: Partial<LogbookCardDraft> = {}): LogbookCardDraft {
-    return {
-      day: DAY,
-      startMs: 0,
-      endMs: 10_000,
-      title: "Coding",
-      summary: "Synthetic summary",
-      detail: "Synthetic detail",
-      category: "coding",
-      appPrimary: "example.test",
-      distractions: [{ startMs: 1000, endMs: 2000, title: "Break" }],
-      ...overrides,
-    };
-  }
+  const card = (overrides: Partial<LogbookCardDraft> = {}): LogbookCardDraft => ({
+    ...window,
+    title: "Coding",
+    summary: "Synthetic summary",
+    detail: "Synthetic detail",
+    category: "coding",
+    appPrimary: "example.test",
+    distractions: [{ startMs: 1000, endMs: 2000, title: "Break" }],
+    ...overrides,
+  });
 
   it("returns identities, rolls back failed claims, and truncates sampling with timestamp ties", () => {
     const ids = Array.from({ length: 18 }, (_, index) => frame(Math.floor(index / 2) * 1000));
