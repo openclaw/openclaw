@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -15,11 +16,7 @@ import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
-import {
-  createCodexAppServerBindingStore,
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./session-binding.js";
+import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
@@ -61,7 +58,6 @@ describe("persistent upstream fork continuation", () => {
     };
     const params = forkParams();
     const retained = codexForkTurn("turn-1", "one");
-    const sourceTurns = [retained, codexForkTurn("turn-2", "edit me")];
     const nativeModel = "gpt-5.6-luna";
     const responseFor = (threadId: string, model = nativeModel) => {
       const response = forkResponse(threadId);
@@ -72,9 +68,11 @@ describe("persistent upstream fork continuation", () => {
         thread: {
           ...response.thread,
           cwd: root,
-          ephemeral: false,
           status: { type: "idle" as const },
-          turns: threadId === "thread-source" ? sourceTurns : [retained],
+          turns:
+            threadId === "thread-source"
+              ? [retained, codexForkTurn("turn-2", "edit me")]
+              : [retained],
         },
       };
     };
@@ -86,6 +84,15 @@ describe("persistent upstream fork continuation", () => {
     let nextThreadId = 0;
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
+      const createThread = (model: unknown, turns: (typeof retained)[]) => {
+        const response = responseFor(
+          `thread-${home}-${nextThreadId++}`,
+          typeof model === "string" ? model : nativeModel,
+        );
+        response.thread.turns = turns;
+        nativeThreads.set(response.thread.id, response);
+        return response;
+      };
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
         if (method === "config/read") {
           return { config: {}, origins: {}, layers: [] };
@@ -96,74 +103,37 @@ describe("persistent upstream fork continuation", () => {
         if (method === "skills/list") {
           return { data: [] };
         }
-        if (!isJsonObject(requestParams)) {
-          throw new Error(`Expected object params for ${method}`);
-        }
+        assert(isJsonObject(requestParams));
         if (method === "thread/start") {
-          const response = responseFor(
-            `thread-${home}-${nextThreadId++}`,
-            typeof requestParams.model === "string" ? requestParams.model : nativeModel,
-          );
-          response.thread.turns = [];
-          nativeThreads.set(response.thread.id, response);
-          return response;
+          return createThread(requestParams.model, []);
         }
         const { threadId } = requestParams;
-        if (typeof threadId !== "string") {
-          throw new Error(`Expected string threadId for ${method}`);
-        }
+        assert(typeof threadId === "string");
+        const source = nativeThreads.get(threadId);
+        assert(home === "secondary" && source);
         if (method === "thread/read" || method === "thread/resume") {
-          const response = nativeThreads.get(threadId);
-          if (home !== "secondary" || !response) {
-            throw new Error(`Thread is not in the selected Codex home: ${threadId}`);
-          }
-          return response;
+          return source;
         }
         if (method === "thread/fork") {
           const { lastTurnId } = requestParams;
-          if (lastTurnId != null && typeof lastTurnId !== "string") {
-            throw new Error("Expected string lastTurnId when provided for thread/fork");
-          }
-          const source = nativeThreads.get(threadId);
-          if (home !== "secondary" || !source) {
-            throw new Error(`No stored fork source in the selected Codex home: ${threadId}`);
-          }
-          const response = responseFor(
-            `thread-${home}-${nextThreadId++}`,
-            typeof requestParams.model === "string" ? requestParams.model : nativeModel,
-          );
+          assert(lastTurnId == null || typeof lastTurnId === "string");
           const turns = source.thread.turns;
           const boundaryIndex = turns.findIndex((turn) => turn.id === lastTurnId);
-          if (lastTurnId != null && boundaryIndex < 0) {
-            throw new Error(`Unknown persisted lastTurnId: ${lastTurnId}`);
-          }
-          response.thread.turns =
-            lastTurnId != null ? turns.slice(0, boundaryIndex + 1) : [...turns];
-          nativeThreads.set(response.thread.id, response);
-          return response;
+          assert(lastTurnId == null || boundaryIndex >= 0);
+          return createThread(
+            requestParams.model,
+            lastTurnId != null ? turns.slice(0, boundaryIndex + 1) : [...turns],
+          );
         }
         if (method === "thread/unsubscribe") {
-          if (home !== "secondary" || !nativeThreads.has(threadId)) {
-            throw new Error(`Unknown subscription target: ${threadId}`);
-          }
           return { status: "unsubscribed" };
         }
         if (method === "thread/archive") {
-          if (home !== "secondary" || !nativeThreads.has(threadId)) {
-            throw new Error(`Unknown archive target: ${threadId}`);
-          }
           nativeThreads.delete(threadId);
           return {};
         }
         if (method === "thread/inject_items") {
-          if (
-            home !== "secondary" ||
-            !nativeThreads.has(threadId) ||
-            !Array.isArray(requestParams.items) ||
-            requestParams.items.length === 0
-          ) {
-            throw new Error(`Invalid history injection: ${threadId}`);
-          }
+          assert(Array.isArray(requestParams.items) && requestParams.items.length > 0);
           // Raw ResponseItems persist without TurnStarted boundaries. Do not
           // fabricate native turns that could make a later beforeTurnId cut pass.
           return {};
@@ -271,40 +241,35 @@ describe("persistent upstream fork continuation", () => {
         },
       ];
       const developerInstructions = "Follow the child agent's current instructions.";
-      const continueFork = async (store: CodexAppServerBindingStore, nativeClient = native) => {
-        const connection = await resolveCodexBindingAppServerConnection({
-          binding: store.read(identity),
-          pluginConfig,
-          config,
-          agentDir,
-          env,
-          authProfileId: attempt.authProfileId,
-          requirementsToml: null,
-        });
-        const selectedFingerprint = buildCodexAppServerConnectionFingerprint(
-          connection.appServer,
-          agentDir,
-        );
-        const selected = selectedFingerprint === fingerprint ? nativeClient : ordinary;
-        const binding = await startOrResumeThread({
-          bindingStore: store,
-          client: selected.client,
-          params: { ...attempt, authProfileId: connection.requestAuthProfileId },
-          cwd: root,
-          appServer: connection.appServer,
-          dynamicTools,
-          developerInstructions,
-          userMcpServersEnabled: false,
-          hostSystemAgentActive: false,
-        });
-        return { binding, connection };
-      };
-      const first = await continueFork(bindingStore);
-
-      expect(first.connection.appServer.start.env?.CODEX_HOME).toBe(secondaryHome);
-      expect(first.connection.clientAuthProfileId).toBeNull();
+      const connection = await resolveCodexBindingAppServerConnection({
+        binding: bindingStore.read(identity),
+        pluginConfig,
+        config,
+        agentDir,
+        env,
+        authProfileId: attempt.authProfileId,
+        requirementsToml: null,
+      });
+      const selectedFingerprint = buildCodexAppServerConnectionFingerprint(
+        connection.appServer,
+        agentDir,
+      );
+      const selected = selectedFingerprint === fingerprint ? native : ordinary;
+      const binding = await startOrResumeThread({
+        bindingStore,
+        client: selected.client,
+        params: { ...attempt, authProfileId: connection.requestAuthProfileId },
+        cwd: root,
+        appServer: connection.appServer,
+        dynamicTools,
+        developerInstructions,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: false,
+      });
+      expect(connection.appServer.start.env?.CODEX_HOME).toBe(secondaryHome);
+      expect(connection.clientAuthProfileId).toBeNull();
       expect(ordinary.request).not.toHaveBeenCalled();
-      expect(first.binding).toMatchObject({
+      expect(binding).toMatchObject({
         model: nativeModel,
         modelProvider: "openai",
         preserveNativeModel: true,
@@ -330,7 +295,7 @@ describe("persistent upstream fork continuation", () => {
       expect(native.request).toHaveBeenCalledWith(
         "thread/inject_items",
         {
-          threadId: first.binding.threadId,
+          threadId: binding.threadId,
           items: [
             { type: "message", role: "user", content: [{ type: "input_text", text: "one" }] },
           ],
