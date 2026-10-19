@@ -10,10 +10,10 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   openProviderWebSocket,
-  requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { setDeepgramQueryParam } from "./audio-query.js";
 
 const DEEPGRAM_FLUX_SAMPLE_RATE = 16_000;
 // Deepgram recommends 80 ms chunks. 16 kHz mono linear16 contains 32 bytes per millisecond.
@@ -49,12 +49,10 @@ function buildDeepgramFluxUrl(params: {
   baseUrl: string;
   language?: string;
   model: string;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: Record<string, string | number | boolean | string[] | undefined>;
 }): string {
-  let url: URL;
-  try {
-    url = new URL(params.baseUrl);
-  } catch {
+  const url = URL.parse(params.baseUrl);
+  if (!url) {
     throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
   }
   if (url.protocol === "http:") {
@@ -80,7 +78,7 @@ function buildDeepgramFluxUrl(params: {
       : undefined;
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && DEEPGRAM_FLUX_QUERY_KEYS.has(key)) {
-      url.searchParams.set(key, String(value));
+      setDeepgramQueryParam(url.searchParams, key, value);
     }
   }
   return url.toString();
@@ -276,8 +274,12 @@ export async function transcribeDeepgramFluxAudio(params: {
           });
           return;
         }
-        if (event.type !== "TurnInfo" || typeof event.transcript !== "string") {
+        if (event.type !== "TurnInfo") {
           return;
+        }
+        // Silence is a stream without turns; a turn without transcript text is malformed.
+        if (typeof event.transcript !== "string") {
+          throw new Error("Audio transcription response missing transcript");
         }
         if (event.event === "EndOfTurn") {
           finalizedTranscriptBytes += Buffer.byteLength(event.transcript, "utf8");
@@ -330,11 +332,6 @@ export async function transcribeDeepgramFluxAudio(params: {
     );
   }).finally(() => socket.terminate());
 
-  return {
-    text: requireTranscriptionText(
-      transcript || undefined,
-      "Audio transcription response missing transcript",
-    ),
-    model: params.model,
-  };
+  // A clean close after flush without turns is silence; the media runner skips it.
+  return { text: transcript, model: params.model };
 }

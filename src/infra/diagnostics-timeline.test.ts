@@ -202,35 +202,18 @@ describe("diagnostics timeline", () => {
     ).toBe(false);
   });
 
-  it("honors config diagnostics flags after config is available", async () => {
-    const { env } = await createTimelineEnv();
-    const envWithoutFlag = { ...env };
-    delete envWithoutFlag.OPENCLAW_DIAGNOSTICS;
-    const configWithTimeline = { diagnostics: { flags: ["timeline"] } } as OpenClawConfig;
-    const configWithWildcard = { diagnostics: { flags: ["*"] } } as OpenClawConfig;
-    const configWithoutTimeline = { diagnostics: { flags: ["telegram.http"] } } as OpenClawConfig;
-
-    expect(isDiagnosticsTimelineEnabled({ config: configWithTimeline, env: envWithoutFlag })).toBe(
-      true,
-    );
-    expect(isDiagnosticsTimelineEnabled({ config: configWithWildcard, env: envWithoutFlag })).toBe(
-      true,
-    );
-    expect(
-      isDiagnosticsTimelineEnabled({ config: configWithoutTimeline, env: envWithoutFlag }),
-    ).toBe(false);
-  });
-
-  it("lets false-like env diagnostics disable config-enabled timeline output", async () => {
-    const { env } = await createTimelineEnv();
-    const configWithTimeline = { diagnostics: { flags: ["timeline"] } } as OpenClawConfig;
-
-    expect(
-      isDiagnosticsTimelineEnabled({
-        config: configWithTimeline,
-        env: { ...env, OPENCLAW_DIAGNOSTICS: "0" },
-      }),
-    ).toBe(false);
+  it("skips flag resolution when no timeline output is configured", () => {
+    const flags = vi.fn(() => "timeline");
+    const env: NodeJS.ProcessEnv = {
+      get OPENCLAW_DIAGNOSTICS() {
+        return flags();
+      },
+    };
+    expect(isDiagnosticsTimelineEnabled({ env })).toBe(false);
+    expect(flags).not.toHaveBeenCalled();
+    env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = "timeline.jsonl";
+    expect(isDiagnosticsTimelineEnabled({ env })).toBe(true);
+    expect(flags).toHaveBeenCalledTimes(1);
   });
 
   it("writes JSONL diagnostic events with the stable envelope", async () => {

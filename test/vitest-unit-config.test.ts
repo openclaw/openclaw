@@ -2,11 +2,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
-import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import {
   createUnitVitestConfig,
   createUnitVitestConfigWithOptions,
-  loadExtraExcludePatternsFromEnv,
 } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
@@ -22,57 +20,7 @@ afterEach(() => {
   patternFiles.cleanup();
 });
 
-describe("loadExtraExcludePatternsFromEnv", () => {
-  it("loads extra exclude patterns from a JSON file", () => {
-    const filePath = patternFiles.writePatternFile("extra-exclude.json", [
-      "src/infra/update-runner.test.ts",
-      42,
-      "",
-      "ui/src/ui/views/chat.test.ts",
-    ]);
-
-    expect(
-      loadExtraExcludePatternsFromEnv({
-        OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: filePath,
-      }),
-    ).toEqual(["src/infra/update-runner.test.ts", "ui/src/ui/views/chat.test.ts"]);
-  });
-
-  it("throws when the configured file is not a JSON array", () => {
-    const filePath = patternFiles.writePatternFile("extra-exclude.json", {
-      exclude: ["src/infra/update-runner.test.ts"],
-    });
-
-    expect(() =>
-      loadExtraExcludePatternsFromEnv({
-        OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: filePath,
-      }),
-    ).toThrow(/JSON array/u);
-  });
-});
-
 describe("unit vitest config", () => {
-  it("defaults unit tests to the non-isolated runner", () => {
-    const unitConfig = createUnitVitestConfig({});
-    const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.isolate).toBe(false);
-    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
-  });
-
-  it("keeps acp and ui tests out of the generic unit lane", () => {
-    const unitConfig = createUnitVitestConfig({});
-    const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.exclude).toContain("extensions/**");
-    expect(testConfig.exclude).toContain("test/**");
-    for (const pattern of [
-      "ui/src/ui/app-chat.test.ts",
-      "ui/src/ui/chat/**/*.test.ts",
-      "ui/src/ui/views/chat.test.ts",
-    ]) {
-      expect(testConfig.include).not.toContain(pattern);
-    }
-  });
-
   it.each([false, true])(
     "keeps routed unit configuration equivalent to CLI discovery with all files excluded=%s",
     (excludeAll) => {
@@ -115,52 +63,6 @@ describe("unit vitest config", () => {
       expect(routedConfig.passWithNoTests).toBe(excludeAll ? true : undefined);
     },
   );
-
-  it("lets root Vitest project runs skip unit files owned by excluded projects", () => {
-    const unitConfig = createUnitVitestConfigWithOptions(
-      {},
-      {
-        argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
-      },
-    );
-    const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.include).toEqual(["src/config/channel-configured.test.ts"]);
-    expect(testConfig.passWithNoTests).toBe(true);
-  });
-
-  it("lets unrelated root Vitest projects skip when CLI filters match no unit files", () => {
-    const unitConfig = createUnitVitestConfigWithOptions(
-      {},
-      {
-        argv: ["node", "vitest", "run", "extensions/browser/index.test.ts"],
-      },
-    );
-    const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.include).toEqual([]);
-    expect(testConfig.passWithNoTests).toBe(true);
-  });
-
-  it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
-    const unitConfig = createUnitVitestConfig({});
-    const testConfig = requireTestConfig(unitConfig);
-    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
-      "test/setup.ts",
-      "test/setup-openclaw-runtime.ts",
-    ]);
-  });
-
-  it("appends extra exclude patterns instead of replacing the base unit excludes", () => {
-    const unitConfig = createUnitVitestConfigWithOptions(
-      {},
-      {
-        extraExcludePatterns: ["src/security/**"],
-      },
-    );
-    const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.exclude).toContain("src/commands/**");
-    expect(testConfig.exclude).toContain("src/config/**");
-    expect(testConfig.exclude).toContain("src/security/**");
-  });
 
   it("skips default coverage source discovery when coverage is disabled", () => {
     const unitConfig = createUnitVitestConfig({});

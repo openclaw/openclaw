@@ -3,7 +3,7 @@ import type { QuarantinedCronConfigJob } from "../types-shared.js";
 import type { CronStoreFile } from "../types.js";
 
 /** Runtime state retained for config-sourced jobs that are not persisted as canonical jobs. */
-export type CronConfigJobRuntimeEntry = {
+type CronConfigJobRuntimeEntry = {
   updatedAtMs?: number;
   scheduleIdentity?: string;
   state?: Record<string, unknown>;

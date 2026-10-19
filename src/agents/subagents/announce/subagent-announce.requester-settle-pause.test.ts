@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import { listUnsettledRequesterChildrenInRuns } from "../registry/subagent-registry-requester-yield.js";
@@ -16,10 +20,18 @@ import {
   deliveredCallArg,
   completeBatch,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+import { getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 describe("requester pause notices", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot(getRuntimeConfig());
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   it.each([
-    { parentOnly: false, replacedSession: false },
     { parentOnly: true, replacedSession: false },
     { parentOnly: false, replacedSession: true },
   ])(
@@ -88,10 +100,9 @@ describe("requester pause notices", () => {
           pauseNotice: { acknowledgment: "TURNOVER-PAUSE" },
         });
         const firstKey = deliveredCallArg().directIdempotencyKey;
-        vi.setSystemTime(Date.now() + 30_001);
         expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
         expect(deliverSpy).toHaveBeenCalledTimes(2);
-        expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).not.toBe(firstKey);
+        expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).toBe(firstKey);
         expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).toContain("TURNOVER-PAUSE");
         expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();
         expect(child.pauseReason).toBe("sessions_yield");
@@ -106,7 +117,11 @@ describe("requester pause notices", () => {
       runId: "run-b",
       outcome: { status: "error", error: "interrupted before pausing" },
       delivery: { status: "pending" },
-      completion: { required: true, resultText: "Final interruption result" },
+      completion: {
+        required: true,
+        resultText: "Final interruption result",
+        terminalReply: { disposition: "visible", text: "Final interruption result" },
+      },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -158,13 +173,21 @@ describe("requester pause notices", () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     const params = wakeParams({
       settledEntry: child,
-      completeBatch: (batch, generation, outcome, onCommitted) => {
+      completeBatch: async (batch, generation, outcome, onCommitted) => {
         if (!consumeSubagentPauseNotice(child)) {
-          completeBatch(batch, generation, outcome, onCommitted);
+          await completeBatch(batch, generation, outcome, onCommitted);
         }
       },
     });
 
+    deliverSpy.mockImplementationOnce(async ({ onBeforeDispatch }) => {
+      if (typeof onBeforeDispatch !== "function") {
+        throw new Error("missing pause dispatch transition");
+      }
+      await onBeforeDispatch();
+      expect(child.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
+      return { delivered: true, path: "direct" };
+    });
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const message = String(deliveredCallArg().triggerMessage);
@@ -209,7 +232,11 @@ describe("requester pause notices", () => {
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
     for (const entry of children) {
       entry.execution = { status: "terminal", endedAt: 5_000, outcome: { status: "ok" } };
-      entry.completion = { required: true, resultText: `completed ${entry.runId}` };
+      entry.completion = {
+        required: true,
+        resultText: `completed ${entry.runId}`,
+        terminalReply: { disposition: "visible", text: `completed ${entry.runId}` },
+      };
     }
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(2);
@@ -219,5 +246,74 @@ describe("requester pause notices", () => {
     );
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
     expect(deliverSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "a default follow-up supersedes a paused child's notice",
+      paused: true,
+      ownsDelivery: false,
+      delivered: false,
+    },
+    {
+      name: "a requester-bound sibling keeps a paused child's notice",
+      paused: true,
+      ownsDelivery: true,
+      delivered: true,
+    },
+    {
+      name: "a default follow-up keeps a completed child's result",
+      paused: false,
+      ownsDelivery: false,
+      delivered: true,
+    },
+  ])("$name", async ({ paused, ownsDelivery, delivered }) => {
+    // A follow-up admitted while the child was still yielding registers as its
+    // own task at the next session generation. Without its own requester it
+    // continues the paused work; with one it is an independent sibling.
+    const child = makeSettledChild({
+      runId: "run-b",
+      delivery: { status: "pending" },
+      ...(paused
+        ? { pauseReason: "sessions_yield" as const }
+        : {
+            completion: {
+              required: true,
+              resultText: "Completed before follow-up",
+              terminalReply: {
+                disposition: "visible" as const,
+                text: "Completed before follow-up",
+              },
+            },
+          }),
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["run-b"],
+        ...(paused ? { pauseNotice: { acknowledgment: "STALE-PAUSE" } } : {}),
+      },
+    });
+    const followUp = makeSettledChild({
+      runId: "follow-up",
+      childSessionKey: child.childSessionKey,
+      generation: 1,
+      createdAt: 4_000,
+      execution: { status: "running", startedAt: 4_000 },
+      requesterSessionKey: ownsDelivery ? "agent:main:plugin-requester" : "agent:main:main",
+      expectsCompletionMessage: ownsDelivery,
+      requesterSettleWake: undefined,
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+    registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey.mockImplementation(
+      (sessionKey, matches) =>
+        [followUp, child].find(
+          (entry) => entry.childSessionKey === sessionKey && (!matches || matches(entry)),
+        ),
+    );
+
+    await expect(
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+    ).resolves.toBe(delivered);
+    expect(deliverSpy).toHaveBeenCalledTimes(delivered ? 1 : 0);
   });
 });

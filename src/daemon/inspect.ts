@@ -1,4 +1,3 @@
-/** Inspects installed platform services for extra OpenClaw or legacy gateway jobs. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -18,14 +17,15 @@ import {
   collectServiceFiles,
   isLegacyLabel,
   isPotentialGatewayServiceName,
-  readServiceFile,
   scanSystemdDir,
   type ExtraGatewayService,
   type ServiceFileInspectionError,
 } from "./inspect-files.js";
 import {
+  areSystemdCommandsMaintenance,
   hasGatewaySubcommandArg,
   hasGatewayServiceMarker,
+  detectSystemdGatewayExecutionMarker,
   detectLaunchdGatewayExecutionMarker,
   isOpenClawGatewayTaskName,
   detectWindowsServiceExecutionMarker,
@@ -379,33 +379,25 @@ async function scanGatewayServices(
   if (process.platform === "darwin") {
     try {
       const home = resolveDaemonHomeDir(env);
-      const userDir = path.join(home, "Library", "LaunchAgents");
-      for (const svc of await scanLaunchdDir({
-        dir: userDir,
-        scope: "user",
-        selectedName: resolveLaunchAgentLabel(env),
-        errors,
-      })) {
-        push(svc);
-      }
+      const scan = async (dir: string, scope: "user" | "system", managedLabel?: string) => {
+        for (const svc of await scanLaunchdDir({
+          dir,
+          scope,
+          managedLabel,
+          selectedName: resolveLaunchAgentLabel(env),
+          errors,
+        })) {
+          push(svc);
+        }
+      };
+      await scan(path.join(home, "Library", "LaunchAgents"), "user");
       if (opts.deep) {
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchAgents"),
-          scope: "system",
-          selectedName: resolveLaunchAgentLabel(env),
-          errors,
-        })) {
-          push(svc);
-        }
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchDaemons"),
-          scope: "system",
-          managedLabel: resolveLaunchAgentLabel(env),
-          selectedName: resolveLaunchAgentLabel(env),
-          errors,
-        })) {
-          push(svc);
-        }
+        await scan(path.join(path.sep, "Library", "LaunchAgents"), "system");
+        await scan(
+          path.join(path.sep, "Library", "LaunchDaemons"),
+          "system",
+          resolveLaunchAgentLabel(env),
+        );
       }
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
@@ -451,7 +443,13 @@ async function scanGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readServiceFile(backupPath)) !== null) {
+        const backup = await fs.readFile(backupPath).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            errors.push({ source: backupPath, message: "Service path could not be inspected." });
+          }
+          return null;
+        });
+        if (backup !== null) {
           push({
             platform: "linux",
             label,
@@ -481,11 +479,7 @@ async function scanGatewayServices(
           try {
             for (const unit of await listLoadedSystemdUnits(scope, env)) {
               const name = unit.name.slice(0, -".service".length);
-              const command = normalizeLowercaseStringOrEmpty(unit.execStart);
-              const gatewayArg = /(?:^|[\s;])gateway(?:[\s;]|$)/.test(command);
-              const marker = gatewayArg
-                ? (EXTRA_MARKERS.find((value) => command.includes(value)) ?? null)
-                : null;
+              const marker = detectSystemdGatewayExecutionMarker(unit.commands);
               const selected = isPotentialGatewayServiceName(
                 name,
                 "linux",
@@ -499,6 +493,9 @@ async function scanGatewayServices(
                   source: unit.name,
                   message: "Loaded systemd Gateway definition could not be inspected.",
                 });
+                continue;
+              }
+              if (!selected && areSystemdCommandsMaintenance(unit.commands)) {
                 continue;
               }
               push({

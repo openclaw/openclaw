@@ -37,22 +37,26 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.requireCard(id);
-      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
-      const comments = appendComment(existing.metadata?.comments, reason);
-      return await this.updateCard(
+      const result = await this.updateLatestCard(
         id,
-        {
-          status: "ready",
-          metadata: {
-            ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
-            comments,
-            stale: null,
-          },
+        (current) => {
+          if (current.status !== "todo") {
+            throw new Error(`Cannot promote Workboard card in ${current.status}; expected todo.`);
+          }
+          assertCanMutateClaimedCard(current, scope === null ? undefined : scope);
+          return {
+            status: "ready",
+            metadata: {
+              ...clearDiagnostics(current.metadata, ["stranded_ready", "blocked_too_long"]),
+              comments: appendComment(current.metadata?.comments, reason),
+              stale: null,
+            },
+          };
         },
         { enforceStatusHolds: input.force !== true },
       );
+      return result.card;
     });
   }
 }

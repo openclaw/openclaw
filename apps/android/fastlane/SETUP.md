@@ -10,8 +10,8 @@ For a checksum-locked, reproducible setup:
 
 ```bash
 cd apps/android
-gem install bundler -v 4.0.21
-bundle _4.0.21_ install
+gem install bundler -v 4.0.22
+bundle _4.0.22_ install
 ```
 
 The expected reproducible runtime is recorded in `apps/android/.ruby-version`.
@@ -70,7 +70,7 @@ cd apps/android
 fastlane android auth_check
 ```
 
-Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane android auth_check`
+Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane android auth_check`
 when reproducing the protected CI toolchain exactly.
 
 Archive locally without upload:
@@ -87,7 +87,7 @@ its saved plan at the recorded source commit; see
 This command is for local archive validation only. It is not a fallback upload
 path after `pnpm android:release:upload` fails.
 
-Generate deterministic phone and Wear OS Google Play screenshots:
+Generate repeatable phone and Wear OS Google Play screenshots:
 
 ```bash
 pnpm android:screenshots
@@ -162,7 +162,7 @@ The Fastlane planner can be inspected without publishing:
 
 ```bash
 cd apps/android
-bundle _4.0.21_ exec fastlane android release_plan output_path:/tmp/android-release-plan.json
+bundle _4.0.22_ exec fastlane android release_plan output_path:/tmp/android-release-plan.json
 ```
 
 It lists uploaded APK and AAB version codes in a temporary edit and always aborts
@@ -188,7 +188,7 @@ fastlane android release_upload
 For the exact protected-CI toolchain:
 
 ```bash
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane android release_upload
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane android release_upload
 ```
 
 Use these direct Fastlane entry points only for maintainer debugging when
@@ -214,7 +214,7 @@ Release rules:
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the phone and Wear OS debug
-  apps, launches deterministic screenshot scenes, and writes Play-ready JPEGs
+  apps, launches fixed screenshot scenes, and writes Play-ready JPEGs
   to the matching `phoneScreenshots` and `wearScreenshots` metadata folders.
 - `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses pinned defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit; replay also requires the saved `OPENCLAW_MOBILE_RELEASE_NOTES` artifact.
 - `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:internal`. With `--destination internal`, it uses those Internal testing tracks and generated notes without screenshot capture or listing updates.
@@ -228,5 +228,7 @@ Screenshots:
 - Android screenshot capture writes Play screenshots under
   `apps/android/fastlane/metadata/android/<locale>/images/phoneScreenshots/`
   and `apps/android/fastlane/metadata/android/<locale>/images/wearScreenshots/`.
+- Store release runs retain emulator startup diagnostics, per-scene UI dumps, and
+  activity startup results for 30 days, including after a screenshot failure.
 - Set `SUPPLY_UPLOAD_SCREENSHOTS=1` to include those screenshots in `fastlane android metadata`.
 - Do not commit generated screenshot captures unless they become intentional store metadata assets.

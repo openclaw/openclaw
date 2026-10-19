@@ -15,19 +15,6 @@ import {
   type QaScorecardChannelDriver,
 } from "./scorecard-taxonomy.js";
 
-type QaRunProfileMembership = {
-  categories: QaScorecardCategoryCoverageReport[];
-  excludedScenarioIds: string[];
-  profile: QaScorecardTaxonomyReport["profiles"][number];
-  profileScenarios: QaSeedScenarioWithSource[];
-  selectedScenarios: QaSeedScenarioWithSource[];
-};
-
-type QaRunProfileExecutionSelection = {
-  excludedScenarios: Array<{ scenario: QaSeedScenarioWithSource; reasons: string[] }>;
-  selectedScenarios: QaSeedScenarioWithSource[];
-};
-
 function categoryMatchesRunProfile(
   category: QaScorecardCategoryCoverageReport,
   opts: { profile: string; surface?: string; category?: string },
@@ -55,7 +42,7 @@ export function resolveQaRunProfileMembership(
     scenarios?: QaSeedScenarioWithSource[];
     scorecardReport?: QaScorecardTaxonomyReport;
   },
-): QaRunProfileMembership {
+) {
   const scenarios = source?.scenarios ?? readQaScenarioPack().scenarios;
   const scorecardReport = source?.scorecardReport ?? readQaScorecardTaxonomyReport(scenarios);
   const profileId = opts.profile.trim();
@@ -114,9 +101,9 @@ export function resolveQaRunProfileExecutionSelection(params: {
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
   resolveModuleFlowSupport?: (channel?: string) => boolean;
-}): QaRunProfileExecutionSelection {
+}) {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
-  const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
+  const excludedScenarios: Array<{ scenario: QaSeedScenarioWithSource; reasons: string[] }> = [];
   for (const scenario of params.scenarios) {
     const reasons: string[] = [];
     if (params.executionKind && scenario.execution.kind !== params.executionKind) {

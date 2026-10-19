@@ -52,35 +52,13 @@ type JsonlReplayMarkdownReport = {
   transcripts: JsonlReplayResult["transcripts"];
 };
 
-function readReplayMessage(record: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (isRecord(record.message)) {
-    return record.message;
-  }
-  return normalizeOptionalString(record.role) ? record : undefined;
-}
-
-function readRole(message: Record<string, unknown>) {
-  return normalizeOptionalString(message.role)?.toLowerCase();
-}
-
-function isTextLikeContentBlock(block: Record<string, unknown>) {
-  const type = normalizeOptionalString(block.type)?.toLowerCase();
-  return (
-    !type ||
-    type === "text" ||
-    type === "input_text" ||
-    type === "message" ||
-    type === "output_text" ||
-    type === "user_text"
-  );
-}
-
 function extractTextContent(content: unknown): string {
-  return extractQaContentText(content, (block) =>
-    isTextLikeContentBlock(block)
+  return extractQaContentText(content, (block) => {
+    const type = normalizeOptionalString(block.type)?.toLowerCase();
+    return !type || ["text", "input_text", "message", "output_text", "user_text"].includes(type)
       ? (normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content))
-      : undefined,
-  );
+      : undefined;
+  });
 }
 
 function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
@@ -93,7 +71,7 @@ function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[]
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(trimmed) as unknown;
+      parsed = JSON.parse(trimmed);
     } catch {
       continue;
     }
@@ -101,8 +79,8 @@ function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[]
       continue;
     }
     acceptedLines.push(trimmed);
-    const message = readReplayMessage(parsed);
-    if (!message || readRole(message) !== "user") {
+    const message = isRecord(parsed.message) ? parsed.message : parsed;
+    if (normalizeOptionalString(message.role)?.toLowerCase() !== "user") {
       continue;
     }
     const userText = extractTextContent(message.content);

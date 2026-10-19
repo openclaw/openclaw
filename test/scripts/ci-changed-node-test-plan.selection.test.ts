@@ -44,19 +44,29 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
   },
 );
 
-it("selects changed test files directly only on routable Vitest surfaces", () => {
-  const cwd = tempDirs.make("node-selection-routable-");
-  // Skill scripts carry node:test files that no Vitest config owns.
-  const skillTest = ".agents/skills/example/scripts/driver.test.mjs";
-  const routable = "src/infra/own.test.ts";
-  for (const file of [skillTest, routable]) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), "export {};\n");
-  }
-  expect(
-    resolveChangedNodeTestTargets([skillTest, routable], { cwd, selectionMode: "aggressive" }),
-  ).toEqual([routable]);
-});
+it.each(["aggressive", "full"] as const)(
+  "routes skill node:test and Python files through their Vitest owner in %s mode",
+  (selectionMode) => {
+    const cwd = tempDirs.make("node-selection-routable-");
+    // Skill scripts carry node:test and Python files that no Vitest config owns.
+    const unownedSkillTest = ".agents/skills/example/scripts/driver.test.mjs";
+    const skillTest = ".agents/skills/telegram-e2e-userbot/scripts/driver.test.mjs";
+    const skillPythonTest = ".agents/skills/telegram-e2e-userbot/scripts/driver.test.py";
+    const wrapper = "test/scripts/telegram-e2e-userbot-skill.test.ts";
+    const routable = "src/infra/own.test.ts";
+    for (const file of [unownedSkillTest, skillTest, skillPythonTest, wrapper, routable]) {
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), "export {};\n");
+    }
+    expect(resolveChangedNodeTestTargets([skillTest], { cwd, selectionMode })).toEqual([wrapper]);
+    expect(
+      resolveChangedNodeTestTargets([unownedSkillTest, skillPythonTest, routable], {
+        cwd,
+        selectionMode,
+      }),
+    ).toEqual([routable, wrapper]);
+  },
+);
 
 it("bounds protected regressions to nearby consumers and restores area coverage in full mode", () => {
   const cwd = tempDirs.make("node-selection-");

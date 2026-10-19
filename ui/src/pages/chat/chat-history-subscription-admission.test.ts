@@ -2,6 +2,7 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   disposeSelectedSessionMessageSubscription,
@@ -35,61 +36,78 @@ function admissionFixture() {
 }
 
 describe("foreground history subscription admission", () => {
-  it("retries a compensated subscription timeout before history without replacing cached input", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const key = "agent:main:timeout-recovery";
-    const cached = [{ role: "assistant", content: "Cached conversation" }];
-    let attempts = 0;
-    const compensated = createDeferred();
-    const state = makeChatHost({
-      sessionKey: key,
-      chatMessages: cached,
-      chatMessage: "Unsent draft",
-      requestHandlers: {
-        "sessions.messages.subscribe": () => {
-          attempts += 1;
-          if (attempts === 1) {
-            throw new GatewayProtocolRequestTimeoutError({
-              method: "sessions.messages.subscribe",
-              timeoutMs: 30_000,
-              requestSent: true,
-            });
-          }
-          return { key, agentId: "main" };
+  it.each(["timeout", "session changed"])(
+    "retries %s before history without replacing cached input",
+    async (failure) => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const key = "agent:main:timeout-recovery";
+      const cached = [{ role: "assistant", content: "Cached conversation" }];
+      const completed = [
+        ...cached,
+        { role: "assistant", content: "Completed while admission changed." },
+      ];
+      let attempts = 0;
+      const requested = createDeferred();
+      const state = makeChatHost({
+        sessionKey: key,
+        chatMessages: cached,
+        chatMessage: "Unsent draft",
+        requestHandlers: {
+          "sessions.messages.subscribe": () => {
+            attempts += 1;
+            if (attempts === 1) {
+              requested.resolve();
+              if (failure === "session changed") {
+                throw new GatewayRequestError({
+                  code: "INVALID_REQUEST",
+                  message: "session changed before sessions.messages.subscribe; retry the request",
+                  details: {
+                    code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                    method: "sessions.messages.subscribe",
+                    sessionKey: key,
+                  },
+                });
+              }
+              throw new GatewayProtocolRequestTimeoutError({
+                method: "sessions.messages.subscribe",
+                timeoutMs: 30_000,
+                requestSent: true,
+              });
+            }
+            return { key, agentId: "main" };
+          },
+          "sessions.messages.unsubscribe": () => ({}),
+          "chat.startup": () => ({ messages: completed }),
         },
-        "sessions.messages.unsubscribe": () => {
-          compensated.resolve();
-          return {};
-        },
-        "chat.startup": () => ({ messages: cached }),
-      },
-    });
-    state.chatError = null;
-    onTestFinished(() => state.sessions.dispose());
-    const subscription = syncSelectedSessionMessageSubscription(state);
-    const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    await compensated.promise;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(1);
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
-    expect(state.chatMessages).toEqual(cached);
-    expect(state.chatError).toBeNull();
-    expect(state.lastError).toBeNull();
-    state.chatMessage = "Newer draft while recovering";
-    await vi.advanceTimersByTimeAsync(500);
-    await expect(subscription).resolves.toBe(true);
-    await history;
-    expect(attempts).toBe(2);
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(1);
-    expect(getChatHistoryLoadState(state).phase).toBe("committed");
-    expect(state.chatMessage).toBe("Newer draft while recovering");
-    disposeSelectedSessionMessageSubscription(state);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      });
+      state.chatError = null;
+      onTestFinished(() => state.sessions.dispose());
+      const subscription = syncSelectedSessionMessageSubscription(state);
+      const history = loadChatHistory(state, { startup: true, deferBranches: true });
+      await requested.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(0);
+      expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
+      expect(state.chatMessages).toEqual(cached);
+      expect(state.chatError).toBeNull();
+      expect(state.lastError).toBeNull();
+      state.chatMessage = "Newer draft while recovering";
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(subscription).resolves.toBe(true);
+      await history;
+      expect(attempts).toBe(2);
+      expect(requestCalls(state.request, "chat.startup")).toHaveLength(1);
+      expect(getChatHistoryLoadState(state).phase).toBe("committed");
+      expect(state.chatMessages).toEqual(completed);
+      expect(state.chatMessage).toBe("Newer draft while recovering");
+      disposeSelectedSessionMessageSubscription(state);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each([false, true])(
     "reads pre-admission activity after the full-stream upgrade ACK (startup: %s)",
@@ -114,58 +132,48 @@ describe("foreground history subscription admission", () => {
     },
   );
 
-  it.each(["selection", "connection"])(
-    "retires the history read when %s changes before stream admission",
+  it.each(["selection", "connection", "rejected", "disposed"])(
+    "withholds history when stream admission is %s",
     async (change) => {
       const { state, key, requested, admitted } = admissionFixture();
       const subscription = syncSelectedSessionMessageSubscription(state);
+      if (change === "disposed") {
+        await requested.promise;
+        admitted.resolve({ key, agentId: "main" });
+        await expect(subscription).resolves.toBe(true);
+      }
       const history = loadChatHistory(state, { startup: true, deferBranches: true });
-      await requested.promise;
+      if (change !== "disposed") {
+        await requested.promise;
+      }
       if (change === "selection") {
         state.sessionKey = "agent:main:replacement";
-      } else {
+      } else if (change === "connection") {
         state.connectionEpoch += 1;
       }
-      admitted.resolve({ key, agentId: "main" });
+      if (change === "rejected") {
+        admitted.reject(new Error("Live stream subscription failed"));
+      } else if (change === "disposed") {
+        disposeSelectedSessionMessageSubscription(state);
+      } else {
+        admitted.resolve({ key, agentId: "main" });
+      }
       await Promise.all([subscription, history]);
 
       expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
       expect(state.chatMessages).toEqual([]);
+      if (change === "rejected") {
+        expect(getChatHistoryLoadState(state)).toMatchObject({
+          phase: "failed",
+          message: "Live stream subscription failed",
+          startup: true,
+        });
+        expect(state.chatLoading).toBe(false);
+        expect(state.chatError).toBeNull();
+        expect(state.lastError).toBeNull();
+      } else if (change === "disposed") {
+        expect(state.chatSessionMessageSubscription).toBeNull();
+      }
     },
   );
-
-  it("settles a rejected admission visibly without reading an incomplete transcript", async () => {
-    const { state, requested, admitted } = admissionFixture();
-    const subscription = syncSelectedSessionMessageSubscription(state);
-    const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    await requested.promise;
-    admitted.reject(new Error("Live stream subscription failed"));
-    await Promise.all([subscription, history]);
-
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      message: "Live stream subscription failed",
-      startup: true,
-    });
-    expect(state.chatLoading).toBe(false);
-    expect(state.chatError).toBeNull();
-    expect(state.lastError).toBeNull();
-  });
-
-  it("retires an acknowledged admission before a queued history read can issue", async () => {
-    const { state, key, requested, admitted } = admissionFixture();
-    const subscription = syncSelectedSessionMessageSubscription(state);
-    await requested.promise;
-    admitted.resolve({ key, agentId: "main" });
-    await expect(subscription).resolves.toBe(true);
-
-    const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    disposeSelectedSessionMessageSubscription(state);
-    await history;
-
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
-    expect(state.chatSessionMessageSubscription).toBeNull();
-    expect(state.chatMessages).toEqual([]);
-  });
 });

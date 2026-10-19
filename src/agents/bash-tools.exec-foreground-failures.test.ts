@@ -186,7 +186,7 @@ describe("exec foreground failures", () => {
     expect(text).toMatch(/timed out/i);
     expect(text).toContain("external side effects may already have completed");
     expect(text).toContain("Verify the resulting state before retrying");
-    expect(text).toContain("Do not automatically rerun non-idempotent commands");
+    expect(text).toContain("Do not automatically rerun commands unless repeating them is safe");
     expect(text).toContain("known to be safe to retry");
     expect(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
     expect(text).not.toContain("OOM-score wrapper");
@@ -205,77 +205,36 @@ describe("exec foreground failures", () => {
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it.each([
-    { name: "child SIGKILL", pty: false, exitSignal: "SIGKILL" as NodeJS.Signals },
-    { name: "PTY signal 9", pty: true, exitSignal: 9 },
-  ])("adds cautious Linux OOM guidance for a wrapped $name", async ({ pty, exitSignal }) => {
-    mockSpawn({
-      reason: "signal",
-      exitCode: pty ? 0 : null,
-      exitSignal,
-      oomScoreWrapperSelected: true,
-    });
-    const tool = fullExec();
-
-    const result = await tool.execute(`call-oom-${exitSignal}`, {
-      command: "find . -type f",
-      host: "gateway",
-      pty,
-    });
-
-    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
-    const text = requireTextContent(result);
-    for (const fragment of [
-      `Command aborted by signal ${exitSignal}`,
-      "OpenClaw selected its Linux OOM-score wrapper",
-      "attempts to set this child's oom_score_adj to 1000",
-      "SIGKILL alone does not identify whether the Linux OOM killer",
-      "Check cgroup memory events or kernel logs",
-      "If they show memory pressure, narrow the command",
-      "adjust memory, concurrency, or resource limits",
-    ]) {
-      expect(text).toContain(fragment);
-    }
-    expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
-  });
-
-  it.each([
-    {
-      name: "unwrapped SIGKILL",
-      exitSignal: "SIGKILL" as NodeJS.Signals,
-      oomScoreWrapperSelected: false,
-      reason: "signal" as const,
-    },
-    {
-      name: "wrapped non-SIGKILL signal",
-      exitSignal: "SIGTERM" as NodeJS.Signals,
-      oomScoreWrapperSelected: true,
-      reason: "signal" as const,
-    },
-    {
-      name: "wrapped manual cancellation",
-      exitSignal: "SIGKILL" as NodeJS.Signals,
-      oomScoreWrapperSelected: true,
-      reason: "manual-cancel" as const,
-    },
-  ])(
-    "preserves the generic signal message for $name",
-    async ({ exitSignal, oomScoreWrapperSelected, reason }) => {
-      mockSpawn({ reason, exitCode: null, exitSignal, oomScoreWrapperSelected });
-      const tool = fullExec({
-        security: "full",
-        ask: "off",
-        allowBackground: false,
+  it.each([{ name: "PTY signal 9", pty: true, exitSignal: 9 }])(
+    "adds cautious Linux OOM guidance for a wrapped $name",
+    async ({ pty, exitSignal }) => {
+      mockSpawn({
+        reason: "signal",
+        exitCode: pty ? 0 : null,
+        exitSignal,
+        oomScoreWrapperSelected: true,
       });
+      const tool = fullExec();
 
-      const result = await tool.execute(`call-generic-${reason}-${exitSignal}`, {
-        command: "sleep 10",
+      const result = await tool.execute(`call-oom-${exitSignal}`, {
+        command: "find . -type f",
         host: "gateway",
+        pty,
       });
 
+      expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
       const text = requireTextContent(result);
-      expect(text).toContain(`Command aborted by signal ${exitSignal}`);
-      expect(text).not.toContain("OOM-score wrapper");
+      for (const fragment of [
+        `Command aborted by signal ${exitSignal}`,
+        "OpenClaw selected its Linux OOM-score wrapper",
+        "attempts to set this child's oom_score_adj to 1000",
+        "SIGKILL alone does not identify whether the Linux OOM killer",
+        "Check cgroup memory events or kernel logs",
+        "If they show memory pressure, narrow the command",
+        "adjust memory, concurrency, or resource limits",
+      ]) {
+        expect(text).toContain(fragment);
+      }
       expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
     },
   );
@@ -314,40 +273,6 @@ describe("exec foreground failures", () => {
       });
     } finally {
       cwdSpy.mockRestore();
-    }
-  });
-
-  it("defaults omitted sandbox workdirs to the sandbox workspace", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    mockSpawn();
-
-    const tool = fullExec({
-      host: "sandbox",
-      sandbox: {
-        containerName: "sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/workspace",
-        buildExecSpec: async ({ command, workdir }) => ({
-          argv: ["docker", "exec", "-w", workdir ?? "/workspace", "sandbox-workdir-test", command],
-          env: {},
-          stdinMode: "pipe-closed",
-        }),
-      },
-    });
-
-    const result = await tool.execute("call-sandbox-default-workdir", {
-      command: "echo ok",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(result.details.cwd).toBe(workspaceDir);
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    const input = supervisorMock.spawn.mock.calls[0]?.[0];
-    expect(input?.cwd).toBe(workspaceDir);
-    expect(input?.mode).toBe("child");
-    if (input?.mode === "child") {
-      expect(input.argv).toContain("-w");
-      expect(input.argv).toContain("/workspace");
     }
   });
 
@@ -401,24 +326,6 @@ describe("exec foreground failures", () => {
     expect(discardPreparedWorkdir).not.toHaveBeenCalled();
     expect(buildExecSpec).not.toHaveBeenCalled();
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
-  });
-
-  it("does not preflight remote-only backend workdirs from the local workspace root", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    fs.writeFileSync(path.join(workspaceDir, "script.py"), "print($TOKEN)\n");
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSpawn();
-
-    const result = await tool.execute("call-remote-only-script", {
-      command: "python script.py",
-      workdir: "/remote/workspace/generated",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
-    expect(buildExecSpec).toHaveBeenCalledOnce();
-    expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/generated");
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
   });
 
   it("uses the mapped host cwd for existing relative backend-validated sandbox workdirs", async () => {

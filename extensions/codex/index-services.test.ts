@@ -7,7 +7,7 @@ import plugin from "./index.js";
 function registerServices(pluginConfig: Record<string, unknown>) {
   const registerService = vi.fn();
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main" }] },
+    agents: { entries: { main: {} } },
     plugins: { entries: { codex: { enabled: true, config: pluginConfig } } },
   };
   plugin.register(
@@ -15,7 +15,13 @@ function registerServices(pluginConfig: Record<string, unknown>) {
       id: "codex",
       config,
       pluginConfig,
-      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+      runtime: createPluginRuntimeMock({
+        config: {
+          current: () => {
+            throw new Error("Runtime config is not prepared");
+          },
+        },
+      }),
       registerService,
     }),
   );

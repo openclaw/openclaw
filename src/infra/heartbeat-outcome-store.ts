@@ -1,5 +1,4 @@
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedRunTrigger } from "../agents/run-trigger.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -7,23 +6,22 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
-} from "../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
+import { truncateOptionalText } from "../shared/text-truncate.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import {
-  claimHeartbeatOutcomeRowInDatabase,
-  persistHeartbeatOutcomeInDatabase,
-  type HeartbeatOutcomeInput,
-  type HeartbeatOutcomeRow,
+import { heartbeatOutcomeFacts, recordHeartbeatOutcomeFact } from "./heartbeat-outcome-facts.js";
+import type {
+  HeartbeatOutcomeInput,
+  HeartbeatOutcomeRow,
 } from "./heartbeat-outcome-store.kernel.js";
 import type { HeartbeatOutcomeWorkerOperations } from "./heartbeat-outcome-store.worker.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
@@ -51,14 +49,9 @@ type PersistedHeartbeatOutcome = {
   occurredAt: number;
 };
 
-function boundedText(value: string | undefined, maxChars: number): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? truncateUtf16Safe(normalized, maxChars) : undefined;
-}
-
 function normalizeTaskNames(taskNames: readonly string[]): string[] {
   return taskNames
-    .map((name) => boundedText(name, HEARTBEAT_OUTCOME_TASK_NAME_MAX_CHARS))
+    .map((name) => truncateOptionalText(name, HEARTBEAT_OUTCOME_TASK_NAME_MAX_CHARS))
     .filter((name): name is string => Boolean(name))
     .slice(0, HEARTBEAT_OUTCOME_MAX_TASKS);
 }
@@ -108,6 +101,7 @@ export async function persistHeartbeatOutcome(params: {
   wakeReason?: string;
   occurredAt: number;
   env?: NodeJS.ProcessEnv;
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<void> {
   if (params.response.notify || params.response.outcome === "no_change") {
     return;
@@ -118,16 +112,18 @@ export async function persistHeartbeatOutcome(params: {
     run_session_key: params.runSessionKey,
     outcome: params.response.outcome,
     summary:
-      boundedText(params.response.summary, HEARTBEAT_OUTCOME_SUMMARY_MAX_CHARS) ??
+      truncateOptionalText(params.response.summary, HEARTBEAT_OUTCOME_SUMMARY_MAX_CHARS) ??
       params.response.outcome,
     response_reason:
-      boundedText(params.response.reason, HEARTBEAT_OUTCOME_REASON_MAX_CHARS) ?? null,
+      truncateOptionalText(params.response.reason, HEARTBEAT_OUTCOME_REASON_MAX_CHARS) ?? null,
     priority: params.response.priority ?? null,
     next_check:
-      boundedText(params.response.nextCheck, HEARTBEAT_OUTCOME_NEXT_CHECK_MAX_CHARS) ?? null,
+      truncateOptionalText(params.response.nextCheck, HEARTBEAT_OUTCOME_NEXT_CHECK_MAX_CHARS) ??
+      null,
     task_names_json: taskNames.length > 0 ? JSON.stringify(taskNames) : null,
     wake_source: params.wakeSource ?? null,
-    wake_reason: boundedText(params.wakeReason, HEARTBEAT_OUTCOME_WAKE_REASON_MAX_CHARS) ?? null,
+    wake_reason:
+      truncateOptionalText(params.wakeReason, HEARTBEAT_OUTCOME_WAKE_REASON_MAX_CHARS) ?? null,
     occurred_at: params.occurredAt,
     context_run_id: null,
     context_claimed_at: null,
@@ -144,47 +140,52 @@ export async function claimHeartbeatOutcomeForRun(params: {
   runId: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<PersistedHeartbeatOutcome | undefined> {
+  const { assertCurrent, runId } = params;
   const row = await runHeartbeatOutcomeOperation(
     params,
-    {
-      type: "claim",
-      input: { sessionKey: params.sessionKey, runId: params.runId },
-    },
-    params.assertCurrent,
+    { type: "claim", input: { sessionKey: params.sessionKey, runId } },
+    assertCurrent,
   );
-  return row ? rowToOutcome(row) : undefined;
+  return row?.context_run_id === runId ? rowToOutcome(row) : undefined;
 }
 
 async function runHeartbeatOutcomeOperation(
-  params: Parameters<typeof resolveSqliteScope>[0],
+  params: Parameters<typeof resolveSqliteScope>[0] & {
+    sessionActor?: SessionActorStorageBinding;
+  },
   command: SqliteWorkerCommand<HeartbeatOutcomeWorkerOperations>,
   assertCurrent: () => void = () => undefined,
 ): Promise<HeartbeatOutcomeRow | undefined> {
+  const authority = { assertCurrent, authorize() {} };
+  const memory = captureSessionActorStorageOwner(params, authority);
+  if (memory) {
+    return withSessionActorStorage(
+      params,
+      {
+        authority,
+        lifetime: { assertCurrent, assertReadable: assertCurrent },
+      },
+      async ({ actor, authority: selectedAuthority }) => {
+        const result =
+          command.type === "persist"
+            ? await actor.storage.mutate(
+                { type: "session.heartbeat.persist", input: command.input },
+                selectedAuthority,
+              )
+            : await actor.storage.mutate(
+                { type: "session.heartbeat.claim", input: command.input },
+                selectedAuthority,
+              );
+        return readSessionActorStorageResult(result);
+      },
+    );
+  }
   const resolved = toDatabaseOptions(resolveSqliteScope(params));
   const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = { ...resolved, env, path: resolveOpenClawAgentSqlitePath({ ...resolved, env }) };
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
-    return runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        runOpenClawAgentWriteTransaction(
-          ({ db }) => {
-            assertCurrent();
-            if (command.type === "persist") {
-              persistHeartbeatOutcomeInDatabase(db, command.input);
-              return undefined;
-            }
-            return claimHeartbeatOutcomeRowInDatabase(db, command.input);
-          },
-          options,
-          { operationLabel: `heartbeat.outcome.${command.type}` },
-        ),
-      true,
-    );
-  }
   // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const assertQueuedCurrent = () => {
@@ -194,30 +195,38 @@ async function runHeartbeatOutcomeOperation(
   try {
     return await runOpenClawAgentWriteAdmission(
       options,
-      () =>
-        withOpenClawAgentDatabaseAsync(
-          options,
-          async ({ db }) => {
+      async () => {
+        if (command.type === "claim") {
+          const known = heartbeatOutcomeFacts(execution)?.get(command.input.sessionKey);
+          if (
+            known === null ||
+            (known && known.context_run_id !== null && known.context_claimed_at !== null)
+          ) {
             assertQueuedCurrent();
-            const worker =
-              await openOpenClawAgentSqliteWorkerStore<HeartbeatOutcomeWorkerOperations>(
-                options,
-                db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.heartbeatOutcomeStore,
-                  ),
-                  input: undefined,
-                },
-              );
-            try {
-              return await worker.execute(command, assertQueuedCurrent);
-            } finally {
-              await worker.close();
-            }
+            return known ?? undefined;
+          }
+        }
+        const worker = await openOpenClawAgentSqliteWorkerStore<HeartbeatOutcomeWorkerOperations>(
+          options,
+          { execution },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.heartbeatOutcomeStore),
+            input: undefined,
           },
-          assertQueuedCurrent,
-        ),
+        );
+        try {
+          // An absent database has no durable base session or outcome to claim.
+          const row = (await worker.executeExisting(command, assertQueuedCurrent))?.value;
+          recordHeartbeatOutcomeFact(
+            execution,
+            command.type === "persist" ? command.input.session_key : command.input.sessionKey,
+            row,
+          );
+          return row;
+        } finally {
+          await worker.close();
+        }
+      },
       true,
     );
   } finally {
@@ -264,11 +273,15 @@ export async function claimHeartbeatContextForUserRun(
   if (params.trigger !== "user" || params.detached || !params.sessionKey) {
     return undefined;
   }
-  if (!params.assertCurrent) {
+  const { assertCurrent } = params;
+  if (!assertCurrent) {
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }
-  params.assertCurrent();
-  const outcome = await claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey });
-  params.assertCurrent();
+  assertCurrent();
+  const outcome = await claimHeartbeatOutcomeForRun({
+    ...params,
+    sessionKey: params.sessionKey,
+  });
+  assertCurrent();
   return buildHeartbeatOutcomeContext(outcome);
 }

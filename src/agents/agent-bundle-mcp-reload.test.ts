@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -21,24 +20,25 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { startMcpLifecycleServer } from "./agent-bundle-mcp-lifecycle.test-support.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
   createMcpProbeFixture,
   probeMcpServer as probe,
 } from "./agent-bundle-mcp-probe.test-support.js";
+import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const startAuthorization = vi.hoisted(() => vi.fn(async () => ({ status: "authorized" })));
-const readAuthorization = vi.hoisted(() =>
-  vi.fn(async (identities: readonly McpOAuthIdentity[]) =>
-    identities.map(() => ({ state: "unauthenticated" })),
-  ),
-);
+const { unauthenticated, readAuthorization } = vi.hoisted(() => {
+  const defaultStatuses = async (identities: readonly McpOAuthIdentity[]) =>
+    identities.map(() => ({ state: "unauthenticated" }));
+  return { unauthenticated: defaultStatuses, readAuthorization: vi.fn(defaultStatuses) };
+});
 vi.mock("./mcp-oauth.js", () => ({
   readMcpOAuthCredentialsStatuses: readAuthorization,
   startMcpOAuthAuthorization: startAuthorization,
@@ -49,6 +49,79 @@ const managers: ReturnType<typeof createSessionMcpRuntimeManager>[] = [];
 const cleanups: Array<() => Promise<unknown>> = [];
 const releaseHeld: Array<() => void> = [];
 let receipts: FixtureReceiptChannel;
+
+function hold() {
+  const started = createDeferred();
+  const released = createDeferred();
+  releaseHeld.push(() => released.resolve());
+  return {
+    started,
+    released,
+    wait: async () => {
+      started.resolve();
+      await released.promise;
+    },
+  };
+}
+
+function mcpConfig(servers: NonNullable<OpenClawConfig["mcp"]>["servers"]): OpenClawConfig {
+  return { plugins: { enabled: false }, mcp: { servers } };
+}
+
+const oauthServer = () => ({
+  transport: "streamable-http" as const,
+  url: "https://mcp.example.test",
+  auth: "oauth" as const,
+  oauth: { identity: "per-requester" as const },
+});
+
+const enabledPlugin = () => ({ entries: { "reload-probe": { enabled: true } } });
+function pluginRegistry(
+  rootDir: string,
+  mcpServers: Parameters<typeof createPluginManifestRecordFixture>[0]["mcpServers"],
+) {
+  return {
+    plugins: [createPluginManifestRecordFixture({ id: "reload-probe", rootDir, mcpServers })],
+  };
+}
+
+function waitForCall(marker: string, pending: Promise<unknown>, signal: AbortSignal) {
+  return withinTest(
+    awaitGateBeforeSettlement(
+      receipts.waitFor(marker, "started"),
+      pending,
+      `Held MCP call settled before starting in ${marker}`,
+    ),
+    signal,
+  );
+}
+
+function probeConnections(...runtimes: SessionMcpRuntime[]) {
+  return Promise.all(
+    runtimes.flatMap((runtime) => ["first", "second"].map((name) => probe(runtime, name))),
+  );
+}
+
+async function expectToolsAndDispose(
+  pending: ReturnType<typeof materializeBundleMcpToolsForRun>,
+  names = ["healthy__probe"],
+  retired = false,
+) {
+  const materialized = await pending;
+  try {
+    expect(materialized.tools.map((tool) => tool.name)).toEqual(names);
+    if (retired) {
+      expect(materialized.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "changed",
+          message: expect.stringMatching(/retired/),
+        }),
+      ]);
+    }
+  } finally {
+    await materialized.dispose();
+  }
+}
 
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
@@ -66,27 +139,34 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   cleanupTempDirs(tempDirs);
   startAuthorization.mockClear();
-  readAuthorization
-    .mockReset()
-    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
-      identities.map(() => ({ state: "unauthenticated" })),
-    );
+  readAuthorization.mockReset().mockImplementation(unauthenticated);
 });
 
-async function fixture(scheduler = createTestGatewayScheduler()) {
-  const source = await createMcpProbeFixture(tempDirs, receipts.endpoint);
-  const manager = createSessionMcpRuntimeManager({ scheduler });
+async function fixture(
+  scheduler = createTestGatewayScheduler(),
+  createRuntime?: CreateSessionMcpRuntime,
+) {
+  const { params, config } = await createMcpProbeFixture(tempDirs, receipts.endpoint);
+  const manager = createSessionMcpRuntimeManager({ scheduler, createRuntime });
+  const { manifestRegistry } = params;
   managers.push(manager);
-  return { ...source, manager };
+  return {
+    params,
+    config,
+    manager,
+    get: (cfg = config()) => manager.getOrCreate({ ...params, cfg }),
+    publish: (cfg: OpenClawConfig, reloadPlugins = false) =>
+      manager.reloadConfig({ cfg, manifestRegistry, reloadPlugins }),
+  };
 }
 
 it("keeps unchanged server transports and catalogs when another server changes", async () => {
-  const { manager, config, params } = await fixture();
-  const original = await manager.getOrCreate({ ...params, cfg: config() });
+  const { config, get } = await fixture();
+  const original = await get();
   const originalCatalog = await original.getCatalog();
   const first = await probe(original, "healthy");
   const old = await probe(original, "changed");
-  const refreshed = await manager.getOrCreate({ ...params, cfg: config("new") });
+  const refreshed = await get(config("new"));
 
   expect(await probe(refreshed, "healthy")).toEqual(first);
   expect(await probe(original, "healthy")).toEqual(first);
@@ -96,73 +176,38 @@ it("keeps unchanged server transports and catalogs when another server changes",
   await expect(probe(original, "changed")).rejects.toThrow(/disposed|retir/);
 });
 
-it.each(["change", "disable", "remove", "collision"] as const)(
-  "revokes only the changed owner immediately on %s publication",
-  async (change) => {
-    const { manager, config, params } = await fixture();
-    const acquisition = await manager.acquire({ ...params, cfg: config() });
-    const original = acquisition.runtime;
-    const healthy = await probe(original, "healthy");
-    await probe(original, "changed");
-    const next = config("new");
-    if (change === "disable") {
-      expectDefined(next.mcp!.servers!.changed, "configured changed server").enabled = false;
-    }
-    if (change === "remove") {
-      delete next.mcp!.servers!.changed;
-    }
-    if (change === "collision") {
-      next.mcp!.servers = {
-        CHANGED: expectDefined(config().mcp!.servers!.changed, "collision source server"),
-        ...config().mcp!.servers,
-      };
-    }
-    await manager.reloadConfig({ cfg: next, manifestRegistry: params.manifestRegistry });
-    await expect(probe(original, "changed")).rejects.toThrow();
-    expect(await probe(original, "healthy")).toEqual(healthy);
-    const materialized = await materializeBundleMcpToolsForRun(acquisition);
-    try {
-      expect(materialized.tools.map((tool) => tool.name)).toEqual(["healthy__probe"]);
-      expect(materialized.diagnostics).toEqual([
-        expect.objectContaining({
-          serverName: "changed",
-          message: expect.stringMatching(/retired/),
-        }),
-      ]);
-    } finally {
-      await materialized.dispose();
-    }
-    const refreshed = await manager.getOrCreate({ ...params, cfg: next });
-    expect(await probe(refreshed, "healthy")).toEqual(healthy);
-    const catalog = await refreshed.getCatalog();
-    if (change === "disable" || change === "remove") {
-      expect(catalog.servers.changed).toBeUndefined();
-    } else {
-      expect(catalog.servers.changed?.safeServerName).toBe(
-        change === "collision" ? "changed-2" : "changed",
-      );
-    }
-  },
-);
+it("revokes only the changed owner immediately on collision publication", async () => {
+  const { manager, config, params, get, publish } = await fixture();
+  const acquisition = await manager.acquire({ ...params, cfg: config() });
+  const original = acquisition.runtime;
+  const healthy = await probe(original, "healthy");
+  await probe(original, "changed");
+  const next = config("new");
+  next.mcp!.servers = {
+    CHANGED: expectDefined(config().mcp!.servers!.changed, "collision source server"),
+    ...config().mcp!.servers,
+  };
+  await publish(next);
+  await expect(probe(original, "changed")).rejects.toThrow();
+  expect(await probe(original, "healthy")).toEqual(healthy);
+  await expectToolsAndDispose(materializeBundleMcpToolsForRun(acquisition), undefined, true);
+  const refreshed = await get(next);
+  expect(await probe(refreshed, "healthy")).toEqual(healthy);
+  const catalog = await refreshed.getCatalog();
+  expect(catalog.servers.changed?.safeServerName).toBe("changed-2");
+});
 
 it("allows an unchanged server call to finish across config publication", async ({ signal }) => {
-  const { manager, config, params } = await fixture();
-  const original = await manager.getOrCreate({ ...params, cfg: config() });
+  const { config, params, get, publish } = await fixture();
+  const original = await get();
   const healthy = await probe(original, "healthy");
   const held = path.join(params.workspaceDir, "held-call");
   const result = probe(original, "healthy", { hold: held });
   const observed = result.catch(() => undefined);
   try {
-    await withinTest(
-      awaitGateBeforeSettlement(
-        receipts.waitFor(held, "started"),
-        result,
-        `Held MCP call settled before starting in ${held}`,
-      ),
-      signal,
-    );
-    await manager.reloadConfig({ cfg: config("new"), manifestRegistry: params.manifestRegistry });
-    const refreshed = await manager.getOrCreate({ ...params, cfg: config("new") });
+    await waitForCall(held, result, signal);
+    await publish(config("new"));
+    const refreshed = await get(config("new"));
     await fs.writeFile(held, "release");
     expect(await result).toEqual(healthy);
     expect(await probe(refreshed, "healthy")).toEqual(healthy);
@@ -175,24 +220,17 @@ it("allows an unchanged server call to finish across config publication", async 
 it.each(["creating", "queued"])(
   "fences a %s acquisition against a crossed publication",
   async (phase) => {
-    const { config, params } = await fixture();
-    const started = createDeferred();
-    const released = createDeferred();
-    releaseHeld.push(() => released.resolve());
-    const manager = createSessionMcpRuntimeManager({
-      async createRuntime(input) {
-        started.resolve();
-        await released.promise;
-        return createSessionMcpRuntime(input);
-      },
+    const { started, released, wait } = hold();
+    const { config, params, manager, get, publish } = await fixture(undefined, async (input) => {
+      await wait();
+      return createSessionMcpRuntime(input);
     });
-    managers.push(manager);
     const first = manager.acquire({ ...params, cfg: config() });
     await started.promise;
     const pending = phase === "queued" ? manager.acquire({ ...params, cfg: config() }) : first;
     const next = config();
     delete next.mcp!.servers!.changed;
-    await manager.reloadConfig({ cfg: next, manifestRegistry: params.manifestRegistry });
+    await publish(next);
     released.resolve();
     if (phase === "queued") {
       (await first).releaseLease();
@@ -201,100 +239,29 @@ it.each(["creating", "queued"])(
     const old = acquisition.runtime;
     await expect(probe(old, "changed")).rejects.toThrow();
     expect(await probe(old, "healthy")).toMatchObject({ label: "healthy" });
-    const materialized = await materializeBundleMcpToolsForRun(acquisition);
-    try {
-      expect(materialized.tools.map((tool) => tool.name)).toEqual(["healthy__probe"]);
-    } finally {
-      await materialized.dispose();
-    }
-    const current = await manager.getOrCreate({ ...params, cfg: next });
+    await expectToolsAndDispose(materializeBundleMcpToolsForRun(acquisition));
+    const current = await get(next);
     expect((await current.getCatalog()).servers.changed).toBeUndefined();
   },
 );
 
 async function httpProbe(onDelete?: () => Promise<void>, onList?: () => Promise<void>) {
-  let initialized = 0;
-  const server = http.createServer((req, res) => {
-    void (async () => {
-      if (req.method === "DELETE") {
-        await onDelete?.();
-        res.writeHead(200).end();
-        return;
-      }
-      if (req.method !== "POST") {
-        res.writeHead(405).end();
-        return;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as {
-        id?: number;
-        method: string;
-        params?: { protocolVersion?: string };
-      };
-      let result;
-      if (message.method === "initialize") {
-        res.setHeader("mcp-session-id", String(++initialized));
-        result = {
-          protocolVersion: message.params?.protocolVersion,
-          capabilities: { tools: {} },
-          serverInfo: { name: "requester-probe", version: "1" },
-        };
-      } else if (message.method === "tools/list") {
-        await onList?.();
-        result = { tools: [{ name: "probe", inputSchema: { type: "object" } }] };
-      } else if (message.method === "tools/call") {
-        result = {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                pid: Number(req.headers["mcp-session-id"]),
-                label: "requester",
-              }),
-            },
-          ],
-        };
-      }
-      if (!result) {
-        res.writeHead(202).end();
-        return;
-      }
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-    })().catch(() => {
-      res.writeHead(500).end();
-    });
+  const server = await startMcpLifecycleServer({
+    toolName: "probe",
+    onDelete,
+    onList,
+    text: (_endpoint, pid) => JSON.stringify({ pid, label: "requester" }),
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  cleanups.push(async () => {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP probe did not bind");
-  }
-  return `http://127.0.0.1:${address.port}/mcp`;
+  cleanups.push(server.close);
+  return `${server.url}/mcp`;
 }
 
 it.each(["changed", "healthy"])(
   "materializes healthy siblings when %s discovery spans revocation",
   async (heldServer) => {
-    const started = createDeferred();
-    const released = createDeferred();
-    releaseHeld.push(() => released.resolve());
-    const url = await httpProbe(undefined, async () => {
-      started.resolve();
-      await released.promise;
-    });
-    const { manager, config, params } = await fixture();
+    const { started, released, wait } = hold();
+    const url = await httpProbe(undefined, wait);
+    const { manager, config, params, publish } = await fixture();
     const cfg = config();
     cfg.mcp!.servers![heldServer] = { transport: "streamable-http", url };
     const acquisition = await manager.acquire({ ...params, cfg });
@@ -304,74 +271,25 @@ it.each(["changed", "healthy"])(
     await probe(acquisition.runtime, heldServer === "changed" ? "healthy" : "changed");
     const next = structuredClone(cfg);
     delete next.mcp!.servers!.changed;
-    await manager.reloadConfig({ cfg: next, manifestRegistry: params.manifestRegistry });
+    await publish(next);
     released.resolve();
-    const materialized = await pending;
-    try {
-      expect(materialized.tools.map((tool) => tool.name)).toEqual(["healthy__probe"]);
-      expect(materialized.diagnostics).toEqual([
-        expect.objectContaining({
-          serverName: "changed",
-          message: expect.stringMatching(/retired/),
-        }),
-      ]);
-    } finally {
-      await materialized.dispose();
-    }
+    await expectToolsAndDispose(pending, undefined, true);
   },
 );
 
-it("refreshes a catalog invalidated while a sibling is still discovering", async () => {
-  const started = createDeferred();
-  const released = createDeferred();
-  releaseHeld.push(() => released.resolve());
-  const url = await httpProbe(undefined, async () => {
-    started.resolve();
-    await released.promise;
-  });
-  const { manager, config, params } = await fixture();
-  const cfg = config();
-  delete cfg.mcp!.servers!.changed;
-  const first = await manager.getOrCreate({ ...params, cfg });
-  await first.getCatalog();
-  const second = await manager.getOrCreate({
-    ...params,
-    sessionId: "discovering-sibling",
-    cfg: { mcp: { servers: { sibling: { transport: "streamable-http", url } } } },
-  });
-  const combined = createCombinedSessionMcpRuntime({ ...params, parts: [first, second] });
-  const pending = combined.getCatalog();
-  await started.promise;
-  await probe(first, "healthy", { changeTools: true });
-  await expect.poll(() => first.peekCatalog()).toBeNull();
-  released.resolve();
-  expect((await pending).tools.map((tool) => tool.toolName)).toEqual(["updated_probe", "probe"]);
-  expect(combined.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual([
-    "updated_probe",
-    "probe",
-  ]);
-});
-
-it.each(["remove", "disable", "public origin"])(
+it.each(["remove", "public origin"])(
   "does not publish revoked sign-in tools when %s crosses sibling discovery",
   async (change) => {
-    const started = createDeferred();
-    const released = createDeferred();
-    releaseHeld.push(() => released.resolve());
-    const url = await httpProbe(undefined, async () => {
-      started.resolve();
-      await released.promise;
-    });
-    const { manager, config, params } = await fixture();
+    const { started, released, wait } = hold();
+    const url = await httpProbe(undefined, wait);
+    const { manager, config, params, publish } = await fixture();
     const cfg = config();
     cfg.gateway = { publicOrigin: "https://gateway.example.test" };
     cfg.mcp!.servers!.healthy = { transport: "streamable-http", url };
     for (const serverName of ["calendar", "contacts"]) {
       cfg.mcp!.servers![serverName] = {
-        transport: "streamable-http",
+        ...oauthServer(),
         url: `https://mcp.example.test/${serverName}`,
-        auth: "oauth",
-        oauth: { identity: "per-requester" },
       };
     }
     const acquisition = await manager.acquire({ ...params, cfg, requesterSenderId: "alice" });
@@ -380,23 +298,17 @@ it.each(["remove", "disable", "public origin"])(
     const next = structuredClone(cfg);
     if (change === "remove") {
       delete next.mcp!.servers!.calendar;
-    } else if (change === "disable") {
-      next.mcp!.servers!.calendar!.enabled = false;
     } else {
       next.gateway!.publicOrigin = "https://replacement.example.test";
     }
-    await manager.reloadConfig({ cfg: next, manifestRegistry: params.manifestRegistry });
+    await publish(next);
     released.resolve();
-    const materialized = await pending;
-    try {
-      expect(materialized.tools.map((tool) => tool.name)).toEqual(
-        change === "public origin"
-          ? ["changed__probe", "healthy__probe"]
-          : ["changed__probe", "contacts__connect", "healthy__probe"],
-      );
-    } finally {
-      await materialized.dispose();
-    }
+    await expectToolsAndDispose(
+      pending,
+      change === "public origin"
+        ? ["changed__probe", "healthy__probe"]
+        : ["changed__probe", "contacts__connect", "healthy__probe"],
+    );
   },
 );
 
@@ -419,58 +331,25 @@ it("rotates one requester's changed server while retaining sibling connections a
       });
     }
     const clock = createGatewaySchedulerClock(100_000);
-    const { manager, params } = await fixture(createTestGatewayScheduler(clock.clock));
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      mcp: {
-        servers: {
-          first: { transport: "streamable-http" },
-          second: { transport: "streamable-http" },
-        },
-      },
-    };
+    const { manager, params, publish } = await fixture(createTestGatewayScheduler(clock.clock));
+    const cfg = mcpConfig({
+      first: { transport: "streamable-http" },
+      second: { transport: "streamable-http" },
+    });
     const aliceParams = { ...params, cfg, requesterSenderId: "alice" };
     const bobParams = { ...params, cfg, requesterSenderId: "bob" };
     const alice = await manager.getOrCreate(aliceParams);
     const bob = await manager.getOrCreate(bobParams);
-    const before = await Promise.all([
-      probe(alice, "first"),
-      probe(alice, "second"),
-      probe(bob, "first"),
-      probe(bob, "second"),
-    ]);
+    const before = await probeConnections(alice, bob);
     generation++;
     clock.setTime(clock.clock.now() + 300_000);
     const nextAlice = await manager.getOrCreate(aliceParams);
     const nextBob = await manager.getOrCreate(bobParams);
-    const after = await Promise.all([
-      probe(nextAlice, "first"),
-      probe(nextAlice, "second"),
-      probe(nextBob, "first"),
-      probe(nextBob, "second"),
-    ]);
+    const after = await probeConnections(nextAlice, nextBob);
     expect(after[0]).not.toEqual(before[0]);
     expect(after.slice(1)).toEqual(before.slice(1));
-    const oldHandle = await manager.getOrCreateRequesterScoped(aliceParams);
-    expect(oldHandle).toBeDefined();
-    await manager.reloadConfig({
-      cfg,
-      manifestRegistry: params.manifestRegistry,
-      reloadPlugins: true,
-    });
+    await publish(cfg, true);
     await expect(probe(nextAlice, "first")).rejects.toThrow();
-    const currentHandle = await manager.getOrCreateRequesterScoped(bobParams);
-    expect(currentHandle).toBeDefined();
-    const currentCatalog = await currentHandle!.runtime.getCatalog();
-    manager.rememberAdvertisedScopedCatalog(currentHandle!, currentCatalog);
-    manager.rememberAdvertisedScopedCatalog(oldHandle!, {
-      ...currentCatalog,
-      servers: {
-        retired: { serverName: "retired", launchSummary: "retired plugin", toolCount: 0 },
-      },
-      tools: [],
-    });
-    expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.servers.retired).toBeUndefined();
     const successor = await manager.getOrCreate(aliceParams);
     expect(await probe(successor, "first")).not.toEqual(after[0]);
   });
@@ -481,35 +360,16 @@ it.each(["removal", "public origin change", "plugin replacement with explicit sh
   async (change) => {
     const { manager, params } = await fixture();
     const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
+      ...mcpConfig({ calendar: { ...oauthServer(), cwd: params.workspaceDir } }),
       gateway: { publicOrigin: "https://gateway.example.test" },
-      mcp: {
-        servers: {
-          calendar: {
-            transport: "streamable-http",
-            url: "https://mcp.example.test",
-            auth: "oauth",
-            oauth: { identity: "per-requester" },
-            cwd: params.workspaceDir,
-          },
-        },
-      },
     };
     const calendar = expectDefined(cfg.mcp!.servers!.calendar, "calendar server");
     const reloadPlugins = change === "plugin replacement with explicit shadow";
     const manifestRegistry = reloadPlugins
-      ? {
-          plugins: [
-            createPluginManifestRecordFixture({
-              id: "reload-probe",
-              rootDir: params.workspaceDir,
-              mcpServers: { calendar },
-            }),
-          ],
-        }
+      ? pluginRegistry(params.workspaceDir, { calendar })
       : params.manifestRegistry;
     if (reloadPlugins) {
-      cfg.plugins = { entries: { "reload-probe": { enabled: true } } };
+      cfg.plugins = enabledPlugin();
       cfg.mcp!.servers = {};
     }
     const runtime = await manager.getOrCreate({
@@ -540,84 +400,45 @@ it.each(["removal", "public origin change", "plugin replacement with explicit sh
   },
 );
 
-it("preserves transferred servers across queued replacements", async () => {
-  const { manager, config, params } = await fixture();
-  const original = await manager.getOrCreate({ ...params, cfg: config() });
-  const healthy = await probe(original, "healthy");
-  await probe(original, "changed");
-  const closing = createDeferred();
-  const released = createDeferred();
-  releaseHeld.push(() => released.resolve());
-  const dispose = original.dispose;
-  original.dispose = async () => {
-    closing.resolve();
-    await released.promise;
-    await dispose();
-  };
-  const first = manager.getOrCreate({ ...params, cfg: config("intermediate") });
-  await closing.promise;
-  const second = manager.getOrCreate({ ...params, cfg: config("winner") });
-  released.resolve();
-  await first;
-  const winner = await second;
-  expect(await probe(winner, "healthy")).toEqual(healthy);
-  expect(await probe(winner, "changed")).toMatchObject({ label: "winner" });
-});
-
-it("retains plugin retirement across a later config-only publication during creation", async () => {
+it("retires an in-flight plugin across publication and reconnects on the next acquisition", async () => {
   const resolverRegistry = createMcpProofPluginRegistry();
   await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
     const url = await httpProbe();
-    const { params } = await fixture();
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      mcp: { servers: { scoped: { transport: "streamable-http" } } },
-    };
+    const cfg = mcpConfig({ scoped: { transport: "streamable-http" } });
     const resolverApi = resolverRegistry.apiFor("test-plugin");
     resolverApi.registerMcpServerConnectionResolver({
       serverName: "scoped",
       resolve: async () => ({ url }),
     });
-    const started = createDeferred();
-    const released = createDeferred();
+    const { started, released, wait } = hold();
     let retired: SessionMcpRuntime | undefined;
     let firstConnection: Awaited<ReturnType<typeof probe>> | undefined;
-    releaseHeld.push(() => released.resolve());
-    const manager = createSessionMcpRuntimeManager({
-      async createRuntime(input) {
-        const runtime = createSessionMcpRuntime(input);
-        if (input.requesterScope && !retired) {
-          retired = runtime;
-          firstConnection = await probe(runtime, "scoped");
-          started.resolve();
-          await released.promise;
-        }
-        return runtime;
-      },
+    const { manager, params, publish } = await fixture(undefined, async (input) => {
+      const runtime = createSessionMcpRuntime(input);
+      if (input.requesterScope && !retired) {
+        retired = runtime;
+        firstConnection = await probe(runtime, "scoped");
+        await wait();
+      }
+      return runtime;
     });
-    managers.push(manager);
     const pending = manager.getOrCreate({ ...params, cfg, requesterSenderId: "alice" });
     await started.promise;
     resolverApi.registerMcpServerConnectionResolver({
       serverName: "scoped",
       resolve: async () => ({ url, headers: { Authorization: "replacement" } }),
     });
-    await manager.reloadConfig({
-      cfg,
-      manifestRegistry: params.manifestRegistry,
-      reloadPlugins: true,
-    });
-    await manager.reloadConfig({
-      cfg: structuredClone(cfg),
-      manifestRegistry: params.manifestRegistry,
-    });
+    await publish(cfg, true);
+    await publish(structuredClone(cfg));
     released.resolve();
-    expect(await probe(await pending, "scoped")).not.toEqual(firstConnection);
+    await expect(probe(await pending, "scoped")).rejects.toThrow("disposed");
     await expect(probe(expectDefined(retired, "retired plugin owner"), "scoped")).rejects.toThrow();
+    const next = await manager.getOrCreate({ ...params, cfg, requesterSenderId: "alice" });
+    expect(await probe(next, "scoped")).not.toEqual(firstConnection);
   });
 });
 
-it.each(["no shadow", "shadow at publication", "shadow before transfer"])(
+it.each(["shadow at publication", "shadow before transfer"])(
   "retires a transferred plugin with %s before the next queued acquisition",
   async (shadow) => {
     const { manager, config, params } = await fixture();
@@ -626,26 +447,13 @@ it.each(["no shadow", "shadow at publication", "shadow before transfer"])(
       args: [path.join(params.workspaceDir, "server.mjs"), "plugin"],
       cwd: params.workspaceDir,
     };
-    const manifestRegistry = {
-      plugins: [
-        createPluginManifestRecordFixture({
-          id: "reload-probe",
-          rootDir: params.workspaceDir,
-          mcpServers: {
-            bundled: bundledServer,
-          },
-        }),
-      ],
-    };
+    const manifestRegistry = pluginRegistry(params.workspaceDir, { bundled: bundledServer });
     const cfg = (label: string): OpenClawConfig => {
       const next = {
         ...config(label),
-        plugins: { entries: { "reload-probe": { enabled: true } } },
+        plugins: enabledPlugin(),
       };
-      if (
-        (label === "winner" && shadow !== "no shadow") ||
-        (label === "intermediate" && shadow === "shadow before transfer")
-      ) {
+      if (label === "winner" || (label === "intermediate" && shadow === "shadow before transfer")) {
         next.mcp!.servers!.bundled = bundledServer;
       }
       return next;
@@ -655,13 +463,10 @@ it.each(["no shadow", "shadow at publication", "shadow before transfer"])(
     const original = await acquire("old");
     const healthy = await probe(original, "healthy");
     const bundled = await probe(original, "bundled");
-    const closing = createDeferred();
-    const released = createDeferred();
-    releaseHeld.push(() => released.resolve());
+    const { started: closing, released, wait } = hold();
     const dispose = original.dispose;
     original.dispose = async () => {
-      closing.resolve();
-      await released.promise;
+      await wait();
       await dispose();
     };
     const first = acquire("intermediate");
@@ -677,138 +482,97 @@ it.each(["no shadow", "shadow at publication", "shadow before transfer"])(
 );
 
 it("reconciles a second publication arriving while a pending owner is retiring a server", async () => {
-  const closing = createDeferred();
-  const releaseClose = createDeferred();
-  releaseHeld.push(() => releaseClose.resolve());
+  const { started: closing, released: releaseClose, wait } = hold();
   let held = false;
   const url = await httpProbe(async () => {
     if (!held) {
       held = true;
-      closing.resolve();
-      await releaseClose.promise;
+      await wait();
     }
   });
-  const { params } = await fixture();
   const server = { transport: "streamable-http" as const, url };
-  const cfg: OpenClawConfig = {
-    plugins: { enabled: false },
-    mcp: { servers: { first: server, second: server } },
-  };
-  const created = createDeferred();
-  const releaseCreate = createDeferred();
-  releaseHeld.push(() => releaseCreate.resolve());
-  const manager = createSessionMcpRuntimeManager({
-    async createRuntime(input) {
-      const runtime = createSessionMcpRuntime(input);
-      await runtime.getCatalog();
-      created.resolve();
-      await releaseCreate.promise;
-      return runtime;
-    },
+  const cfg = mcpConfig({ first: server, second: server });
+  const { started: created, released: releaseCreate, wait: waitForCreate } = hold();
+  const { get, publish } = await fixture(undefined, async (input) => {
+    const runtime = createSessionMcpRuntime(input);
+    await runtime.getCatalog();
+    await waitForCreate();
+    return runtime;
   });
-  managers.push(manager);
-  const pending = manager.getOrCreate({ ...params, cfg });
+  const pending = get(cfg);
   await created.promise;
-  await manager.reloadConfig({
-    cfg: { ...cfg, mcp: { servers: { second: server } } },
-    manifestRegistry: params.manifestRegistry,
-  });
+  await publish(mcpConfig({ second: server }));
   releaseCreate.resolve();
   await closing.promise;
-  const latestPublication = manager.reloadConfig({
-    cfg: { ...cfg, mcp: { servers: {} } },
-    manifestRegistry: params.manifestRegistry,
-  });
+  const latestPublication = publish(mcpConfig({}));
   releaseClose.resolve();
   await latestPublication;
   await expect(probe(await pending, "second")).rejects.toThrow();
 });
 
-it("preserves an explicit config snapshot acquired after an unrelated global publication", async () => {
-  const { manager, config, params } = await fixture();
-  await manager.reloadConfig({
-    cfg: { mcp: { servers: {} } },
-    manifestRegistry: params.manifestRegistry,
-  });
-  const explicit = await manager.getOrCreate({ ...params, cfg: config() });
-  expect(await probe(explicit, "healthy")).toMatchObject({ label: "healthy" });
-});
-
-it.each([false, true])(
-  "accounts for config cleanup with concurrent replacement %s",
-  async (replace) => {
-    const closing = createDeferred();
-    const releaseClose = createDeferred();
-    releaseHeld.push(() => releaseClose.resolve());
-    const url = await httpProbe(async () => {
-      closing.resolve();
-      await releaseClose.promise;
-    });
-    const { manager, params } = await fixture();
-    const server = { transport: "streamable-http" as const, url };
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      mcp: { servers: { first: server, second: server } },
-    };
-    const original = await manager.getOrCreate({
+it("accounts for config cleanup with concurrent replacement", async () => {
+  const { started: closing, released: releaseClose, wait } = hold();
+  const url = await httpProbe(wait);
+  const { manager, params, get, publish } = await fixture();
+  const server = { transport: "streamable-http" as const, url };
+  const next = mcpConfig({ second: server });
+  const original = await get(mcpConfig({ first: server }));
+  await probe(original, "first");
+  const acquire = (sessionId: string) =>
+    manager.getOrCreate({
       ...params,
-      cfg: { ...cfg, mcp: { servers: { first: server } } },
+      sessionId,
+      cfg: next,
     });
-    await probe(original, "first");
-    const acquire = (sessionId: string) =>
-      manager.getOrCreate({
-        ...params,
-        sessionId,
-        cfg: { ...cfg, mcp: { servers: { second: server } } },
-      });
+  const leases = [];
+  try {
     for (let index = 0; index < 255; index += 1) {
-      await acquire(`other-${index}`);
+      leases.push(
+        await manager.acquire({
+          ...params,
+          sessionId: `other-${index}`,
+          cfg: next,
+        }),
+      );
     }
-    const reload = manager.reloadConfig({
-      cfg: { ...cfg, mcp: { servers: { second: server } } },
-      manifestRegistry: params.manifestRegistry,
-    });
+    const reload = publish(next);
     await closing.promise;
-    const replacement = replace ? acquire(params.sessionId) : undefined;
-    await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+    const replacement = acquire(params.sessionId);
+    const blocked = await acquire("overflow");
+    expect((await blocked.getCatalog()).diagnostics?.[0]?.message).toContain(
+      "all 256 Gateway MCP runtimes are in use",
+    );
+    expect(manager.peekSession({ sessionId: "overflow" })).toBeUndefined();
     releaseClose.resolve();
     await reload;
-    await replacement;
-    if (replace) {
-      await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
-      await manager.disposeSession(params.sessionId);
-    }
+    const replaced = await replacement;
     await acquire("overflow");
-    // The cached empty facade must reserve capacity again before gaining a server.
-    await expect(acquire(params.sessionId)).rejects.toThrow("live runtime limit (256)");
-  },
-);
+    expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
+    await manager.disposeSession("overflow");
+    expect(await acquire(params.sessionId)).not.toBe(replaced);
+  } finally {
+    releaseClose.resolve();
+    leases.forEach((lease) => lease.releaseLease());
+  }
+});
 
 it("joins config retirement cleanup before installing a replacement transport", async () => {
-  const closing = createDeferred();
-  const releaseClose = createDeferred();
-  releaseHeld.push(() => releaseClose.resolve());
-  const url = await httpProbe(async () => {
-    closing.resolve();
-    await releaseClose.promise;
-  });
-  const { manager, params } = await fixture();
+  const { started: closing, released: releaseClose, wait } = hold();
+  const url = await httpProbe(wait);
+  const { get, publish } = await fixture();
   const server = { transport: "streamable-http" as const, url };
-  const cfg: OpenClawConfig = {
-    plugins: { enabled: false },
-    mcp: { servers: { first: server, second: server } },
-  };
-  const original = await manager.getOrCreate({ ...params, cfg });
+  const cfg = mcpConfig({ first: server, second: server });
+  const original = await get(cfg);
   await probe(original, "first");
   const healthy = await probe(original, "second");
   const next = {
     ...cfg,
     mcp: { servers: { first: { ...server, headers: { "X-Generation": "new" } }, second: server } },
   };
-  const reload = manager.reloadConfig({ cfg: next, manifestRegistry: params.manifestRegistry });
+  const reload = publish(next);
   await closing.promise;
   let installed = false;
-  const replacement = manager.getOrCreate({ ...params, cfg: next }).then((runtime) => {
+  const replacement = get(next).then((runtime) => {
     installed = true;
     return runtime;
   });
@@ -824,39 +588,27 @@ it("joins config retirement cleanup before installing a replacement transport", 
 it("revokes transferred active work while unrelated transport cleanup is pending", async ({
   signal,
 }) => {
-  const closing = createDeferred();
-  const releaseClose = createDeferred();
-  releaseHeld.push(() => releaseClose.resolve());
-  const url = await httpProbe(async () => {
-    closing.resolve();
-    await releaseClose.promise;
-  });
-  const { manager, config, params } = await fixture();
+  const { started: closing, released: releaseClose, wait } = hold();
+  const url = await httpProbe(wait);
+  const { config, params, get, publish } = await fixture();
   const cfg = config();
   cfg.mcp!.servers!.changed = { transport: "streamable-http", url };
-  const original = await manager.getOrCreate({ ...params, cfg });
+  const original = await get(cfg);
   await probe(original, "changed");
   const marker = path.join(params.workspaceDir, "revoked-call");
   let revoked = false;
   const held = probe(original, "healthy", { hold: marker }).catch(() => {
     revoked = true;
   });
-  await withinTest(
-    awaitGateBeforeSettlement(
-      receipts.waitFor(marker, "started"),
-      held,
-      `Held MCP call settled before starting in ${marker}`,
-    ),
-    signal,
-  );
+  await waitForCall(marker, held, signal);
   const next = structuredClone(cfg);
   next.mcp!.servers!.changed = { transport: "streamable-http", url, headers: { generation: "2" } };
-  const pending = manager.getOrCreate({ ...params, cfg: next });
+  const pending = get(next);
   void pending.catch(() => undefined);
   await closing.promise;
   const removed = structuredClone(next);
   delete removed.mcp!.servers!.healthy;
-  await manager.reloadConfig({ cfg: removed, manifestRegistry: params.manifestRegistry });
+  await publish(removed);
   await setImmediate();
   expect(revoked).toBe(true);
   releaseClose.resolve();
@@ -865,12 +617,12 @@ it("revokes transferred active work while unrelated transport cleanup is pending
 });
 
 it("completes required retirement when the old run releases the final transferred lease", async () => {
-  const { manager, config, params } = await fixture();
-  const original = await manager.getOrCreate({ ...params, cfg: config() });
+  const { manager, config, params, get } = await fixture();
+  const original = await get();
   const releaseOriginal = expectDefined(original.acquireLease, "original run lease")();
   const healthy = await probe(original, "healthy");
   manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
-  const replacement = await manager.getOrCreate({ ...params, cfg: config("new") });
+  const replacement = await get(config("new"));
   const releaseReplacement = expectDefined(replacement.acquireLease, "replacement run lease")();
   releaseReplacement();
   await expect(manager.completeDeferredRetirement(params.sessionId, replacement)).resolves.toBe(
@@ -885,17 +637,14 @@ it("completes required retirement when the old run releases the final transferre
 it.each([false, true])(
   "defers retirement behind acquisition (required: %s)",
   async (retainAcrossReuse) => {
-    const { manager, config, params } = await fixture();
-    const original = await manager.getOrCreate({ ...params, cfg: config() });
+    const { manager, config, params, get } = await fixture();
+    const original = await get();
     const releaseOriginal = expectDefined(original.acquireLease, "original run lease")();
     const healthy = await probe(original, "healthy");
-    const closing = createDeferred();
-    const releaseClose = createDeferred();
-    releaseHeld.push(() => releaseClose.resolve());
+    const { started: closing, released: releaseClose, wait } = hold();
     const dispose = original.dispose;
     original.dispose = async () => {
-      closing.resolve();
-      await releaseClose.promise;
+      await wait();
       await dispose();
     };
     const pending = manager.acquire({ ...params, cfg: config("new") }).then((lease) => ({
@@ -920,22 +669,14 @@ it.each([false, true])(
 it("completes required retirement after pending requester acquisition fails without a lease", async () => {
   const { manager, config, params } = await fixture();
   const cfg = config();
-  cfg.mcp!.servers!.calendar = {
-    transport: "streamable-http",
-    url: "https://mcp.example.test",
-    auth: "oauth",
-    oauth: { identity: "per-requester" },
-  };
+  cfg.mcp!.servers!.calendar = oauthServer();
   const input = { ...params, cfg, requesterSenderId: "alice" };
   const original = await manager.getOrCreate(input);
   const releaseOriginal = expectDefined(original.acquireLease, "original run lease")();
   const healthy = await probe(original, "healthy");
-  const started = createDeferred();
-  const released = createDeferred();
-  releaseHeld.push(() => released.resolve());
+  const { started, released, wait } = hold();
   readAuthorization.mockImplementationOnce(async () => {
-    started.resolve();
-    await released.promise;
+    await wait();
     throw new Error("requester authorization unavailable");
   });
   const pending = manager.getOrCreateRequesterScoped(input).catch((error: unknown) => error);

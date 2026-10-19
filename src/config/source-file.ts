@@ -8,9 +8,11 @@ import {
   type WatchSubscription,
 } from "@openclaw/fs-safe/watch";
 import {
+  FS_RECONCILE_MS,
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { resolveIncludeRoots } from "./paths.js";
 import {
   admitConfigObservationRoots,
@@ -108,10 +110,7 @@ export function createConfigFileAdapter(opts: {
     }
     primaryTarget ??=
       admitted.find((entry) => entry.primary)?.primary?.target ?? nodePath.resolve(opts.path);
-    const plans = new Map<
-      string,
-      { root: Root; entries: Map<string, string>; scopes: WatchScope[] }
-    >();
+    const plans = new Map<string, Pick<Source, "root" | "entries" | "scopes">>();
     for (const boundary of admitted) {
       const entries = [...configObservationEntries(boundary, desiredPaths)];
       for (let offset = 0; offset < entries.length; offset += 128) {
@@ -173,41 +172,44 @@ export function createConfigFileAdapter(opts: {
         subscription: watch(plan.root, {
           scopes: plan.scopes,
           mode: next.mode,
+          intervalMs: FS_RECONCILE_MS,
           pollIntervalMs: resolveFsObservationIntervalMs(),
           signal: next.lifetime.signal,
-          onInvalidate: (hint) => {
-            // Each new baseline has its own read-gap check below.
-            if (!source.ready && hint.reason === "reconcile" && !hint.changes?.length) {
-              return;
-            }
-            const indirect = source.scopes.filter(
-              (scope) => !source.entries.has(nodePath.normalize(scope.path)),
-            );
-            if (
-              source.ready &&
-              indirect.length &&
-              (!hint.changes ||
-                hint.changes.some(
-                  (change) =>
-                    change.type === "structural" &&
-                    indirect.some(
-                      (scope) => nodePath.normalize(scope.path) === nodePath.normalize(change.path),
-                    ),
-                ))
-            ) {
-              opts.onChange();
-              void reconcilePaths([...watchedPaths], true).catch((error: unknown) =>
-                handleWatcherError(next, error),
+          onInvalidate: (hint) =>
+            runWithMainThreadTask("fs-watch:config", () => {
+              // Each new baseline has its own read-gap check below.
+              if (!source.ready && hint.reason === "reconcile" && !hint.changes?.length) {
+                return;
+              }
+              const indirect = source.scopes.filter(
+                (scope) => !source.entries.has(nodePath.normalize(scope.path)),
               );
-              return;
-            }
-            if (hint.changes?.length) {
-              retries = 0;
-            }
-            next.stability.dirty(
-              [...source.entries.keys()].map((relative) => ({ root: source.root, relative })),
-            );
-          },
+              if (
+                source.ready &&
+                indirect.length &&
+                (!hint.changes ||
+                  hint.changes.some(
+                    (change) =>
+                      change.type === "structural" &&
+                      indirect.some(
+                        (scope) =>
+                          nodePath.normalize(scope.path) === nodePath.normalize(change.path),
+                      ),
+                  ))
+              ) {
+                opts.onChange();
+                void reconcilePaths([...watchedPaths], true).catch((error: unknown) =>
+                  handleWatcherError(next, error),
+                );
+                return;
+              }
+              if (hint.changes?.length) {
+                retries = 0;
+              }
+              next.stability.dirty(
+                [...source.entries.keys()].map((relative) => ({ root: source.root, relative })),
+              );
+            }),
           onHealth: (health) => {
             if (health.state === "unavailable") {
               handleWatcherError(
@@ -280,7 +282,7 @@ export function createConfigFileAdapter(opts: {
     };
     watcher = next;
     status = "active";
-    void enqueueRefresh(next);
+    return enqueueRefresh(next);
   };
 
   const handleWatcherError = (source: Watcher, error: unknown, eventWatchFailed = false) => {
@@ -327,7 +329,7 @@ export function createConfigFileAdapter(opts: {
       void retirement.then(
         () => {
           if (!stopped && !watcher) {
-            createWatcher(true);
+            void createWatcher(true);
           }
         },
         () => {},
@@ -360,12 +362,13 @@ export function createConfigFileAdapter(opts: {
   };
 
   return {
-    start: () => {
+    start: async () => {
       if (!started && !stopped) {
         started = true;
-        createWatcher(false);
+        await createWatcher(false);
       }
     },
+    whenSettled: () => watcher?.stability.whenSettled() ?? Promise.resolve(),
     observePaths: (paths: readonly string[]) => reconcilePaths([...acceptedPaths, ...paths]),
     acceptPaths: (paths: readonly string[]) => {
       acceptedPaths = [...paths];

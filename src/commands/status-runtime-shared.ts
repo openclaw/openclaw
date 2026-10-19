@@ -1,22 +1,28 @@
-// Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveNodeService } from "../daemon/node-service.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import { formatServiceLabel } from "../daemon/runtime-format.js";
+import {
+  inspectGatewayServiceInstallationDrift,
+  summarizeGatewayServiceLayout,
+  type GatewayServiceLayoutSummary,
+} from "../daemon/service-layout.js";
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import type { GatewayServiceLoadState } from "../daemon/service-types.js";
+import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
-import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { formatDaemonRuntimeShort } from "./status.format.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
-
-const statusUsageModuleLoader = createLazyImportLoader(() => import("./status-usage.runtime.js"));
-const securityAuditModuleLoader = createLazyImportLoader(
-  () => import("../security/audit.runtime.js"),
-);
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 /** Runs the lightweight security audit used by status JSON/all output. */
 export async function resolveStatusSecurityAudit(params: {
@@ -24,7 +30,7 @@ export async function resolveStatusSecurityAudit(params: {
   sourceConfig: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const { runSecurityAudit } = await securityAuditModuleLoader.load();
+  const { runSecurityAudit } = await import("../security/audit.runtime.js");
   // The audit owns setup-backed capabilities; inventory projections can name
   // accounts without carrying their channel security adapters.
   return await runSecurityAudit({
@@ -40,120 +46,199 @@ export async function resolveStatusSecurityAudit(params: {
 
 /** Loads optional usage and its credential resolver only when requested. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
-  return (await statusUsageModuleLoader.load()).resolveStatusUsageSummary(params);
+  return (await import("./status-usage.runtime.js")).resolveStatusUsageSummary(params);
 }
 
-/** Calls gateway health and lets errors propagate to deep status callers. */
-export async function resolveStatusGatewayHealth(params: {
+type StatusGatewayQuery = {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayProbeDeadlineMs: number;
-}) {
-  const { callGateway } = await gatewayCallModuleLoader.load();
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
-  if (timeoutMs === 0) {
-    throw new Error("Gateway probe budget exhausted before health check.");
-  }
-  return await callGateway<HealthSummary>({
-    method: "health",
-    params: { probe: true },
-    timeoutMs,
-    config: params.config,
-  });
-}
+  callOverrides?: { url: string; token?: string; password?: string };
+};
+type StatusGatewayFailure = { kind: "budget" } | { kind: "request"; cause: unknown };
 
-/** Calls gateway health but converts unreachable/failing probes into an error object. */
-export async function resolveStatusGatewayHealthSafe(params: {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  gatewayReachable: boolean;
-  gatewayProbeError?: string | null;
-  callOverrides?: {
-    url: string;
-    token?: string;
-    password?: string;
-  };
-}) {
-  if (!params.gatewayReachable) {
-    // Preserve the probe error so status-all can explain why health was not called.
-    return { error: params.gatewayProbeError ?? "gateway unreachable" };
-  }
-  const { callGateway } = await gatewayCallModuleLoader.load();
+async function queryStatusGateway<T>(
+  params: StatusGatewayQuery,
+  buildRequest: () => Pick<CallGatewayOptions, "method" | "params">,
+): Promise<Result<T, StatusGatewayFailure>> {
+  const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
-    return { error: "Gateway probe budget exhausted before health check." };
+    return { ok: false, error: { kind: "budget" } };
   }
-  return await callGateway<HealthSummary>({
-    method: "health",
-    params: { probe: true },
+  // Import failures still propagate; only an attempted RPC becomes a request failure.
+  return await callGateway<T>({
+    ...buildRequest(),
     timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch((err: unknown) => ({ error: String(err) }));
+  }).then<Result<T, StatusGatewayFailure>, Result<T, StatusGatewayFailure>>(
+    (value) => ({ ok: true, value }),
+    (cause: unknown) => ({ ok: false, error: { kind: "request", cause } }),
+  );
+}
+
+function formatStatusGatewayFailure(error: StatusGatewayFailure, operation: string): string {
+  return error.kind === "budget"
+    ? `Gateway check budget exhausted before ${operation}.`
+    : String(error.cause);
+}
+
+/** Calls gateway health and lets errors propagate to deep status callers. */
+export async function resolveStatusGatewayHealth(
+  params: Omit<StatusGatewayQuery, "callOverrides">,
+) {
+  const result = await queryStatusGateway<HealthSummary>(params, () => ({
+    method: "health",
+    params: { probe: true },
+  }));
+  if (!result.ok) {
+    throw result.error.kind === "request"
+      ? result.error.cause
+      : new Error(formatStatusGatewayFailure(result.error, "health check"));
+  }
+  return result.value;
+}
+
+/** Calls gateway health but converts unreachable/failing probes into an error object. */
+export async function resolveStatusGatewayHealthSafe(
+  params: StatusGatewayQuery & { gatewayReachable: boolean; gatewayProbeError?: string | null },
+) {
+  if (!params.gatewayReachable) {
+    return { error: params.gatewayProbeError ?? "gateway unreachable" };
+  }
+  const result = await queryStatusGateway<HealthSummary>(params, () => ({
+    method: "health",
+    params: { probe: true },
+  }));
+  return result.ok
+    ? result.value
+    : { error: formatStatusGatewayFailure(result.error, "health check") };
 }
 
 export type StatusGatewayDiagnosticsResult = Result<unknown, string>;
 
 /** Reads gateway diagnostics while preserving whether data or an unavailable outcome was observed. */
-export async function resolveStatusGatewayDiagnosticsSafe(params: {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  gatewayReachable: boolean;
-  type?: string;
-  callOverrides?: {
-    url: string;
-    token?: string;
-    password?: string;
-  };
-}): Promise<StatusGatewayDiagnosticsResult> {
+export async function resolveStatusGatewayDiagnosticsSafe(
+  params: StatusGatewayQuery & { gatewayReachable: boolean; type?: string },
+): Promise<StatusGatewayDiagnosticsResult> {
   if (!params.gatewayReachable) {
     return { ok: false, error: "gateway unreachable" };
   }
-  const { callGateway } = await gatewayCallModuleLoader.load();
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
-  if (timeoutMs === 0) {
-    return { ok: false, error: "Gateway probe budget exhausted before diagnostics." };
-  }
-  return await callGateway<unknown>({
+  const result = await queryStatusGateway<unknown>(params, () => ({
     method: "diagnostics.stability",
     params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
-    timeoutMs,
-    config: params.config,
-    ...params.callOverrides,
-  }).then<StatusGatewayDiagnosticsResult, StatusGatewayDiagnosticsResult>(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error: String(error) }),
-  );
+  }));
+  return result.ok
+    ? result
+    : { ok: false, error: formatStatusGatewayFailure(result.error, "diagnostics") };
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-async function resolveStatusLastHeartbeat(params: {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  gatewayReachable: boolean;
-}) {
+async function resolveStatusLastHeartbeat(
+  params: Omit<StatusGatewayQuery, "callOverrides"> & { gatewayReachable: boolean },
+) {
   if (!params.gatewayReachable) {
     return null;
   }
-  const { callGateway } = await gatewayCallModuleLoader.load();
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
-  if (timeoutMs === 0) {
-    return null;
-  }
-  return await callGateway<HeartbeatEventPayload | null>({
+  const result = await queryStatusGateway<HeartbeatEventPayload | null>(params, () => ({
     method: "last-heartbeat",
     params: {},
-    timeoutMs,
-    config: params.config,
-  }).catch(() => null);
+  }));
+  return result.ok ? result.value : null;
 }
 
 // Default bound for service-manager probes when status runs without an explicit
 // --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
 const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
+
+type ServiceStatusSummary = {
+  label: string;
+  installed: boolean | null;
+  loadState: GatewayServiceLoadState;
+  managedByOpenClaw: boolean;
+  externallyManaged: boolean;
+  loadedText: string;
+  runtime: GatewayServiceRuntime | undefined;
+  layout?: GatewayServiceLayoutSummary;
+  wrapperPath?: string;
+  installationDrift?: string;
+};
+
+async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeoutMs?: number) {
+  const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
+  const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
+  const activePackageRoot =
+    serviceLabel === "gateway"
+      ? await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] })
+      : null;
+  let summary: ServiceStatusSummary;
+  try {
+    const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
+    // Layout is optional enrichment; a broken manifest or inaccessible path
+    // must not erase service-manager evidence that the gateway is running.
+    const layout = await summarizeGatewayServiceLayout(state.command).catch(() => undefined);
+    const installationDrift = activePackageRoot
+      ? await inspectGatewayServiceInstallationDrift(layout, activePackageRoot).catch(
+          () => undefined,
+        )
+      : undefined;
+    const wrapperPath = state.command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
+    const managedByOpenClaw = state.installed;
+    // A running unmanaged process still counts as installed for status display.
+    const externallyManaged = !managedByOpenClaw && state.running;
+    const installed = managedByOpenClaw || externallyManaged;
+    const loadedText = externallyManaged
+      ? "running (externally managed)"
+      : state.loadState.status === "loaded"
+        ? service.loadedText
+        : state.loadState.status === "not-loaded"
+          ? service.notLoadedText
+          : "unknown";
+    summary = {
+      label: formatServiceLabel(service.label, state.runtime),
+      installed,
+      loadState: state.loadState,
+      managedByOpenClaw,
+      externallyManaged,
+      loadedText,
+      runtime: state.runtime,
+      ...(layout ? { layout } : {}),
+      ...(wrapperPath ? { wrapperPath } : {}),
+      ...(installationDrift
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(
+              installationDrift,
+              undefined,
+              state.env,
+            ),
+          }
+        : {}),
+    };
+  } catch (error) {
+    // Status output should survive service-manager errors and show an unknown row.
+    summary = {
+      label: fallbackLabel,
+      installed: null,
+      loadState: { status: "unknown", detail: String(error) },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "unknown",
+      runtime: undefined,
+    };
+  }
+  const runtime = summary.runtime?.inspectionFailure
+    ? { ...summary.runtime, detail: `${summary.runtime.detail}; retry with openclaw status --deep` }
+    : summary.runtime;
+  const loaded =
+    summary.loadState.status === "unknown" ? null : summary.loadState.status === "loaded";
+  return {
+    ...summary,
+    loaded,
+    runtime,
+    runtimeShort: formatDaemonRuntimeShort(runtime),
+  };
+}
 
 /** Preserve independent service diagnostics when local status collection refuses state. */
 export async function reportStatusScanFailure(
@@ -162,7 +247,8 @@ export async function reportStatusScanFailure(
   timeoutMs?: number,
 ): Promise<never> {
   try {
-    const { installationDrift } = await getDaemonStatusSummary(
+    const { installationDrift } = await buildDaemonStatusSummary(
+      "gateway",
       timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS,
     );
     if (installationDrift) {
@@ -178,8 +264,8 @@ export async function reportStatusScanFailure(
 export async function resolveStatusServiceSummaries(timeoutMs?: number) {
   const probeTimeoutMs = timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS;
   return await Promise.all([
-    getDaemonStatusSummary(probeTimeoutMs),
-    getNodeDaemonStatusSummary(probeTimeoutMs),
+    buildDaemonStatusSummary("gateway", probeTimeoutMs),
+    buildDaemonStatusSummary("node", probeTimeoutMs),
   ]);
 }
 
@@ -234,17 +320,15 @@ export async function resolveStatusRuntimeSnapshot(params: {
     params.deep && !params.gatewayStartupPhase
       ? !params.gatewayReachable
         ? { error: params.gatewayProbeError ?? "Gateway is unreachable" }
-        : params.suppressHealthErrors
-          ? await resolveGatewayHealthSummary({
-              config: params.config,
-              timeoutMs: params.timeoutMs,
-              gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-            }).catch((error: unknown) => ({ error: String(error) }))
-          : await resolveGatewayHealthSummary({
-              config: params.config,
-              timeoutMs: params.timeoutMs,
-              gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-            })
+        : await resolveGatewayHealthSummary({
+            config: params.config,
+            timeoutMs: params.timeoutMs,
+            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+          }).catch(
+            params.suppressHealthErrors
+              ? (error: unknown) => ({ error: String(error) })
+              : undefined,
+          )
       : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat =

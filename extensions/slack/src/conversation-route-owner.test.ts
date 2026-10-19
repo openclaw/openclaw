@@ -4,7 +4,7 @@ import {
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
+import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 describe("inspectSlackConversationRouteOwner", () => {
@@ -24,7 +24,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     vi.unstubAllEnvs();
   });
 
-  it("checks the thread before its parent without touching liveness", () => {
+  it("prefers the thread over its parent without touching liveness", async () => {
     const touch = vi.fn();
     const resolveByConversation = vi.fn((conversation) =>
       conversation.conversationId === "thread-1"
@@ -47,7 +47,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     });
 
     expect(
-      inspectSlackConversationRouteOwner({
+      await inspectSlackConversationRouteOwner({
         cfg: { channels: { slack: { accounts: { default: {} } } } },
         accountId: "default",
         conversation: { kind: "channel", peerId: "channel-1", threadId: "thread-1" },
@@ -62,13 +62,13 @@ describe("inspectSlackConversationRouteOwner", () => {
     expect(touch).not.toHaveBeenCalled();
   });
 
-  it("distinguishes degraded identity from a qualified target conflict", () => {
+  it("distinguishes degraded identity from a qualified target conflict", async () => {
     releaseInstallation?.();
     const installation = registerSlackInstallationState("default", "degraded");
     releaseInstallation = installation.release;
 
     expect(
-      inspectSlackConversationRouteOwner({
+      await inspectSlackConversationRouteOwner({
         cfg: { channels: { slack: { accounts: { default: {} } } } },
         accountId: "default",
         conversation: { kind: "channel", peerId: "C456" },
@@ -76,7 +76,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     ).toEqual({ kind: "unavailable" });
     installation.update("workspace");
     expect(
-      inspectSlackConversationRouteOwner({
+      await inspectSlackConversationRouteOwner({
         cfg: { channels: { slack: { accounts: { default: {} } } } },
         accountId: "default",
         conversation: { kind: "channel", peerId: "team:T123:channel:C456" },
@@ -84,7 +84,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     ).toBeNull();
   });
 
-  it("fails closed when workspace identity is released during binding inspection", () => {
+  it("fails closed when workspace identity is released during binding inspection", async () => {
     registerSessionBindingAdapter({
       channel: "slack",
       accountId: "default",
@@ -104,13 +104,13 @@ describe("inspectSlackConversationRouteOwner", () => {
       conversation: { kind: "channel" as const, peerId: "C456" },
     };
 
-    expect(inspectSlackConversationRouteOwner(input)).toEqual({
+    expect(await inspectSlackConversationRouteOwner(input)).toEqual({
       kind: "agent",
       agentId: "finance",
     });
     releaseInstallation?.();
     releaseInstallation = undefined;
-    expect(inspectSlackConversationRouteOwner(input)).toEqual({ kind: "unavailable" });
+    expect(await inspectSlackConversationRouteOwner(input)).toEqual({ kind: "unavailable" });
   });
   const inactiveAccounts: Array<{
     name: string;
@@ -140,12 +140,12 @@ describe("inspectSlackConversationRouteOwner", () => {
   ];
   it.each(inactiveAccounts)(
     "rejects a $name without requiring installation identity",
-    ({ accountId, slack }) => {
+    async ({ accountId, slack }) => {
       releaseInstallation?.();
       releaseInstallation = undefined;
 
       expect(
-        inspectSlackConversationRouteOwner({
+        await inspectSlackConversationRouteOwner({
           cfg: { channels: { slack } },
           accountId,
           conversation: { kind: "channel", peerId: "C456" },
@@ -154,12 +154,12 @@ describe("inspectSlackConversationRouteOwner", () => {
     },
   );
 
-  it("preserves a configured default while its token and installation are unavailable", () => {
+  it("preserves a configured default while its token and installation are unavailable", async () => {
     vi.stubEnv("OPENCLAW_TEST_MISSING_SLACK_BOT_TOKEN", undefined);
     releaseInstallation?.();
     releaseInstallation = undefined;
     expect(
-      inspectSlackConversationRouteOwner({
+      await inspectSlackConversationRouteOwner({
         cfg: {
           channels: {
             slack: {

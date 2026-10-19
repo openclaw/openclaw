@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import {
   MessagePort,
   MessageChannel,
+  getEnvironmentData,
   parentPort,
   SHARE_ENV,
   setEnvironmentData,
@@ -12,14 +13,27 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { BrokerNativeResourceCloseError } from "../process/spawn-broker/resource-protocol.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import {
+  readSqliteDatabaseAdmissions,
+  SqliteDatabaseAdmissionRegistry,
+} from "./sqlite-database-admission-record.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";
+import { WORKER_TASK_PORT_MESSAGE } from "./worker-task-transport.js";
 
 if (!isRecord(workerData) || !(workerData.port instanceof MessagePort)) {
   throw new Error("Native worker lifetime owner requires its private port");
 }
 const port = workerData.port;
+const databaseAdmissions = new SqliteDatabaseAdmissionRegistry();
+const inheritedDatabaseAdmissions = readSqliteDatabaseAdmissions(
+  getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+);
+if (inheritedDatabaseAdmissions) {
+  databaseAdmissions.install(inheritedDatabaseAdmissions);
+}
 if (parentPort) {
   serveWorkerMemorySamples(parentPort);
 }
@@ -136,11 +150,25 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   const id = request.id;
   const { environment, shareEnvironment, ...options } = request.options;
   const descriptor = request.resource;
+  const taskPort = request.taskPort;
   let resourcePorts: MessageChannel | undefined;
   let childData = options.workerData;
   let workerTransfers = request.transferList;
   let worker: Worker;
   try {
+    // Install ordered deltas before child validation so the next creation starts from this receipt.
+    for (const [key, value] of request.environmentData) {
+      if (key === SQLITE_DATABASE_ADMISSIONS_KEY) {
+        const admissions = readSqliteDatabaseAdmissions(value);
+        if (admissions) {
+          if (!databaseAdmissions.install(admissions)) {
+            databaseAdmissions.publish();
+          }
+          continue;
+        }
+      }
+      setEnvironmentData(key, value);
+    }
     if (descriptor) {
       if (
         (options.workerData !== undefined && !isRecord(options.workerData)) ||
@@ -153,9 +181,6 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
       workerTransfers = [...request.transferList, resourcePorts.port2];
     }
     // The carrier may predate admission; each child inherits the spawning caller's current facts.
-    for (const [key, value] of request.environmentData) {
-      setEnvironmentData(key, value);
-    }
     worker = new Worker(
       request.filename.kind === "url" ? new URL(request.filename.value) : request.filename.value,
       {
@@ -168,25 +193,32 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   } catch (error) {
     resourcePorts?.port1.close();
     resourcePorts?.port2.close();
+    taskPort?.close();
     send({ type: "create-error", id, error });
     return;
   }
   const lifetime: NativeLifetime = { worker, joined: false };
   workers.set(id, lifetime);
-  if (resourcePorts && descriptor) {
-    const resourcePort = resourcePorts.port1;
-    lifetime.resource = {
-      port: resourcePort,
-      owner: attachBrokerNativeResource(
-        descriptor.attachment,
-        resourcePort,
-        (response) => send({ type: "resource-message", id, response }),
-        (error) => {
-          send({ type: "error", id, error });
-          stop(id, lifetime);
-        },
-      ),
-    };
+  const fail = (error: unknown) => {
+    send({ type: "error", id, error });
+    stop(id, lifetime);
+  };
+  try {
+    if (resourcePorts && descriptor) {
+      const resourcePort = resourcePorts.port1;
+      lifetime.resource = {
+        port: resourcePort,
+        owner: attachBrokerNativeResource(
+          descriptor.attachment,
+          resourcePort,
+          (response) => send({ type: "resource-message", id, response }),
+          fail,
+        ),
+      };
+    }
+  } catch (error) {
+    taskPort?.close();
+    throw error;
   }
   worker.on("message", (value: unknown) => {
     send({ type: "message", id, value }, transfers(value));
@@ -194,11 +226,10 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   worker.on("messageerror", (error: unknown) => {
     send({ type: "messageerror", id, error });
   });
-  worker.on("error", (error) => {
-    send({ type: "error", id, error });
-    stop(id, lifetime);
-  });
+  worker.on("error", fail);
   worker.once("exit", (code) => {
+    // A child can exit before postMessage transfers its startup endpoint.
+    taskPort?.close();
     // Bun finishes its parent-side thread join after delivering the close callback.
     // The next owner turn is after that native stack returns, including natural exit.
     void (async () => {
@@ -208,7 +239,16 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
       finishJoined(id, lifetime);
     })().catch((error: unknown) => send({ type: "stop-error", id, error }));
   });
-  send({ type: "created", id, threadId: worker.threadId });
+  try {
+    send({ type: "created", id, threadId: worker.threadId });
+    if (taskPort) {
+      worker.postMessage({ type: WORKER_TASK_PORT_MESSAGE, port: taskPort }, [taskPort]);
+    }
+  } catch (error) {
+    taskPort?.close();
+    // Construction succeeded: only the real worker/resource join can release custody.
+    fail(error);
+  }
 }
 
 port.on("message", (message: NativeWorkerRequest) => {
@@ -221,7 +261,8 @@ port.on("message", (message: NativeWorkerRequest) => {
     return;
   }
   if (message.type === "release") {
-    if (lifetime.joined) {
+    // The parent can also join an exited target with the broker's independent close receipt.
+    if (lifetime.joined || lifetime.nativeJoined) {
       lifetime.resource?.owner.dispose();
       workers.delete(message.id);
     }

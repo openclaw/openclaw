@@ -6,6 +6,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
+import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
@@ -51,14 +52,12 @@ export function createModelPickerVisibleProviderPredicate(
 /** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(
   provider: string,
-  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
+  params: { config?: OpenClawConfig } = {},
 ): boolean {
   const normalized = normalizeProviderId(provider);
   return listCliRuntimeProviderIds({
     config: params.config,
-    env: params.env,
-    includeSetupRegistry:
-      params.includeSetupRegistry ?? (params.config !== undefined || params.env !== undefined),
+    includeSetupRegistry: params.config !== undefined,
   }).includes(normalized);
 }
 
@@ -83,8 +82,6 @@ export function isCliRuntimeAliasForProvider(params: {
 
 type RuntimeAliasComparisonOptions = {
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  includeSetupRegistry?: boolean;
 };
 
 function canonicalizeRuntimeAliasProvider(
@@ -95,9 +92,7 @@ function canonicalizeRuntimeAliasProvider(
     resolveCliRuntimeCanonicalProvider({
       runtime: provider,
       config: options.config,
-      env: options.env,
-      includeSetupRegistry:
-        options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
+      includeSetupRegistry: options.config !== undefined,
     }) ?? provider
   );
 }
@@ -141,6 +136,73 @@ export function areRuntimeModelRefsEquivalent(
     normalizeRuntimeModelRefForComparison(left, options) ===
     normalizeRuntimeModelRefForComparison(right, options)
   );
+}
+
+/** Route a `<cli-runtime>/<model>` row shares with a canonical row config pins to that runtime. */
+export type CliRuntimeTwinRoute = { key: string; runtime: string; alias: boolean };
+
+/**
+ * Resolves an entry's twin route during owner-scoped preparation; model-id equivalence is plugin
+ * policy, so reads must not recompute it. A runtime chosen only by a session override has no
+ * twin: choosing that canonical row can reset to a different configured route.
+ */
+export function resolveCliRuntimeTwinRoute(
+  entry: { provider: string; id: string },
+  scope: {
+    config: OpenClawConfig;
+    agentId: string;
+    cliRuntimeBindings: readonly { provider: string; runtime: string }[];
+  },
+): CliRuntimeTwinRoute | undefined {
+  const provider = normalizeProviderId(entry.provider);
+  const aliasOf = scope.cliRuntimeBindings.find(({ runtime }) => runtime === provider)?.provider;
+  const runtime = aliasOf
+    ? provider
+    : normalizeOptionalAgentRuntimeId(
+        resolveModelRuntimePolicy({
+          config: scope.config,
+          agentId: scope.agentId,
+          provider: entry.provider,
+          modelId: entry.id,
+        }).policy?.id,
+      );
+  if (!runtime || !scope.cliRuntimeBindings.some((binding) => binding.runtime === runtime)) {
+    return undefined;
+  }
+  const canonical = aliasOf ?? provider;
+  const modelId =
+    resolveProviderModelCatalogId({ provider: canonical, modelId: entry.id }) ?? entry.id;
+  return { key: `${canonical}/${modelId}\0${runtime}`, runtime, alias: aliasOf !== undefined };
+}
+
+/**
+ * Drops CLI runtime rows whose canonical twin is listed on the same runtime, so one model and
+ * route appear once. An alias stays when a selection policy (the agent's manual policy or a
+ * Gateway role) allows it but not its canonical twin.
+ */
+export function omitCliRuntimeAliasTwins<
+  T extends { provider: string; id: string; agentRuntime?: { id: string } },
+>(
+  rows: readonly { row: T; twin?: CliRuntimeTwinRoute }[],
+  selectionPolicies: readonly { allows: (ref: { provider: string; model: string }) => boolean }[],
+): T[] {
+  const canonicalRows = new Map<string, T>();
+  for (const { row, twin } of rows) {
+    if (twin && !twin.alias && row.agentRuntime?.id === twin.runtime) {
+      canonicalRows.set(twin.key, row);
+    }
+  }
+  return rows.flatMap(({ row, twin }) => {
+    const canonical = twin?.alias ? canonicalRows.get(twin.key) : undefined;
+    const replaced =
+      canonical &&
+      selectionPolicies.every(
+        (policy) =>
+          !policy.allows({ provider: row.provider, model: row.id }) ||
+          policy.allows({ provider: canonical.provider, model: canonical.id }),
+      );
+    return replaced ? [] : [row];
+  });
 }
 
 export function shouldPreferActiveRuntimeAliasAuthLabel(params: {

@@ -1,7 +1,12 @@
 /** Behavior tests for live node-host MCP catalog and connection recovery. */
 
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import "./mcp-manager.test-support.js";
+import {
+  SdkHttpError,
+  SdkErrorCode,
+  type CallToolResult,
+  type Tool,
+} from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -9,7 +14,8 @@ import {
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "../agents/mcp-http-transport.js";
-import { startNodeHostMcpManager } from "./mcp.js";
+
+const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
 
 function tool(name: string, inputSchema: Tool["inputSchema"] = { type: "object" }): Tool {
   return { name, inputSchema };
@@ -36,7 +42,7 @@ function createClient(params: {
 }
 
 const stdioTransport = {
-  transport: {} as never,
+  transport: { start: async () => {}, send: async () => {}, close: async () => {} },
   transportType: "stdio" as const,
   connectionTimeoutMs: 100,
   requestTimeoutMs: 100,
@@ -219,11 +225,15 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("redacts Streamable HTTP response bodies from node diagnostics", async () => {
+  it("preserves Streamable HTTP response bodies in tool errors", async () => {
     const client = createClient({
       tools: () => [tool("fail")],
       call: async () => {
-        throw new StreamableHTTPError(500, "Error POSTing to endpoint: bearer=body-secret");
+        throw new SdkHttpError(
+          SdkErrorCode.ClientHttpNotImplemented,
+          "Error POSTing to endpoint: bearer=body-secret",
+          { status: 500 },
+        );
       },
     });
     const manager = await startNodeHostMcpManager(
@@ -234,8 +244,10 @@ describe("node host MCP live lifecycle", () => {
     const error = await manager
       .callMcpTool({ server: "docs", tool: "fail" })
       .catch((caught: unknown) => caught);
-    expect(String(error)).not.toContain("body-secret");
-    expect(String(error)).toContain("[redacted response body]");
+    expect(error).toMatchObject({
+      code: "MCP_TOOL_ERROR",
+      message: "Error POSTing to endpoint: bearer=body-secret",
+    });
     await manager.close();
   });
 
@@ -492,7 +504,9 @@ describe("node host MCP live lifecycle", () => {
         call: async () => {
           throw transportType === "sse"
             ? new McpSseSessionExpiredError("Session not found")
-            : new StreamableHTTPError(404, "Session not found");
+            : new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Session not found", {
+                status: 404,
+              });
         },
       });
       const clients = {
@@ -507,7 +521,9 @@ describe("node host MCP live lifecycle", () => {
           createClient({
             tools: () => [tool("run")],
             call: async () => {
-              throw new StreamableHTTPError(404, "Not found");
+              throw new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Not found", {
+                status: 404,
+              });
             },
           }),
         ],
@@ -628,8 +644,17 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
-  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async ({
+    onTestFinished,
+  }) => {
     vi.useFakeTimers();
+    // Native AbortSignal deadlines otherwise advance independently of the retry clock.
+    const deadline = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+      return controller.signal;
+    });
+    onTestFinished(() => deadline.mockRestore());
     let active = 0;
     let maxActive = 0;
     const attemptsByServer = new Map<string, number>();

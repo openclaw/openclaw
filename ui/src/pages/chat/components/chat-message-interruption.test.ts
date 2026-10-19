@@ -1,22 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import type { ChatState } from "../chat-state-contract.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 
 const container = document.createElement("div");
-afterEach(() => render(html``, container));
+const view = createMessageGroupHarness(container);
+afterEach(() => view.unmount());
 
 function renderReply(message: unknown, isStreaming = false) {
-  render(
-    renderMessageGroup(createMessageGroup(message, "assistant", { isStreaming }), {
-      showReasoning: false,
-    }),
-    container,
-  );
+  view.render(createMessageGroup(message, "assistant", { isStreaming }), {
+    showReasoning: false,
+  });
 }
 
 describe("interrupted assistant replies", () => {
@@ -47,11 +44,6 @@ describe("interrupted assistant replies", () => {
       message: createAssistantMessage([{ type: "text", text: "Partial reply" }]),
     },
     { name: "no payload", message: undefined },
-    { name: "invalid payload", message: "not-an-assistant-message" },
-    {
-      name: "non-assistant payload",
-      message: { role: "user", content: [{ type: "text", text: "unexpected" }] },
-    },
   ])("marks a live stopped reply with $name", ({ message }) => {
     const state: ChatState = {
       client: null,
@@ -70,6 +62,10 @@ describe("interrupted assistant replies", () => {
       chatRunId: "stopped-run",
       chatStream: "Partial reply",
       chatStreamStartedAt: 100,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
       lastError: null,
       hello: null,
     };

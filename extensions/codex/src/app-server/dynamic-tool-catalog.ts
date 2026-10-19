@@ -40,6 +40,10 @@ const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   // Native update_plan is disabled on every thread; its replacement must be
   // available in the initial context, including catalogs prepared at creation.
   "progress_card",
+  // Native Goals are disabled; core controls must not depend on model tool-search support.
+  "get_goal",
+  "create_goal",
+  "update_goal",
   "sessions_spawn",
   "sessions_yield",
 ]);
@@ -86,21 +90,13 @@ export function createCodexDynamicToolSpecs(params: {
     }
     namespaceTools.push({ ...functionSpec, deferLoading: true });
   }
-  if (namespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: namespaceTools,
-    });
-  }
-  if (directOnlyNamespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: directOnlyNamespaceTools,
-    });
+  for (const [name, tools] of [
+    [CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE, namespaceTools],
+    [CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE, directOnlyNamespaceTools],
+  ] as const) {
+    if (tools.length > 0) {
+      specs.push({ type: "namespace", name, description: "", tools });
+    }
   }
   return specs;
 }
@@ -113,28 +109,9 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
 } {
   const projectedTools: ProjectedCodexDynamicTool<T>[] = [];
   const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  let length: number;
-  try {
-    length = tools.length;
-  } catch {
-    return {
-      tools: [],
-      quarantinedTools: [{ tool: "tool[0]", violations: ["tool[0] is unreadable"] }],
-    };
-  }
-  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
-    let tool: T;
-    try {
-      tool = tools[toolIndex]!;
-    } catch {
-      quarantinedTools.push({
-        tool: `tool[${toolIndex}]`,
-        violations: [`tool[${toolIndex}] is unreadable`],
-      });
-      continue;
-    }
+  for (const [toolIndex, tool] of tools.entries()) {
     const descriptor = readCodexDynamicToolDescriptor(tool, toolIndex);
-    if (!descriptor.ok) {
+    if ("diagnostic" in descriptor) {
       quarantinedTools.push(descriptor.diagnostic);
       continue;
     }
@@ -165,16 +142,8 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
 }
 
 type CodexDynamicToolDescriptorRead =
-  | {
-      ok: true;
-      name: string;
-      description: string;
-      parameters: unknown;
-    }
-  | {
-      ok: false;
-      diagnostic: CodexDynamicToolSchemaQuarantine;
-    };
+  | Pick<CodexToolDescriptor, "name" | "description" | "parameters">
+  | { diagnostic: CodexDynamicToolSchemaQuarantine };
 
 function readCodexDynamicToolDescriptor(
   tool: CodexToolDescriptor,
@@ -182,7 +151,6 @@ function readCodexDynamicToolDescriptor(
 ): CodexDynamicToolDescriptorRead {
   const fallbackName = `tool[${toolIndex}]`;
   const invalid = (name: string, violation: string): CodexDynamicToolDescriptorRead => ({
-    ok: false,
     diagnostic: { tool: name, violations: [`${name}.${violation}`] },
   });
   let name: string;
@@ -223,5 +191,5 @@ function readCodexDynamicToolDescriptor(
   } catch {
     return invalid(name, "inputSchema is unreadable");
   }
-  return { ok: true, name, description, parameters };
+  return { name, description, parameters };
 }

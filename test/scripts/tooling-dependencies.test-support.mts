@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-export function createToolingDependencyFixture(root: string) {
+export function createToolingDependencyFixture(root: string, staleAncestor = false) {
   const checkout = join(root, "checkout");
   const tooling = join(root, "tooling #root");
   const lib = join(checkout, "scripts", "lib");
@@ -18,7 +18,12 @@ export function createToolingDependencyFixture(root: string) {
       }
     }
   }
-  for (const name of ["tsx-cli-shim.mjs", "tooling-dependencies.mjs", "local-check-runtime.mts"]) {
+  for (const name of [
+    "tsx-cli-shim.mjs",
+    "tooling-dependencies.mjs",
+    "local-check-runtime.mts",
+    "managed-cleanup-handoff.mts",
+  ]) {
     copyFileSync(resolve("scripts/lib", name), join(lib, name));
   }
   for (const name of ["tsx.mjs", "crabbox-wrapper.mjs"]) {
@@ -26,31 +31,54 @@ export function createToolingDependencyFixture(root: string) {
   }
   writeFileSync(
     join(checkout, "package.json"),
-    JSON.stringify({ devDependencies: { tsx: "1.0.0", "fixture-pkg": "1.0.0" } }),
+    JSON.stringify({
+      devDependencies: { tsx: "1.0.0", "fixture-pkg": "1.0.0", "private-pkg": "1.0.0" },
+    }),
   );
-  function writePackage(name: string, source: string, version = "1.0.0") {
-    const directory = join(tooling, "node_modules", name);
+  function writePackage(
+    name: string,
+    source: string,
+    version = "1.0.0",
+    owner = tooling,
+    subpaths: Record<string, string> = {},
+  ) {
+    const directory = join(owner, "node_modules", name);
     mkdirSync(directory, { recursive: true });
+    const exports: Record<string, string> =
+      name === "tsx" ? { "./esm": "./index.mjs" } : { ".": "./index.mjs" };
+    for (const [subpath, subpathSource] of Object.entries(subpaths)) {
+      exports[subpath] = `${subpath}.mjs`;
+      writeFileSync(join(directory, `${subpath}.mjs`), subpathSource);
+    }
     writeFileSync(
       join(directory, "package.json"),
-      JSON.stringify({
-        name,
-        version,
-        type: "module",
-        exports: name === "tsx" ? { "./esm": "./index.mjs" } : "./index.mjs",
-      }),
+      JSON.stringify({ name, version, type: "module", exports }),
     );
     writeFileSync(join(directory, "index.mjs"), source);
     return directory;
   }
   // Exercise the preload contract without installing a compiler in the fixture.
   writePackage("tsx", 'process.env.TOOLING_FIXTURE_PRELOADED = "1";');
-  writePackage("fixture-pkg", 'export default "qualified";');
+  const packageRoot = writePackage(
+    "fixture-pkg",
+    'export default "qualified"; export { default as privateValue } from "private-pkg";',
+  );
+  writePackage("private-pkg", 'export default "root";');
+  writePackage("private-pkg", 'export default "private";', "2.0.0", packageRoot);
+  if (staleAncestor) {
+    writePackage(
+      "fixture-pkg",
+      'export default "stale ancestor"; export const privateValue = "private";',
+      "0.0.0-stale",
+      root,
+    );
+  }
   writeFileSync(
     join(checkout, "scripts/crabbox-wrapper.mts"),
     `import assert from "node:assert/strict";
-import value from "fixture-pkg";
+import value, { privateValue } from "fixture-pkg";
 assert.equal(value, "qualified");
+assert.equal(privateValue, "private");
 assert.equal(process.env.TOOLING_FIXTURE_PRELOADED, "1");
 assert.equal(process.env.TSX_DISABLE_CACHE, "1");
 assert.equal(process.argv[2], "--help");

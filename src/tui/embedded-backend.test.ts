@@ -5,7 +5,7 @@ import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-questi
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
-import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   clearEmbeddedPluginApprovalBroker,
   getEmbeddedPluginApprovalBroker,
@@ -20,9 +20,23 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  registerEmbeddedFollowupTests,
+  registerEmbeddedQueueCapTest,
+} from "./embedded-backend.followup.test-support.js";
 import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
-import { registerEmbeddedBackendStreamTests } from "./embedded-backend.stream.test-support.js";
+import { registerEmbeddedBackendShutdownTests } from "./embedded-backend.shutdown.test-support.js";
+import {
+  captureBackendEvents,
+  registerEmbeddedBackendStreamTests,
+} from "./embedded-backend.stream.test-support.js";
+import {
+  deferred,
+  flushMicrotasks,
+  localSessionEntry,
+  sendMainChat,
+} from "./embedded-backend.test-helpers.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -41,15 +55,17 @@ type EmbeddedAgentResult = {
 let EmbeddedTuiBackend: typeof EmbeddedTuiBackendType;
 
 const agentCommandFromIngressMock = vi.fn();
-const queueEmbeddedAgentMessageWithOutcomeAsyncMock = vi.fn();
+const steerSessionControllerOperationMock = vi.fn();
 const claimPendingEmbeddedAgentQuestionAnswerMock = vi.fn();
-const resolveActiveEmbeddedRunSessionIdMock = vi.fn();
+const getSessionControllerOperationMock = vi.fn();
 const runBtwSideQuestionMock = vi.fn();
 const formatSessionUsageCostSummaryMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
 const projectSessionPatchResultMock = vi.fn();
+const readAcpSessionMetaForEntriesMock =
+  vi.fn<typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntries>();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
@@ -117,29 +133,6 @@ const readChatHistoryPageMock = vi.fn(
     messages: [],
   }),
 );
-type LoadSessionEntryMockResult = {
-  agentId: string;
-  cfg: Record<string, unknown>;
-  canonicalKey: string;
-  storePath?: string;
-  store?: Record<string, unknown>;
-  entry?: Record<string, unknown>;
-};
-function localSessionEntry(
-  sessionKey: string,
-  opts?: { agentId?: string },
-  overrides: Partial<LoadSessionEntryMockResult> = {},
-): LoadSessionEntryMockResult {
-  return {
-    cfg: {},
-    agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
-    canonicalKey: sessionKey,
-    storePath: "/tmp/openclaw-sessions.json",
-    store: {},
-    entry: {},
-    ...overrides,
-  };
-}
 const loadSessionEntryMock = vi.fn(localSessionEntry);
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
@@ -148,16 +141,21 @@ vi.mock("../agents/agent-command.js", () => ({
   agentCommandFromIngress: (...args: unknown[]) => agentCommandFromIngressMock(...args),
 }));
 
+// mock-isolation: Question-answer receipts are scripted independently of the process-wide native run registry.
 vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   claimPendingEmbeddedAgentQuestionAnswer: (...args: unknown[]) =>
     claimPendingEmbeddedAgentQuestionAnswerMock(...args),
-  queueEmbeddedAgentMessageWithOutcomeAsync: (...args: unknown[]) =>
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock(...args),
 }));
 
-vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
-  resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-    resolveActiveEmbeddedRunSessionIdMock(...args),
+// mock-isolation: The backend uses sentinel operations and scripted steering receipts, not live controller injection.
+vi.mock("../sessions/session-controller.steer.js", () => ({
+  steerSessionControllerOperation: (...args: unknown[]) =>
+    steerSessionControllerOperationMock(...args),
+}));
+
+vi.mock("../sessions/session-controller.state.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSessionControllerOperation: (...args: unknown[]) => getSessionControllerOperationMock(...args),
 }));
 
 vi.mock("../agents/btw.js", () => ({
@@ -207,10 +205,6 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
   resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
-  resolveDefaultAgentId: (cfg?: {
-    agents?: { list?: Array<{ id?: string; default?: boolean }> };
-  }) =>
-    cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: (params: { sessionKey?: string; agentId?: string }) =>
     params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
 }));
@@ -255,8 +249,10 @@ vi.mock("../gateway/server-methods/models-list-result.js", () => ({
     buildModelsListResultMock(...args),
 }));
 
+// mock-isolation: Embedded-backend fixtures own config publication and listeners without loading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
   loadConfig: () => getRuntimeConfigMock(),
   registerConfigWriteListener: (
     listener: (event: { runtimeConfig: Record<string, unknown> }) => void,
@@ -281,8 +277,9 @@ vi.mock("../gateway/session-utils-row.js", () => ({
     buildGatewaySessionRowMock(params),
 }));
 
-vi.mock("../gateway/session-utils-store-lookup.js", () => ({
-  createGatewaySessionEntryReader: () => () => undefined,
+// mock-isolation: The embedded fixture has no stored parent sessions; never query a real lineage database.
+vi.mock("../gateway/session-utils-store-lineage.js", () => ({
+  prepareGatewaySessionEntryReader: async () => () => undefined,
 }));
 
 vi.mock("../gateway/session-utils-list.js", () => ({
@@ -308,7 +305,8 @@ vi.mock("../gateway/server-methods/chat-history-budget.js", async (importOrigina
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
-vi.mock("../gateway/server-methods/chat-history-page-kernel.js", () => ({
+// mock-isolation: The embedded backend fixture bypasses Gateway history presentation.
+vi.mock("../gateway/server-methods/chat-history-response-page.js", () => ({
   enrichChatHistoryCompactionMarkers: (messages: unknown[]) => messages,
 }));
 
@@ -316,18 +314,19 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
-vi.mock("../gateway/session-utils.js", () => ({
-  getSessionDefaults: () => getSessionDefaultsMock(),
-  listAgentsForGateway: () => [],
-  loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  loadGatewaySessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
-    primaryKey: key,
-    target: { storeKeys: [key] },
-  }),
-  resolveGatewaySessionStoreTargetWithStore: ({
+// mock-isolation: Use the synthetic session fixture without opening Gateway worker databases.
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: ({
+    key,
+    cfg: _cfg,
+    ...opts
+  }: {
+    key: string;
+    cfg: unknown;
+    agentId?: string;
+    includeStoreChildEntries?: boolean;
+  }) => Promise.resolve(loadSessionEntryMock(key, Object.keys(opts).length ? opts : undefined)),
+  resolveGatewaySessionStoreTargetInWorker: async ({
     key,
     agentId,
   }: {
@@ -339,11 +338,27 @@ vi.mock("../gateway/session-utils.js", () => ({
     storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
   }),
+}));
+
+// mock-isolation: Embedded-backend tests supply defaults and model facts without loading Gateway storage.
+vi.mock("../gateway/session-utils.js", () => ({
+  getSessionDefaults: () => getSessionDefaultsMock(),
+  listAgentsForGateway: () => [],
+  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
+    primaryKey: key,
+    target: { storeKeys: [key] },
+  }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
 vi.mock("../gateway/session-utils-model.js", () => ({
   projectSessionPatchResult: (...args: unknown[]) => projectSessionPatchResultMock(...args),
+}));
+
+vi.mock("../acp/runtime/session-meta-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../acp/runtime/session-meta-readonly.js")>()),
+  readAcpSessionMetaForEntries: (...args: Parameters<typeof readAcpSessionMetaForEntriesMock>) =>
+    readAcpSessionMetaForEntriesMock(...args),
 }));
 
 vi.mock("../gateway/session-create-service.js", () => ({
@@ -372,40 +387,10 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: () => ({}),
 }));
 
-function deferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function captureBackendEvents(backend: EmbeddedTuiBackendType) {
-  const events: Array<{ event: string; payload: unknown }> = [];
-  backend.onEvent = ({ event, payload }) => {
-    events.push({ event, payload });
-  };
-  return events;
-}
-
-function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
-  return backend.sendChat({ sessionKey: "agent:main:main", message, runId });
 }
 
 const selectedGlobalSessionCases = [
@@ -425,10 +410,10 @@ describe("EmbeddedTuiBackend", () => {
     vi.useFakeTimers();
     vi.setSystemTime(embeddedEventTimestamp);
     agentCommandFromIngressMock.mockReset();
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockReset();
+    steerSessionControllerOperationMock.mockReset();
     claimPendingEmbeddedAgentQuestionAnswerMock.mockReset().mockResolvedValue(null);
-    resolveActiveEmbeddedRunSessionIdMock.mockReset();
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue(undefined);
+    getSessionControllerOperationMock.mockReset();
+    getSessionControllerOperationMock.mockReturnValue(undefined);
     runBtwSideQuestionMock.mockReset();
     formatSessionUsageCostSummaryMock.mockReset();
     formatSessionUsageCostSummaryMock.mockResolvedValue("💸 Usage cost\nSession $1.23");
@@ -508,6 +493,10 @@ describe("EmbeddedTuiBackend", () => {
     projectSessionsPatchEntryMock.mockReset();
     projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
     projectSessionPatchResultMock.mockReset();
+    readAcpSessionMetaForEntriesMock.mockReset();
+    readAcpSessionMetaForEntriesMock.mockImplementation(async ({ entries }) =>
+      entries.map(() => null),
+    );
     projectSessionPatchResultMock.mockImplementation(
       (params: { canonicalKey: string; entry: unknown; storePath: string }) => ({
         ok: true,
@@ -554,35 +543,6 @@ describe("EmbeddedTuiBackend", () => {
     defaultRuntime.error = originalRuntimeError;
   });
 
-  it("creates TUI sessions through the shared gateway lifecycle", async () => {
-    const backend = new EmbeddedTuiBackend();
-
-    const result = await backend.createSession({
-      key: "tui-created",
-      agentId: "main",
-      parentSessionKey: "agent:main:main",
-    });
-
-    expect(createGatewaySessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-        key: "tui-created",
-        agentId: "main",
-        parentSessionKey: "agent:main:main",
-        armSessionDiffBaselineCapture: true,
-        emitCommandHooks: true,
-        commandSource: "tui:embedded",
-        loadGatewayModelCatalogSnapshot: expect.any(Function),
-      }),
-    );
-    expect(result).toEqual({
-      ok: true,
-      key: "agent:main:tui-created",
-      entry: { sessionId: "created-session" },
-      resolved: { modelProvider: "openai", model: "gpt-5.4" },
-    });
-  });
-
   it("returns the resolved model from the shared reset lifecycle", async () => {
     const backend = new EmbeddedTuiBackend();
 
@@ -594,50 +554,62 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it.each([{ key: "agent:work:new" }, { key: "global", agentId: "work" }])(
-    "creates $key using its resolved owner's raw prepared catalog",
-    async (input) => {
-      const config = { agents: { ownership: "explicit", entries: { main: {}, work: {} } } };
-      getRuntimeConfigMock.mockReturnValue(config);
-      const catalog: ModelCatalogEntry[] = [
-        { id: "work-model", name: "Work", provider: "fixture", api: "openai-completions" },
-      ];
-      loadPreparedModelCatalogMock.mockReturnValue(catalog);
-      createGatewaySessionMock.mockImplementation(
-        async ({
-          loadGatewayModelCatalogSnapshot,
-        }: {
-          loadGatewayModelCatalogSnapshot: () => Promise<{
-            entries: unknown[];
-            routeVariants: unknown[];
-          }>;
-        }) => {
-          expect(await loadGatewayModelCatalogSnapshot()).toEqual({
-            entries: catalog,
-            routeVariants: catalog,
-          });
-          return {
-            ok: true,
-            key: input.key,
-            entry: { sessionId: "new-session" },
-            resolved: {},
-            resetExisting: false,
-          };
-        },
-      );
+  it.each([
+    { key: "agent:work:new", parentSessionKey: "agent:work:main" },
+    { key: "global", agentId: "work" },
+  ])("creates $key using its resolved owner's raw prepared catalog", async (input) => {
+    const config = { agents: { ownership: "explicit", entries: { main: {}, work: {} } } };
+    getRuntimeConfigMock.mockReturnValue(config);
+    const catalog: ModelCatalogEntry[] = [
+      { id: "work-model", name: "Work", provider: "fixture", api: "openai-completions" },
+    ];
+    loadPreparedModelCatalogMock.mockReturnValue(catalog);
+    createGatewaySessionMock.mockImplementation(
+      async ({
+        loadGatewayModelCatalogSnapshot,
+      }: {
+        loadGatewayModelCatalogSnapshot: () => Promise<{
+          entries: unknown[];
+          routeVariants: unknown[];
+        }>;
+      }) => {
+        expect(await loadGatewayModelCatalogSnapshot()).toEqual({
+          entries: catalog,
+          routeVariants: catalog,
+        });
+        return {
+          ok: true,
+          key: input.key,
+          entry: { sessionId: "new-session" },
+          resolved: {},
+          resetExisting: false,
+        };
+      },
+    );
 
-      await expect(new EmbeddedTuiBackend().createSession(input)).resolves.toMatchObject({
-        ok: true,
-        key: input.key,
-      });
-      expect(loadPreparedModelCatalogMock).toHaveBeenCalledWith({
-        config,
-        agentId: "work",
-        readOnly: true,
-      });
-      expect(buildModelsListResultMock).not.toHaveBeenCalled();
-    },
-  );
+    await expect(new EmbeddedTuiBackend().createSession(input)).resolves.toEqual({
+      ok: true,
+      key: input.key,
+      entry: { sessionId: "new-session" },
+      resolved: {},
+    });
+    expect(createGatewaySessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...input,
+        cfg: config,
+        armSessionDiffBaselineCapture: true,
+        emitCommandHooks: Boolean(input.parentSessionKey),
+        commandSource: "tui:embedded",
+        loadGatewayModelCatalogSnapshot: expect.any(Function),
+      }),
+    );
+    expect(loadPreparedModelCatalogMock).toHaveBeenCalledWith({
+      config,
+      agentId: "work",
+      readOnly: true,
+    });
+    expect(buildModelsListResultMock).not.toHaveBeenCalled();
+  });
 
   it("bridges assistant and lifecycle events into chat events", async () => {
     const pending = deferred<EmbeddedAgentResult>();
@@ -655,7 +627,14 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
     expect(onConnected).toHaveBeenCalledTimes(1);
 
-    await sendMainChat(backend, "hello", "run-local-1");
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-local-1",
+      timeoutMs: 300_000,
+    });
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandFromIngressMock.mock.calls[0]?.[0].timeout).toBe("300");
 
     registeredListener?.({
       runId: "run-local-1",
@@ -924,6 +903,10 @@ describe("EmbeddedTuiBackend", () => {
     createSessionRowProjectionMock,
     listProjectedSessionsMock,
     runSessionStartupMigrationMock,
+    getRuntimeConfigMock,
+    refreshPreparedModelRuntimeSnapshotsMock,
+    agentCommandFromIngressMock,
+    unregisterConfigWriteListenerMock,
     flushMicrotasks,
   });
 
@@ -968,30 +951,9 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("publishes the configured runtime before admitting the first local turn", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    getRuntimeConfigMock.mockReturnValue(initialConfig);
-    const publication = deferred<void>();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-
-    const send = sendMainChat(backend, "hello", "run-waits-for-published-runtime");
-    await flushMicrotasks();
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(initialConfig);
-    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-
-    publication.resolve();
-    await send;
-    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
-    await backend.stop();
-  });
-
   it("queues config runtime publication ahead of later local turns and unregisters on stop", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    const nextConfig = { agents: { list: [{ id: "main" }], defaults: { model: "openai/next" } } };
+    const initialConfig = { agents: { entries: { main: {} } } };
+    const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
 
     const backend = new EmbeddedTuiBackend();
@@ -1017,7 +979,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("forwards overlapping config publications immediately for runtime latest-wins coalescing", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
+    const initialConfig = { agents: { entries: { main: {} } } };
     const middleConfig = { agents: { defaults: { model: "openai/middle" } } };
     const latestConfig = { agents: { defaults: { model: "openai/latest" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
@@ -1310,7 +1272,6 @@ describe("EmbeddedTuiBackend", () => {
           entry,
           storePath: "/tmp/private.sqlite",
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
         }),
       );
       expect(sessionProjection.present).not.toHaveBeenCalled();
@@ -1455,8 +1416,13 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+  it.each([false, true])("loads history despite runtime plugin failure=%s", async (fails) => {
+    if (fails) {
+      loadAgentRuntimePluginRegistryHandleMock.mockImplementationOnce(() => {
+        throw new Error("runtime unavailable");
+      });
+    }
+    const cfg = { agents: { entries: { main: {} } } };
     loadSessionEntryMock.mockReturnValue({
       cfg,
       agentId: "main",
@@ -1468,32 +1434,15 @@ describe("EmbeddedTuiBackend", () => {
     const backend = new EmbeddedTuiBackend();
 
     await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
-      runtimePluginsPrewarm: { status: "warmed" },
+      sessionKey: "agent:main:main",
+      messages: [],
+      runtimePluginsPrewarm: fails
+        ? { status: "failed", error: "runtime unavailable" }
+        : { status: "warmed" },
     });
     expect(loadAgentRuntimePluginRegistryHandleMock).toHaveBeenCalledWith({
       config: cfg,
       workspaceDir: "/tmp/openclaw-agent-main",
-    });
-  });
-
-  it("returns embedded history when runtime plugin loading fails", async () => {
-    loadAgentRuntimePluginRegistryHandleMock.mockImplementationOnce(() => {
-      throw new Error("runtime unavailable");
-    });
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      entry: {},
-    });
-
-    const backend = new EmbeddedTuiBackend();
-
-    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      messages: [],
-      runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
     });
   });
 
@@ -1523,13 +1472,18 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("reports publication failure instead of returning stale model choices", async () => {
+    const publishing = deferred<void>();
     const publication = deferred<void>();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
+    refreshPreparedModelRuntimeSnapshotsMock.mockImplementationOnce(() => {
+      publishing.resolve();
+      return publication.promise;
+    });
     const backend = new EmbeddedTuiBackend();
     backend.start();
     const choices = backend.listModels({ agentId: "work" });
     const failure = expect(choices).rejects.toThrow("catalog publication failed");
 
+    await publishing.promise;
     publication.reject(new Error("catalog publication failed"));
     await failure;
     expect(withPreparedModelCatalogOwnerMock).not.toHaveBeenCalled();
@@ -1623,7 +1577,11 @@ describe("EmbeddedTuiBackend", () => {
       }),
     );
     expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        senderId: agentCommandFromIngressMock.mock.calls[0]?.[0]?.runContext?.senderId,
+      }),
     );
 
     expect(
@@ -1638,200 +1596,93 @@ describe("EmbeddedTuiBackend", () => {
     await backend.stop();
   });
 
-  it("waits for local post-turn maintenance before emitting chat final", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-
-    backend.start();
-    await sendMainChat(backend, "compact after final", "run-local-maintenance");
-
-    registeredListener?.({
-      runId: "run-local-maintenance",
-      stream: "assistant",
-      data: { text: "done", delta: "done" },
-    });
-    registeredListener?.({
-      runId: "run-local-maintenance",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-    await flushMicrotasks();
-
-    expect(
-      events.some(
-        (entry) =>
-          entry.event === "chat" && (entry.payload as { state?: string }).state === "final",
-      ),
-    ).toBe(false);
-
-    pending.resolve({ payloads: [{ text: "done" }], meta: {} });
-    await flushMicrotasks();
-
-    expect(
-      events
-        .filter((entry) => entry.event === "chat")
-        .map((entry) => (entry.payload as { state?: string }).state),
-    ).toEqual(["delta", "final"]);
+  registerEmbeddedBackendShutdownTests({
+    createBackend: () => new EmbeddedTuiBackend(),
+    agentCommandFromIngressMock,
+    getRegisteredListener: () => registeredListener,
+    originalRuntimeLog,
+    originalRuntimeError,
   });
 
-  it("waits for local post-turn maintenance during stop", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    const abortListener = vi.fn();
-    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      opts.abortSignal?.addEventListener("abort", abortListener);
-      return pending.promise;
-    });
+  it.each(["active", "finishing", "end", "steering rejected", "persisted followup"])(
+    "queues same-session sends behind a run with %s",
+    async (phase) => {
+      await withEnvAsync(
+        phase === "active" ? { OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" } : {},
+        async () => {
+          const first = deferred<EmbeddedAgentResult>();
+          const second = deferred<EmbeddedAgentResult>();
+          const firstAbortListener = vi.fn();
+          agentCommandFromIngressMock
+            .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+              opts.abortSignal?.addEventListener("abort", firstAbortListener);
+              return first.promise;
+            })
+            .mockReturnValueOnce(second.promise);
+          if (phase === "steering rejected" || phase === "persisted followup") {
+            getSessionControllerOperationMock.mockReturnValue({ sessionId: "active-session" });
+          }
+          if (phase === "steering rejected") {
+            steerSessionControllerOperationMock.mockResolvedValue({
+              status: "rejected",
+              reason: "runtime_rejected",
+            });
+          }
+          if (phase === "persisted followup") {
+            loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
+              localSessionEntry(sessionKey, opts, {
+                cfg: { messages: { queue: { mode: "steer" } } },
+                entry: { queueMode: "followup", queueDebounceMs: 0 },
+              }),
+            );
+          }
+          const backend = new EmbeddedTuiBackend();
+          backend.start();
+          await sendMainChat(backend, "first", "run-local-first");
+          if (phase === "active" || phase === "finishing") {
+            registeredListener?.({
+              runId: "run-local-first",
+              stream: "assistant",
+              data: { text: "first done", delta: "first done" },
+            });
+          }
+          if (phase === "finishing" || phase === "end") {
+            registeredListener?.({
+              runId: "run-local-first",
+              stream: "lifecycle",
+              data: { phase, stopReason: "stop" },
+            });
+          }
+          await sendMainChat(backend, "second", "run-local-second");
+          if (phase === "active") {
+            await vi.advanceTimersByTimeAsync(5);
+            await flushMicrotasks();
+          }
+          expect(firstAbortListener).not.toHaveBeenCalled();
+          expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+          if (phase === "persisted followup") {
+            expect(steerSessionControllerOperationMock).not.toHaveBeenCalled();
+          }
+          first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+          await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
+          second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+          await flushMicrotasks();
+        },
+      );
+    },
+  );
 
-    const backend = new EmbeddedTuiBackend();
-    captureBackendEvents(backend);
-    backend.start();
-    await sendMainChat(backend, "compact before shutdown", "run-local-stop-maintenance");
-
-    registeredListener?.({
-      runId: "run-local-stop-maintenance",
-      stream: "assistant",
-      data: { text: "done", delta: "done" },
-    });
-    registeredListener?.({
-      runId: "run-local-stop-maintenance",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    let stopped = false;
-    const stopPromise = backend.stop().then(() => {
-      stopped = true;
-    });
-    await flushMicrotasks();
-
-    expect(stopped).toBe(false);
-    expect(abortListener).not.toHaveBeenCalled();
-    expect(isEmbeddedMode()).toBe(true);
-
-    pending.resolve({ payloads: [{ text: "done" }], meta: {} });
-    await stopPromise;
-
-    expect(abortListener).not.toHaveBeenCalled();
-    expect(registeredListener).toBeUndefined();
-    expect(isEmbeddedMode()).toBe(false);
-  });
-
-  it("aborts local post-turn maintenance when stop grace elapses", async () => {
-    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
-      const pending = deferred<EmbeddedAgentResult>();
-      const abortListener = vi.fn();
-      agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-        opts.abortSignal?.addEventListener("abort", abortListener);
-        return pending.promise;
-      });
-
-      const backend = new EmbeddedTuiBackend();
-      backend.start();
-      await sendMainChat(backend, "compact before shutdown", "run-local-stop-timeout");
-
-      registeredListener?.({
-        runId: "run-local-stop-timeout",
-        stream: "lifecycle",
-        data: { phase: "end", stopReason: "stop" },
-      });
-
-      let stopped = false;
-      const stopPromise = backend.stop().then(() => {
-        stopped = true;
-      });
-      await flushMicrotasks();
-      expect(stopped).toBe(false);
-      expect(abortListener).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(5);
-      await stopPromise;
-
-      expect(abortListener).toHaveBeenCalledTimes(1);
-      expect(isEmbeddedMode()).toBe(false);
-    });
-  });
-
-  it("queues same-session sends behind local post-turn maintenance", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const second = deferred<EmbeddedAgentResult>();
-    const firstAbortListener = vi.fn();
-    agentCommandFromIngressMock
-      .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-        opts.abortSignal?.addEventListener("abort", firstAbortListener);
-        return first.promise;
-      })
-      .mockReturnValueOnce(second.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-
-    registeredListener?.({
-      runId: "run-local-first",
-      stream: "assistant",
-      data: { text: "first done", delta: "first done" },
-    });
-    registeredListener?.({
-      runId: "run-local-first",
-      stream: "lifecycle",
-      data: { phase: "finishing", stopReason: "stop" },
-    });
-
-    await sendMainChat(backend, "second", "run-local-second");
-
-    expect(firstAbortListener).not.toHaveBeenCalled();
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-
-    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
-    await flushMicrotasks();
-  });
-
-  it("queues same-session sends behind active local runs", async () => {
-    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
-      const first = deferred<EmbeddedAgentResult>();
-      const second = deferred<EmbeddedAgentResult>();
-      const firstAbortListener = vi.fn();
-      agentCommandFromIngressMock
-        .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-          opts.abortSignal?.addEventListener("abort", firstAbortListener);
-          return first.promise;
-        })
-        .mockReturnValueOnce(second.promise);
-
-      const backend = new EmbeddedTuiBackend();
-      backend.start();
-      await sendMainChat(backend, "first", "run-local-first");
-
-      registeredListener?.({
-        runId: "run-local-first",
-        stream: "assistant",
-        data: { text: "first response", delta: "first response" },
-      });
-
-      await sendMainChat(backend, "second", "run-local-second");
-      await vi.advanceTimersByTimeAsync(5);
-      await flushMicrotasks();
-
-      expect(firstAbortListener).not.toHaveBeenCalled();
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-      first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-      await vi.waitFor(() => {
-        expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-      });
-
-      second.resolve({ payloads: [{ text: "second done" }], meta: {} });
-      await flushMicrotasks();
-    });
-  });
+  const followupTestContext = {
+    createBackend: () => new EmbeddedTuiBackend(),
+    agentCommandFromIngressMock,
+    loadSessionEntryMock,
+    getSessionControllerOperationMock,
+    steerSessionControllerOperationMock,
+    claimPendingEmbeddedAgentQuestionAnswerMock,
+    updateSessionStoreMock,
+    emitAgentEvent: (event: unknown) => registeredListener?.(event),
+  };
+  registerEmbeddedFollowupTests(followupTestContext);
 
   it("keeps later queued turns behind the active provider when intermediate turns are canceled", async () => {
     const active = deferred<EmbeddedAgentResult>();
@@ -1898,7 +1749,7 @@ describe("EmbeddedTuiBackend", () => {
     const mode = "interrupt";
     const first = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+    getSessionControllerOperationMock.mockReturnValue({ sessionId: "active-session" });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: { messages: { queue: { mode } } },
       agentId: "main",
@@ -1916,10 +1767,10 @@ describe("EmbeddedTuiBackend", () => {
         runId: "question-owner",
       });
       expect(claimPendingEmbeddedAgentQuestionAnswerMock).toHaveBeenCalledWith(
-        "active-session",
+        { sessionId: "active-session" },
         "Green",
       );
-      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+      expect(steerSessionControllerOperationMock).not.toHaveBeenCalled();
       first.resolve({ payloads: [{ text: "answered" }], meta: {} });
       await flushMicrotasks();
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
@@ -1929,51 +1780,142 @@ describe("EmbeddedTuiBackend", () => {
     }
   });
 
-  it("steers same-session sends into the active local run", async () => {
+  it("steers only the selected physical store when active owners share their key and session ID", async () => {
+    const { getSessionControllerOperation } = await vi.importActual<
+      typeof import("../sessions/session-controller.state.js")
+    >("../sessions/session-controller.state.js");
+    const { steerSessionControllerOperation } = await vi.importActual<
+      typeof import("../sessions/session-controller.steer.js")
+    >("../sessions/session-controller.steer.js");
+    const { createReplyOperation } = await import("../sessions/session-controller.operation.js");
+    const { captureSessionTarget } = await import("../sessions/session-controller.target.js");
+    const { prepareReplyToolAuthority } =
+      await import("../auto-reply/reply/reply-tool-authority.js");
+    const { withMessageInjectionAdmission } =
+      await import("../auto-reply/reply/message-injection-authority.js");
+    const { INTERNAL_MESSAGE_CHANNEL } = await import("../utils/message-channel-constants.js");
+    getSessionControllerOperationMock.mockImplementation(getSessionControllerOperation);
+    steerSessionControllerOperationMock.mockImplementation(steerSessionControllerOperation);
     const first = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockResolvedValue({
-      queued: true,
-      sessionId: "active-session",
-      target: "embedded_run",
-      gatewayHealth: "live",
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-
-    const result = await sendMainChat(backend, "steer this turn", "run-local-second");
-
-    expect(result).toEqual({ runId: "run-local-first" });
-    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
-      "active-session",
-      "steer this turn",
-      { steeringMode: "all", debounceMs: 500, isInboundUserMessage: true },
+    const sessionKey = "agent:main:main";
+    const sessionId = "shared-session-id";
+    const stores = ["/tmp/tui-owner-a/sessions.json", "/tmp/tui-owner-b/sessions.json"];
+    const accepted: string[][] = [[], []];
+    const operations = stores.map((storeScope) =>
+      createReplyOperation({
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        turnKind: "direct",
+        resetTriggered: false,
+        target: captureSessionTarget({
+          storeScope,
+          sessionKey,
+          agentId: "main",
+          incarnation: sessionId,
+        }),
+      }),
     );
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-    first.resolve({ payloads: [{ text: "done" }], meta: {} });
-    await flushMicrotasks();
+    const backend = new EmbeddedTuiBackend();
+    try {
+      loadSessionEntryMock.mockImplementation((key, options) =>
+        localSessionEntry(key, options, {
+          storePath: stores[1],
+          cfg: { messages: { queue: { mode: "steer", debounceMs: 0 } } },
+          entry: { sessionId, updatedAt: 0, permissionMode: "full" },
+        }),
+      );
+      backend.start();
+      await sendMainChat(backend, "first", "selected-local-run");
+      const senderId = agentCommandFromIngressMock.mock.calls[0]?.[0]?.runContext?.senderId;
+      expect(senderId).toEqual(expect.any(String));
+      for (const [index, operation] of operations.entries()) {
+        await operation.bindToolAuthoritySnapshotAsync(
+          prepareReplyToolAuthority({
+            originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+            disableTools: false,
+            run: {
+              sessionId,
+              sessionFile: `/tmp/tui-owner-${index}/session.jsonl`,
+              workspaceDir: "/tmp",
+              provider: "openai",
+              model: "gpt-test",
+              config: {},
+              messageProvider: INTERNAL_MESSAGE_CHANNEL,
+              senderId,
+              permissionMode: "full",
+              senderIsOwner: false,
+              traceAuthorized: false,
+            },
+          }),
+        );
+        await operation.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-test" });
+        operation.attachBackend({
+          kind: "embedded",
+          runId: `physical-owner-${index}`,
+          cancel: () => {},
+          supportsTranscriptCommitWait: true,
+          messageInjectionV2: {
+            version: 2,
+            isAvailable: () => true,
+            queueMessage: async () => {
+              throw new Error("Prepared steering is required");
+            },
+            queueMessageAsync: async (text, _options, preparation) => {
+              await withMessageInjectionAdmission(preparation.prepareCurrent, () => {
+                preparation.assertCurrent();
+                accepted[index]!.push(text);
+              });
+            },
+          },
+        });
+        operation.setPhase("running");
+      }
+      await expect(sendMainChat(backend, "use the selected store", "steer-send")).resolves.toEqual({
+        runId: "selected-local-run",
+      });
+      expect(accepted).toEqual([[], ["use the selected store"]]);
+      expect(agentCommandFromIngressMock).toHaveBeenCalledOnce();
+    } finally {
+      first.resolve({ payloads: [], meta: {} });
+      await backend.stop();
+      for (const operation of operations) {
+        operation.complete();
+      }
+    }
   });
 
-  it.each(["claim", "steer"])(
+  it.each(["claim", "steer", "steer receipt failure", "steer unconfirmed result"])(
     "surfaces uncertain question input from %s without queuing it again",
     async (route) => {
       const first = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
-      resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+      getSessionControllerOperationMock.mockReturnValue({ sessionId: "active-session" });
       const error = new QuestionAnswerUnconfirmedError("synthetic-question");
-      (route === "claim"
-        ? claimPendingEmbeddedAgentQuestionAnswerMock
-        : queueEmbeddedAgentMessageWithOutcomeAsyncMock
-      ).mockRejectedValue(error);
+      if (route === "claim") {
+        claimPendingEmbeddedAgentQuestionAnswerMock.mockRejectedValue(error);
+      } else if (route === "steer receipt failure") {
+        steerSessionControllerOperationMock.mockRejectedValue(error);
+      } else if (route === "steer unconfirmed result") {
+        steerSessionControllerOperationMock.mockResolvedValue({
+          status: "accepted",
+          result: { transcriptCommit: "unconfirmed", errorMessage: error.message },
+        });
+      } else {
+        // The controller reports an unconfirmed answer as consumed, never replayable.
+        steerSessionControllerOperationMock.mockResolvedValue({
+          status: "indeterminate",
+          errorMessage: error.message,
+        });
+      }
       const backend = new EmbeddedTuiBackend();
       backend.start();
       await sendMainChat(backend, "first", "run-local-first");
       try {
-        await expect(sendMainChat(backend, "answer", "run-local-second")).rejects.toBe(error);
+        await expect(sendMainChat(backend, "answer", "run-local-second")).rejects.toThrow(
+          error.message,
+        );
       } finally {
         first.resolve({ payloads: [{ text: "done" }], meta: {} });
         await flushMicrotasks();
@@ -1981,100 +1923,6 @@ describe("EmbeddedTuiBackend", () => {
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("queues local sends when active-runtime steering rejects them", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const second = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockResolvedValue({
-      queued: false,
-      sessionId: "active-session",
-      reason: "runtime_rejected",
-      gatewayHealth: "live",
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-    await sendMainChat(backend, "queue on rejection", "run-local-second");
-
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
-    await flushMicrotasks();
-  });
-
-  it("honors a persisted local followup queue override", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const second = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
-      localSessionEntry(sessionKey, opts, {
-        cfg: { messages: { queue: { mode: "steer" } } },
-        entry: { queueMode: "followup", queueDebounceMs: 0 },
-      }),
-    );
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-    await sendMainChat(backend, "follow up later", "run-local-second");
-
-    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
-    await flushMicrotasks();
-  });
-
-  it("collects pending local messages into one followup turn", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const collected = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(collected.promise);
-    loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
-      localSessionEntry(sessionKey, opts, {
-        cfg: { messages: { queue: { mode: "collect" } } },
-      }),
-    );
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-    const second = await sendMainChat(backend, "collect alpha", "run-local-second");
-    const third = await sendMainChat(backend, "collect beta", "run-local-third");
-
-    expect(second).toEqual({ runId: "run-local-second" });
-    expect(third).toEqual({ runId: "run-local-second" });
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-    const collectedCall = agentCommandFromIngressMock.mock.calls[1];
-    if (!collectedCall) {
-      throw new Error("expected collected local followup call");
-    }
-    const collectedPrompt = (collectedCall[0] as { message: string }).message;
-    expect(collectedPrompt).toContain("[Queued messages while agent was busy]");
-    expect(collectedPrompt).toContain("collect alpha");
-    expect(collectedPrompt).toContain("collect beta");
-    collected.resolve({ payloads: [{ text: "collected done" }], meta: {} });
-    await flushMicrotasks();
-  });
 
   it("keeps a local overflow summary after future drops switch to old", async () => {
     const nextDropPolicy = "old";
@@ -2109,11 +1957,12 @@ describe("EmbeddedTuiBackend", () => {
 
       dropPolicy = nextDropPolicy;
       cap = 2;
-      await sendMainChat(
+      const third = await sendMainChat(
         backend,
         "third queued message",
         `run-local-policy-third-${nextDropPolicy}`,
       );
+      expect(third).toEqual({ runId: `run-local-policy-second-${nextDropPolicy}` });
 
       active.resolve({ payloads: [{ text: "active done" }], meta: {} });
       await vi.waitFor(() => {
@@ -2124,6 +1973,7 @@ describe("EmbeddedTuiBackend", () => {
         throw new Error("expected queued local followup call");
       }
       const queuedPrompt = (queuedCall[0] as { message: string }).message;
+      expect(queuedPrompt).toContain("[Queued messages while agent was busy]");
       expect(queuedPrompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
       expect(queuedPrompt).toContain("first overflowed message");
       expect(queuedPrompt).toContain("second queued message");
@@ -2137,37 +1987,7 @@ describe("EmbeddedTuiBackend", () => {
     }
   });
 
-  it("applies the local queue cap and drop-new policy", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const second = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
-      localSessionEntry(sessionKey, opts, {
-        cfg: {
-          messages: { queue: { mode: "followup", cap: 1, drop: "new" } },
-        },
-      }),
-    );
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-    await sendMainChat(backend, "kept followup", "run-local-second");
-    const dropped = await sendMainChat(backend, "dropped followup", "run-local-third");
-
-    expect(dropped).toEqual({ runId: "run-local-second" });
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-    expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ message: "kept followup" }),
-    );
-    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
-    await flushMicrotasks();
-  });
+  registerEmbeddedQueueCapTest(followupTestContext);
 
   it("interrupts the active local run before starting its replacement", async () => {
     const first = deferred<EmbeddedAgentResult>();
@@ -2211,48 +2031,21 @@ describe("EmbeddedTuiBackend", () => {
         entry: { queueMode: "interrupt" },
       }),
     );
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+    getSessionControllerOperationMock.mockReturnValue({ sessionId: "active-session" });
 
     const backend = new EmbeddedTuiBackend();
     backend.start();
     await sendMainChat(backend, "first", "run-local-first");
     await sendMainChat(backend, "/queue followup", "run-local-queue");
 
-    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+    expect(steerSessionControllerOperationMock).not.toHaveBeenCalled();
     expect(firstAbortListener).not.toHaveBeenCalled();
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
     first.resolve({ payloads: [{ text: "first done" }], meta: {} });
     await flushMicrotasks();
   });
 
-  it("does not queue stop commands behind active local runs", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const firstAbortListener = vi.fn(() => {
-      first.resolve({ payloads: [{ text: "first aborted" }], meta: {} });
-    });
-    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      opts.abortSignal?.addEventListener("abort", firstAbortListener);
-      return first.promise;
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-
-    registeredListener?.({
-      runId: "run-local-first",
-      stream: "assistant",
-      data: { text: "first response", delta: "first response" },
-    });
-
-    await sendMainChat(backend, "/stop", "run-local-stop");
-
-    expect(firstAbortListener).toHaveBeenCalledTimes(1);
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-    await flushMicrotasks();
-  });
-
-  it("stops terminal local runs while post-turn maintenance is pending", async () => {
+  it.each(["active", "end"])("stops a local run during %s", async (phase) => {
     const first = deferred<EmbeddedAgentResult>();
     const firstAbortListener = vi.fn(() => {
       first.resolve({ payloads: [{ text: "first aborted" }], meta: {} });
@@ -2269,8 +2062,9 @@ describe("EmbeddedTuiBackend", () => {
 
     registeredListener?.({
       runId: "run-local-first-terminal",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
+      ...(phase === "end"
+        ? { stream: "lifecycle", data: { phase, stopReason: "stop" } }
+        : { stream: "assistant", data: { text: "first response", delta: "first response" } }),
     });
 
     await sendMainChat(backend, "/stop", "run-local-stop-terminal");
@@ -2289,41 +2083,56 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("retains the latest tool validation summary for an aborted chat event", async () => {
+  it.each([
+    { name: "retains the latest validation failure", progress: undefined, unsafe: false },
+    {
+      name: "clears stale diagnostics on assistant progress",
+      progress: { stream: "assistant", data: { text: "Recovered" } },
+      unsafe: false,
+    },
+    {
+      name: "clears stale diagnostics on tool progress",
+      progress: { stream: "tool", data: { phase: "start", name: "read" } },
+      unsafe: false,
+    },
+    { name: "drops unsafe lifecycle diagnostics", progress: undefined, unsafe: true },
+  ])("$name when aborting", async ({ progress, unsafe }) => {
     const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
-
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
     const backend = new EmbeddedTuiBackend();
     const events = captureBackendEvents(backend);
+    const runId = "run-validation-loop";
+    const summary = "edit tool validation failed: edits: must have required properties edits";
     backend.start();
-    await sendMainChat(backend, "edit the file", "run-validation-loop");
-
+    await sendMainChat(backend, "edit the file", runId);
+    if (!unsafe) {
+      registeredListener?.({
+        runId,
+        stream: "tool",
+        data: { phase: "result", toolErrorSummary: summary },
+      });
+    }
+    if (progress) {
+      registeredListener?.({ runId, ...progress });
+    }
     registeredListener?.({
-      runId: "run-validation-loop",
-      stream: "tool",
-      data: {
-        phase: "result",
-        toolErrorSummary: "edit tool validation failed: edits: must have required properties edits",
-      },
-    });
-    registeredListener?.({
-      runId: "run-validation-loop",
+      runId,
       stream: "lifecycle",
       data: {
         phase: "end",
         aborted: true,
+        ...(unsafe ? { toolErrorSummary: "browser failed\nsecret output" } : {}),
       },
     });
     await flushMicrotasks();
-
     expect(events).toContainEqual({
       event: "chat",
       payload: {
-        runId: "run-validation-loop",
+        runId,
         sessionKey: "agent:main:main",
         agentId: "main",
         state: "aborted",
-        errorMessage: "edit tool validation failed: edits: must have required properties edits",
+        ...(!unsafe && !progress ? { errorMessage: summary } : {}),
       },
     });
   });
@@ -2332,6 +2141,30 @@ describe("EmbeddedTuiBackend", () => {
   const structuredLifecycleError = `\u001b[31mThe image is too large. Authorization: Bearer ${structuredLifecycleSecret}\u001b[0m`;
 
   it.each([
+    {
+      label: "a provider timeout",
+      meta: { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
+      partialText: "Partial assistant output before the terminal failure.",
+      text: "The provider timed out. Please try again.",
+    },
+    {
+      label: "a queued timeout",
+      meta: { stopReason: "timeout", timeoutPhase: "queue", providerStarted: false },
+      partialText: "Partial assistant output before the terminal failure.",
+      text: "The provider timed out. Please try again.",
+    },
+    {
+      label: "a blocked run",
+      meta: { livenessState: "blocked" },
+      partialText: "Partial assistant output before the terminal failure.",
+      text: "Agent run blocked before producing a usable result.",
+    },
+    {
+      label: "an abandoned run",
+      meta: { livenessState: "abandoned" },
+      partialText: "Partial assistant output before the terminal failure.",
+      text: "Agent run ended before producing a complete result.",
+    },
     {
       label: "a provider timeout after mechanical cancellation",
       lifecycle: {
@@ -2478,105 +2311,39 @@ describe("EmbeddedTuiBackend", () => {
   );
 
   it.each([
-    {
-      label: "a provider timeout",
-      meta: { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
-      diagnostic: "The provider timed out. Please try again.",
+    { reason: "failed", terminal: { state: "error", errorMessage: "Agent run failed." } },
+    { reason: "cancelled", terminal: { state: "aborted" } },
+  ] as const)(
+    "preserves a wrapped $reason outcome without exposing its cause",
+    async ({ reason, terminal }) => {
+      const { AgentRunTerminalOutcomeError } =
+        await import("../agents/agent-run-terminal-error.js");
+      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+      agentCommandFromIngressMock.mockRejectedValueOnce(
+        new AgentRunTerminalOutcomeError(new Error(`hidden provider credential ${secret}`), {
+          reason,
+          status: "error",
+        }),
+      );
+      const backend = new EmbeddedTuiBackend();
+      const events = captureBackendEvents(backend);
+      backend.start();
+
+      await sendMainChat(backend, "surface the canonical failure", "error-only-terminal");
+      await flushMicrotasks();
+
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: {
+          runId: "error-only-terminal",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          ...terminal,
+        },
+      });
+      expect(JSON.stringify(events)).not.toContain(secret);
     },
-    {
-      label: "a queued timeout",
-      meta: { stopReason: "timeout", timeoutPhase: "queue", providerStarted: false },
-      diagnostic: "The provider timed out. Please try again.",
-    },
-    {
-      label: "a blocked run",
-      meta: { livenessState: "blocked" },
-      diagnostic: "Agent run blocked before producing a usable result.",
-    },
-    {
-      label: "an abandoned run",
-      meta: { livenessState: "abandoned" },
-      diagnostic: "Agent run ended before producing a complete result.",
-    },
-  ])("does not let partial assistant output hide $label", async ({ meta, diagnostic }) => {
-    const partialText = "Partial assistant output before the terminal failure.";
-    agentCommandFromIngressMock.mockResolvedValueOnce({
-      payloads: [{ text: partialText }],
-      meta,
-    });
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-    backend.start();
-
-    await sendMainChat(backend, "preserve the canonical failure diagnostic", "partial-terminal");
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "partial-terminal",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "error",
-        errorMessage: diagnostic,
-      },
-    });
-  });
-
-  it("surfaces canonical error-only thrown outcomes without exposing the wrapped cause", async () => {
-    const { AgentRunTerminalOutcomeError } = await import("../agents/agent-run-terminal-error.js");
-    const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    agentCommandFromIngressMock.mockRejectedValueOnce(
-      new AgentRunTerminalOutcomeError(new Error(`hidden provider credential ${secret}`), {
-        reason: "failed",
-        status: "error",
-      }),
-    );
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-    backend.start();
-
-    await sendMainChat(backend, "surface the canonical failure", "error-only-terminal");
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "error-only-terminal",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "error",
-        errorMessage: "Agent run failed.",
-      },
-    });
-    expect(JSON.stringify(events)).not.toContain(secret);
-  });
-
-  it("preserves a wrapped canonical cancellation without redundant abort metadata", async () => {
-    const { AgentRunTerminalOutcomeError } = await import("../agents/agent-run-terminal-error.js");
-    agentCommandFromIngressMock.mockRejectedValueOnce(
-      new AgentRunTerminalOutcomeError(new Error("underlying cancellation"), {
-        reason: "cancelled",
-        status: "error",
-      }),
-    );
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-    backend.start();
-
-    await sendMainChat(backend, "preserve the canonical cancellation", "wrapped-cancellation");
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "wrapped-cancellation",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "aborted",
-      },
-    });
-  });
+  );
 
   it.each([
     {
@@ -2655,184 +2422,38 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it.each([
-    { stream: "assistant", data: { text: "Recovered" } },
-    { stream: "tool", data: { phase: "start", name: "read" } },
-  ] as const)(
-    "clears stale validation diagnostics on local $stream progress",
-    async (progressEvent) => {
+  it.each(["do not do that", "/stop"])(
+    "sends idle %s as a prompt with a terminal event",
+    async (message) => {
       const pending = deferred<EmbeddedAgentResult>();
-      agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
 
       const backend = new EmbeddedTuiBackend();
       const events = captureBackendEvents(backend);
       backend.start();
-      await sendMainChat(backend, "recover after invalid arguments", "run-recovered-validation");
+      await sendMainChat(backend, message, "run-local-idle-stop");
 
-      registeredListener?.({
-        runId: "run-recovered-validation",
-        stream: "tool",
-        data: {
-          phase: "result",
-          toolErrorSummary: "edit tool validation failed: invalid arguments",
-        },
-      });
-      registeredListener?.({
-        runId: "run-recovered-validation",
-        stream: progressEvent.stream,
-        data: progressEvent.data,
-      });
-      registeredListener?.({
-        runId: "run-recovered-validation",
-        stream: "lifecycle",
-        data: { phase: "end", aborted: true },
-      });
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+      pending.resolve({ payloads: [{ text: "idle stop prompt" }], meta: {} });
       await flushMicrotasks();
 
       expect(events).toContainEqual({
         event: "chat",
         payload: {
-          runId: "run-recovered-validation",
+          runId: "run-local-idle-stop",
           sessionKey: "agent:main:main",
           agentId: "main",
-          state: "aborted",
+          state: "final",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "idle stop prompt" }],
+            timestamp: embeddedEventTimestamp,
+          },
         },
       });
     },
   );
-
-  it("drops unsafe lifecycle tool-error summaries", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-    backend.start();
-    await sendMainChat(backend, "open the page", "run-unsafe-abort");
-
-    registeredListener?.({
-      runId: "run-unsafe-abort",
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        aborted: true,
-        toolErrorSummary: "browser failed\nsecret output",
-      },
-    });
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "run-unsafe-abort",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "aborted",
-      },
-    });
-  });
-
-  it("sends broad stop-like text as a normal prompt when idle", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "do not do that", "run-local-normal-stop-like-text");
-
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-    pending.resolve({ payloads: [{ text: "normal prompt" }], meta: {} });
-    await flushMicrotasks();
-  });
-
-  it("sends idle slash stop as a normal prompt so the TUI receives a terminal event", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-    backend.start();
-    await sendMainChat(backend, "/stop", "run-local-idle-stop");
-
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-    pending.resolve({ payloads: [{ text: "idle stop prompt" }], meta: {} });
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "run-local-idle-stop",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "idle stop prompt" }],
-          timestamp: embeddedEventTimestamp,
-        },
-      },
-    });
-  });
-
-  it("queues same-session sends behind terminal local runs until maintenance settles", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const second = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-
-    registeredListener?.({
-      runId: "run-local-first",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    await sendMainChat(backend, "second", "run-local-second");
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-
-    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
-    await flushMicrotasks();
-  });
-
-  it("runs selected-agent global sends independently across agents", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const second = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await backend.sendChat({
-      sessionKey: "global",
-      agentId: "main",
-      message: "first",
-      runId: "run-local-main-global",
-    });
-    await backend.sendChat({
-      sessionKey: "global",
-      agentId: "work",
-      message: "second",
-      runId: "run-local-work-global",
-    });
-
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-
-    first.resolve({ payloads: [{ text: "main done" }], meta: {} });
-    second.resolve({ payloads: [{ text: "work done" }], meta: {} });
-    await flushMicrotasks();
-  });
 
   it("does not stop another agent's selected global local run", async () => {
     const first = deferred<EmbeddedAgentResult>();
@@ -2870,9 +2491,12 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("does not abort selected-global run ids across default-agent boundaries", async () => {
+  it("does not abort selected-global run ids across explicit agent boundaries", async () => {
     getRuntimeConfigMock.mockReturnValue({
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+      },
     });
     const defaultRun = deferred<EmbeddedAgentResult>();
     const workRun = deferred<EmbeddedAgentResult>();
@@ -2896,6 +2520,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await backend.sendChat({
       sessionKey: "global",
+      agentId: "main",
       message: "default",
       runId: "run-local-default-global",
     });
@@ -2916,6 +2541,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(
       backend.abortChat({
         sessionKey: "global",
+        agentId: "main",
         runId: "run-local-work-global",
       }),
     ).resolves.toEqual({ ok: true, aborted: false, runIds: [] });
@@ -2932,6 +2558,7 @@ describe("EmbeddedTuiBackend", () => {
     "scopes selected global patch policy and result to the stored owner: $input.sessionKey",
     async ({ input, owner }) => {
       const sessionUtils = await import("../gateway/session-utils.js");
+      const sessionWorker = await import("../gateway/session-utils-store-worker.js");
       const entry = { sessionId: `session-${owner}`, updatedAt: embeddedEventTimestamp };
       const target = {
         agentId: owner,
@@ -2941,8 +2568,8 @@ describe("EmbeddedTuiBackend", () => {
         store: { global: entry },
       };
       const resolveTarget = vi
-        .spyOn(sessionUtils, "resolveGatewaySessionStoreTargetWithStore")
-        .mockReturnValue(target);
+        .spyOn(sessionWorker, "resolveGatewaySessionStoreTargetInWorker")
+        .mockResolvedValue(target);
       const resolveCanonical = vi
         .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
         .mockReturnValue({ target, primaryKey: "global", entry });
@@ -2970,6 +2597,7 @@ describe("EmbeddedTuiBackend", () => {
           canonicalKey: "global",
           cfg: expect.anything(),
           entry,
+          preparedAcpMeta: null,
           storePath: target.storePath,
           targetAgentId: owner,
         });
@@ -2980,8 +2608,8 @@ describe("EmbeddedTuiBackend", () => {
     },
   );
 
-  it("fails a queued local send when the previous finishing run does not settle", async () => {
-    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
+  it.each([0, 5])("fails a queued send when maintenance exceeds %s ms", async (graceMs) => {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(graceMs) }, async () => {
       const first = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
 
@@ -3003,7 +2631,7 @@ describe("EmbeddedTuiBackend", () => {
 
       await sendMainChat(backend, "second", "run-local-second");
 
-      await vi.advanceTimersByTimeAsync(5);
+      await vi.advanceTimersByTimeAsync(graceMs);
       await flushMicrotasks();
 
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
@@ -3061,41 +2689,6 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("fails a queued local send immediately when shutdown grace is zero", async () => {
-    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "0" }, async () => {
-      const first = deferred<EmbeddedAgentResult>();
-      agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
-
-      const backend = new EmbeddedTuiBackend();
-      const events = captureBackendEvents(backend);
-      backend.start();
-      await sendMainChat(backend, "first", "run-local-first");
-
-      registeredListener?.({
-        runId: "run-local-first",
-        stream: "lifecycle",
-        data: { phase: "finishing", stopReason: "stop" },
-      });
-
-      await sendMainChat(backend, "second", "run-local-second");
-      await flushMicrotasks();
-
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-      expect(
-        events.some(
-          (entry) =>
-            entry.event === "chat" &&
-            (entry.payload as { runId?: string; state?: string; errorMessage?: string }).runId ===
-              "run-local-second" &&
-            (entry.payload as { state?: string }).state === "error" &&
-            ((entry.payload as { errorMessage?: string }).errorMessage ?? "").includes(
-              "timed out waiting for previous local run",
-            ),
-        ),
-      ).toBe(true);
-    });
-  });
-
   it("clears local finishing state before surfacing a post-turn failure", async () => {
     agentCommandFromIngressMock
       .mockImplementationOnce(() => {
@@ -3134,169 +2727,102 @@ describe("EmbeddedTuiBackend", () => {
 
   it.each([
     {
-      name: "preserves every authoritative final payload block",
+      name: "every authoritative final payload block",
       finalPayloads: [{ text: "First final block" }, { text: "Second final block" }],
       expectedText: "First final block\n\nSecond final block",
     },
+    { name: "streamed text without final text", finalPayloads: [], expectedText: "Draft answer" },
     {
-      name: "preserves streamed text when the final payload contains no text",
-      finalPayloads: [],
-      expectedText: "Draft answer",
-    },
-    {
-      name: "preserves an ordinary MEDIA-like suffix in the authoritative final answer",
+      name: "an ordinary MEDIA-like suffix",
       finalPayloads: [{ text: "The selected size is\nM" }],
       expectedText: "The selected size is\nM",
     },
-  ])("$name", async ({ finalPayloads, expectedText }) => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-
-    backend.start();
-    await sendMainChat(backend, "finish the draft", "run-local-authoritative-final");
-
-    registeredListener?.({
-      runId: "run-local-authoritative-final",
-      stream: "assistant",
-      data: { text: "Draft answer", delta: "Draft answer" },
-    });
-    registeredListener?.({
-      runId: "run-local-authoritative-final",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    pending.resolve({ payloads: finalPayloads, meta: {} });
-    await flushMicrotasks();
-
-    const chatPayloads = events
-      .filter((event) => event.event === "chat")
-      .map((event) => event.payload);
-
-    expect(chatPayloads.at(-1)).toStrictEqual({
-      runId: "run-local-authoritative-final",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      state: "final",
-      stopReason: "stop",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: expectedText }],
-        timestamp: embeddedEventTimestamp,
-      },
-    });
-  });
-
-  it("preserves generic relative media URLs in the authoritative final answer", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-
-    backend.start();
-    await sendMainChat(backend, "show the image", "run-local-relative-media");
-
-    registeredListener?.({
-      runId: "run-local-relative-media",
-      stream: "assistant",
-      data: {
-        text: "MEDIA:./image.png",
-        delta: "MEDIA:./image.png",
-        mediaUrls: ["./image.png"],
-      },
-    });
-    registeredListener?.({
-      runId: "run-local-relative-media",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    pending.resolve({ payloads: [{ text: "MEDIA:./image.png" }], meta: {} });
-    await flushMicrotasks();
-
-    expect(
-      events
+    {
+      name: "generic relative media URLs",
+      streamedText: "MEDIA:./image.png",
+      mediaUrls: ["./image.png"],
+      finalPayloads: [{ text: "MEDIA:./image.png" }],
+      expectedText: "MEDIA:./image.png",
+    },
+    {
+      name: "prepared short replies",
+      streamedText: "No",
+      expectStream: true,
+      finalPayloads: [{ text: "No" }],
+      expectedText: "No",
+    },
+    {
+      name: "a prepared literal silence marker",
+      streamedText: "NO_REPLY",
+      expectStream: true,
+      finalPayloads: [{ text: "NO_REPLY" }],
+      expectedText: "NO_REPLY",
+    },
+  ])(
+    "preserves $name in the final answer",
+    async ({
+      finalPayloads,
+      expectedText,
+      streamedText = "Draft answer",
+      mediaUrls,
+      expectStream,
+    }) => {
+      const pending = deferred<EmbeddedAgentResult>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+      const backend = new EmbeddedTuiBackend();
+      const events = captureBackendEvents(backend);
+      const runId = "run-local-authoritative-final";
+      backend.start();
+      await sendMainChat(backend, "finish the draft", runId);
+      registeredListener?.({
+        runId,
+        stream: "assistant",
+        data: { text: streamedText, delta: streamedText, mediaUrls },
+      });
+      registeredListener?.({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", stopReason: "stop" },
+      });
+      pending.resolve({ payloads: finalPayloads, meta: {} });
+      await flushMicrotasks();
+      const chatPayloads = events
         .filter((event) => event.event === "chat")
-        .map((event) => event.payload)
-        .at(-1),
-    ).toStrictEqual({
-      runId: "run-local-relative-media",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      state: "final",
-      stopReason: "stop",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "MEDIA:./image.png" }],
-        timestamp: embeddedEventTimestamp,
-      },
-    });
-  });
-
-  it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-
-    backend.start();
-    await sendMainChat(backend, "answer shortly", "run-local-no");
-
-    registeredListener?.({
-      runId: "run-local-no",
-      stream: "assistant",
-      data: { text: "No", delta: "No" },
-    });
-    registeredListener?.({
-      runId: "run-local-no",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    pending.resolve({ payloads: [{ text: "No" }], meta: {} });
-    await flushMicrotasks();
-
-    const chatPayloads = events
-      .filter((entry) => entry.event === "chat")
-      .map(
-        (entry) =>
-          entry.payload as {
-            runId?: string;
-            sessionKey?: string;
+        .map((event) => event.payload);
+      if (expectStream) {
+        const nonEmptyDeltas = chatPayloads.filter((entry) => {
+          const payload = entry as {
             state?: string;
-            stopReason?: string;
             message?: { content?: Array<{ text?: string }> };
-          },
-      );
-    const nonEmptyDeltas = chatPayloads.filter(
-      (payload) => payload.state === "delta" && payload.message?.content?.[0]?.text,
-    );
-    expect(nonEmptyDeltas).toHaveLength(0);
-    expect(chatPayloads.at(-1)).toStrictEqual({
-      runId: "run-local-no",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      state: "final",
-      stopReason: "stop",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "No" }],
-        timestamp: embeddedEventTimestamp,
-      },
-    });
-  });
+          };
+          return payload.state === "delta" && payload.message?.content?.[0]?.text;
+        });
+        expect(nonEmptyDeltas).toHaveLength(1);
+      }
+      expect(chatPayloads.at(-1)).toStrictEqual({
+        runId,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "final",
+        stopReason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: expectedText }],
+          timestamp: embeddedEventTimestamp,
+        },
+      });
+    },
+  );
 
   registerEmbeddedBackendStreamTests({
     createBackend: () => new EmbeddedTuiBackend(),
     createPendingReply: () => deferred<EmbeddedAgentResult>(),
-    prepareReply: (reply) => agentCommandFromIngressMock.mockReturnValueOnce(reply),
+    prepareReply: (reply, onStart) =>
+      agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal: AbortSignal }) => {
+        onStart?.(opts.abortSignal);
+        return reply;
+      }),
     emitAgentEvent: (event) => registeredListener?.(event),
-    captureBackendEvents,
     flushMicrotasks,
     embeddedEventTimestamp,
   });
@@ -3607,31 +3133,6 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
-  it("aborts active local runs", async () => {
-    let capturedSignal: AbortSignal | undefined;
-    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      capturedSignal = opts.abortSignal;
-      return new Promise((_, reject) => {
-        opts.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
-          once: true,
-        });
-      });
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "long task", "run-abort-1");
-
-    const result = await backend.abortChat({
-      sessionKey: "agent:main:main",
-      runId: "run-abort-1",
-    });
-    await flushMicrotasks();
-
-    expect(result).toEqual({ ok: true, aborted: true, runIds: ["run-abort-1"] });
-    expect(capturedSignal?.aborted).toBe(true);
-  });
-
   it("keeps local BTW runs alive during a session-scoped abort", async () => {
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
@@ -3678,48 +3179,6 @@ describe("EmbeddedTuiBackend", () => {
 
     btwRun.resolve({ text: "still running" });
     await flushMicrotasks();
-  });
-
-  it("passes explicit chat timeouts to the agent command as seconds", async () => {
-    agentCommandFromIngressMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello" }],
-      meta: {},
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    try {
-      await backend.sendChat({
-        sessionKey: "agent:main:main",
-        message: "Wake up, my friend!",
-        runId: "run-explicit-timeout",
-        timeoutMs: 300_000,
-      });
-      await flushMicrotasks();
-
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-      const ingressOptions = agentCommandFromIngressMock.mock.calls.at(0)?.[0] as
-        | { timeout?: unknown }
-        | undefined;
-      expect(ingressOptions?.timeout).toBe("300");
-    } finally {
-      await backend.stop();
-    }
-  });
-
-  it("restores embedded mode and runtime loggers on stop", async () => {
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-
-    expect(isEmbeddedMode()).toBe(true);
-    expect(defaultRuntime.log).not.toBe(originalRuntimeLog);
-    expect(defaultRuntime.error).not.toBe(originalRuntimeError);
-
-    await backend.stop();
-
-    expect(isEmbeddedMode()).toBe(false);
-    expect(defaultRuntime.log).toBe(originalRuntimeLog);
-    expect(defaultRuntime.error).toBe(originalRuntimeError);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

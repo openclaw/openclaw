@@ -5,6 +5,7 @@ import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
+import { createManifestProviderIdLists } from "./manifest-provider-ids.js";
 import type {
   PluginBundleFormat,
   PluginDiagnostic,
@@ -18,6 +19,7 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   formatPluginVerificationDiagnostic,
@@ -89,18 +91,7 @@ export function createPluginRecord(params: {
     channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
     providerIds: [...(params.providerIds ?? [])],
-    embeddingProviderIds: [...(params.contracts?.embeddingProviders ?? [])],
-    speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
-    realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
-    realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
-    mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
-    transcriptSourceProviderIds: [...(params.contracts?.transcriptSourceProviders ?? [])],
-    imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
-    videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
-    musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],
-    webFetchProviderIds: [...(params.contracts?.webFetchProviders ?? [])],
-    webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
-    migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
+    ...createManifestProviderIdLists(params.contracts),
     contextEngineIds: [],
     agentHarnessIds: [],
     cliCommands: [],
@@ -282,14 +273,9 @@ export function recordPluginError(params: {
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
-  for (const plugin of failedPlugins) {
-    const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase) ?? [];
-    ids.push(plugin.id);
-    grouped.set(phase, ids);
-  }
-  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
+  return [...groupPluginRecords(failedPlugins, (plugin) => plugin.failurePhase ?? "load")]
+    .map(([phase, plugins]) => `${phase}: ${plugins.map((plugin) => plugin.id).join(", ")}`)
+    .join("; ");
 }
 
 function describePluginModuleExportShape(

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
@@ -15,6 +16,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
+import { configuredDefaultRepository } from "./configured-default-repository.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
@@ -39,26 +41,24 @@ import {
   createWorkerPlacementRuntimeInstallReader,
   type WorkerPlacementRuntimeInstallReader,
 } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { resolveDefaultWorkerPlacementExecutionMode } from "./worker-environments/placement-session-runtime.js";
+import {
+  readPreparedPoolPresenceDemand,
+  writePreparedPoolPresenceDemand,
+} from "./worker-environments/prepared-pool-presence-worker.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerEnvironmentServiceOptions } from "./worker-environments/service.types.js";
 import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 
-type WorkerEnvironmentStore = Awaited<
-  ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
->;
 type WorkerEnvironmentLogger = {
   child: (name: string) => { info: (message: string) => void; warn: (message: string) => void };
 };
 
-export type GatewayWorkerEnvironmentStartupState = {
-  durableProviderIds: string[];
-  listDurableProviderIds: () => string[];
-  store: WorkerEnvironmentStore;
-  placementStore: WorkerSessionPlacementStore;
-};
+export type GatewayWorkerEnvironmentStartupState = Awaited<
+  ReturnType<typeof loadGatewayWorkerEnvironmentStartupState>
+>;
 
 export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
@@ -79,14 +79,11 @@ export type GatewayWorkerEnvironmentRuntime = {
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
 );
-const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
-  () => import("./worker-environments/inference-runtime.js"),
-);
 const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(
   () => import("./worker-environments/worker-session-tool-executor.js"),
 );
 
-export async function loadGatewayWorkerEnvironmentStartupState(): Promise<GatewayWorkerEnvironmentStartupState> {
+export async function loadGatewayWorkerEnvironmentStartupState() {
   const [{ createWorkerEnvironmentStore }, { createWorkerSessionPlacementStore }] =
     await Promise.all([
       import("./worker-environments/store.js"),
@@ -174,17 +171,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // reconciliation attempts to release the owning worker claims.
   await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
-  params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
+  await params.startup.placementStore.clearLocalTurnClaimsAfterRestartAsync();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
     // Claims loaded before this Gateway acquired the state lock remain usable only by
     // workspace recovery. Worker authority is minted from claims created in this lifecycle.
-    rejectExistingWorkerClaims: true,
+    recoveryPlacements: await params.startup.placementStore.listAsync(),
   });
   const workerEnvironmentLog = params.log.child("worker-environments");
-  const listRetainedBundleHashes = () =>
+  const listRetainedBundleHashes = async () =>
     listRetainedWorkerBundleHashes({
       environments: params.startup.store.list(),
-      placements: params.startup.placementStore.list(),
+      placements: await params.startup.placementStore.listAsync(),
     });
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
@@ -342,7 +339,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
             executionMode: mode,
           }),
         });
-        // Reload owns a new inventory; active enrollments pin their old artifact until closure.
+        // Reload selects a new producer; overlapping enrollment may retry after retirement.
         if (generation) {
           retireBootstrapProducer(generation.producer);
         }
@@ -350,19 +347,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         bootstrapProducers.set(mode, generation);
       }
     }
-    const artifact = await generation.producer.prepare(signal);
-    return {
-      artifact,
-      assertCurrent: () => {
-        if (
-          bootstrapProducers.get(mode) !== generation ||
-          params.getPluginRegistry() !== generation.registry ||
-          getGatewayPluginMetadataSnapshot() !== generation.metadata
-        ) {
-          throw new Error("Worker preparation artifact generation changed");
-        }
-      },
-    };
+    return generation.producer.prepare(signal);
   };
   const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
     isEnvironmentOwnedNode,
@@ -374,8 +359,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getLocalTlsFingerprint: () => params.resolveGatewayContext()?.gatewayTlsFingerprint,
     resolveAvailability: deviceRuntime.resolveAvailability,
     transfer: nodeBootstrapTransfer,
-    prepareArtifact: async (record, signal) =>
-      (await prepareNodeArtifact(record.profileSnapshot, signal)).artifact,
+    prepareArtifact: async (record, signal) => prepareNodeArtifact(record.profileSnapshot, signal),
   });
   let createGatewayTools: NonNullable<
     WorkerEnvironmentServiceOptions["createGatewayTools"]
@@ -411,6 +395,31 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       params.desktopSessionRegistry.hasActivity(environmentId, ownerEpoch),
     store: params.startup.store,
     getConfig: getRuntimeConfig,
+    resolveHumanPresenceDemand: () => {
+      const config = getRuntimeConfig();
+      const repository = configuredDefaultRepository(config);
+      if (!repository?.profileId) {
+        return undefined;
+      }
+      const agentId = resolveDefaultAgentId(config);
+      const executionMode = resolveDefaultWorkerPlacementExecutionMode({ cfg: config, agentId });
+      if (!executionMode) {
+        return undefined;
+      }
+      return {
+        profileId: repository.profileId,
+        executionMode,
+        repository: {
+          agentId,
+          url: repository.url,
+          ...(repository.ref ? { ref: repository.ref } : {}),
+        },
+      };
+    },
+    presenceDemandStore: {
+      read: readPreparedPoolPresenceDemand,
+      write: writePreparedPoolPresenceDemand,
+    },
     maintainProviders: (signal) =>
       maintainConfiguredWorkerProviders({
         getRegistry: params.getPluginRegistry,
@@ -427,45 +436,36 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     ensureNodeWorkerBundle: nodeWorkerBundleInstaller,
     prepareNodeBootstrap: nodeEnrollment.prepare,
     prepareNodeArtifacts: async (profileSnapshot, signal) => {
-      const pin = new AbortController();
-      try {
-        const preparationSignal = signal ? AbortSignal.any([signal, pin.signal]) : pin.signal;
-        // Cancellation releases the caller; the producers retain their shared work.
-        const [bootstrapResult, bundleResult] = await racePromiseWithAbortSignal(
-          Promise.allSettled([
-            prepareNodeArtifact(profileSnapshot, preparationSignal),
-            prepareInstallation("bundle", preparationSignal),
-          ]),
-          signal,
-        );
-        signal?.throwIfAborted();
-        if (bootstrapResult.status === "rejected") {
-          throw bootstrapResult.reason;
-        }
-        if (bundleResult.status === "rejected") {
-          throw bundleResult.reason;
-        }
-        const preparedBootstrap = bootstrapResult.value;
-        const bootstrap = preparedBootstrap.artifact;
-        const bundle = bundleResult.value;
-        preparedBootstrap.assertCurrent();
-        if (bundle.install !== "bundle") {
-          throw new Error("Worker preparation requires a bundle artifact");
-        }
-        return {
-          artifacts: {
-            nodeBootstrapSha256: bootstrap.tarballSha256,
-            enabledPluginIds: [...bootstrap.enabledPluginIds],
-            workerBundleHash: bundle.bundleHash,
-            workerArchiveSha256: bundle.tarballSha256,
-            openclawVersion: bundle.openclawVersion,
-            protocolFeatures: [...bundle.protocolFeatures],
-          },
-          assertCurrent: preparedBootstrap.assertCurrent,
-        };
-      } finally {
-        pin.abort();
+      // Cancellation releases the caller; the producers retain their shared work.
+      const [bootstrapResult, bundleResult] = await racePromiseWithAbortSignal(
+        Promise.allSettled([
+          prepareNodeArtifact(profileSnapshot, signal),
+          prepareInstallation("bundle", signal),
+        ]),
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (bootstrapResult.status === "rejected") {
+        throw bootstrapResult.reason;
       }
+      if (bundleResult.status === "rejected") {
+        throw bundleResult.reason;
+      }
+      const bootstrap = bootstrapResult.value;
+      const bundle = bundleResult.value;
+      if (bundle.install !== "bundle") {
+        throw new Error("Worker preparation requires a bundle artifact");
+      }
+      return {
+        artifacts: {
+          nodeBootstrapSha256: bootstrap.tarballSha256,
+          enabledPluginIds: [...bootstrap.enabledPluginIds],
+          workerBundleHash: bundle.bundleHash,
+          workerArchiveSha256: bundle.tarballSha256,
+          openclawVersion: bundle.openclawVersion,
+          protocolFeatures: [...bundle.protocolFeatures],
+        },
+      };
     },
     ...preparedWorkspaces,
     prepareNodeEnrollment: nodeEnrollment.begin,
@@ -503,10 +503,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
     }).commit,
-    executeInference: async (inferenceParams) => {
-      const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
-      return await workerInferenceRuntime.executeWorkerInference(inferenceParams);
-    },
     placementStore: placementGate,
     createGatewayTools: (request) => createGatewayTools(request),
     liveEvents: workerLiveEvents,
@@ -589,13 +585,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       await params.startup.store.revokeEnvironmentCredential(environmentId);
     }
     await Promise.all(
-      environmentIds.map(async (environmentId) => {
-        await workerEnvironmentService.reconcileEnvironment(environmentId).catch(() => {
+      environmentIds.map((environmentId) =>
+        workerEnvironmentService.reconcileEnvironment(environmentId).catch(() => {
           workerEnvironmentLog.warn(
             `Device worker reconcile failed (${deviceId}, ${environmentId}); periodic cleanup will retry`,
           );
-        });
-      }),
+        }),
+      ),
     );
     return environmentIds;
   });

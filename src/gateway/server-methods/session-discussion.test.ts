@@ -12,7 +12,7 @@ import type { SessionDiscussionProvider } from "../../plugins/session-discussion
 import { sessionDiscussionHandlers } from "./session-discussion.js";
 
 const mocks = vi.hoisted(() => ({
-  emitSessionsChanged: vi.fn(),
+  emitSessionTitleChanged: vi.fn(),
   generateConversationLabelWithFallback: vi.fn(),
   getProvider: vi.fn(),
   loadSessionTarget: vi.fn(),
@@ -31,23 +31,42 @@ vi.mock("../../agents/utility-model.js", () => ({
 vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generateConversationLabelWithFallback,
 }));
+// mock-isolation: Title persistence is captured by this fixture without opening a database.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.updateSessionEntry,
-  loadSessionEntry: () => mocks.loadSessionTarget()?.entry,
+}));
+// mock-isolation: Discussion title tests supply current entry facts without opening SQLite.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
 }));
 vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();
   mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
   return { ...actual, maybeGenerateSessionTitle: mocks.maybeGenerateSessionTitle };
 });
+// mock-isolation: Discussion tests supply title fields without starting transcript workers.
 vi.mock("../session-transcript-title-reader.js", () => ({
-  readSessionTitleFieldsFromTranscript: mocks.readSessionTitleFields,
+  readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
+// mock-isolation: Capture title lifecycle notifications without starting Gateway broadcast workers.
 vi.mock("./session-change-event.js", () => ({
-  emitSessionsChanged: mocks.emitSessionsChanged,
+  emitSessionTitleChanged: mocks.emitSessionTitleChanged,
 }));
-vi.mock("./sessions-shared.js", () => ({
-  loadAccessorSessionEntryForGatewayTarget: mocks.loadSessionTarget,
+// mock-isolation: Discussion fixtures own selected targets and rows without admitting physical stores.
+vi.mock("../session-utils-store-lookup.js", () => ({
+  withGatewaySessionStoreTarget: async (
+    _params: unknown,
+    consume: (target: unknown) => unknown,
+  ) => {
+    const selected = mocks.loadSessionTarget();
+    return consume({
+      ...selected.target,
+      canonicalKey: selected.canonicalKey,
+      storePath: selected.storePath,
+      storeKeys: [selected.canonicalKey],
+      store: selected.entry ? { [selected.canonicalKey]: selected.entry } : {},
+    });
+  },
 }));
 
 const cfg = {
@@ -100,7 +119,7 @@ function provider() {
 
 describe("session discussion gateway methods", () => {
   beforeEach(() => {
-    mocks.emitSessionsChanged.mockReset();
+    mocks.emitSessionTitleChanged.mockReset();
     mocks.generateConversationLabelWithFallback.mockReset();
     mocks.getProvider.mockReset();
     mocks.loadSessionTarget.mockReset();
@@ -119,7 +138,7 @@ describe("session discussion gateway methods", () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "returns none when %s has no provider",
     async (method) => {
       mocks.getProvider.mockReturnValue(undefined);
@@ -146,9 +165,8 @@ describe("session discussion gateway methods", () => {
     expect(
       await invoke("session.discussion.open", { sessionKey: "global" }, ownedConfig),
     ).toMatchObject({ ok: true, payload: { state: "available" } });
-    expect(mocks.loadSessionTarget).toHaveBeenCalledWith({
-      cfg: ownedConfig,
-      key: "global",
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "global",
       agentId: "ops",
     });
 
@@ -166,7 +184,7 @@ describe("session discussion gateway methods", () => {
   });
 
   it("persists a generated title before opening an untitled session discussion", async () => {
-    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
     let persistedEntry: SessionEntry | undefined;
     mockSession(entry);
     mocks.readSessionTitleFields.mockReturnValue({
@@ -181,11 +199,16 @@ describe("session discussion gateway methods", () => {
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
 
-    expect(await invoke("session.discussion.open", { sessionKey })).toMatchObject({
+    expect(
+      await invoke("session.discussion.open", { sessionKey: "agent:main:thread-alias" }),
+    ).toMatchObject({
       ok: true,
       payload: { state: "available" },
     });
-    expect(registered.open).toHaveBeenCalledWith({ sessionKey, agentId: "main" });
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "agent:main:thread-alias",
+      agentId: "main",
+    });
 
     expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -198,58 +221,18 @@ describe("session discussion gateway methods", () => {
       }),
     );
     expect(persistedEntry?.displayName).toBe("Release Planning");
+    expect(mocks.generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     expect(
       mocks.updateSessionEntry.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     ).toBeLessThan(registered.open.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY);
-    expect(mocks.emitSessionsChanged).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
+    expect(mocks.emitSessionTitleChanged).toHaveBeenLastCalledWith(
       expect.anything(),
-      expect.objectContaining({ sessionKey, agentId: "main", reason: "chat.title" }),
-    );
-  });
-
-  it("attempts a title when system prompt state already exists", async () => {
-    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
-    mockSession(entry);
-    mocks.readSessionTitleFields.mockReturnValue({
-      firstUserMessage: "Plan the release",
-      lastMessagePreview: null,
-    });
-    mocks.updateSessionEntry.mockImplementation(async (_scope, update) => {
-      const patch = await update({ ...entry });
-      return patch ? { ...entry, ...patch } : entry;
-    });
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    await invoke("session.discussion.open", { sessionKey });
-
-    expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledOnce();
-    expect(mocks.generateConversationLabelWithFallback).toHaveBeenCalledOnce();
-  });
-
-  it("titles via the canonical session key when opened through an alias key", async () => {
-    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-    mocks.loadSessionTarget.mockReturnValue({
-      canonicalKey: sessionKey,
-      entry,
-      storePath,
-      target: { agentId: "main" },
-    });
-    mocks.readSessionTitleFields.mockReturnValue({
-      firstUserMessage: "Plan the release",
-      lastMessagePreview: null,
-    });
-    mocks.updateSessionEntry.mockImplementation(async (_scope, update) => {
-      const patch = await update({ ...entry });
-      return patch ? { ...entry, ...patch } : undefined;
-    });
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    await invoke("session.discussion.open", { sessionKey: "agent:main:thread-alias" });
-
-    expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey }),
+      expect.objectContaining({
+        sessionKey,
+        sessionId: "session-1",
+        agentId: "main",
+      }),
     );
   });
 
@@ -274,16 +257,24 @@ describe("session discussion gateway methods", () => {
     });
     // Resolvable deferred: settling it after the assertions evicts the shared
     // single-flight map entry so module state stays clean across suites.
-    let releaseGeneration: ((value: string | null) => void) | undefined;
-    mocks.generateConversationLabelWithFallback.mockReturnValue(
-      new Promise<string | null>((resolve) => {
+    let releaseGeneration!: (value: string | null) => void;
+    let markGenerationStarted!: () => void;
+    const generationStarted = new Promise<void>((resolve) => {
+      markGenerationStarted = resolve;
+    });
+    mocks.generateConversationLabelWithFallback.mockImplementation(() => {
+      markGenerationStarted();
+      return new Promise<string | null>((resolve) => {
         releaseGeneration = resolve;
-      }),
-    );
+      });
+    });
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
 
     const responsePromise = invoke("session.discussion.open", { sessionKey });
+    // Skill discovery precedes inference and may yield to real filesystem work.
+    // Start the fake timeout only after the deferred provider call is active.
+    await generationStarted;
     await vi.advanceTimersByTimeAsync(10_000);
 
     await expect(responsePromise).resolves.toMatchObject({
@@ -291,39 +282,20 @@ describe("session discussion gateway methods", () => {
       payload: { state: "available" },
     });
     expect(registered.open).toHaveBeenCalledOnce();
-    expect(mocks.emitSessionsChanged).not.toHaveBeenCalled();
-    releaseGeneration?.(null);
+    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledOnce();
+    releaseGeneration(null);
     // Bounded flush: eviction settles via microtasks, so advancing 0ms is
     // enough. runAllTimersAsync livelocks (10000-timer abort) when any other
     // suite in a shared shard worker schedules an interval into this fake clock.
     await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
   });
 
-  it("returns discussion info without loading or titling the session", async () => {
-    mockSession({ sessionId: "session-1", updatedAt: 1 });
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    expect(await invoke("session.discussion.info", { sessionKey })).toMatchObject({
-      ok: true,
-      payload: {
-        state: "open",
-        embedUrl: "https://chat.example/embed/thread",
-        openUrl: "https://chat.example/thread",
-      },
-    });
-
-    expect(mocks.loadSessionTarget).not.toHaveBeenCalled();
-    expect(mocks.maybeGenerateSessionTitle).not.toHaveBeenCalled();
-    expect(registered.info).toHaveBeenCalledExactlyOnceWith({ sessionKey, agentId: "main" });
-  });
-
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "returns a retryable error when the provider throws from %s",
     async (method) => {
       const registered = provider();
-      const operation = method === "session.discussion.info" ? registered.info : registered.open;
-      operation.mockRejectedValueOnce(new Error("provider failed"));
+      registered.open.mockRejectedValueOnce(new Error("provider failed"));
       mocks.getProvider.mockReturnValue(registered.value);
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
       const phases: DiagnosticEventPayload[] = [];
@@ -353,12 +325,11 @@ describe("session discussion gateway methods", () => {
     },
   );
 
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "rejects a malformed provider result from %s",
     async (method) => {
       const registered = provider();
-      const operation = method === "session.discussion.info" ? registered.info : registered.open;
-      operation.mockResolvedValueOnce({ state: "invalid" } as never);
+      registered.open.mockResolvedValueOnce({ state: "invalid" } as never);
       mocks.getProvider.mockReturnValue(registered.value);
 
       expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
@@ -368,7 +339,7 @@ describe("session discussion gateway methods", () => {
     },
   );
 
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "rejects an empty session key for %s",
     async (method) => {
       expect(await invoke(method, { sessionKey: "" })).toMatchObject({

@@ -18,6 +18,7 @@ import {
   XAI_DEFAULT_MAX_TOKENS,
   XAI_UNKNOWN_MODEL_COST,
 } from "./model-definitions.js";
+import { normalizeXaiReasoningEfforts } from "./model-id.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
@@ -30,14 +31,7 @@ const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;
 const XAI_GROK_OAUTH_REASONING_MODEL_IDS = new Set(["grok-composer-2.5-fast"]);
 
 export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  try {
-    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
-  } catch {
-    return false;
-  }
+  return URL.parse(baseUrl ?? "")?.href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
 }
 
 export function buildXaiProvider(
@@ -58,7 +52,7 @@ export async function buildLiveXaiProvider(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  return await buildLiveModelProviderConfig({
+  const provider = await buildLiveModelProviderConfig({
     discoveryMode: "strict",
     providerId: PROVIDER_ID,
     endpoint: XAI_MODELS_ENDPOINT,
@@ -74,6 +68,11 @@ export async function buildLiveXaiProvider(params: {
     ttlMs: XAI_MODELS_CACHE_TTL_MS,
     auditContext: "xai-model-discovery",
   });
+  // Multi-agent models reject the client-side tools every OpenClaw agent turn sends.
+  return {
+    ...provider,
+    models: provider.models.filter((model) => !model.id.toLowerCase().includes("multi-agent")),
+  };
 }
 
 function isXaiOAuthResponsesModel(
@@ -127,6 +126,24 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
     supportsReasoningEffort === true ||
     fallback?.reasoning === true ||
     XAI_GROK_OAUTH_REASONING_MODEL_IDS.has(modelId);
+  // The listing names each model's selectable efforts; carry them so the thinking
+  // profile and request compat follow the account instead of model-ID rules.
+  const listedEfforts =
+    row && typeof row === "object" && "reasoning_efforts" in row
+      ? row.reasoning_efforts
+      : undefined;
+  const supportedReasoningEfforts =
+    supportsReasoningEffort === true && Array.isArray(listedEfforts)
+      ? normalizeXaiReasoningEfforts(
+          listedEfforts.map((entry) =>
+            entry && typeof entry === "object" && "value" in entry ? entry.value : entry,
+          ),
+        )
+      : [];
+  const compat =
+    supportedReasoningEfforts.length > 0
+      ? { ...fallback?.compat, supportedReasoningEfforts }
+      : fallback?.compat;
 
   return {
     id: modelId,
@@ -138,7 +155,7 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
     cost: fallback?.cost ?? XAI_UNKNOWN_MODEL_COST,
     contextWindow,
     maxTokens,
-    ...(fallback?.compat ? { compat: fallback.compat } : {}),
+    ...(compat ? { compat } : {}),
     ...(fallback?.thinkingLevelMap ? { thinkingLevelMap: fallback.thinkingLevelMap } : {}),
   };
 }

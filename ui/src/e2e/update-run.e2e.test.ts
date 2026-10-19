@@ -200,10 +200,7 @@ suite.define(() => {
             ...Array.from({ length: 3 }, (_, index) => ({
               step: `warning:doctor:${index + 1}`,
               status: "completed" as const,
-              detail:
-                "An optional integration needs attention. Review its configuration in Settings. ".repeat(
-                  6,
-                ),
+              detail: `Integration ${index + 1}: ${"An optional integration needs attention. Review its configuration in Settings. ".repeat(6)}`,
             })),
           ],
           verification: {
@@ -221,7 +218,7 @@ suite.define(() => {
           status: run.status,
           updatedAtMs: run.updatedAtMs,
         });
-        const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0).";
+        const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0); 3 warnings need attention.";
         await runView.getByText(headline, { exact: true }).first().waitFor();
         await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);

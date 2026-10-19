@@ -1,19 +1,14 @@
 /* @vitest-environment jsdom */
-import { JSDOM } from "jsdom";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import * as lazyCustomElement from "../app/lazy-custom-element.ts";
-import * as toast from "../lib/toast.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTooltip,
   dispatchMousePointer,
-  focusTrigger,
   hoverTrigger,
   settleTooltip,
-  webAwesomeTooltip,
+  tooltipSurface,
 } from "./tooltip.test-support.ts";
 
-describe("lazy tooltip materialization", () => {
+describe("lazy tooltip content materialization", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
     document.body.replaceChildren();
@@ -21,105 +16,50 @@ describe("lazy tooltip materialization", () => {
     vi.restoreAllMocks();
   });
 
-  it("materializes on first hover intent and reuses the popup while preserving descriptions", async () => {
+  it("waits for the native surface to render before opening an anchor preview", async () => {
+    const tooltip = document.createElement("openclaw-tooltip");
+    const anchor = document.createElement("button");
+    anchor.textContent = "Preview";
+    document.body.append(anchor, tooltip);
+
+    tooltip.previewForAnchor(anchor, "Preview details", "focus");
+    expect(tooltip.hasAttribute("open")).toBe(false);
+    await settleTooltip(tooltip);
+
+    expect(tooltipSurface(tooltip)?.matches(":popover-open")).toBe(true);
+    expect(tooltipSurface(tooltip)?.querySelector(".tooltip-content")?.textContent).toBe(
+      "Preview details",
+    );
+  });
+
+  it("materializes content on first hover intent and reuses the native surface", async () => {
     const { tooltip, trigger } = createTooltip("Hover details");
     const untouched = createTooltip("Untouched details");
     document.body.append(tooltip, untouched.tooltip);
-    await Promise.all([tooltip.updateComplete, untouched.tooltip.updateComplete]);
-
+    await Promise.all([settleTooltip(tooltip), settleTooltip(untouched.tooltip)]);
     const descriptionId = trigger.getAttribute("aria-describedby")!;
     expect(document.getElementById(descriptionId)?.textContent).toBe("Hover details");
-    expect(webAwesomeTooltip(tooltip)).toBeNull();
+    const popup = tooltipSurface(tooltip)!;
+    expect(popup.querySelector(".tooltip-content")).toBeNull();
     hoverTrigger(trigger);
     vi.advanceTimersByTime(149);
-    expect(webAwesomeTooltip(tooltip)).toBeNull();
+    expect(popup.querySelector(".tooltip-content")).toBeNull();
     vi.advanceTimersByTime(1);
+    await settleTooltip(tooltip);
     expect(tooltip.hasAttribute("open")).toBe(true);
-    await settleTooltip(tooltip);
-
-    const popup = webAwesomeTooltip(tooltip)!;
-    expect(popup.open).toBe(true);
-    expect(popup.anchor).toBe(trigger);
-    expect(webAwesomeTooltip(untouched.tooltip)).toBeNull();
+    expect(popup.matches(":popover-open")).toBe(true);
+    expect(popup.querySelector(".tooltip-content")?.textContent).toBe("Hover details");
+    expect(tooltipSurface(untouched.tooltip)?.querySelector(".tooltip-content")).toBeNull();
     expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
-    expect(document.getElementById(descriptionId)?.textContent).toBe("Hover details");
-
     dispatchMousePointer(trigger, "pointerleave");
-    expect(tooltip.hasAttribute("open")).toBe(false);
-    expect(popup.open).toBe(false);
-    await settleTooltip(tooltip);
-    expect(webAwesomeTooltip(tooltip)).toBe(popup);
+    expect(popup.matches(":popover-open")).toBe(false);
     hoverTrigger(trigger);
     vi.advanceTimersByTime(150);
     await settleTooltip(tooltip);
-    expect(webAwesomeTooltip(tooltip)).toBe(popup);
-    expect(popup.open).toBe(true);
-    expect(tooltip.hasAttribute("open")).toBe(true);
+    expect(tooltipSurface(tooltip)).toBe(popup);
+    expect(popup.matches(":popover-open")).toBe(true);
     expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
   });
-
-  it.each([false, true])(
-    "handles a popup-less registered tooltip (open throws=%s)",
-    async (openThrows) => {
-      await lazyCustomElement.ensureCustomElementDefined(
-        "wa-tooltip",
-        () => import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
-      );
-      // A separate registry keeps the stub out of sibling tests' real tooltip definitions.
-      const stubWindow = new JSDOM().window;
-      onTestFinished(() => stubWindow.close());
-      class TooltipStub extends stubWindow.HTMLElement {
-        anchor: Element | null = null;
-        updateComplete = Promise.resolve(true);
-        #open = false;
-        get open() {
-          return this.#open;
-        }
-        set open(value: boolean) {
-          if (value && openThrows) {
-            throw new Error("Tooltip open failed");
-          }
-          this.#open = value;
-        }
-      }
-      stubWindow.customElements.define("wa-tooltip", TooltipStub);
-      const stub = new TooltipStub();
-      const loading = createDeferred();
-      vi.spyOn(lazyCustomElement, "ensureCustomElementDefined").mockReturnValueOnce(
-        loading.promise,
-      );
-      const errorHandled = createDeferred();
-      const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => {
-        errorHandled.resolve();
-        return true;
-      });
-      const { tooltip, trigger } = createTooltip("Stub details");
-      document.body.append(tooltip);
-      await tooltip.updateComplete;
-      focusTrigger(trigger);
-      await tooltip.updateComplete;
-      const original = webAwesomeTooltip(tooltip)!;
-      await original.updateComplete;
-      stub.append(...original.childNodes);
-      original.replaceWith(stub);
-      tooltip.requestUpdate();
-      await tooltip.updateComplete;
-      loading.resolve();
-      await settleTooltip(tooltip);
-      if (openThrows) {
-        await errorHandled.promise;
-      }
-
-      expect(stub.anchor).toBe(trigger);
-      expect(stub.open).toBe(!openThrows);
-      expect(tooltip.hasAttribute("open")).toBe(!openThrows);
-      if (openThrows) {
-        expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "Tooltip open failed" });
-      } else {
-        expect(showToast).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it.each(["pointer", "focus"] as const)(
     "materializes an anchor preview from %s intent",
@@ -128,40 +68,30 @@ describe("lazy tooltip materialization", () => {
       const anchor = document.createElement("button");
       anchor.textContent = "Preview";
       document.body.append(anchor, tooltip);
-      await tooltip.updateComplete;
-      expect(webAwesomeTooltip(tooltip)).toBeNull();
-
+      await settleTooltip(tooltip);
+      expect(tooltipSurface(tooltip)?.querySelector(".tooltip-content")).toBeNull();
       tooltip.previewForAnchor(anchor, "Preview details", input);
-      await tooltip.updateComplete;
+      await settleTooltip(tooltip);
       vi.advanceTimersByTime(150);
       await settleTooltip(tooltip);
-      expect(webAwesomeTooltip(tooltip)?.open).toBe(true);
-      expect(webAwesomeTooltip(tooltip)?.anchor).toBe(anchor);
-      expect(tooltip.hasAttribute("open")).toBe(true);
+      expect(tooltipSurface(tooltip)?.matches(":popover-open")).toBe(true);
       expect(document.getElementById(anchor.getAttribute("aria-describedby")!)?.textContent).toBe(
         "Preview details",
       );
     },
   );
 
-  it.each(["open", "escape", "disconnect", "toggle", "failure"] as const)(
-    "preserves %s intent while the popup definition is loading",
+  it.each(["open", "escape", "disconnect", "toggle", "veto"] as const)(
+    "preserves %s intent during first content materialization",
     async (outcome) => {
-      const loading = createDeferred();
-      vi.spyOn(lazyCustomElement, "ensureCustomElementDefined").mockReturnValueOnce(
-        loading.promise,
-      );
-      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-      const { tooltip, trigger } = createTooltip("Loading details");
+      const { tooltip, trigger } = createTooltip("Details");
       tooltip.openOnClick = true;
       document.body.append(tooltip);
-      await tooltip.updateComplete;
-
+      await settleTooltip(tooltip);
+      if (outcome === "veto") {
+        tooltip.addEventListener("overlay-show", (event) => event.preventDefault(), { once: true });
+      }
       trigger.click();
-      expect(tooltip.hasAttribute("open")).toBe(true);
-      await tooltip.updateComplete;
-      const popup = webAwesomeTooltip(tooltip)!;
-      expect(popup.open).not.toBe(true);
       if (outcome === "escape") {
         const escape = new KeyboardEvent("keydown", {
           key: "Escape",
@@ -169,27 +99,15 @@ describe("lazy tooltip materialization", () => {
           cancelable: true,
         });
         trigger.dispatchEvent(escape);
-        expect(escape.defaultPrevented).toBe(true);
+        expect(escape.defaultPrevented).toBe(false);
       } else if (outcome === "disconnect") {
         tooltip.remove();
       } else if (outcome === "toggle") {
         trigger.click();
       }
-      if (outcome === "failure") {
-        loading.reject(new Error("Tooltip import failed"));
-      } else {
-        await import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js");
-        loading.resolve();
-      }
       await settleTooltip(tooltip);
-
-      expect(popup.open).toBe(outcome === "open");
       expect(tooltip.hasAttribute("open")).toBe(outcome === "open");
-      if (outcome === "failure") {
-        expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "Tooltip import failed" });
-      } else {
-        expect(showToast).not.toHaveBeenCalled();
-      }
+      expect(tooltipSurface(tooltip)?.matches(":popover-open") ?? false).toBe(outcome === "open");
     },
   );
 });

@@ -76,13 +76,9 @@ function readUserText(message: Extract<AgentMessage, { role: "user" }>): string 
   ) {
     return undefined;
   }
-  const content = message.content;
-  if (typeof content === "string") {
-    return content.length <= MAX_DECISION_CONTEXT_CHARS &&
-      detectImageReferences(content).length === 0
-      ? stripUserEnvelopeForDisplay(content).trim()
-      : undefined;
-  }
+  const rawContent = message.content;
+  const content =
+    typeof rawContent === "string" ? [{ type: "text" as const, text: rawContent }] : rawContent;
   if (content.length > MAX_CONTENT_BLOCKS || content.some((block) => block.type !== "text")) {
     return undefined;
   }
@@ -206,13 +202,16 @@ export function prepareDecisionContext(params: {
       }
     }
     const unpaired = unmatchedResult || pendingCalls.size > 0;
+    const size = (user?.length ?? 0) + assistant.length;
     const problem = unpaired
       ? "pending-tool-work"
       : excluded
         ? "excluded-context"
         : !assistant || !terminal
           ? "missing-exchange"
-          : undefined;
+          : facts.contextChars + size > MAX_DECISION_CONTEXT_CHARS
+            ? "context-too-large"
+            : undefined;
     if (problem) {
       if (recentConversation.length === 0) {
         return skip(problem);
@@ -225,14 +224,6 @@ export function prepareDecisionContext(params: {
       assistant,
       ...(returned ? { toolResults: { returned, errors } } : {}),
     };
-    const size = exchange.user.length + exchange.assistant.length;
-    if (facts.contextChars + size > MAX_DECISION_CONTEXT_CHARS) {
-      if (recentConversation.length === 0) {
-        return skip("context-too-large");
-      }
-      facts.olderContextOmitted = true;
-      break;
-    }
     recentConversation.unshift(exchange);
     facts.contextChars += size;
     facts.exchangeCount = recentConversation.length;

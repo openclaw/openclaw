@@ -203,16 +203,6 @@ export function createMeetingStatusPreludeSource(
     else delete window[${audioOutputsGlobal}];
   };
   const adoptAudioBridgeSourcesForSession = () => suspendOwnedAudioBridges(true);
-  const retireOwnedCaptions = () => {
-    const active = window[${captionsGlobal}];
-    const owned = Boolean(
-      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
-    );
-    if (!owned) return;
-    if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
-    active.observer?.disconnect?.();
-    delete window[${captionsGlobal}];
-  };
   const finalizeCaptionState = (active) => {
     if (!active) return;
     if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);

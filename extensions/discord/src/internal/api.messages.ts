@@ -19,6 +19,15 @@ export async function getChannel(rest: RequestClient, channelId: string): Promis
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
 }
 
+export async function createChannelMessage(
+  rest: RequestClient,
+  channelId: string,
+  data: RequestData,
+): Promise<APIMessage> {
+  // SAFETY: Discord's Create Message endpoint returns APIMessage on success.
+  return (await rest.post(Routes.channelMessages(channelId), data)) as APIMessage;
+}
+
 export async function getThreadMember(
   rest: RequestClient,
   threadId: string,
@@ -49,29 +58,15 @@ export async function editChannelMessage(
   )) as APIMessage;
 }
 
-export async function deleteChannelMessage(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-): Promise<void> {
-  await rest.delete(Routes.channelMessage(channelId, normalizeDiscordMessageId(messageId)));
+function messageMutation(method: "put" | "delete", route: "channelMessage" | "channelPin") {
+  return async (rest: RequestClient, channelId: string, messageId: string): Promise<void> => {
+    await rest[method](Routes[route](channelId, normalizeDiscordMessageId(messageId)));
+  };
 }
 
-export async function pinChannelMessage(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-): Promise<void> {
-  await rest.put(Routes.channelPin(channelId, normalizeDiscordMessageId(messageId)));
-}
-
-export async function unpinChannelMessage(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-): Promise<void> {
-  await rest.delete(Routes.channelPin(channelId, normalizeDiscordMessageId(messageId)));
-}
+export const deleteChannelMessage = messageMutation("delete", "channelMessage");
+export const pinChannelMessage = messageMutation("put", "channelPin");
+export const unpinChannelMessage = messageMutation("delete", "channelPin");
 
 export async function createThread<T extends object = APIChannel>(
   rest: RequestClient,

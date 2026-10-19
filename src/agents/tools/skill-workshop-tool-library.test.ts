@@ -42,10 +42,14 @@ afterEach(resetCodeModeTestState);
 
 describe("personal Skill Workshop results", () => {
   it("lets Code Mode discover a personal skill and read its whole guidance", async () => {
+    const entries = Array.from({ length: 21 }, (_, index) => ({
+      ...entry,
+      skillId: index === 0 ? entry.skillId : String(index),
+    }));
     const tool = libraryTool(async ({ action, skillId }) => {
       if (action === "list") {
         return {
-          entries: [entry],
+          entries,
           profileId: "owner",
           multipleProfiles: true,
           defaultTarget: "personal",
@@ -80,8 +84,12 @@ describe("personal Skill Workshop results", () => {
     expect(result.status, JSON.stringify(result)).toBe("completed");
     expect(result.value).toMatchObject({
       listed: {
-        entries: [{ skillId: entry.skillId, slug: "release-guide", canEdit: true }],
-        omitted: 0,
+        entries: entries.slice(0, 20).map(({ skillId }) => ({
+          skillId,
+          slug: "release-guide",
+          canEdit: true,
+        })),
+        omitted: 1,
       },
       read: {
         skillId: entry.skillId,
@@ -95,24 +103,7 @@ describe("personal Skill Workshop results", () => {
     });
     expect(JSON.stringify(result.value)).not.toContain("UNSELECTED_SUPPORT_BYTES");
     expect(JSON.stringify(result.value)).not.toContain(entry.ownerLabel);
-  });
-
-  it("keeps the structured library list bounded and projected", async () => {
-    const tool = libraryTool(async () => ({
-      entries: Array.from({ length: 21 }, (_, index) => ({ ...entry, skillId: String(index) })),
-      profileId: "owner",
-      multipleProfiles: true,
-      defaultTarget: "personal",
-      canManageWorkspace: false,
-      defaultSelectionLimit: 20,
-    }));
-    const result = await tool.execute("list", { action: "list" });
-    expect(result.details).toMatchObject({
-      entries: Array.from({ length: 20 }, (_, index) => ({ skillId: String(index) })),
-      omitted: 1,
-    });
-    expect(JSON.stringify(result.details)).not.toContain(entry.ownerLabel);
-    expect(result.details).not.toHaveProperty("profileId");
+    expect(result.value).not.toHaveProperty("listed.profileId");
   });
 
   it.each([

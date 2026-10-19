@@ -510,7 +510,8 @@ function loadConfig() {
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: loadConfig,
+  readRuntimeConfig: loadConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
   getRuntimeConfigSnapshot: vi.fn(() => null),
 }));
 
@@ -557,7 +558,6 @@ vi.mock("./chrome.js", () => ({
       exe: { kind: "chrome", path: "/fake/chrome" },
       userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
-      startedAt: Date.now(),
       proc,
     };
   }),

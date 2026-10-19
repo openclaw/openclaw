@@ -446,6 +446,8 @@ sys.exit(record.main())
       photos: [],
       text: "fixture",
       timeoutMs: 1000,
+      // The test's own bound owns readiness hangs; host stalls can outlast the live 30 s budget.
+      recorderReadyTimeoutMs: TEST_TIMEOUT_MS,
       record: path.join(root, "events"),
       output: path.join(root, "summary.json"),
       scenario: { actions },

@@ -110,7 +110,7 @@ export type MeetingRuntimeProbeResults = {
   speech: unknown;
 };
 
-export type MeetingRuntimeOwner<
+type MeetingRuntimeOwner<
   Transport extends "chrome" | "chrome-node",
   Mode extends string,
   Health extends MeetingBrowserHealth,

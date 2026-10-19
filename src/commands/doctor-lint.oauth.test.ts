@@ -1,5 +1,5 @@
 // Read-only Doctor must not rotate a server credential into a discarded database.
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpToolRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
@@ -144,7 +144,7 @@ describe("Doctor OAuth snapshot isolation", () => {
     async ({ lane, rejected }) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-oauth-" }, async (state) => {
         const cfg = {
-          agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
           mcp: {
             servers: {
               [SERVER_NAME]: {

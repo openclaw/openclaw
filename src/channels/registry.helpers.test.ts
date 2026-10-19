@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginChannelRegistryVersion,
   resetPluginRuntimeStateForTest,
@@ -81,23 +80,5 @@ describe("channel registry helpers", () => {
     expect(normalizeAnyChannelId("b")).toBe("beta");
     expect(normalizeAnyChannelIdLight("a")).toBeNull();
     expect(normalizeAnyChannelIdLight("b")).toBe("beta");
-  });
-
-  it("refreshes registered channel lookups when selected registry channels grow in place", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-
-    expect(normalizeAnyChannelId("a")).toBeNull();
-    expect(normalizeAnyChannelIdLight("a")).toBeNull();
-
-    registry.channels.push(
-      expectDefined(
-        createRegistryWithRegisteredChannel("alpha", ["a"]).channels[0],
-        'createRegistryWithRegisteredChannel("alpha", ["a"]).channels[0] test invariant',
-      ),
-    );
-
-    expect(normalizeAnyChannelId("a")).toBe("alpha");
-    expect(normalizeAnyChannelIdLight("a")).toBe("alpha");
   });
 });

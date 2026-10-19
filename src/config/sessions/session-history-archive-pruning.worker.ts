@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { readSqliteFreePageCount } from "../../infra/sqlite-wal-reclamation.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -19,6 +20,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PublishedSessionTranscriptArchive,
   SessionArchivePruningRead,
+  SessionArchivePruningSnapshot,
   SessionArchiveRetentionDelete,
   SessionLegacyArchiveRemovalResult,
 } from "./session-history-archive-pruning.types.js";
@@ -26,9 +28,10 @@ import type {
 export function readSessionArchivePruningInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   limit = 1,
-): PublishedSessionTranscriptArchive[] {
+): SessionArchivePruningSnapshot {
+  const freePages = isPostgresSqlConnection(database.db) ? 0 : readSqliteFreePageCount(database.db);
   if (!tableExists(database.db, "session_transcript_archives")) {
-    return [];
+    return { archives: [], freePages };
   }
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
@@ -47,19 +50,18 @@ export function readSessionArchivePruningInDatabase(
         "session_key",
       ])
       .where("published_at", "is not", null)
+      .$narrowType<{ published_at: number }>()
       .orderBy("created_at", "asc")
       .orderBy("session_id", "asc")
       .orderBy("generation", "asc")
       .limit(limit),
   ).rows;
-  return rows.flatMap((row) =>
-    row.published_at === null ? [] : [{ ...row, published_at: row.published_at }],
-  );
+  return { archives: rows.map((row) => Object.assign({}, row)), freePages };
 }
 
 export function readSessionArchivePruningInWorker(
   request: SessionArchivePruningRead,
-): PublishedSessionTranscriptArchive[] {
+): SessionArchivePruningSnapshot {
   const identity = `file:${request.expectedIdentity.physicalIdentity}`;
   assertExistingDatabaseIdentity(request.database.path, identity);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -102,29 +104,37 @@ export function pruneSessionArchivesByRetentionInDatabase(
       );
       const db = getSessionKysely(transactionDb.db);
       const directory = path.resolve(input.archiveDirectory);
-      let removed = 0;
-      for (const row of input.candidates) {
+      const removable = input.candidates.filter((row) => {
         const archivePath = path.resolve(directory, row.archive_name);
-        if (
-          referenced.has(row.session_id) ||
-          path.dirname(archivePath) !== directory ||
-          path.basename(archivePath) !== row.archive_name ||
-          fs.existsSync(archivePath)
-        ) {
-          continue;
-        }
+        return (
+          !referenced.has(row.session_id) &&
+          path.dirname(archivePath) === directory &&
+          path.basename(archivePath) === row.archive_name &&
+          !fs.existsSync(archivePath)
+        );
+      });
+      let removed = 0;
+      if (removable.length > 0) {
         // Selection can wait behind publication or restore; stale rows simply wait for another sweep.
         const result = executeSqliteQuerySync(
           transactionDb.db,
           db
             .deleteFrom("session_transcript_archives")
-            .where("session_id", "=", row.session_id)
-            .where("generation", "=", row.generation)
-            .where("archive_name", "=", row.archive_name)
-            .where("created_at", "=", row.created_at)
-            .where("published_at", "=", row.published_at),
+            .where((eb) =>
+              eb.or(
+                removable.map((row) =>
+                  eb.and([
+                    eb("session_id", "=", row.session_id),
+                    eb("generation", "=", row.generation),
+                    eb("archive_name", "=", row.archive_name),
+                    eb("created_at", "=", row.created_at),
+                    eb("published_at", "=", row.published_at),
+                  ]),
+                ),
+              ),
+            ),
         );
-        removed += Number(result.numAffectedRows ?? 0n);
+        removed = Number(result.numAffectedRows ?? 0n);
       }
       admit("commit");
       return removed;
@@ -229,16 +239,4 @@ export function deletePublishedSessionArchiveInDatabase(
     options,
     { operationLabel: "session.archive.delete-published" },
   );
-}
-
-export function reclaimSessionArchivePagesInWorker(
-  database: OpenClawAgentDatabase,
-  maxPages: number | undefined,
-  admit: (stage: "transaction" | "commit") => void,
-): SqliteWalReclamationResult {
-  return database.walMaintenance.reclaimFreePages({
-    maxPages,
-    beforeMutation: () => admit("transaction"),
-    onCommit: () => admit("commit"),
-  });
 }

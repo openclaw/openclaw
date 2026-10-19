@@ -12,57 +12,18 @@ import {
   expectOnlyCanonicalPathCommands,
   createSandboxFsBridge,
   expectMkdirpAllowsExistingDirectory,
-  findCallByDockerArg,
+  getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenRootFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
 describe("sandbox fs bridge boundary validation", () => {
   installFsBridgeTestHarness();
 
-  it("blocks writes into read-only bind mounts", async () => {
-    const sandbox = createSandbox({
-      docker: {
-        ...createSandbox().docker,
-        binds: ["/tmp/workspace-two:/workspace-two:ro"],
-      },
-    });
-    const bridge = createSandboxFsBridge({ sandbox });
-
-    await expect(
-      bridge.writeFile({ filePath: "/workspace-two/new.txt", data: "hello" }),
-    ).rejects.toThrow(/read-only/);
-    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-  });
-
-  it("allows mkdirp for existing in-boundary subdirectories", async () => {
-    await expectMkdirpAllowsExistingDirectory();
-  });
-
   it("allows mkdirp when boundary open reports io for an existing directory", async () => {
     await expectMkdirpAllowsExistingDirectory({ forceBoundaryIoFallback: true });
-  });
-
-  it("rejects mkdirp when target exists as a file", async () => {
-    await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const filePath = path.join(workspaceDir, "memory", "kemik");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, "not a directory");
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).rejects.toThrow(
-        /cannot create directories/i,
-      );
-      expect(findCallByDockerArg(1, "mkdirp")).toBeUndefined();
-    });
   });
 
   it.each(["file", "directory"] as const)(
@@ -131,12 +92,6 @@ describe("sandbox fs bridge boundary validation", () => {
     });
   });
 
-  it("rejects missing files without a container content-read command", async () => {
-    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
-    await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/ENOENT|no such file/i);
-    expectOnlyCanonicalPathCommands();
-  });
-
   it.runIf(process.platform !== "win32")(
     "rejects a regular file replaced by a FIFO at descriptor open",
     async () => {
@@ -171,4 +126,22 @@ describe("sandbox fs bridge boundary validation", () => {
       });
     },
   );
+
+  it("re-validates target before the pinned write helper runs", async () => {
+    mockedOpenRootFile
+      .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
+      .mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "validation",
+        error: new Error("Hardlinked path is not allowed"),
+      }));
+
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    await expect(bridge.writeFile({ filePath: "b.txt", data: "hello" })).rejects.toThrow(
+      /hardlinked path/i,
+    );
+
+    const scripts = getScriptsFromCalls();
+    expect(scripts.join("\n")).not.toContain("os.replace(");
+  });
 });

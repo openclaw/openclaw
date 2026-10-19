@@ -63,9 +63,9 @@ export function prepareIncrementalSuffixIdempotencyMutation(params: {
   const extractedKey =
     /* kysely-allow-raw: select the canonical message idempotency key without hydrating prefix events. */
     sql<string>`CASE
-    WHEN json_valid(${transcriptEventNavigationSql("event")})
-      AND json_type(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey') = 'text'
-    THEN trim(json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'), ${trimCharacters})
+    WHEN json_valid(${transcriptEventNavigationSql(params.database.db, "event")})
+      AND json_type(${transcriptEventNavigationSql(params.database.db, "event")}, '$.message.idempotencyKey') = 'text'
+    THEN trim(json_extract(${transcriptEventNavigationSql(params.database.db, "event")}, '$.message.idempotencyKey'), ${trimCharacters})
   END`;
   const replacements = executeSqliteQuerySync(
     params.database.db,

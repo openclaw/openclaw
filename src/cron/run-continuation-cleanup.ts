@@ -9,11 +9,12 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import {
-  isCompetingSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  hasSessionControllerQueuedWork,
+  isCompetingSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
@@ -40,6 +41,7 @@ export async function removeCronRunContinuationSessionIfIdle(
   sessionKey: string,
   settledDeliveryId?: string,
   queueContext?: OpenClawStateWorkerContext,
+  capturedStorePath?: string,
 ): Promise<void> {
   if (
     !parseCronRunScopeSuffix(sessionKey).runId ||
@@ -50,10 +52,12 @@ export async function removeCronRunContinuationSessionIfIdle(
   const context = queueContext ?? captureOpenClawStateWorkerContext();
   const assertCurrent = () => assertSubagentReadContext(context);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-    agentId,
-    env: context.environment,
-  });
+  const storePath =
+    capturedStorePath ??
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+      agentId,
+      env: context.environment,
+    });
   const readEntry = () =>
     withSessionEntryReadOnlyInWorker(
       {
@@ -75,11 +79,15 @@ export async function removeCronRunContinuationSessionIfIdle(
   if (!original || !canRemoveCronRunContinuation(original.cronRunContinuation)) {
     return;
   }
-  await runExclusiveSessionLifecycleMutation({
+  await runSessionMutation({
+    diagnosticLabel: "cron-cleanup",
     scope: storePath,
     identities: [sessionKey, original.sessionId],
     run: async () => {
-      if (isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, original.sessionId])) {
+      if (
+        isCompetingSessionControllerWorkActive(storePath, [sessionKey, original.sessionId]) ||
+        hasSessionControllerQueuedWork(storePath, [sessionKey, original.sessionId])
+      ) {
         return;
       }
       const pendingSessionDeliveries = await loadPendingSessionDeliveries(context);
@@ -95,46 +103,33 @@ export async function removeCronRunContinuationSessionIfIdle(
       ) {
         return;
       }
-      const descendants = await prepareCronDescendantDeletion([sessionKey]);
-      try {
-        assertCurrent();
-        if (descendants.hasUnsettled(sessionKey)) {
-          return;
-        }
-        const entry = await readEntry();
-        if (
-          !entry ||
-          entry.sessionId !== original.sessionId ||
-          entry.lifecycleRevision !== original.lifecycleRevision ||
-          !canRemoveCronRunContinuation(entry.cronRunContinuation)
-        ) {
-          return;
-        }
-        await deleteSessionEntryLifecycle({
-          descendantRunBasis: descendants.basis,
-          agentId,
-          commitGuard: () => {
-            assertCurrent();
-            if (
-              descendants.hasUnsettled(sessionKey) ||
-              hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
-            ) {
-              throw new Error("cron run continuation still has unsettled background work");
-            }
-          },
-          // Exact rows alias the stable cron transcript; the stable row owns archival.
-          archiveTranscript: false,
-          expectedEntry: entry,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-          expectedSessionId: entry.sessionId,
-          expectedUpdatedAt: entry.updatedAt,
-          requireWriteSuccess: true,
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        });
-      } finally {
-        descendants.dispose();
+      const descendants = await prepareCronDescendantDeletion([sessionKey], context);
+      assertCurrent();
+      if (descendants.hasUnsettled(sessionKey)) {
+        return;
       }
+      await deleteSessionEntryLifecycle({
+        agentId,
+        env: context.environment,
+        commitGuard: () => {
+          assertCurrent();
+          if (
+            descendants.hasUnsettled(sessionKey) ||
+            hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
+          ) {
+            throw new Error("cron run continuation still has unsettled background work");
+          }
+        },
+        // Exact rows alias the stable cron transcript; the stable row owns archival.
+        archiveTranscript: false,
+        expectedEntry: original,
+        expectedLifecycleRevision: original.lifecycleRevision,
+        expectedSessionId: original.sessionId,
+        expectedUpdatedAt: original.updatedAt,
+        requireWriteSuccess: true,
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
     },
   });
 }

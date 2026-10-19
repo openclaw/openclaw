@@ -1,10 +1,13 @@
 // Reply-preview resolution: memoized quoted-source previews served from
-// already-loaded transcript rows first, then the reply-message access loader.
+// already-loaded transcript rows first, then page-carried quoted originals.
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { userTurnRunId } from "../chat-thread-items.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
-import { prepareChatMessageRender, resolveMessageReplyText } from "./chat-message-markdown.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageReplyText,
+} from "./chat-message-markdown-view.tsx";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";

@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -16,6 +15,7 @@ import { createCronOutputCommand } from "./output-mode.js";
 import { registerCronMutationOptions } from "./register.cron-options.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
+  assertCronCliJobSpec,
   assertCronTimeoutSupported,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -76,9 +76,8 @@ export function registerCronListCommand(cron: Command) {
             printCronJson(enrichCronJsonWithStatus(res));
             return;
           }
-          const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
           const deliveryPreviews = coerceCronDeliveryPreviews(res);
-          printCronList(jobs, defaultRuntime, { deliveryPreviews });
+          printCronList(res.jobs, defaultRuntime, { deliveryPreviews });
         } catch (err) {
           handleCronCliError(err);
         }
@@ -95,7 +94,7 @@ export function registerCronAddCommand(cron: Command) {
         .argument("[message]", "Agent message when using a positional schedule"),
       "add",
     )
-      .option("--declaration-key <key>", "Idempotent declaration identity key")
+      .option("--declaration-key <key>", "Key to avoid duplicate declarations")
       .option("--disabled", "Create job disabled", false)
       .action(
         async (
@@ -264,23 +263,7 @@ export function registerCronAddCommand(cron: Command) {
               throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
-            if (
-              sessionTarget === "main" &&
-              resolvedPayload.kind !== "systemEvent" &&
-              resolvedPayload.kind !== "script"
-            ) {
-              throw new CronCliError("Main jobs require --system-event or --script.");
-            }
-            if (
-              resolvedPayload.kind === "script" &&
-              sessionTarget !== "main" &&
-              sessionTarget !== "isolated"
-            ) {
-              throw new CronCliError("Script jobs require --session main or --session isolated.");
-            }
-            if (isIsolatedLikeSessionTarget && !isDeliveryPayload) {
-              throw new CronCliError("Isolated jobs require --message, --command, or --script.");
-            }
+            await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
             const supportsChatDelivery = isIsolatedLikeSessionTarget && isDeliveryPayload;
             if ((opts.announce || typeof opts.deliver === "boolean") && !supportsChatDelivery) {
               throw new CronCliError(

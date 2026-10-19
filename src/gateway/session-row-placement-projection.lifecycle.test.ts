@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
@@ -12,6 +13,7 @@ function placementReadView() {
     isCurrent(): boolean;
     getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
   } = {
+    physicalPaths: (locator) => [locator],
     state: {
       cfg: {},
       policyConfig: {},
@@ -35,7 +37,21 @@ function placementReadView() {
       entry,
     };
   };
-  return { projection, query, lookup };
+  const read = <T>(
+    owner: ReturnType<typeof createSessionRowPlacementProjection>,
+    select: string | (() => Lookup[]),
+    consume: () => T,
+    prepareRows: () => undefined | Promise<void> = () => undefined,
+  ) =>
+    owner.withPreparedRows(
+      projection,
+      () => true,
+      lookup,
+      typeof select === "string" ? () => [query(select)] : select,
+      prepareRows,
+      consume,
+    );
+  return { projection, query, read };
 }
 
 function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlacementProjection {
@@ -50,8 +66,92 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
   };
 }
 
+it.each([false, true])(
+  "settles native results before later topology changes (placement reader: %s)",
+  async (withPlacement) => {
+    const { projection, read } = placementReadView();
+    const preparedState = projection.state;
+    let topologyChanged = false;
+    let consumed = 0;
+    Object.defineProperty(projection, "state", {
+      get() {
+        if (topologyChanged) {
+          throw new Error("Session row topology changed; prepare current facts before reading");
+        }
+        return preparedState;
+      },
+    });
+    const owner = createSessionRowPlacementProjection(
+      withPlacement ? { readProjection: async () => placementSnapshot([]) } : undefined,
+      () => undefined,
+    );
+    try {
+      const reading = read(owner, "completed-native-read", () => {
+        consumed++;
+        queueMicrotask(() => {
+          topologyChanged = true;
+        });
+        return "prepared";
+      });
+      await expect(reading).resolves.toEqual("prepared");
+      expect(consumed).toBe(1);
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+
+it.each(["facts", "rows"] as const)(
+  "releases exact preparation after the requesting observation closes during %s readiness",
+  async (phase) => {
+    const { read } = placementReadView();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const work = new AsyncWorkScope();
+    const cancelled = new Error("Requesting connection closed");
+    let preparations = 0;
+    let consumed = false;
+    const prepare = () => {
+      preparations++;
+      if (preparations === 1) {
+        entered.resolve();
+        return release.promise;
+      }
+      return undefined;
+    };
+    const owner = createSessionRowPlacementProjection(
+      undefined,
+      phase === "facts" ? prepare : () => undefined,
+    );
+    const reading = work.track(() =>
+      read(
+        owner,
+        "cancelled-exact-read",
+        () => {
+          consumed = true;
+        },
+        phase === "rows" ? prepare : () => undefined,
+      ),
+    );
+    const settled = Promise.allSettled([reading]);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, reading, "Read did not enter preparation");
+      work.beginClose(cancelled);
+      release.resolve();
+      await expect(reading).rejects.toBe(cancelled);
+      expect(preparations).toBe(1);
+      expect(consumed).toBe(false);
+    } finally {
+      release.resolve();
+      owner.dispose();
+      await settled;
+      await work.drain();
+    }
+  },
+);
+
 it("refreshes placement facts invalidated after the read settles but before consumption", async () => {
-  const { projection, query, lookup } = placementReadView();
+  const { read } = placementReadView();
   const sessionId = "completed-placement-read";
   const factsEntered = createDeferredCore();
   const releaseFacts = createDeferredCore();
@@ -79,18 +179,11 @@ it("refreshes placement facts invalidated after the read settles but before cons
     },
   );
   const consumed: Array<boolean | undefined> = [];
-  const reading = owner.withPreparedRows(
-    projection,
-    () => true,
-    lookup,
-    () => [query(sessionId)],
-    () => undefined,
-    () => {
-      const value = owner.getProjectionFacts(sessionId)?.workspaceResultReconciling;
-      consumed.push(value);
-      return value;
-    },
-  );
+  const reading = read(owner, sessionId, () => {
+    const value = owner.getProjectionFacts(sessionId)?.workspaceResultReconciling;
+    consumed.push(value);
+    return value;
+  });
   const settled = Promise.allSettled([reading]);
   try {
     await withTestTimeout(factsEntered.promise, 2_000, "Post-read facts preparation did not enter");
@@ -100,7 +193,7 @@ it("refreshes placement facts invalidated after the read settles but before cons
     releaseFacts.resolve();
     expect(
       await withTestTimeout(reading, 2_000, "Invalidated placement facts did not refresh"),
-    ).toEqual({ kind: "complete", value: true });
+    ).toEqual(true);
     expect(consumed).toEqual([true]);
   } finally {
     owner.dispose();
@@ -110,7 +203,7 @@ it("refreshes placement facts invalidated after the read settles but before cons
 });
 
 it("settles queued placement preparation on disposal without dispatching it", async () => {
-  const { projection, query, lookup } = placementReadView();
+  const { query, read } = placementReadView();
   const firstEntered = createDeferredCore();
   const secondEntered = createDeferredCore();
   const queuedSelected = createDeferredCore();
@@ -147,38 +240,21 @@ it("settles queued placement preparation on disposal without dispatching it", as
     return value;
   };
   try {
-    const first = owner.withPreparedRows(
-      projection,
-      () => true,
-      lookup,
-      () => [query("first")],
-      () => undefined,
-      () => consume("first"),
-    );
+    const first = read(owner, "first", () => consume("first"));
     active.push(Promise.allSettled([first]));
     await withTestTimeout(firstEntered.promise, 2_000, "First placement read did not enter");
-    const second = owner.withPreparedRows(
-      projection,
-      () => true,
-      lookup,
-      () => [query("second")],
-      () => undefined,
-      () => consume("second"),
-    );
+    const second = read(owner, "second", () => consume("second"));
     active.push(Promise.allSettled([second]));
     await withTestTimeout(secondEntered.promise, 2_000, "Second placement read did not enter");
     const queued = queuedIds.map((id) =>
-      owner.withPreparedRows(
-        projection,
-        () => true,
-        lookup,
+      read(
+        owner,
         () => {
           if (++selectedCount === queuedIds.length) {
             queuedSelected.resolve();
           }
           return [query(id)];
         },
-        () => undefined,
         () => consume(id),
       ),
     );
@@ -214,7 +290,7 @@ it("settles queued placement preparation on disposal without dispatching it", as
 });
 
 it("keeps resident preparation ahead of later exact demand in the accepted FIFO", async () => {
-  const { projection, query, lookup } = placementReadView();
+  const { read } = placementReadView();
   const createStep = (id: string) => ({
     id,
     entered: createDeferredCore(),
@@ -244,14 +320,7 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
   );
   const accepted: Promise<unknown>[] = [];
   const exact = (id: string) => {
-    const result = owner.withPreparedRows(
-      projection,
-      () => true,
-      lookup,
-      () => [query(id)],
-      () => undefined,
-      () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
-    );
+    const result = read(owner, id, () => owner.getProjectionFacts(id)?.workspaceResultReconciling);
     accepted.push(Promise.allSettled([result]));
     return result;
   };
@@ -275,9 +344,9 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
     await withTestTimeout(newer.entered.promise, 2_000, "Newer queued read did not enter");
     expect(dispatched).toEqual([["first"], ["second"], ["older"], ["resident"], ["newer"]]);
     newer.release.resolve();
-    await expect(olderRead).resolves.toEqual({ kind: "complete", value: true });
+    await expect(olderRead).resolves.toEqual(true);
     await preparing;
-    await expect(newerRead).resolves.toEqual({ kind: "complete", value: true });
+    await expect(newerRead).resolves.toEqual(true);
   } finally {
     owner.dispose();
     for (const step of steps) {
@@ -288,7 +357,7 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
 });
 
 it("refreshes an invalidated exact snapshot before adopting its resident row", async () => {
-  const { projection, query, lookup } = placementReadView();
+  const { read } = placementReadView();
   const id = "materializing-exact-placement";
   const materializing = createDeferredCore();
   const releaseMaterialization = createDeferredCore();
@@ -304,11 +373,10 @@ it("refreshes an invalidated exact snapshot before adopting its resident row", a
     },
     () => undefined,
   );
-  const reading = owner.withPreparedRows(
-    projection,
-    () => true,
-    lookup,
-    () => [query(id)],
+  const reading = read(
+    owner,
+    id,
+    () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
     () => {
       if (rowsPrepared) {
         return undefined;
@@ -317,7 +385,6 @@ it("refreshes an invalidated exact snapshot before adopting its resident row", a
       materializing.resolve();
       return releaseMaterialization.promise;
     },
-    () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
   );
   const settled = Promise.allSettled([reading]);
   try {
@@ -330,7 +397,7 @@ it("refreshes an invalidated exact snapshot before adopting its resident row", a
     await owner.prepare();
     expect(dispatched).toEqual([[id], [id]]);
     releaseMaterialization.resolve();
-    expect(await reading).toEqual({ kind: "complete", value: true });
+    expect(await reading).toEqual(true);
     expect(owner.getProjectionFacts(id)?.workspaceResultReconciling).toBe(true);
   } finally {
     owner.dispose();

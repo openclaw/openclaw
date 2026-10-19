@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { readClawHubRecommendations } from "../../shared/clawhub-recommendations.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -32,19 +33,13 @@ const remotePlugin = {
 const catalog = { version: 0, channels: [], getChannel: () => undefined } as const;
 
 function messageTool(config = {}, options: Partial<Parameters<typeof createMessageTool>[0]> = {}) {
+  setRuntimeConfigSnapshot(options.config ?? config);
   return createMessageTool({
     config,
     preparedMessageToolCatalog: catalog,
     currentChannelProvider: "webchat",
     agentSessionKey: "agent:main:webchat:dm:clawhub-proof",
     runId: "clawhub-proof-run",
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async () => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...options,
   });
 }
@@ -58,27 +53,54 @@ beforeEach(() => {
   registry.skillStatus.mockReset().mockReturnValue({ skills: [] });
 });
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 describe("ClawHub message recommendations", () => {
-  it("excludes unverified publisher claims and gives a visible no-match outcome", async () => {
-    registry.plugins.mockResolvedValue({ items: [{ ...remotePlugin, isOfficial: false }] });
-    registry.skills.mockResolvedValue([
-      {
-        slug: "whatsapp",
-        installRef: "@openclaw/whatsapp",
-        ownerHandle: "openclaw",
-        displayName: "WhatsApp",
-        official: false,
-      },
-    ]);
-    const result = await messageTool().execute("no-match", {
+  it.each([undefined, "", " \t\n"])(
+    "excludes unverified publisher claims and gives a visible no-match outcome for message=%j",
+    async (message) => {
+      registry.plugins.mockResolvedValue({ items: [{ ...remotePlugin, isOfficial: false }] });
+      registry.skills.mockResolvedValue([
+        {
+          slug: "whatsapp",
+          installRef: "@openclaw/whatsapp",
+          ownerHandle: "openclaw",
+          displayName: "WhatsApp",
+          official: false,
+        },
+      ]);
+      const result = await messageTool().execute("no-match", {
+        action: "send",
+        message,
+        clawhub: { query: "whatsapp" },
+      });
+      const reply = extractMessagingToolSourceReplyPayload(result);
+      expect(readClawHubRecommendations(reply?.channelData)).toEqual([]);
+      expect(reply?.text).toContain("No official ClawHub plugin or skill match");
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining("No official ClawHub plugin or skill match"),
+        },
+      ]);
+    },
+  );
+
+  it("preserves an explicit reply when a ClawHub search has no matches", async () => {
+    const message = "Deployment complete.\nAll requested checks passed.";
+    const result = await messageTool().execute("no-match-with-reply", {
       action: "send",
-      clawhub: { query: "whatsapp" },
+      message,
+      clawhub: { query: "unmatched-capability", kind: "skill" },
     });
     const reply = extractMessagingToolSourceReplyPayload(result);
+    expect(registry.skills).toHaveBeenCalled();
     expect(readClawHubRecommendations(reply?.channelData)).toEqual([]);
-    expect(reply?.text).toContain("No official ClawHub plugin or skill match");
+    expect(reply?.text).toBe(message);
     expect(result.content).toEqual([
-      { type: "text", text: expect.stringContaining("No official ClawHub plugin or skill match") },
+      { type: "text", text: expect.stringContaining("No official ClawHub skill match") },
     ]);
   });
 
@@ -111,6 +133,9 @@ describe("ClawHub message recommendations", () => {
       message: "Here is your calendar capability.",
       clawhub: { query: "calendar", kind: "skill" },
     });
+    expect(extractMessagingToolSourceReplyPayload(result)?.text).toBe(
+      "Here is your calendar capability.",
+    );
     expect(
       readClawHubRecommendations(extractMessagingToolSourceReplyPayload(result)?.channelData),
     ).toEqual([

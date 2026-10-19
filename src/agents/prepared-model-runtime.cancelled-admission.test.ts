@@ -12,14 +12,13 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import {
-  acquireAgentRunPreparedModelRuntime,
-  activateStandalonePreparedModelRuntime,
-  getPreparedModelRuntimeSnapshot,
-  loadPublishedGatewayReplyDispatchRuntime,
-  prepareModelRuntimeSnapshot,
+  acquireAgentRunPreparedModelRuntime as acquireRun,
+  activateStandalonePreparedModelRuntime as activate,
+  getPreparedModelRuntimeSnapshot as readSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
+  prepareModelRuntimeSnapshot as prepare,
   registerPreparedModelRuntimePublicationListener,
-  acquireReadOnlyPreparedModelRuntime,
-  refreshPreparedModelRuntimeSnapshots,
+  refreshPreparedModelRuntimeSnapshots as refresh,
   type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
 import { createPreparedModelRuntimeReplacement } from "./prepared-model-runtime.lifecycle.js";
@@ -68,244 +67,147 @@ function dynamicInput(label: string): PreparedModelRuntimeInput {
   };
 }
 
+function cancellableRun(input: PreparedModelRuntimeInput) {
+  const controller = new AbortController();
+  const pending = acquireRun(input, { abortSignal: controller.signal });
+  return {
+    pending,
+    cancel(reason: string) {
+      controller.abort(new Error(reason));
+      return expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    },
+  };
+}
+
+function holdModelBuild() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  pendingBuildReleases.push(release);
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    entered.resolve();
+    await release.promise;
+    return { agentDir: String(agentDir), wrote: false };
+  });
+  return { entered, release };
+}
+
+function closeProcess() {
+  const closing = { done: false, promise: Promise.resolve() };
+  closing.promise = drainGlobalSingletonLifecycleState("close").then(() => {
+    closing.done = true;
+  });
+  return closing;
+}
+
+function observe<T>(pending: Promise<T>) {
+  void pending.catch(() => {});
+  return pending;
+}
+
 describe("prepared model runtime cancelled admission ownership", () => {
   beforeEach(() => {
     pendingBuildReleases = [];
     buildBatchSpy = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
   });
 
-  it("retires a sole cold ephemeral owner before shared discovery finishes", async () => {
-    const input = dynamicInput("cancelled-ephemeral");
+  it.each([
+    ["retains a shared cold owner until its final admission cancels", "cancel"],
+    ["retains a shared cold owner until its final admission finishes", "finish"],
+    ["does not let an abandoned publication satisfy or delete its same-key replacement", "replace"],
+    ["skips workspace preparation for a cancelled queued replacement", "skip"],
+  ] as const)("%s", async (_name, outcome) => {
+    const input = dynamicInput("coalesced-admissions");
     const build = prepareColdBuildGate();
-    const abort = new AbortController();
-    const admission = acquireReadOnlyPreparedModelRuntime(input, {
-      abortSignal: abort.signal,
-      catalogMode: "static",
-    });
-
+    const first = cancellableRun(input);
     await build.started.promise;
+    const shared = outcome === "cancel" || outcome === "finish";
+    let replacementBuild: ReturnType<typeof prepareColdBuildGate> | undefined;
+    if (!shared) {
+      await first.cancel("first request cancelled");
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+      if (outcome === "replace") {
+        replacementBuild = prepareColdBuildGate();
+      } else {
+        await cancellableRun(input).cancel("queued request cancelled");
+      }
+    }
+    const second = cancellableRun(input);
+    if (shared) {
+      const observed = second.pending.then(
+        () => "settled",
+        () => "settled",
+      );
+      await expect(Promise.race([observed, Promise.resolve("pending")])).resolves.toBe("pending");
+      await first.cancel("first request cancelled");
+    }
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    abort.abort(new Error("request cancelled"));
-    await expect(admission).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-
-    build.release.resolve();
+    if (outcome === "cancel") {
+      await second.cancel("second request cancelled");
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+      build.release.resolve();
+    } else {
+      build.release.resolve();
+      if (replacementBuild) {
+        await replacementBuild.started.promise;
+        expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
+        expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+        replacementBuild.release.resolve();
+      }
+      const lease = await second.pending;
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(shared ? 1 : 2);
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+      await lease[Symbol.asyncDispose]();
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+    }
   });
 
-  it("retires a coalesced cold owner only after the final admission cancels", async () => {
-    const input = dynamicInput("coalesced-cancellations");
-    const build = prepareColdBuildGate();
-    const firstAbort = new AbortController();
-    const secondAbort = new AbortController();
-    const first = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: firstAbort.signal,
-    });
-
-    await build.started.promise;
-    const second = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: secondAbort.signal,
-    });
-    const secondObserved = second.then(
-      () => "resolved",
-      () => "rejected",
-    );
-    await expect(Promise.race([secondObserved, Promise.resolve("pending")])).resolves.toBe(
-      "pending",
-    );
-
-    firstAbort.abort(new Error("first request cancelled"));
-    await expect(first).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    secondAbort.abort(new Error("second request cancelled"));
-    await expect(second).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-
-    build.release.resolve();
-  });
-
-  it("keeps one shared build for a survivor after its peer cancels", async () => {
-    const input = dynamicInput("cancelled-peer-survivor");
-    const build = prepareColdBuildGate();
-    const cancelledAbort = new AbortController();
-    const cancelled = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: cancelledAbort.signal,
-    });
-
-    await build.started.promise;
-    const survivor = acquireAgentRunPreparedModelRuntime(input);
-
-    cancelledAbort.abort(new Error("peer request cancelled"));
-    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    build.release.resolve();
-    const lease = await survivor;
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    await lease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-  });
-
-  it("does not let an abandoned publication satisfy or delete its same-key replacement", async () => {
-    const input = dynamicInput("same-key-replacement");
-    const firstBuild = prepareColdBuildGate();
-    const firstAbort = new AbortController();
-    const abandoned = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: firstAbort.signal,
-    });
-
-    await firstBuild.started.promise;
-    firstAbort.abort(new Error("first request cancelled"));
-    await expect(abandoned).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-
-    const secondBuild = prepareColdBuildGate();
-    const replacement = acquireAgentRunPreparedModelRuntime(input);
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    firstBuild.release.resolve();
-    await secondBuild.started.promise;
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    secondBuild.release.resolve();
-    const lease = await replacement;
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-    await lease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-  });
-
-  it("skips workspace preparation for a cancelled queued replacement", async () => {
-    const input = dynamicInput("queued-cancelled-replacement");
-    const firstBuild = prepareColdBuildGate();
-    const firstAbort = new AbortController();
-    const first = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: firstAbort.signal,
-    });
-
-    await firstBuild.started.promise;
-    firstAbort.abort(new Error("first request cancelled"));
-    await expect(first).rejects.toMatchObject({ name: "AbortError" });
-
-    const queuedAbort = new AbortController();
-    const queued = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: queuedAbort.signal,
-    });
-    queuedAbort.abort(new Error("queued request cancelled"));
-    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
-
-    const survivor = acquireAgentRunPreparedModelRuntime(input);
-    firstBuild.release.resolve();
-
-    const lease = await survivor;
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
-
-    await lease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-  });
-
-  it("preserves the configured baseline and clears a later retained lease on refresh", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    mocks.prepareStaticCatalog.mockClear();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    const input = {
-      ...dynamicInput("gateway-retained-owner"),
-      config,
-    };
-    const cancelledBuild = prepareColdBuildGate();
-    const abort = new AbortController();
-    const cancelled = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: abort.signal,
-    });
-
-    await cancelledBuild.started.promise;
-    abort.abort(new Error("gateway request cancelled"));
-    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    cancelledBuild.release.resolve();
-    const retainedLease = await acquireAgentRunPreparedModelRuntime(input);
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-
-    await retainedLease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-  });
   it("retires model publication before auth snapshots are cleared during restart", async () => {
     mocks.configuredAgentIds = ["default"];
-    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    const prepared = getPreparedModelRuntimeSnapshot(configuredInput());
+    await refresh({}, { gatewayLifecycle: true });
+    const prepared = readSnapshot(configuredInput());
     expect(prepared).toBeDefined();
     await drainGlobalSingletonLifecycleState("restart");
     const builds = mocks.ensureOpenClawModelsJson.mock.calls.length;
     mocks.mutationListener?.({ affectsInheritedStores: true, profileSetChanged: true });
     await nextTurn();
-    expect(getPreparedModelRuntimeSnapshot(configuredInput())).toBeUndefined();
+    expect(readSnapshot(configuredInput())).toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(builds);
     expect(prepared?.isCurrent()).toBe(false);
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-    ).resolves.toBeUndefined();
+    await expect(loadPublishedDispatch({ agentId: "default" })).resolves.toBeUndefined();
   });
 
   it.each(["auth", "config"] as const)(
     "joins the raw %s publication before completing process close",
     async (source) => {
       mocks.configuredAgentIds = ["default"];
-      await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-      const entered = createDeferred();
-      const release = createDeferred();
+      await refresh({}, { gatewayLifecycle: true });
+      const { entered, release } = holdModelBuild();
       const published = vi.fn();
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "published") {
           published();
         }
       });
-      mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-        entered.resolve();
-        await release.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      });
-      let refresh: Promise<void> | undefined;
+      let refreshWork: Promise<void> | undefined;
       if (source === "auth") {
         mocks.mutationListener?.({ affectsInheritedStores: true });
       } else {
-        refresh = refreshPreparedModelRuntimeSnapshots({});
-        void refresh.catch(() => {});
+        refreshWork = observe(refresh({}));
       }
       await entered.promise;
-      const reader = prepareModelRuntimeSnapshot(configuredInput());
-      void reader.catch(() => {});
-      let closed = false;
-      const closing = drainGlobalSingletonLifecycleState("close").then(() => {
-        closed = true;
-      });
+      const reader = observe(prepare(configuredInput()));
+      const closing = closeProcess();
       try {
         await nextTurn();
-        expect(closed).toBe(false);
+        expect(closing.done).toBe(false);
         release.resolve();
-        await closing;
+        await closing.promise;
         await expect(reader).rejects.toThrow(/closed|superseded/);
-        expect(getPreparedModelRuntimeSnapshot(configuredInput())).toBeUndefined();
+        expect(readSnapshot(configuredInput())).toBeUndefined();
         expect(published).not.toHaveBeenCalled();
       } finally {
         release.resolve();
-        await Promise.allSettled([refresh, reader, closing]);
+        await Promise.allSettled([refreshWork, reader, closing.promise]);
         unregister();
       }
     },
@@ -316,54 +218,39 @@ describe("prepared model runtime cancelled admission ownership", () => {
   }) => {
     const input = { config: {}, agentDir: fixture.state.agentDir("direct") };
     const options = { retainIdleRunOwner: true, abortSignal: signal };
-    const previous = await acquireAgentRunPreparedModelRuntime(input, options);
-    let closed = false;
-    const closing = drainGlobalSingletonLifecycleState("close").then(() => {
-      closed = true;
-    });
+    const previous = await acquireRun(input, options);
+    const closing = closeProcess();
     try {
       await nextTurn(undefined, { signal });
-      expect(closed).toBe(false);
+      expect(closing.done).toBe(false);
       expect(previous.snapshot.isCurrent()).toBe(false);
       expect(previous.snapshot.createStores()).toBeDefined();
       await previous[Symbol.asyncDispose]();
-      await closing;
-      const next = await acquireAgentRunPreparedModelRuntime(input, options);
-      try {
-        expect(next.snapshot).not.toBe(previous.snapshot);
-        await previous[Symbol.asyncDispose]();
-        expect(getPreparedModelRuntimeSnapshot(input)).toBe(next.snapshot);
-        expect(next.snapshot.isCurrent()).toBe(true);
-      } finally {
-        await next[Symbol.asyncDispose]();
-      }
+      await closing.promise;
+      await using next = await acquireRun(input, options);
+      expect(next.snapshot).not.toBe(previous.snapshot);
+      await previous[Symbol.asyncDispose]();
+      expect(readSnapshot(input)).toBe(next.snapshot);
+      expect(next.snapshot.isCurrent()).toBe(true);
     } finally {
       await previous[Symbol.asyncDispose]();
-      await closing;
+      await closing.promise;
     }
   });
 
   it("does not revive a queued standalone activation after its process lifetime closes", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
+    const { entered, release } = holdModelBuild();
     const input = { config: {}, agentDir: fixture.state.agentDir("queued") };
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      entered.resolve();
-      await release.promise;
-      return { agentDir: String(agentDir), wrote: false };
-    });
-    const first = activateStandalonePreparedModelRuntime(input);
-    void first.catch(() => {});
+    const first = observe(activate(input));
     await entered.promise;
-    const second = activateStandalonePreparedModelRuntime(input);
-    void second.catch(() => {});
+    const second = observe(activate(input));
     const closing = drainGlobalSingletonLifecycleState("close");
     try {
       release.resolve();
       await closing;
       await expect(first).rejects.toThrow(/closed|superseded/);
       await expect(second).rejects.toThrow(/closed|superseded/);
-      expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
+      expect(readSnapshot(input)).toBeUndefined();
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
@@ -385,11 +272,11 @@ describe("prepared model runtime automatic selections", () => {
         },
       },
     };
-    await refreshPreparedModelRuntimeSnapshots(config, {
+    await refresh(config, {
       catalogMode: "static",
       gatewayLifecycle: true,
     });
-    const dispatch = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+    const dispatch = await loadPublishedDispatch({ agentId: "worker" });
     expect(dispatch).toBeDefined();
     const input = {
       ...fixture.agentInput("worker", config),
@@ -397,7 +284,7 @@ describe("prepared model runtime automatic selections", () => {
       runtimePluginSelections: [{ provider: "xai", modelId: "grok-4.6", runtime: "auto" }],
     };
     const options = { pluginGeneration: dispatch!.pluginGeneration };
-    await using outer = await acquireAgentRunPreparedModelRuntime(input, options);
+    await using outer = await acquireRun(input, options);
     expect(fixture.mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0]).toMatchObject(
       {
         selections: [{ provider: "xai", modelId: "grok-4.6", runtime: "openclaw" }],
@@ -406,25 +293,21 @@ describe("prepared model runtime automatic selections", () => {
     const resolveConfiguredOwner = owners.resolveConfiguredOwner;
     let iterations = 0;
     // Bound the pre-fix microtask livelock; a timer cannot interrupt it.
-    const guard = vi.spyOn(owners, "resolveConfiguredOwner").mockImplementation((...args) => {
+    using _ = vi.spyOn(owners, "resolveConfiguredOwner").mockImplementation((...args) => {
       if (++iterations > 8) {
         throw new Error("lease admission repeated without completing");
       }
       return resolveConfiguredOwner(...args);
     });
-    try {
-      await using nested = await acquireAgentRunPreparedModelRuntime(
-        {
-          ...input,
-          runtimePluginSelections: [{ ...input.runtimePluginSelections[0]!, agentId: "worker" }],
-        },
-        options,
-      );
-      expect(nested.snapshot).toBe(outer.snapshot);
-      expect(nested.snapshot.isCurrent()).toBe(true);
-    } finally {
-      guard.mockRestore();
-    }
+    await using nested = await acquireRun(
+      {
+        ...input,
+        runtimePluginSelections: [{ ...input.runtimePluginSelections[0]!, agentId: "worker" }],
+      },
+      options,
+    );
+    expect(nested.snapshot).toBe(outer.snapshot);
+    expect(nested.snapshot.isCurrent()).toBe(true);
   });
 
   it("rejects a settled replacement that never publishes instead of spinning", async () => {

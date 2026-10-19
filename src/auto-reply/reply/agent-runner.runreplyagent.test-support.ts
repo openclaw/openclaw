@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { rootDir } from "./agent-runner.misc.runreplyagent.test-support.js";
 import {
   createTestQueueSettings,
@@ -7,7 +8,7 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import { createMockTypingController } from "./test-helpers.js";
 
-type RunReplyAgent = typeof import("./agent-runner.js").runReplyAgent;
+type RunReplyAgent = typeof import("./agent-runner-run.js").runReplyAgent;
 
 export type BaseRunOptions = {
   context?: Parameters<typeof createTestTemplateContext>[0];
@@ -19,7 +20,7 @@ export type BaseRunOptions = {
 };
 
 export function createBaseRun(options: BaseRunOptions = {}) {
-  const sessionKey = options.run?.sessionKey ?? "main";
+  const sessionKey = options.run?.sessionKey ?? options.reply?.sessionKey ?? "main";
   const messageProvider = options.run?.messageProvider ?? "whatsapp";
   const typing = createMockTypingController();
   const sessionCtx = createTestTemplateContext(
@@ -69,7 +70,7 @@ export function createBaseRun(options: BaseRunOptions = {}) {
   const replyParams = {
     commandBody: "hello",
     followupRun,
-    queueKey: "main",
+    queueKey: sessionKey,
     resolvedQueue,
     shouldSteer: false,
     shouldFollowup: false,
@@ -91,7 +92,8 @@ export function createBaseRun(options: BaseRunOptions = {}) {
     resolvedQueue,
     followupRun,
     run: async () => {
-      const { runReplyAgent } = await import("./agent-runner.js");
+      const { runReplyAgent } = await import("./agent-runner-run.js");
+      setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
       return runReplyAgent(replyParams);
     },
   };

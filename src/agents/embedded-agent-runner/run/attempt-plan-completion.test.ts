@@ -1,9 +1,11 @@
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createReplyOperation, type ReplyOperation } from "../../../sessions/session-controller.js";
 import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
 import {
   createAssistant,
@@ -15,18 +17,28 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import * as gatewayTool from "../../tools/in-process-gateway.js";
 import { createProgressCardTool } from "../../tools/progress-card-tool.js";
-import { clearActiveEmbeddedRun } from "../runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 registerAgentSessionLoopTestLifecycle();
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
+let replyOperation: ReplyOperation;
+beforeEach(() => {
+  replyOperation = createReplyOperation({
+    sessionId: "session-output-schema",
+    sessionKey: "agent:main:main",
+    resetTriggered: false,
+  });
+});
 afterEach(() => {
   for (const stream of streams.splice(0)) {
     stream.subscription.unsubscribe();
     clearActiveEmbeddedRun("session-output-schema", stream.queueHandle, "agent:main:main");
   }
+  replyOperation.complete();
+  vi.restoreAllMocks();
 });
 
 it.each([
@@ -113,7 +125,8 @@ it.each([
     });
     const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
     const attempt = { completionCheck };
-    const prepared = prepareCatalogExecutor([], {
+    const prepared = prepareCatalogExecutor({
+      replyOperation,
       activeSession: session,
       attempt,
       onAgentEvent: (event) => events.push(event),
@@ -212,6 +225,75 @@ it.each([
   },
 );
 
+it("keeps a reply that already reports the blocker as the only reply after the check", async () => {
+  const completionCheck = { unfinishedPlan: false, checked: false };
+  const plan = [
+    { step: "List files", status: "completed" as const },
+    { step: "Delete the largest file", status: "pending" as const },
+  ];
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue({
+    card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
+  });
+  const progress = createProgressCardTool({
+    agentSessionKey: "agent:main:main",
+    onPlanSaved: (unfinished) => {
+      completionCheck.unfinishedPlan = unfinished;
+    },
+  });
+  const { session } = await createTestSession({ customTools: [progress] });
+  const prepared = prepareCatalogExecutor({
+    activeSession: session,
+    attempt: { completionCheck },
+    replyOperation,
+  });
+  streams.push(prepared);
+  const answer = "Files: big.log (9 KB), notes.md (1 KB). May I delete big.log?";
+  let requests = 0;
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests += 1;
+    if (requests === 1) {
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          [{ type: "toolCall", id: "save", name: "progress_card", arguments: { plan } }],
+          "toolUse",
+        ),
+      );
+    }
+    if (requests === 2) {
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: answer }]));
+    }
+    // Stand-in for the live model: it restates the blocker unless the check offers silence.
+    const check = JSON.stringify(context.messages.at(-1)?.content);
+    expect(check).toContain("latest successfully saved plan");
+    return createAssistantResultStream(
+      createAssistant(model, [
+        {
+          type: "text",
+          text: check.includes(SILENT_REPLY_TOKEN)
+            ? SILENT_REPLY_TOKEN
+            : "Deleting big.log still needs your approval.",
+        },
+      ]),
+    );
+  });
+
+  await session.prompt("List the files, then ask me before deleting the largest one.");
+  await prepared.subscription.waitForPendingEvents();
+
+  expect(requests).toBe(3);
+  const assistant = prepared.subscription.getCurrentAttemptAssistant();
+  const payloads = buildEmbeddedRunPayloads({
+    assistantTexts: prepared.subscription.assistantTexts,
+    answerSegments: prepared.subscription.answerSegments,
+    lastAssistant: assistant,
+    currentAssistant: assistant ?? null,
+    keptAnswer: prepared.subscription.getKeptAnswer(),
+    sessionKey: "agent:main:main",
+  });
+  expect(payloads.map((payload) => payload.text)).toEqual([answer]);
+});
+
 it.each([
   { name: "completed replacement", replacement: "completed", checks: 0 },
   { name: "cleared replacement", replacement: "clear", checks: 0 },
@@ -221,13 +303,14 @@ it.each([
   { name: "no plan saved in this run", replacement: "untouched", checks: 0 },
   { name: "a consumed check is not rearmed by another save", replacement: "recovery", checks: 0 },
   { name: "status-only refresh", replacement: "status", checks: 0 },
+  { name: "authored silence with pending work", replacement: "silent", checks: 0 },
 ])("honors $name", async ({ replacement, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: replacement === "recovery" };
   const pending = [{ step: "Await external permission", status: "pending" as const }];
   const initial = {
     card: { sessionKey: "agent:main:main", steps: pending, revision: 1, updatedAt: 1 },
   };
-  const gateway = vi.fn().mockResolvedValue(initial);
+  const gateway = vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(initial);
   const replacementArgs =
     replacement === "completed"
       ? { plan: [{ step: "Await external permission", status: "completed" }] }
@@ -261,19 +344,19 @@ it.each([
   }
   const progress = createProgressCardTool({
     agentSessionKey: "agent:main:main",
-    callGateway: gateway,
     onPlanSaved: (unfinished) => {
       completionCheck.unfinishedPlan = unfinished;
     },
   });
   const { session } = await createTestSession({ customTools: [progress] });
-  const prepared = prepareCatalogExecutor([], {
+  const prepared = prepareCatalogExecutor({
+    replyOperation,
     activeSession: session,
     attempt: {
       completionCheck,
       ...(replacement === "status"
         ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
-        : {}),
+        : { terminalReplyExpectation: "required" as const }),
     },
   });
   streams.push(prepared);
@@ -295,7 +378,10 @@ it.each([
           : [
               {
                 type: "text",
-                text: "Waiting for the user's permission; no more authorized actions.",
+                text:
+                  replacement === "silent"
+                    ? "NO_REPLY"
+                    : "Waiting for the user's permission; no more authorized actions.",
               },
             ],
         requests <= writes ? "toolUse" : "stop",
@@ -327,11 +413,11 @@ it.each([
 ])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: false };
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue({
+    card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
+  });
   const progress = createProgressCardTool({
     agentSessionKey: "agent:main:main",
-    callGateway: vi.fn().mockResolvedValue({
-      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-    }),
     onPlanSaved: (unfinished) => {
       completionCheck.unfinishedPlan = unfinished;
     },
@@ -354,7 +440,8 @@ it.each([
           createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: onFinalize }]),
         )
       : undefined;
-  const prepared = prepareCatalogExecutor([], {
+  const prepared = prepareCatalogExecutor({
+    replyOperation,
     activeSession: session,
     hookRunner,
     runAbortController: controller,

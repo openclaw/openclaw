@@ -1,6 +1,28 @@
 import { expect } from "vitest";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+import { buildMcpToolSchema } from "./mcp-http.schema.js";
+
+export type MockGatewayTool = {
+  name: string;
+  label: string;
+  description: string;
+  parameters: AnyAgentTool["parameters"] | Record<string, unknown>;
+  prepareBeforeToolCallParams?: (...args: unknown[]) => unknown;
+  finalizeBeforeToolCallParams?: (...args: unknown[]) => unknown;
+  execute: (...args: unknown[]) => Promise<{
+    content: unknown[];
+    details?: unknown;
+  }>;
+};
+
+export type MockGatewayScopedTools = {
+  agentId: string;
+  workspaceDir?: string;
+  tools: MockGatewayTool[];
+};
 
 export type McpToolResultPayload = {
   result?: {
@@ -75,4 +97,92 @@ export function mcpToolCallMessage(name: string, args: Record<string, unknown> =
     method: "tools/call",
     params: { name, arguments: args },
   } as const;
+}
+
+export function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
+  const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+  for (const name of expected) {
+    expect(names).toContain(name);
+  }
+}
+
+export function expectMcpResultText(
+  payload: McpToolResultPayload,
+  text: string,
+  isError?: boolean,
+) {
+  if (isError === undefined) {
+    expect(payload.result?.isError).not.toBe(true);
+  } else {
+    expect(payload.result?.isError).toBe(isError);
+  }
+  expect(payload.result?.content?.[0]?.text).toBe(text);
+}
+
+export function objectSchema(properties: Record<string, unknown>, required?: string[]) {
+  return {
+    type: "object",
+    properties,
+    ...(required ? { required } : {}),
+  };
+}
+
+export function angleSchema(property: unknown, required: string[] = []) {
+  return objectSchema({ angle: property }, required);
+}
+
+export function makeMockTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
+  return {
+    name: "mockplugin_tool",
+    label: "Mock tool",
+    description: "mock tool",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({
+      content: [{ type: "text", text: "ok" }],
+    }),
+    ...overrides,
+  };
+}
+
+export function makeMessageTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
+  return makeMockTool({
+    name: "message",
+    description: "send a message",
+    ...overrides,
+  });
+}
+
+export function makeCronTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
+  return makeMockTool({
+    name: "cron",
+    description: "manage schedules",
+    ...overrides,
+  });
+}
+
+export function mcpToolsListBody(id = 1) {
+  return JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list" });
+}
+
+export function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
+  return buildMcpToolSchema(tools as unknown as Parameters<typeof buildMcpToolSchema>[0]);
+}
+
+type McpToolCacheParams = Parameters<McpLoopbackToolCache["resolve"]>[0];
+
+export function createMcpToolCacheResolver({
+  cfg = {},
+  ...baseContext
+}: Partial<McpToolCacheParams["context"] & Pick<McpToolCacheParams, "cfg">> = {}) {
+  const cache = new McpLoopbackToolCache();
+  return (context: Partial<McpToolCacheParams["context"]> = {}) =>
+    cache.resolve({
+      cfg,
+      context: {
+        sessionKey: "agent:main:direct:test",
+        senderIsOwner: true,
+        ...baseContext,
+        ...context,
+      },
+    });
 }

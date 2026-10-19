@@ -1,16 +1,23 @@
+import { isUtf8 } from "node:buffer";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import * as tar from "tar";
 import { z } from "zod";
 import {
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
+  resolvePortableArchivePathKey,
   type BackupSymbolicLink,
 } from "../infra/backup-archive-path-policy.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
 const recoveryPath = z
   .string()
@@ -206,7 +213,7 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
   return manifest;
 }
 
-export function backupManifestSizeError(bytes: number): Error | undefined {
+function backupManifestSizeError(bytes: number): Error | undefined {
   const maxBytes = 1024 * 1024;
   return bytes > maxBytes
     ? new Error(`Backup manifest exceeds ${maxBytes} byte limit.`)
@@ -232,6 +239,7 @@ export type BackupManifest = {
   paths?: {
     stateDir?: string;
     configPath?: string;
+    configSourcePath?: string;
     oauthDir?: string;
     workspaceDirs?: string[];
     agentRoots?: Array<{ agentId: string; sourcePath: string }>;
@@ -243,6 +251,8 @@ export type BackupManifest = {
   }>;
   /** Capture-time canonical database inventory; absent in legacy archives. */
   sqliteSnapshots?: BackupManifestSqliteSnapshot[];
+  /** Producer-generated capsules, bound to their captured manifests; absent in legacy archives. */
+  postgresSnapshots?: Array<{ archivePath: string; manifestSha256: string }>;
   externalSymbolicLinks?: BackupSymbolicLink[];
   skipped?: Array<{
     kind?: string;
@@ -251,6 +261,27 @@ export type BackupManifest = {
     coveredBy?: string;
   }>;
 };
+
+/** Encode the bounded root manifest as the archive's final tar member. */
+export function encodeBackupManifest(manifest: BackupManifest): Buffer {
+  const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
+  const sizeError = backupManifestSizeError(contents.length);
+  if (sizeError) {
+    throw sizeError;
+  }
+  const header = Buffer.alloc(512);
+  new tar.Header({
+    path: manifest.archiveRoot + "/manifest.json",
+    type: "File",
+    mode: 0o644,
+    size: contents.length,
+  }).encode(header);
+  return Buffer.concat([
+    header,
+    contents,
+    Buffer.alloc(((512 - (contents.length % 512)) % 512) + 1024),
+  ]);
+}
 
 function parseBackupManifestSourcePath(value: unknown, label: string): string {
   if (typeof value !== "string" || value.includes("\0")) {
@@ -352,6 +383,53 @@ function parseBackupManifestSqliteSnapshots(
   });
 }
 
+function parseBackupManifestPostgresSnapshots(value: unknown): BackupManifest["postgresSnapshots"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Backup manifest postgresSnapshots must be an array.");
+  }
+  const paths = new Set<string>();
+  return value.map((snapshot) => {
+    if (
+      !isRecord(snapshot) ||
+      Object.keys(snapshot).length !== 2 ||
+      typeof snapshot.archivePath !== "string"
+    ) {
+      throw new Error("Backup manifest contains an invalid PostgreSQL snapshot.");
+    }
+    const digest = recoveryDigest.safeParse(snapshot.manifestSha256);
+    if (!digest.success) {
+      throw new Error("Backup manifest contains an invalid PostgreSQL snapshot hash.");
+    }
+    const archivePath = normalizeArchivePath(snapshot.archivePath, "PostgreSQL capsule path");
+    if (archivePath !== snapshot.archivePath || !archivePath.endsWith(".postgres")) {
+      throw new Error(
+        "Backup manifest PostgreSQL capsule path must be normalized and end in .postgres.",
+      );
+    }
+    const key = archivePath.normalize("NFC").toLowerCase();
+    if (paths.has(key)) {
+      throw new Error("Backup manifest contains duplicate PostgreSQL snapshot paths.");
+    }
+    paths.add(key);
+    return { archivePath, manifestSha256: digest.data };
+  });
+}
+
+function readRequiredManifestString(
+  record: Record<string, unknown>,
+  key: string,
+  label = "Backup manifest",
+): string {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
+    throw new Error(`${label} is missing ${key}.`);
+  }
+  return value;
+}
+
 export function parseBackupManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
@@ -366,36 +444,22 @@ export function parseBackupManifest(raw: string): BackupManifest {
   if (parsed.schemaVersion !== 1) {
     throw new Error(`Unsupported backup manifest schemaVersion: ${String(parsed.schemaVersion)}`);
   }
-  if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
-    throw new Error("Backup manifest is missing archiveRoot.");
-  }
-  if (typeof parsed.createdAt !== "string" || !parsed.createdAt.trim()) {
-    throw new Error("Backup manifest is missing createdAt.");
-  }
+  const archiveRoot = readRequiredManifestString(parsed, "archiveRoot");
+  const createdAt = readRequiredManifestString(parsed, "createdAt");
   if (!Array.isArray(parsed.assets)) {
     throw new Error("Backup manifest is missing assets.");
   }
 
-  const assets: BackupManifest["assets"] = [];
-  for (const asset of parsed.assets) {
+  const assets = parsed.assets.map((asset) => {
     if (!isRecord(asset)) {
       throw new Error("Backup manifest contains a non-object asset.");
     }
-    if (typeof asset.kind !== "string" || !asset.kind.trim()) {
-      throw new Error("Backup manifest asset is missing kind.");
-    }
-    if (typeof asset.sourcePath !== "string" || !asset.sourcePath.trim()) {
-      throw new Error("Backup manifest asset is missing sourcePath.");
-    }
-    if (typeof asset.archivePath !== "string" || !asset.archivePath.trim()) {
-      throw new Error("Backup manifest asset is missing archivePath.");
-    }
-    assets.push({
-      kind: asset.kind,
-      sourcePath: asset.sourcePath,
-      archivePath: asset.archivePath,
-    });
-  }
+    return {
+      kind: readRequiredManifestString(asset, "kind", "Backup manifest asset"),
+      sourcePath: readRequiredManifestString(asset, "sourcePath", "Backup manifest asset"),
+      archivePath: readRequiredManifestString(asset, "archivePath", "Backup manifest asset"),
+    };
+  });
 
   const externalSymbolicLinks: BackupSymbolicLink[] = [];
   if (parsed.externalSymbolicLinks !== undefined) {
@@ -416,12 +480,9 @@ export function parseBackupManifest(raw: string): BackupManifest {
 
   return {
     schemaVersion: 1,
-    archiveRoot: parsed.archiveRoot,
-    createdAt: parsed.createdAt,
-    runtimeVersion:
-      typeof parsed.runtimeVersion === "string" && parsed.runtimeVersion.trim()
-        ? parsed.runtimeVersion
-        : "unknown",
+    archiveRoot,
+    createdAt,
+    runtimeVersion: readNonBlankString(parsed.runtimeVersion) ?? "unknown",
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     paths: isRecord(parsed.paths)
@@ -431,11 +492,25 @@ export function parseBackupManifest(raw: string): BackupManifest {
             : {
                 stateDir: parseBackupManifestSourcePath(parsed.paths.stateDir, "state directory"),
               }),
+          ...(parsed.paths.configPath === undefined
+            ? {}
+            : {
+                configPath: parseBackupManifestSourcePath(parsed.paths.configPath, "configuration"),
+              }),
+          ...(parsed.paths.configSourcePath === undefined
+            ? {}
+            : {
+                configSourcePath: parseBackupManifestSourcePath(
+                  parsed.paths.configSourcePath,
+                  "configuration source",
+                ),
+              }),
           agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots),
         }
       : undefined,
     assets,
     sqliteSnapshots: parseBackupManifestSqliteSnapshots(parsed.sqliteSnapshots),
+    postgresSnapshots: parseBackupManifestPostgresSnapshots(parsed.postgresSnapshots),
     ...(parsed.externalSymbolicLinks === undefined ? {} : { externalSymbolicLinks }),
   };
 }
@@ -495,9 +570,152 @@ export function verifyBackupSqliteCoverage(
             (verified.role === "agent" && verified.agentId === required.agentId)),
       )
     ) {
-      throw new Error(
-        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
-      );
+      throw new Error(`Backup lacks verified SQLite database coverage for ${required.sourcePath}.`);
     }
   }
+}
+
+export type NormalizedArchiveEntry = {
+  raw: string;
+  normalized: string;
+  size?: number;
+  type?: string;
+};
+
+type ArchiveEntry = NormalizedArchiveEntry & {
+  linkpath?: string;
+};
+
+export async function listBackupArchiveEntries(archivePath: string) {
+  const entries: ArchiveEntry[] = [];
+  let invalidReason: string | undefined;
+  let pathError: Error | undefined;
+  let manifestContent: Promise<string | Error> | undefined;
+  await tar.t({
+    file: archivePath,
+    gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+    onwarn: (code, message) => {
+      // tar skips invalid headers; a readable remainder is not a complete backup.
+      if (code === "TAR_BAD_ARCHIVE" || code === "TAR_ENTRY_INVALID") {
+        invalidReason ??= formatErrorMessage(message);
+      }
+    },
+    onReadEntry: (entry) => {
+      if (pathError) {
+        return;
+      }
+      let normalized: string;
+      try {
+        normalized = normalizeArchivePath(entry.path, "Archive entry");
+      } catch (error) {
+        pathError ??= toStringifiedError(error);
+        return;
+      }
+      entries.push({
+        raw: entry.path,
+        normalized,
+        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
+        ...(Number.isSafeInteger(entry.size) && entry.size >= 0 ? { size: entry.size } : {}),
+        ...(entry.type ? { type: entry.type } : {}),
+      });
+      // tar resumes the entry after this callback. Capture only one bounded body;
+      // duplicate manifests are rejected after the entire archive has drained.
+      if (!manifestContent && isRootBackupManifestEntry(normalized)) {
+        manifestContent = readBackupManifestEntry(entry);
+      }
+    },
+  });
+  return { entries, invalidReason, pathError, manifestContent };
+}
+
+/** Collect during listing; defer content errors until the complete entry inventory is checked. */
+async function readBackupManifestEntry(entry: tar.ReadEntry): Promise<string | Error> {
+  const sizeError = backupManifestSizeError(entry.size);
+  if (sizeError) {
+    return sizeError;
+  }
+  try {
+    const content = await entry.concat();
+    return isUtf8(content)
+      ? content.toString("utf8")
+      : new Error("Backup manifest must be valid UTF-8.");
+  } catch (error) {
+    return toStringifiedError(error);
+  }
+}
+
+export function isRegularArchiveFile(entryType: string | undefined): boolean {
+  return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
+}
+
+export function resolvePostgresRestoreEntries(
+  entries: NormalizedArchiveEntry[],
+  manifest: BackupManifest,
+): {
+  captures: Array<{ directoryPath: string; anchorPath: string; manifestSha256?: string }>;
+  warnings: string[];
+} {
+  const captures =
+    manifest.postgresSnapshots?.map(({ archivePath, manifestSha256 }) => ({
+      directoryPath: archivePath,
+      anchorPath: archivePath.slice(0, -".postgres".length),
+      manifestSha256,
+    })) ??
+    (manifest.sqliteSnapshots ?? []).flatMap(({ sourcePath }) => {
+      const anchorPath = buildBackupArchivePath(manifest.archiveRoot, sourcePath);
+      const directoryPath = `${anchorPath}.postgres`;
+      // Legacy ownership comes from the outer core inventory, never a capsule's shape.
+      return entries.some((entry) => isArchivePathWithin(entry.normalized, directoryPath))
+        ? [{ anchorPath, directoryPath }]
+        : [];
+    });
+  const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
+  const portablePaths = new Set(
+    entries.map((entry) => resolvePortableArchivePathKey(entry.normalized)),
+  );
+  const payloadRoot = path.posix.join(normalizeArchiveRoot(manifest.archiveRoot), "payload");
+  for (const { directoryPath, anchorPath } of captures) {
+    if (!isArchivePathWithin(directoryPath, payloadRoot)) {
+      throw new Error(`PostgreSQL capsule path is outside payload root: ${directoryPath}`);
+    }
+    for (const database of [
+      anchorPath,
+      `${directoryPath}/anchor.sqlite`,
+      `${directoryPath}/database.sqlite`,
+    ]) {
+      for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+        if (portablePaths.has(resolvePortableArchivePathKey(`${database}${suffix}`))) {
+          throw new Error(`PostgreSQL export has unexpected SQLite sidecar: ${database}${suffix}`);
+        }
+      }
+    }
+    for (const required of [
+      anchorPath,
+      ...["manifest.json", "anchor.sqlite", "database.sqlite"].map((name) =>
+        path.posix.join(directoryPath, name),
+      ),
+    ]) {
+      const entry = byPath.get(required);
+      if (!entry || !isRegularArchiveFile(entry.type)) {
+        throw new Error(`PostgreSQL backup is missing a regular matched artifact: ${required}`);
+      }
+    }
+  }
+  const declaredDirectories = new Set(captures.map(({ directoryPath }) => directoryPath));
+  const hasUnlistedLegacyCapsules =
+    manifest.postgresSnapshots === undefined &&
+    entries.some(
+      (entry) =>
+        entry.normalized.endsWith(".postgres/manifest.json") &&
+        !declaredDirectories.has(path.posix.dirname(entry.normalized)),
+    );
+  return {
+    captures,
+    warnings: hasUnlistedLegacyCapsules
+      ? [
+          "This legacy archive has no PostgreSQL capsule ownership inventory. Unlisted exports are preserved as files, not imported. Re-run backup with this version on the source installation to recover plugin PostgreSQL stores automatically.",
+        ]
+      : [],
+  };
 }

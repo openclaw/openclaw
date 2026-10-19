@@ -1,37 +1,52 @@
 // Tests executable behavior for the legacy package entrypoint.
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
+import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
 import { completePendingPackageLifecycle } from "./infra/package-lifecycle.js";
+import { withMockedPlatform } from "./test-utils/vitest-spies.js";
+
+const compileCache = vi.hoisted(() => ({
+  enable: vi.fn<typeof import("node:module").enableCompileCache>(),
+  directory: vi.fn<() => string | undefined>(),
+  respawn: vi.fn<typeof import("../node-runtime-recovery.mjs").runRespawnedChild>(async () => true),
+}));
+// mock-isolation: These cases simulate different processes; real immutable roles have subprocess coverage.
+vi.mock("./infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
+}));
+vi.mock("../node-runtime-recovery.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-runtime-recovery.mjs")>()),
+  runRespawnedChild: compileCache.respawn,
+}));
+vi.mock("node:module", async (importOriginal) => {
+  const { mockNodeBuiltinModule } = await import("./plugin-sdk/test-helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(() => importOriginal<typeof import("node:module")>(), {
+    enableCompileCache: compileCache.enable,
+    getCompileCacheDir: compileCache.directory,
+  });
+});
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: vi.fn(() => false),
 }));
 
-vi.mock("./cli/run-main.js", () => ({
-  runCli: vi.fn(async () => undefined),
-}));
+// mock-isolation: Exercise entrypoint dispatch without running the CLI.
+vi.mock("./cli/run-main.js", () => ({ runCli: vi.fn(async () => undefined) }));
 const lifecycleImports = vi.hoisted(() => ({ failureOutput: vi.fn() }));
 
-vi.mock("./cli/one-shot-exit.js", () => ({
-  runCliWithExitFinalization: vi.fn(),
-}));
-vi.mock("./cli/failure-output.js", () => {
-  lifecycleImports.failureOutput();
-  return {
-    formatCliFailureLines: vi.fn(() => []),
-    formatCliJsonFailure: vi.fn(),
-    isExpectedCliError: vi.fn(() => false),
-  };
-});
+// mock-isolation: Keep one-shot finalization from terminating the test process.
+vi.mock("./cli/one-shot-exit.js", () => ({ runCliWithExitFinalization: vi.fn() }));
 vi.mock("./entry.version-fast-path.js", () => ({
   tryHandleRootVersionFastPath: vi.fn(() => false),
 }));
-vi.mock("./infra/is-main.js", () => ({
-  isMainModule: vi.fn(() => true),
-}));
+// mock-isolation: Import this entrypoint as the main module in the fixture.
+vi.mock("./infra/is-main.js", () => ({ isMainModule: vi.fn(() => true) }));
 vi.mock("./infra/package-lifecycle.js", () => ({
   completePendingPackageLifecycle: vi.fn(async () => true),
 }));
@@ -59,15 +74,34 @@ vi.mock("./library.js", () => ({
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
 
+function loadEntry(args = ["status"]) {
+  process.argv = ["node", "dist/index.js", ...args];
+  return import("./index.js");
+}
+
 describe("legacy package executable entrypoint", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
+    // Module resets retain mock factories; each entry case needs a fresh import witness.
+    vi.doMock("./cli/failure-output.js", () => {
+      lifecycleImports.failureOutput();
+      return {
+        formatCliFailureLines: vi.fn(() => []),
+        formatCliJsonFailure: vi.fn(),
+        isExpectedCliError: vi.fn(() => false),
+      };
+    });
     vi.mocked(isMainModule).mockReturnValue(true);
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(false);
     vi.mocked(existsSync).mockReturnValue(false);
     vi.mocked(completePendingPackageLifecycle).mockResolvedValue(true);
-    lifecycleImports.failureOutput.mockClear();
+    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", undefined);
+    vi.stubEnv("NODE_COMPILE_CACHE", undefined);
+    vi.stubEnv("OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED", undefined);
+    compileCache.directory.mockReturnValue(undefined);
+    const { constants } = await import("node:module");
+    compileCache.enable.mockReturnValue({ status: constants.compileCacheStatus.ALREADY_ENABLED });
     process.argv = ["node", "dist/index.js", "status"];
   });
 
@@ -76,69 +110,184 @@ describe("legacy package executable entrypoint", () => {
     process.exitCode = originalExitCode;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.doUnmock("./cli/failure-output.js");
   });
 
-  it("handles root --version before CLI startup", async () => {
-    process.argv = ["node", "dist/index.js", "--version"];
-    vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(true);
+  function inheritCache() {
+    const base = path.resolve("inherited-node-cache");
+    vi.stubEnv("NODE_COMPILE_CACHE", base);
+    compileCache.directory.mockReturnValue(path.join(base, "node-version-leaf"));
+    return base;
+  }
 
-    await import("./index.js?legacy-version-fast-path" as "./index.js");
-
-    const runMain = await import("./cli/run-main.js");
-    const exitFinalization = await import("./cli/one-shot-exit.js");
-    expect(tryHandleRootVersionFastPath).toHaveBeenCalledWith(process.argv);
-    expect(runMain.runCli).not.toHaveBeenCalled();
-    expect(exitFinalization.runCliWithExitFinalization).not.toHaveBeenCalled();
-    expect(lifecycleImports.failureOutput).not.toHaveBeenCalled();
-  });
-
-  it("loads CLI failure modules only after the version fast path declines", async () => {
-    process.argv = ["node", "dist/index.js", "status"];
-
-    await import("./index.js?legacy-cli-start" as "./index.js");
-
-    expect(lifecycleImports.failureOutput).toHaveBeenCalledOnce();
-  });
-
-  it("keeps library imports free of CLI failure modules", async () => {
-    vi.mocked(isMainModule).mockReturnValue(false);
-
-    const entry = await import("./index.js?legacy-library-entry" as "./index.js");
-
-    expect(typeof entry.loadConfig).toBe("function");
-    expect(lifecycleImports.failureOutput).not.toHaveBeenCalled();
-  });
-
-  it("completes pending lifecycle before loading the CLI entry graph", async () => {
-    const calls: string[] = [];
+  function markPendingLifecycle() {
     vi.mocked(existsSync).mockImplementation((value) =>
       String(value).endsWith(".openclaw-lifecycle-pending"),
     );
+  }
+
+  it.each([
+    { mode: "version", args: ["--version"] },
+    { mode: "CLI", args: ["status"] },
+    { mode: "disabled cache", args: ["status"] },
+    { mode: "Gateway", args: ["gateway", "run"] },
+    { mode: "library", args: ["status"] },
+  ])("loads only the modules needed for $mode", async ({ mode, args }) => {
+    const handled = mode === "version";
+    const caches = mode === "Gateway";
+    const loadsFailure = !handled && mode !== "library";
+    if (mode === "disabled cache") {
+      vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
+    }
+    vi.mocked(isMainModule).mockReturnValue(mode !== "library");
+    vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(handled);
+    const entry = await loadEntry(args);
+    expect(lifecycleImports.failureOutput).toHaveBeenCalledTimes(loadsFailure ? 1 : 0);
+    expect(compileCache.enable).toHaveBeenCalledTimes(caches ? 1 : 0);
+    expect(runCliWithExitFinalization).toHaveBeenCalledTimes(loadsFailure ? 1 : 0);
+    if (caches) {
+      expect(compileCache.enable).toHaveBeenCalledBefore(lifecycleImports.failureOutput);
+    }
+    if (mode === "library") {
+      expect(typeof entry.loadConfig).toBe("function");
+    }
+    if (handled) {
+      const runMain = await import("./cli/run-main.js");
+      expect(tryHandleRootVersionFastPath).toHaveBeenCalledWith(process.argv);
+      expect(runMain.runCli).not.toHaveBeenCalled();
+      expect(runCliWithExitFinalization).not.toHaveBeenCalled();
+    }
+  });
+
+  it("continues startup with one diagnostic when the compile cache is unavailable", async () => {
+    const { constants } = await import("node:module");
+    compileCache.enable.mockReturnValue({ status: constants.compileCacheStatus.FAILED });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await loadEntry(["gateway", "run"]);
+    vi.resetModules();
+    await loadEntry(["gateway", "run"]);
+    expect(runCliWithExitFinalization).toHaveBeenCalledTimes(2);
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(
+      "[openclaw] Compile cache unavailable; continuing without it.\n",
+    );
+  });
+
+  it("passes uncaught exception cause to the process exit owner", async () => {
+    const listeners = new Set(process.listeners("uncaughtException"));
+    const runtime = await import("./runtime.js");
+    vi.spyOn(runtime, "restoreRuntimeTerminalState").mockImplementation(() => {});
+    const { registerSignalExitOwner } = await import("./cli/signal-exit-barrier.js");
+    const owner = vi.fn();
+    const releaseOwner = registerSignalExitOwner(owner);
+    try {
+      await loadEntry();
+      const handler = process.listeners("uncaughtException").find((entry) => !listeners.has(entry));
+      if (!handler) {
+        throw new Error("uncaughtException handler was not registered");
+      }
+      handler(new Error("owned failure"), "uncaughtException");
+      expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
+      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception");
+    } finally {
+      releaseOwner();
+      for (const listener of process.listeners("uncaughtException")) {
+        if (!listeners.has(listener)) {
+          process.off("uncaughtException", listener);
+        }
+      }
+    }
+  });
+
+  it("scopes an inherited cache before starting the direct CLI", async () => {
+    const base = inheritCache();
+    await loadEntry();
+    expect(compileCache.respawn.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          command: process.execPath,
+          args: [
+            "--import",
+            CLI_PARENT_BOUND_PRELOAD,
+            ...process.execArgv,
+            expect.stringMatching(/[\\/]index\.ts$/),
+            "status",
+          ],
+          env: expect.objectContaining({
+            NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
+            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+          }),
+        }),
+      ],
+    ]);
+    expect(compileCache.enable).not.toHaveBeenCalled();
+    expect(runCliWithExitFinalization).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["webhooks", "gmail", "run"],
+    ["hooks", "relay"],
+  ])("keeps foreground %s in-process with an inherited cache", async (...command) => {
+    inheritCache();
+    await withMockedPlatform("linux", async () => {
+      await loadEntry(command);
+    });
+    expect(compileCache.respawn).not.toHaveBeenCalled();
+    expect(compileCache.enable).toHaveBeenCalledOnce();
+    expect(runCliWithExitFinalization).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(!process.execve)("keeps the Gateway PID when scoping an inherited cache", async () => {
+    const replacement = new Error("execve boundary");
+    const execve = vi.spyOn(process, "execve").mockImplementation(() => {
+      throw replacement;
+    });
+    const base = inheritCache();
+    await expect(loadEntry(["gateway", "run"])).rejects.toBe(replacement);
+    expect(execve).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        process.execPath,
+        ...process.execArgv,
+        expect.stringMatching(/[\\/]index\.ts$/),
+        "gateway",
+        "run",
+      ],
+      expect.objectContaining({
+        NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
+      }),
+    );
+    expect(compileCache.respawn).not.toHaveBeenCalled();
+    expect(runCliWithExitFinalization).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: ["status"], fails: false },
+    { args: ["update", "admit", "--help"], fails: false },
+    { args: ["update", "status"], fails: false },
+    { args: ["status"], fails: true },
+  ])("completes the lifecycle before CLI startup: $args, fails=$fails", async ({ args, fails }) => {
+    const calls: string[] = [];
+    markPendingLifecycle();
     vi.mocked(completePendingPackageLifecycle).mockImplementation(async () => {
       calls.push("lifecycle");
+      if (fails) {
+        throw new Error("postinstall failed");
+      }
       return true;
     });
     vi.mocked(tryHandleRootVersionFastPath).mockImplementation(() => {
       calls.push("version");
       return false;
     });
-
-    await import("./index.js?pending-package-lifecycle" as "./index.js");
-
+    const entry = loadEntry(args);
+    if (fails) {
+      await expect(entry).rejects.toThrow("package lifecycle is incomplete");
+      expect(tryHandleRootVersionFastPath).not.toHaveBeenCalled();
+    } else {
+      await entry;
+      expect(calls).toEqual(["lifecycle", "version"]);
+    }
     expect(completePendingPackageLifecycle).toHaveBeenCalledOnce();
-    expect(calls).toEqual(["lifecycle", "version"]);
-  });
-
-  it("does not load the CLI entry graph when lifecycle completion fails", async () => {
-    vi.mocked(existsSync).mockImplementation((value) =>
-      String(value).endsWith(".openclaw-lifecycle-pending"),
-    );
-    vi.mocked(completePendingPackageLifecycle).mockRejectedValue(new Error("postinstall failed"));
-
-    await expect(import("./index.js?failed-package-lifecycle" as "./index.js")).rejects.toThrow(
-      "package lifecycle is incomplete",
-    );
-    expect(tryHandleRootVersionFastPath).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -149,35 +298,19 @@ describe("legacy package executable entrypoint", () => {
   ])(
     "leaves pending lifecycle untouched before internal context validation (%j)",
     async (...args) => {
-      process.argv = ["node", "dist/index.js", "update", "admit", ...args];
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", "inherited-authority");
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-      vi.mocked(existsSync).mockImplementation((value) =>
-        String(value).endsWith(".openclaw-lifecycle-pending"),
-      );
+      markPendingLifecycle();
       vi.mocked(completePendingPackageLifecycle).mockRejectedValue(new Error("lifecycle sentinel"));
 
-      await import("./index.js?admission-before-lifecycle" as "./index.js");
+      await loadEntry(["update", "admit", ...args]);
 
       expect(completePendingPackageLifecycle).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(2);
       expect(stdout).not.toHaveBeenCalled();
       expect(stderr).toHaveBeenCalledOnce();
-      const exitFinalization = await import("./cli/one-shot-exit.js");
-      expect(exitFinalization.runCliWithExitFinalization).not.toHaveBeenCalled();
+      expect(runCliWithExitFinalization).not.toHaveBeenCalled();
     },
   );
-
-  it.each([
-    ["update", "admit", "--help"],
-    ["update", "status"],
-  ])("retains lifecycle completion for ordinary argv %j", async (...args) => {
-    process.argv = ["node", "dist/index.js", ...args];
-    vi.mocked(existsSync).mockImplementation((value) =>
-      String(value).endsWith(".openclaw-lifecycle-pending"),
-    );
-    await import("./index.js?ordinary-lifecycle" as "./index.js");
-    expect(completePendingPackageLifecycle).toHaveBeenCalledOnce();
-  });
 });

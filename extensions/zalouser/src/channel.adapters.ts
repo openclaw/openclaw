@@ -4,12 +4,16 @@ import type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  createPairingPrefixStripper,
+  type createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
@@ -22,12 +26,12 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
@@ -51,7 +55,6 @@ import {
   resolveZalouserOutboundSessionRoute,
 } from "./session-route.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
-import type { ZaloSendResult } from "./types.js";
 
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
@@ -65,23 +68,16 @@ type ZalouserSendMediaContext = ChannelMessageSendTextContext & {
 
 export function resolveZalouserQrProfile(accountId?: string | null): string {
   const normalized = normalizeAccountId(accountId);
-  if (!normalized || normalized === DEFAULT_ACCOUNT_ID) {
+  if (normalized === DEFAULT_ACCOUNT_ID) {
     return process.env.ZALOUSER_PROFILE?.trim() || process.env.ZCA_PROFILE?.trim() || "default";
   }
   return normalized;
 }
 
-function toZalouserMessageSendResult(result: ZaloSendResult): ChannelMessageSendResult {
-  return {
-    messageId: result.messageId,
-    receipt: result.receipt,
-  };
-}
-
 function resolveZalouserGroupPolicyScope(params: ChannelGroupContext) {
   const account = resolveZalouserAccountSync({
     cfg: params.cfg,
-    accountId: params.accountId ?? undefined,
+    accountId: params.accountId,
   });
   return resolveZalouserGroupScope(
     account.config.groups,
@@ -134,11 +130,9 @@ async function sendZalouserFromContext({
         fallbackLimit: ZALOUSER_TEXT_CHUNK_LIMIT,
       },
     ),
-    onDeliveryResult: async (progress) => {
-      await onDeliveryResult?.(toZalouserMessageSendResult(progress));
-    },
+    onDeliveryResult,
   });
-  return toZalouserMessageSendResult(result);
+  return result;
 }
 
 function adaptZalouserOutboundProgress(
@@ -223,7 +217,7 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
     if (action !== "react") {
       throw new Error(`Zalouser action ${action} not supported`);
     }
-    const { sendReactionZalouser } = await loadZalouserChannelRuntime();
+    const { sendZaloReaction } = await loadZalouserChannelRuntime();
     const account = resolveZalouserAccountSync({ cfg, accountId });
     const explicitTarget =
       (typeof params.threadId === "string" ? params.threadId.trim() : "") ||
@@ -257,17 +251,18 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
         "Zalouser react requires messageId + cliMsgId (or a current message context id).",
       );
     }
-    const result = await sendReactionZalouser({
-      profile: account.profile,
-      threadId: target.threadId,
-      isGroup,
-      msgId: ids.msgId,
-      cliMsgId: ids.cliMsgId,
-      emoji,
-      remove: params.remove === true,
-    });
-    if (!result.ok) {
-      throw new Error(result.error || "Failed to react on Zalo message");
+    try {
+      await sendZaloReaction({
+        profile: account.profile,
+        threadId: target.threadId,
+        isGroup,
+        msgId: ids.msgId,
+        cliMsgId: ids.cliMsgId,
+        emoji,
+        remove: params.remove === true,
+      });
+    } catch (error) {
+      throw toStringifiedError(formatErrorMessage(error) || "Failed to react on Zalo message");
     }
     return textResult(
       params.remove === true
@@ -283,19 +278,7 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
 };
 
 export const zalouserResolverAdapter = {
-  resolveTargets: async ({
-    cfg,
-    accountId,
-    inputs,
-    kind,
-    runtime,
-  }: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    inputs: string[];
-    kind: "user" | "group";
-    runtime: RuntimeEnv;
-  }) => {
+  resolveTargets: async ({ cfg, accountId, inputs, kind, runtime }) => {
     const results = [];
     for (const input of inputs) {
       const trimmed = input.trim();
@@ -346,18 +329,10 @@ export const zalouserResolverAdapter = {
     }
     return results;
   },
-};
+} satisfies NonNullable<ChannelPlugin["resolver"]>;
 
 export const zalouserAuthAdapter = {
-  login: async ({
-    cfg,
-    accountId,
-    runtime,
-  }: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    runtime: RuntimeEnv;
-  }) => {
+  login: async ({ cfg, accountId, runtime }) => {
     const { startZaloQrLogin, waitForZaloQrLogin } = await loadZalouserChannelRuntime();
     const account = resolveZalouserAccountSync({
       cfg,
@@ -390,7 +365,7 @@ export const zalouserAuthAdapter = {
 
     runtime.log(waited.message);
   },
-};
+} satisfies NonNullable<ChannelPlugin["auth"]>;
 
 export const zalouserSecurityAdapter = {
   resolveDmPolicy: resolveZalouserDmPolicy,
@@ -413,17 +388,7 @@ export const zalouserPairingTextAdapter = {
   idLabel: "zalouserUserId",
   message: "Your pairing request has been approved.",
   normalizeAllowEntry: createPairingPrefixStripper(/^(zalouser|zlu):/i),
-  notify: async ({
-    cfg,
-    id,
-    message,
-    accountId,
-  }: {
-    cfg: OpenClawConfig;
-    id: string;
-    message: string;
-    accountId?: string;
-  }) => {
+  notify: async ({ cfg, id, message, accountId }) => {
     const { sendMessageZalouser } = await loadZalouserChannelRuntime();
     const account = resolveZalouserAccountSync({ cfg, accountId });
     const authenticated = await checkZcaAuthenticated(account.profile);
@@ -434,7 +399,7 @@ export const zalouserPairingTextAdapter = {
       profile: account.profile,
     });
   },
-};
+} satisfies Parameters<typeof createTextPairingAdapter>[0];
 
 export const zalouserOutboundAdapter = {
   deliveryMode: "direct" as const,

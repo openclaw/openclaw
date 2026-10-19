@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -6,15 +5,21 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import {
+  captureOperatorModelPolicySnapshot,
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
+import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import {
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
@@ -26,7 +31,14 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import {
+  isOperatorRoleSourcePolicyCurrent,
+  sourceRolePolicy,
+} from "./operator-role-source-policy.js";
+import {
+  normalizeGatewayOperatorRecoverySnapshot,
+  type OperatorRunRecoverySnapshot,
+} from "./operator-run-recovery-source.codec.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
 type OperatorSource = {
@@ -36,6 +48,7 @@ type OperatorSource = {
     config: GatewayRequestContext["getRuntimeConfig"],
     device: object | undefined,
     access: object | null | undefined,
+    ingress: object | undefined,
     invocation: object | undefined,
   ];
   membership: string | undefined;
@@ -45,6 +58,18 @@ type OperatorSource = {
 
 // Comparison records live only while captured work retains their original authority.
 const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
+const continuationAuthorities = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
+  () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
+);
+
+/** Accepted continuations retain policy custody independently of a recovered work claim. */
+export function bindGatewayOperatorContinuationAuthority(
+  work: AdmittedRunOperatorAuthority,
+  source: AdmittedRunOperatorAuthority,
+): void {
+  continuationAuthorities.set(work, source);
+}
 
 function getOperatorSources(client: GatewayClient): Set<OperatorSource> {
   let sources = operatorSources.get(client);
@@ -106,7 +131,7 @@ function prepareRunRolePolicy(
     : undefined;
 }
 
-function intersectRunModelPolicy(
+export function intersectOperatorRunModelPolicy(
   original: PreparedOperatorModelPolicy | undefined,
   current: PreparedOperatorModelPolicy | undefined,
 ): PreparedOperatorModelPolicy | undefined {
@@ -121,10 +146,47 @@ function intersectRunModelPolicy(
     : (current ?? original);
 }
 
+/** Keep the admission ceiling while refreshing only committed config/metadata views. */
+function prepareRunModelPolicy(params: {
+  cfg: OpenClawConfig;
+  metadata: ReturnType<typeof getProcessGatewayPluginMetadataSnapshot>;
+  initialPolicy: GatewayOperatorRoleDefinition["modelPolicy"];
+  getConfig: () => OpenClawConfig;
+  resolvePolicy: (cfg: OpenClawConfig) => GatewayOperatorRoleDefinition["modelPolicy"];
+}) {
+  let { cfg, metadata } = params;
+  const original = prepareOperatorModelPolicy({
+    cfg,
+    policy: params.initialPolicy,
+    manifestPlugins: metadata ?? [],
+  });
+  let policy = original;
+  return {
+    original,
+    readCurrent: () => {
+      const nextConfig = params.getConfig();
+      const nextMetadata = getProcessGatewayPluginMetadataSnapshot();
+      if (nextConfig !== cfg || nextMetadata !== metadata) {
+        const current = prepareOperatorModelPolicy({
+          cfg: nextConfig,
+          policy: params.resolvePolicy(nextConfig),
+          manifestPlugins: nextMetadata ?? [],
+        });
+        policy = intersectOperatorRunModelPolicy(original, current);
+        cfg = nextConfig;
+        metadata = nextMetadata;
+      }
+      return policy;
+    },
+  };
+}
+
 /** Bridge a prepared linked principal while retaining its exact channel admission capability. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
+  recoveryReference?: UserChannelAuthorizationReference;
   assignedRole: string | null;
+  githubLogin?: string | null;
   scopes: readonly string[];
   gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   getRuntimeConfig: () => OpenClawConfig;
@@ -133,45 +195,36 @@ export function captureChannelOperatorRunAuthority(input: {
 }): AdmittedRunOperatorAuthority {
   const params = { ...input };
   params.assertCurrent();
-  let modelPolicyConfig = params.getRuntimeConfig();
-  let modelPolicyMetadata = getProcessGatewayPluginMetadataSnapshot();
-  const prepareModelPolicy = (cfg: OpenClawConfig, metadata: typeof modelPolicyMetadata) =>
-    prepareOperatorModelPolicy({
+  const initialConfig = params.getRuntimeConfig();
+  const metadata = getProcessGatewayPluginMetadataSnapshot();
+  const resolveRole = (cfg: OpenClawConfig) =>
+    resolveOperatorRolePolicyForAssignment(
+      params.profileId,
+      params.assignedRole,
       cfg,
-      policy: resolveOperatorRolePolicyForAssignment(params.profileId, params.assignedRole, cfg)
-        ?.modelPolicy,
-      manifestPlugins: metadata ?? [],
-    });
-  const originalModelPolicy = prepareModelPolicy(modelPolicyConfig, modelPolicyMetadata);
-  let modelPolicy = originalModelPolicy;
+      params.githubLogin ?? null,
+    );
+  const role = resolveRole(initialConfig);
+  const modelPolicy = prepareRunModelPolicy({
+    cfg: initialConfig,
+    metadata,
+    initialPolicy: role?.modelPolicy,
+    getConfig: params.getRuntimeConfig,
+    resolvePolicy: (cfg) => resolveRole(cfg)?.modelPolicy,
+  });
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
+    channelRecoverySource: params.recoveryReference
+      ? { reference: params.recoveryReference, modelPolicy: modelPolicy.original }
+      : undefined,
     scopes: params.scopes,
-    rolePolicy: prepareRunRolePolicy(
-      sourceRolePolicy(
-        resolveOperatorRolePolicyForAssignment(
-          params.profileId,
-          params.assignedRole,
-          modelPolicyConfig,
-        ),
-      ),
-    ),
+    rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
     assertCurrent: params.assertCurrent,
-    readCurrentRoleAssignment: () => {
-      params.assertCurrent();
-      return params.assignedRole;
-    },
+    readCurrentRoleAssignment: () => params.assignedRole,
+    readCurrentGithubLogin: () => params.githubLogin ?? null,
     get modelPolicy() {
-      const cfg = params.getRuntimeConfig();
-      const metadata = getProcessGatewayPluginMetadataSnapshot();
-      if (cfg !== modelPolicyConfig || metadata !== modelPolicyMetadata) {
-        const current = prepareModelPolicy(cfg, metadata);
-        modelPolicy = intersectRunModelPolicy(originalModelPolicy, current);
-        modelPolicyConfig = cfg;
-        modelPolicyMetadata = metadata;
-      }
-      return modelPolicy;
+      return modelPolicy.readCurrent();
     },
     onModelPolicyChanged: (listener) => {
       const releaseProfile = onUserProfilesChanged(listener);
@@ -199,6 +252,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
+  /** Only an accepting continuation owner may outlive the original recovery claim. */
+  independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -213,37 +268,54 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertAdmittedRunOperatorAuthority(inherited);
     inherited.assertCurrent();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
+    const continuation = continuationAuthorities.get(inherited);
+    const source = params.independentContinuation ? (continuation ?? inherited) : inherited;
     const authority = roleScopesAllow({
       role: "operator",
-      requestedScopes: inherited.scopes,
+      requestedScopes: source.scopes,
       allowedScopes: scopes,
     })
-      ? inherited
+      ? source
       : createAdmittedRunOperatorAuthority({
-          ...inherited,
+          ...source,
           scopes,
           get modelPolicy() {
-            return inherited.modelPolicy;
+            return source.modelPolicy;
           },
         });
-    return { authority, release: inherited.retain?.() ?? (() => {}) };
+    if (continuation && !params.independentContinuation && authority !== inherited) {
+      continuationAuthorities.set(authority, continuation);
+    }
+    return { authority, release: source.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
-  // Shared-secret owner sessions keep system role semantics, but still have an
-  // authenticated user subject. Capture only the real, handshake-attested ingress:
-  // an autonomous/synthetic system caller must not acquire the owner profile.
+  const ingressPrincipal = client?.internal?.remoteIngressPrincipal;
+  // An owner subject requires a real socket or the host-bound ingress grant.
+  // Autonomous/synthetic system callers must not acquire the owner profile.
+  // Ephemeral shared-secret sockets attest the owner without display attribution.
   const isAuthenticatedOwner = (currentActor: typeof actor) =>
     client?.internal?.authenticatedOperator === true &&
     (currentActor === undefined || currentActor.kind === "system") &&
     client.connect.role === "operator" &&
-    Boolean(client.connId) &&
+    (Boolean(client.connId) ||
+      (ingressPrincipal !== undefined &&
+        client.internal.remoteIngressPrincipal === ingressPrincipal &&
+        ingressPrincipal.operatorRoleActor.kind === "system" &&
+        ingressPrincipal.authenticatedUserProfile.profileId === GATEWAY_OWNER_PROFILE_ID)) &&
     !client.invalidated &&
     !client.connectionSignal?.aborted &&
     !client.internal.syntheticClient &&
     !client.internal.agentRuntimeIdentity &&
     !client.internal.agentToolCaller &&
-    client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID;
+    (client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+      (currentActor?.kind === "system" &&
+        !client.authenticatedUserProfile &&
+        !client.authenticatedUserId &&
+        client.usesSharedGatewayAuth === true &&
+        Boolean(client.sharedGatewaySessionGeneration) &&
+        (client.authPolicy?.authMethod === "token" ||
+          client.authPolicy?.authMethod === "password")));
   const authenticatedOwner = isAuthenticatedOwner(actor);
   if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;
@@ -259,10 +331,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const resolveGatewayContext = params.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.();
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
-  let modelPolicyConfig = getConfig();
-  let modelPolicyMetadata = getProcessGatewayPluginMetadataSnapshot();
-  let modelPolicy: ReturnType<typeof prepareOperatorModelPolicy>;
-  let originalModelPolicy: ReturnType<typeof prepareOperatorModelPolicy>;
   const isGatewayCurrent = () =>
     !resolveGatewayContext ||
     (gatewayContext !== undefined && resolveGatewayContext() === gatewayContext);
@@ -270,15 +338,16 @@ export async function captureGatewayOperatorRunAuthority(input: {
     params.sourceAuthority !== undefined
       ? params.sourceAuthority
       : client.internal?.operatorAccessAuthority;
-  const sourceAuthorities = [sourceAuthority, params.invocationAuthority];
-  const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
+  const sourceAuthorities = [sourceAuthority, ingressPrincipal, params.invocationAuthority];
+  const scopes = [...(client.connect.scopes ?? [])];
   const sourceOwners: OperatorSource["owners"] = [
     gatewayContext ?? params.context,
     resolveGatewayContext,
     getConfig,
     readGatewayDeviceSourceIdentity(params.hasCurrentClientAuthority) ??
-      (params.hasCurrentClientAuthority ? Object.freeze({}) : undefined),
+      (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
+    ingressPrincipal,
     params.invocationAuthority,
   ];
   let releaseSource: (() => void) | undefined;
@@ -298,8 +367,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
       throw new Error("operator source identity changed; start a new request", { cause: error });
     }
   };
-  const resolveCurrentRole = (cfg = getConfig()) =>
-    resolveOperatorRolePolicyForAssignment(profileId, assertProfileCurrent().assignedRole, cfg);
+  const resolveCurrentRole = (cfg = getConfig()) => {
+    const profile = assertProfileCurrent();
+    return resolveOperatorRolePolicyForAssignment(
+      profileId,
+      profile.assignedRole,
+      cfg,
+      profile.githubLogin ?? null,
+    );
+  };
   const assertRoleCurrent = () => {
     const policy = resolveCurrentRole();
     if (
@@ -308,22 +384,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ) {
       throw new Error("Your operator role changed; reconnect before continuing.");
     }
-  };
-  const readModelPolicy = () => {
-    const original = originalModelPolicy;
-    const cfg = getConfig();
-    const metadata = getProcessGatewayPluginMetadataSnapshot();
-    if (cfg !== modelPolicyConfig || metadata !== modelPolicyMetadata) {
-      const current = prepareOperatorModelPolicy({
-        cfg,
-        policy: resolveCurrentRole(cfg)?.modelPolicy,
-        manifestPlugins: metadata ?? [],
-      });
-      modelPolicy = intersectRunModelPolicy(original, current);
-      modelPolicyConfig = cfg;
-      modelPolicyMetadata = metadata;
-    }
-    return modelPolicy;
   };
   const revoke = (reason: unknown) => {
     if (references > 0 && isGatewayCurrent()) {
@@ -340,31 +400,36 @@ export async function captureGatewayOperatorRunAuthority(input: {
       }
     }
   };
-  const assertSourceCurrent = () => {
-    if (revoked || references === 0) {
-      throw new Error("operator execution authority is no longer active");
-    }
-    if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-      throw new Error("operator source authority is no longer active");
-    }
-    for (const authority of sourceAuthorities) {
-      authority?.signal?.throwIfAborted();
-      authority?.assertCurrent();
-      authority?.signal?.throwIfAborted();
-    }
-    if (revoked || references === 0) {
-      throw new Error("operator execution authority is no longer active");
-    }
-  };
-  const assertCurrent = () => {
+  const assertSourceCurrent = composeSessionSourceAssertion(
+    sourceAuthorities.map((authority) =>
+      composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+        authority?.signal?.throwIfAborted();
+        assertSource();
+        authority?.signal?.throwIfAborted();
+      }),
+    ),
+    (assertSources) => {
+      if (revoked || references === 0) {
+        throw new Error("operator execution authority is no longer active");
+      }
+      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
+        throw new Error("operator source authority is no longer active");
+      }
+      assertSources();
+      if (revoked || references === 0) {
+        throw new Error("operator execution authority is no longer active");
+      }
+    },
+  );
+  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
     try {
-      assertSourceCurrent();
+      assertSource();
       assertRoleCurrent();
     } catch (error) {
       revoked = true;
       throw error;
     }
-  };
+  });
   const releaseHold = () => {
     let released = false;
     return () => {
@@ -384,24 +449,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const release = releaseHold();
   try {
-    const initialRoleConfig = {
-      gateway: { roles: structuredClone(modelPolicyConfig.gateway?.roles) },
+    let assertCapturedRoleCurrent = () => {
+      // Capture current policy after preparation; reverted changes need no replay.
     };
-    const preparationConfigs = [initialRoleConfig];
-    let onConfigChange = () => {
-      preparationConfigs.push({ gateway: { roles: structuredClone(getConfig().gateway?.roles) } });
-    };
-    let profileChangedDuringPreparation = false;
-    let onProfileChange = () => {
-      profileChangedDuringPreparation = true;
-    };
-    // The assignment arrives asynchronously. Keep committed policy changes until
-    // it can be resolved, so revocation cannot disappear behind a later restore.
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
         revoke(new Error("operator source authority is no longer active")),
       ),
-      onUserProfilesChanged(() => onProfileChange()),
+      onUserProfilesChanged(() => recheck(assertCapturedRoleCurrent)),
       onOperatorRolePolicyChanged((change) => {
         if (change.kind === "assignment" && change.profileId === profileId) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
@@ -409,7 +464,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
           change.kind === "config" &&
           change.context === (gatewayContext ?? params.context)
         ) {
-          onConfigChange();
+          recheck(assertCapturedRoleCurrent);
         }
       }),
     );
@@ -442,94 +497,154 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ) {
       throw new Error("Gateway caller authority is no longer active.");
     }
-    const capturedAssignedRole = assertProfileCurrent().assignedRole;
-    const capturedRole = structuredClone(resolveCurrentRole());
+    const capturedConfig = getConfig();
+    const capturedProfile = assertProfileCurrent();
+    const capturedAssignedRole = capturedProfile.assignedRole;
+    const capturedRole = structuredClone(
+      resolveOperatorRolePolicyForAssignment(
+        profileId,
+        capturedAssignedRole,
+        capturedConfig,
+        capturedProfile.githubLogin ?? null,
+      ),
+    );
     const capturedSourcePolicy = sourceRolePolicy(capturedRole);
-    if (
-      preparationConfigs.some(
-        (config) =>
-          !isDeepStrictEqual(
-            capturedSourcePolicy,
-            sourceRolePolicy(
-              resolveOperatorRolePolicyForAssignment(profileId, capturedAssignedRole, config),
-            ),
-          ),
-      )
-    ) {
-      revoke(new Error("Your operator role changed; reconnect before continuing."));
-    }
-    const assertCapturedRoleCurrent = () => {
+    assertCapturedRoleCurrent = () => {
       const current = assertProfileCurrent();
       const policy = resolveOperatorRolePolicyForAssignment(
         profileId,
         current.assignedRole,
         getConfig(),
+        current.githubLogin ?? null,
       );
       if (
         current.assignedRole !== capturedAssignedRole ||
-        !isDeepStrictEqual(capturedSourcePolicy, sourceRolePolicy(policy))
+        !isOperatorRoleSourcePolicyCurrent(capturedSourcePolicy, sourceRolePolicy(policy), scopes)
       ) {
         throw new Error("Your operator role changed; reconnect before continuing.");
       }
     };
-    onConfigChange = () => recheck(assertCapturedRoleCurrent);
-    onProfileChange = () => recheck(assertCapturedRoleCurrent);
-    if (profileChangedDuringPreparation) {
-      onProfileChange();
-    }
-    assertCurrent();
-    originalModelPolicy = prepareOperatorModelPolicy({
-      cfg: modelPolicyConfig,
-      policy: resolveOperatorRolePolicyForAssignment(
-        profileId,
-        capturedAssignedRole,
-        initialRoleConfig,
-      )?.modelPolicy,
-      manifestPlugins: modelPolicyMetadata ?? [],
+    const modelPolicy = prepareRunModelPolicy({
+      cfg: capturedConfig,
+      metadata: getProcessGatewayPluginMetadataSnapshot(),
+      initialPolicy: capturedRole?.modelPolicy,
+      getConfig,
+      resolvePolicy: (cfg) => resolveCurrentRole(cfg)?.modelPolicy,
     });
-    modelPolicy = originalModelPolicy;
-    preparationConfigs.length = 0;
     const source = retainOperatorSource(
       client,
       sourceOwners,
-      readOperatorModelPolicyMembership(originalModelPolicy),
+      readOperatorModelPolicyMembership(modelPolicy.original),
     );
     releaseSource = source.release;
-    return {
-      authority: createAdmittedRunOperatorAuthority({
-        profileId,
-        scopes,
-        rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
-        readCurrentRoleAssignment: () => {
-          assertCurrent();
-          return assertProfileCurrent().assignedRole;
-        },
-        gatewayAccessGrant:
-          sourceAuthority === null || (sourceAuthority === undefined && authenticatedOwner)
-            ? null
-            : sourceAuthority?.gatewayAccessGrant,
-        source: source.token,
-        assertCurrent,
-        signal: revocation.signal,
-        retain: () => {
-          assertCurrent();
-          references += 1;
-          return releaseHold();
-        },
-        get modelPolicy() {
-          return readModelPolicy();
-        },
-        onModelPolicyChanged: (listener) =>
-          onOperatorRolePolicyChanged((change) => {
-            if (change.kind === "config" && change.context === (gatewayContext ?? params.context)) {
-              listener();
-            }
-          }),
-      }),
-      release,
+    const grant =
+      sourceAuthority === null || (sourceAuthority === undefined && authenticatedOwner)
+        ? null
+        : sourceAuthority?.gatewayAccessGrant;
+    // Pin the grant before source callbacks can mutate their original reference.
+    const admission = {
+      profileId,
+      scopes,
+      gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
+      assertCurrent,
     };
+    const recoverySnapshot = captureGatewayOperatorRecoverySnapshot({
+      client,
+      authority: admission,
+      modelPolicy: modelPolicy.original,
+      identity: preparedProfile,
+      config: getConfig(),
+    });
+    assertCurrent();
+    const authority = createAdmittedRunOperatorAuthority({
+      ...admission,
+      recoverySnapshot,
+      rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
+      readCurrentRoleAssignment: () => assertProfileCurrent().assignedRole,
+      readCurrentGithubLogin: () => assertProfileCurrent().githubLogin ?? null,
+      source: source.token,
+      signal: revocation.signal,
+      retain: () => {
+        assertCurrent();
+        references += 1;
+        return releaseHold();
+      },
+      get modelPolicy() {
+        return modelPolicy.readCurrent();
+      },
+      onModelPolicyChanged: (listener) =>
+        onOperatorRolePolicyChanged((change) => {
+          if (change.kind === "config" && change.context === (gatewayContext ?? params.context)) {
+            listener();
+          }
+        }),
+    });
+    return { authority, release };
   } catch (error) {
     release();
     throw error;
   }
+}
+
+/** Capture only handshake-attested input; internal callers cannot manufacture a durable source. */
+function captureGatewayOperatorRecoverySnapshot(params: {
+  client: GatewayClient;
+  authority: Pick<
+    AdmittedRunOperatorAuthority,
+    "profileId" | "scopes" | "gatewayAccessGrant" | "assertCurrent"
+  >;
+  modelPolicy: PreparedOperatorModelPolicy | undefined;
+  identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
+  config: OpenClawConfig;
+}): OperatorRunRecoverySnapshot | undefined {
+  const { client, authority, identity } = params;
+  if (
+    !client.internal?.authenticatedOperator ||
+    client.internal.syntheticClient ||
+    !client.authPolicy?.authMethod ||
+    authority.gatewayAccessGrant === undefined
+  ) {
+    return undefined;
+  }
+  authority.assertCurrent();
+  const device = client.internal.operatorDeviceTokenIdentity ?? undefined;
+  if (client.connect.device && client.internal.operatorDeviceTokenIdentity === undefined) {
+    return undefined;
+  }
+  const sharedGeneration = client.usesSharedGatewayAuth
+    ? client.sharedGatewaySessionGeneration
+    : undefined;
+  if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
+    return undefined;
+  }
+  const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
+  if (params.modelPolicy && !modelPolicy) {
+    return undefined;
+  }
+  const profile = identity.readCurrentProfile();
+  const source = {
+    profileId: authority.profileId,
+    scopes: [...authority.scopes],
+    assignedRole: profile.assignedRole,
+    githubLogin: profile.githubLogin ?? null,
+    rolePolicy: sourceRolePolicy(
+      resolveOperatorRolePolicyForAssignment(
+        profile.profileId,
+        profile.assignedRole,
+        params.config,
+        profile.githubLogin ?? null,
+      ),
+    ),
+    modelPolicy,
+    grant: authority.gatewayAccessGrant,
+    aliasBindingIds: identity.emailBindingIds,
+    // Accepted work follows its grant, not unrelated handshake policy changes.
+    authPolicy: { ...client.authPolicy, generation: "" },
+    sharedGeneration,
+    device,
+    controlUiAdmin: client.internal.controlUiAdmin === true,
+    localOperator: client.internal.isLocalClient === true,
+    sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
+  };
+  return normalizeGatewayOperatorRecoverySnapshot(source);
 }

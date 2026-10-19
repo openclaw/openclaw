@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { UpdateCampaignController } from "../infra/update-campaign.js";
 import {
   createGatewayUpdateLifecycle,
@@ -6,6 +7,7 @@ import {
 } from "../infra/update-check-lifecycle.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { StateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -15,23 +17,27 @@ import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watche
 const ledger = vi.hoisted(() => ({
   run: undefined as UpdateRunRecord | undefined,
   reads: vi.fn<(kind: "run" | "status") => void>(),
-  reconcile:
-    vi.fn<
-      (
-        input: { signal?: AbortSignal },
-        onCandidate?: (runId: string) => void,
-      ) => Promise<UpdateRunRecord[]>
-    >(),
+  reconcile: vi.fn<(input: { signal?: AbortSignal }) => Promise<UpdateRunRecord[]>>(),
   notice: vi.fn(async (_run: UpdateRunRecord) => {}),
+  sentinel: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
+  publication:
+    vi.fn<
+      (options: { signal?: AbortSignal }) => Promise<StateSchemaPublicationBlocker | undefined>
+    >(),
 }));
-vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-db.js")>()),
-  reconcileOpenClawStateSchemaPublication: () => undefined,
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: ledger.publication,
 }));
 vi.mock("../infra/update-run-interruption.js", () => ({
   reconcileInterruptedUpdateRuns: ledger.reconcile,
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: ledger.notice }));
+vi.mock("./server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-update-sentinel.js")>()),
+  refreshLatestUpdateRestartSentinel: ledger.sentinel,
+  getLatestUpdateRestartSentinel: () => null,
+}));
 vi.mock("../infra/update-run-ledger.js", () => ({
   reconcileAbandonedUpdateRunsAsync: async () => [],
   listUpdateRunsAsync: async () => {
@@ -56,6 +62,8 @@ beforeEach(() => {
   ledger.reads.mockReset();
   ledger.reconcile.mockReset().mockResolvedValue([]);
   ledger.notice.mockReset().mockResolvedValue(undefined);
+  ledger.sentinel.mockReset().mockResolvedValue(null);
+  ledger.publication.mockReset().mockResolvedValue(undefined);
 });
 afterEach(async () => {
   await watcher?.stop();
@@ -119,6 +127,34 @@ function nextPollSchedule() {
 }
 
 describe("Gateway update run watcher", () => {
+  it("joins in-flight schema publication on shutdown without arming its returned deadline", async () => {
+    const publication = createDeferredCore<StateSchemaPublicationBlocker>();
+    const entered = createDeferredCore();
+    let publicationSignal: AbortSignal | undefined;
+    const events: string[] = [];
+    ledger.publication.mockImplementationOnce(async ({ signal }) => {
+      publicationSignal = signal;
+      entered.resolve();
+      const blocker = await publication.promise;
+      events.push("publication-settled");
+      return blocker;
+    });
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
+    await entered.promise;
+    const stopping = watcher.stop().then(() => events.push("stopped"));
+    try {
+      expect(publicationSignal?.aborted).toBe(true);
+      expect(events).toEqual([]);
+    } finally {
+      publication.resolve({ runId: "legacy-run", updaterVersion: "2026.9.2", publishAfterMs: 100 });
+      await stopping;
+    }
+    expect(events).toEqual(["publication-settled", "stopped"]);
+    expect(clock.armedAtMs).toBeNull();
+    await clock.advanceBy(100);
+    expect(ledger.publication).toHaveBeenCalledOnce();
+  });
+
   it("clears a campaign created after watcher startup before publishing its terminal run", async () => {
     beginRun();
     const onChange = vi.fn();
@@ -148,6 +184,7 @@ describe("Gateway update run watcher", () => {
     await terminal.promise;
     expect(onChange).toHaveBeenLastCalledWith(undefined);
     expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    expect(ledger.notice).not.toHaveBeenCalled();
   });
 
   it("joins an entered notice during shutdown and retires queued notices", async () => {
@@ -209,7 +246,9 @@ describe("Gateway update run watcher", () => {
       await activatingNotice.promise;
       expect(ledger.notice).toHaveBeenCalledOnce();
       ledger.run = { ...ledger.run!, updatedAtMs: 3 };
+      const unchangedPhase = nextPollSchedule();
       await clock.advanceBy(4_000);
+      await unchangedPhase;
       expect(ledger.notice).toHaveBeenCalledOnce();
       ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 4 };
       await clock.advanceBy(2_000);
@@ -225,147 +264,82 @@ describe("Gateway update run watcher", () => {
     }
   });
 
-  it.each(["same revision", "successor completed", "newer correction"] as const)(
-    "publishes a held verification result once while preserving %s",
-    async (scenario) => {
-      const first = beginRun();
-      first.phase = "verifying";
-      first.steps = [{ step: "notice:ack", status: "completed" }];
-      const initialBroadcast = createDeferredCore();
-      const selectCandidate = createDeferredCore();
-      const candidateSelected = createDeferredCore();
-      const verification = createDeferredCore<UpdateRunRecord[]>();
-      const nextCycle = createDeferredCore();
-      const firstNotice = createDeferredCore();
-      const successorNotice = createDeferredCore();
-      const correctionNotice = createDeferredCore();
-      ledger.reconcile
-        .mockImplementationOnce(async (_input, onCandidate) => {
-          await selectCandidate.promise;
-          onCandidate?.(first.runId);
-          candidateSelected.resolve();
-          return await verification.promise;
-        })
-        .mockImplementationOnce(async () => {
-          nextCycle.resolve();
-          return [];
-        });
-      ledger.notice.mockImplementation(async (run) => {
-        if (run.runId !== first.runId) {
-          successorNotice.resolve();
-        } else if (run.updatedAtMs === 2) {
-          firstNotice.resolve();
-        } else {
-          correctionNotice.resolve();
-        }
+  it("publishes a newer correction returned by held verification", async () => {
+    const first = beginRun();
+    first.phase = "verifying";
+    first.steps = [{ step: "notice:ack", status: "completed" }];
+    const initialBroadcast = createDeferredCore();
+    const verificationStarted = createDeferredCore();
+    const verification = createDeferredCore<UpdateRunRecord[]>();
+    const nextCycle = createDeferredCore();
+    const firstNotice = createDeferredCore();
+    const correctionNotice = createDeferredCore();
+    ledger.reconcile
+      .mockImplementationOnce(async () => {
+        verificationStarted.resolve();
+        return await verification.promise;
+      })
+      .mockImplementationOnce(async () => {
+        nextCycle.resolve();
+        return [];
       });
-      const broadcast = vi.fn().mockImplementationOnce(() => initialBroadcast.resolve());
-      watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-      try {
-        await initialBroadcast.promise;
-        const terminal: UpdateRunRecord = {
-          ...first,
-          phase: "finished",
-          status: scenario === "newer correction" ? "failed" : "succeeded",
-          reason: scenario === "newer correction" ? "abandoned" : null,
-          updatedAtMs: 2,
-          finishedAtMs: 2,
-        };
-        if (scenario === "newer correction") {
-          // This cycle selects the already abandoned row and may later correct it.
-          ledger.run = terminal;
-        }
-        selectCandidate.resolve();
-        await candidateSelected.promise;
-        // The row is committed, but this verification cycle still holds its reply.
-        ledger.run = terminal;
-        await clock.advanceBy(2_000);
-        await firstNotice.promise;
-
-        if (scenario === "successor completed") {
-          const successorBroadcast = createDeferredCore();
-          broadcast.mockImplementationOnce(() => successorBroadcast.resolve());
-          const successor = beginRun("aa688074-cb7a-4fb8-ae6a-e099e37e1d20");
-          successor.steps = [{ step: "notice:ack", status: "completed" }];
-          wakeUpdateRunWatcher();
-          await successorBroadcast.promise;
-          ledger.run = {
-            ...successor,
-            phase: "finished",
-            status: "succeeded",
-            updatedAtMs: 4,
-            finishedAtMs: 4,
-          };
-          await clock.advanceBy(2_000);
-          await successorNotice.promise;
-        }
-
-        const settled: UpdateRunRecord =
-          scenario === "newer correction"
-            ? { ...terminal, status: "succeeded", reason: null, updatedAtMs: 3, finishedAtMs: 3 }
-            : terminal;
-        if (scenario === "newer correction") {
-          ledger.run = settled;
-        }
-        verification.resolve([settled]);
-        if (scenario === "newer correction") {
-          await correctionNotice.promise;
-        }
-        // A follow-up cycle starts only after the held result's scan has completed.
-        await nextCycle.promise;
-        await watcher.stop();
-        const revisions = scenario === "newer correction" ? [2, 3] : [2];
-        expect(
-          broadcast.mock.calls
-            .filter(([, run]) => run.runId === first.runId && run.status !== "running")
-            .map(([, run]) => run.updatedAtMs),
-        ).toEqual(revisions);
-        expect(
-          ledger.notice.mock.calls
-            .filter(([run]) => run.runId === first.runId)
-            .map(([run]) => run.updatedAtMs),
-        ).toEqual(revisions);
-        if (scenario === "successor completed") {
-          expect(
-            broadcast.mock.calls.filter(
-              ([, run]) => run.runId !== first.runId && run.status !== "running",
-            ),
-          ).toHaveLength(1);
-          expect(
-            ledger.notice.mock.calls.filter(([run]) => run.runId !== first.runId),
-          ).toHaveLength(1);
-        }
-      } finally {
-        selectCandidate.resolve();
-        verification.resolve([]);
-        await watcher.stop();
+    ledger.notice.mockImplementation(async (run) => {
+      if (run.runId !== first.runId) {
+        return;
       }
-    },
-  );
-
-  it("leaves pre-acknowledgement refusal reporting to the command", async () => {
-    beginRun();
-    const initial = createDeferredCore();
-    const terminal = createDeferredCore();
-    const broadcast = vi
-      .fn()
-      .mockImplementationOnce(() => initial.resolve())
-      .mockImplementationOnce(() => terminal.resolve());
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-    await initial.promise;
-    const idle = nextLedgerRead("status");
-    ledger.run = { ...ledger.run!, phase: "finished", status: "failed", updatedAtMs: 2 };
-    await clock.advanceBy(2_000);
-    await terminal.promise;
-    await idle;
-    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", {
-      runId: ledger.run.runId,
-      phase: "finished",
-      status: "failed",
-      updatedAtMs: 2,
+      if (run.updatedAtMs === 2) {
+        firstNotice.resolve();
+      } else {
+        correctionNotice.resolve();
+      }
     });
-    expect(ledger.notice).not.toHaveBeenCalled();
+    const broadcast = vi.fn().mockImplementationOnce(() => initialBroadcast.resolve());
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    try {
+      await initialBroadcast.promise;
+      await verificationStarted.promise;
+      const terminal: UpdateRunRecord = {
+        ...first,
+        phase: "finished",
+        status: "failed",
+        reason: "abandoned",
+        updatedAtMs: 2,
+        finishedAtMs: 2,
+      };
+      // The row is committed, but this verification cycle still holds its reply.
+      ledger.run = terminal;
+      await clock.advanceBy(2_000);
+      await firstNotice.promise;
+
+      const settled: UpdateRunRecord = {
+        ...terminal,
+        status: "succeeded",
+        reason: null,
+        updatedAtMs: 3,
+        finishedAtMs: 3,
+      };
+      ledger.run = settled;
+      verification.resolve([settled]);
+      await correctionNotice.promise;
+      // A follow-up cycle starts only after the held result's scan has completed.
+      await nextCycle.promise;
+      await watcher.stop();
+      expect(
+        broadcast.mock.calls
+          .filter(([, run]) => run.runId === first.runId && run.status !== "running")
+          .map(([, run]) => run.updatedAtMs),
+      ).toEqual([2, 3]);
+      expect(
+        ledger.notice.mock.calls
+          .filter(([run]) => run.runId === first.runId)
+          .map(([run]) => run.updatedAtMs),
+      ).toEqual([2, 3]);
+    } finally {
+      verification.resolve([]);
+      await watcher.stop();
+    }
   });
+
   it("wakes for admission, broadcasts changed rows, and stops polling after the terminal event", async () => {
     const initialRead = nextLedgerRead("status");
     const requested = createDeferredCore();
@@ -405,6 +379,72 @@ describe("Gateway update run watcher", () => {
     expect(ledger.reads).toHaveBeenCalledTimes(reads);
     expect(broadcast).toHaveBeenCalledTimes(3);
   });
+
+  it.each(["unavailable", "timed-out", "superseded"] as const)(
+    "owns late terminal sentinel observation until %s",
+    async (outcome) => {
+      const run = beginRun();
+      const pending: RestartSentinelPayload = {
+        kind: "update",
+        status: "skipped",
+        ts: 1,
+        stats: { runId: run.runId, reason: "managed-service-handoff-started" },
+      };
+      ledger.sentinel.mockResolvedValue(pending);
+      const initial = createDeferredCore();
+      const terminal = createDeferredCore();
+      const settled = createDeferredCore();
+      const idle = createDeferredCore();
+      const broadcast = vi
+        .fn()
+        .mockImplementationOnce(() => initial.resolve())
+        .mockImplementationOnce(() => terminal.resolve())
+        .mockImplementationOnce(() => {
+          if (outcome !== "superseded") {
+            void nextLedgerRead("status").then(() => idle.resolve());
+          }
+          settled.resolve();
+        });
+      const warn = vi.fn();
+      watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn } });
+      await initial.promise;
+      ledger.run = { ...run, status: "failed", phase: "finished", updatedAtMs: 2 };
+      if (outcome === "unavailable") {
+        ledger.sentinel.mockRejectedValueOnce(new Error("state unavailable"));
+      }
+      await clock.advanceBy(2_000);
+      await terminal.promise;
+      expect(scheduler.nextWakeAtMs).not.toBeNull();
+      if (outcome === "superseded") {
+        beginRun("aa688074-cb7a-4fb8-ae6a-e099e37e1d20");
+        ledger.sentinel.mockResolvedValue(null);
+        await clock.advanceBy(2_000);
+        await settled.promise;
+        expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+        return;
+      }
+      if (outcome !== "timed-out") {
+        ledger.sentinel.mockResolvedValue({
+          ...pending,
+          status: "error",
+          stats: { runId: run.runId },
+        });
+      }
+      await clock.advanceBy(outcome === "timed-out" ? 30 * 60_000 : 2_000);
+      await settled.promise;
+      await idle.promise;
+      expect(ledger.sentinel).toHaveBeenCalled();
+      expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+      const reads = ledger.reads.mock.calls.length;
+      await clock.advanceBy(60_000);
+      expect(ledger.reads).toHaveBeenCalledTimes(reads);
+      if (outcome === "timed-out") {
+        expect(warn).toHaveBeenCalledWith(
+          `update run ${run.runId} terminal notification remained pending`,
+        );
+      }
+    },
+  );
 
   it("broadcasts a terminal repair after an update has remained running for over 45 minutes", async () => {
     beginRun();

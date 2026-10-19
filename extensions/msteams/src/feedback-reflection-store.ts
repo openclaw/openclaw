@@ -14,30 +14,16 @@ function learningStoreKey(storePath: string, sessionKey: string): string {
   return crypto.createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
 }
 
-function appendFeedbackLearning(
-  current: FeedbackLearningEntry | undefined,
-  prepared: { sessionKey: string; learning: string; updatedAt: number },
-): FeedbackLearningEntry {
-  return {
-    sessionKey: prepared.sessionKey,
-    learnings: [...(current?.learnings ?? []), prepared.learning].slice(-10),
-    updatedAt: prepared.updatedAt,
-  };
-}
-
 export async function storeSessionLearning(params: {
   storePath: string;
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const store = getMSTeamsRuntime().state.openKeyedStore<FeedbackLearningEntry>({
+  const store = getMSTeamsRuntime().state.openKeyedStoreV2<FeedbackLearningEntry>({
     namespace: LEARNINGS_NAMESPACE,
     maxEntries: MAX_LEARNING_ENTRIES,
   });
   const key = learningStoreKey(params.storePath, params.sessionKey);
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error("plugin state atomic comparison is unavailable");
-  }
   const prepared = {
     sessionKey: params.sessionKey,
     learning: params.learning,
@@ -48,7 +34,11 @@ export async function storeSessionLearning(params: {
     const result = await store.compareAndApply(key, observed.comparison, {
       operation: "update",
       action: "set",
-      value: appendFeedbackLearning(observed.value, prepared),
+      value: {
+        sessionKey: prepared.sessionKey,
+        learnings: [...(observed.value?.learnings ?? []), prepared.learning].slice(-10),
+        updatedAt: prepared.updatedAt,
+      },
     });
     if (result.status !== "conflict") {
       return;

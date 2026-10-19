@@ -40,7 +40,7 @@ describe("wait-loop lane recovery", () => {
   it.each([false, true])(
     "bounds repeated waits while preserving meaningful progress=%s",
     async (progress) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
       vi.setSystemTime(1_000);
       const ctx = {
         sessionId: "wait-session",
@@ -57,7 +57,7 @@ describe("wait-loop lane recovery", () => {
         parameters: Type.Object({ runId: Type.String() }),
         execute: async () => {
           executed++;
-          vi.setSystemTime(Date.now() + 2_500);
+          vi.advanceTimersByTime(2_500);
           const details = {
             status: "waiting",
             runId: "cell-1",
@@ -101,7 +101,7 @@ describe("wait-loop lane recovery", () => {
       });
       setInternalBeforeToolBatch(agent, createToolLoopBatchAdmission(ctx));
       installToolLoopRecoveryCleanup({ agent, runId: ctx.runId });
-      const lane = `session:${ctx.sessionKey}`;
+      const lane = `test:tool-loop:${ctx.sessionKey}`;
       const first = enqueueCommandInLane(lane, () => agent.prompt("finish the task"));
       const onWait = vi.fn();
       const next = enqueueCommandInLane(lane, async () => "queued message ran", {

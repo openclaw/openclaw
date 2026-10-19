@@ -1,18 +1,116 @@
 import { createServer, type Server } from "node:http";
+import { Readable } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+
+const effectGate = vi.hoisted((): { prepare: (() => Promise<void>) | undefined } => ({
+  prepare: undefined,
+}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 
-function createTestClient(fetch: typeof globalThis.fetch) {
-  return createClickClackClient({ baseUrl: "https://clickclack.example", token: "fake", fetch });
+function createTestClient(
+  fetch: typeof globalThis.fetch,
+  options: Omit<Partial<Parameters<typeof createClickClackClient>[0]>, "fetch"> = {},
+) {
+  return createClickClackClient({
+    baseUrl: "https://clickclack.example",
+    token: "fake",
+    ...options,
+    fetch,
+  });
 }
 
-function requestBodyJson(init: RequestInit | undefined): unknown {
-  const body = init?.body;
+function historyRoot(sequence: number, replies: number) {
+  return {
+    id: "msg_root",
+    channel_seq: sequence,
+    created_at: "2026-07-19T10:00:00.000Z",
+    thread_state: { reply_count: replies, last_reply_at: "2026-07-19T13:00:00.000Z" },
+  };
+}
+
+function jsonResponses(...bodies: unknown[]) {
+  const fetch = vi.fn<typeof globalThis.fetch>();
+  for (const body of bodies) {
+    fetch.mockResolvedValueOnce(Response.json(body));
+  }
+  return fetch;
+}
+
+function expectRequest(
+  calls: readonly (readonly unknown[])[],
+  index: number,
+  path: string,
+  method?: string,
+  body?: unknown,
+) {
+  expect(calls[index - 1]).toEqual([
+    `https://clickclack.example/api/${path}`,
+    method ? expect.objectContaining({ method }) : expect.any(Object),
+  ]);
+  if (body !== undefined) {
+    expect(requestBodyJson(calls[index - 1]?.[1])).toEqual(body);
+  }
+}
+
+function jsonFetch(body: unknown, status = 200) {
+  return vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+    Response.json(body, { status }),
+  );
+}
+
+function nonceResponses(kind: "Upload" | "Message", found: unknown) {
+  return vi
+    .fn()
+    .mockResolvedValueOnce(Response.json(found))
+    .mockResolvedValueOnce(
+      Response.json(
+        { error: "missing" },
+        { status: 404, headers: { [`X-ClickClack-${kind}-Nonce`]: "supported" } },
+      ),
+    )
+    .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
+    .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
+}
+
+async function expectNonceErrors(
+  find: (nonce: string) => Promise<unknown>,
+  kind: "upload" | "message",
+) {
+  await expect(find("missing")).resolves.toBeUndefined();
+  await expect(find("unsupported")).rejects.toMatchObject({
+    message: expect.stringContaining(`does not support durable ${kind} nonce lookup`),
+    cause: expect.objectContaining({ status: 404 }),
+  });
+  await expect(find("broken")).rejects.toThrow("ClickClack 503");
+}
+
+function requestBodyJson(init: unknown): unknown {
+  const body = init && typeof init === "object" && "body" in init ? init.body : undefined;
   if (typeof body !== "string") {
     throw new Error("expected string request body");
   }
@@ -35,60 +133,37 @@ async function listenLoopbackServer(server: Server): Promise<number> {
 }
 
 function createOversizedJsonServer(): { server: Server; closed: Promise<number> } {
-  let resolveClosed: (sentBytes: number) => void = () => {};
-  const closed = new Promise<number>((resolve) => {
-    resolveClosed = resolve;
-  });
+  const closed = createDeferred<number>();
   const server = createServer((req, res) => {
+    const prefix = Buffer.from('{"user":{"id":"');
+    const body = Buffer.alloc(64 * 1024, 0x61);
+    const suffix = Buffer.from('"}}');
+    function* chunks() {
+      yield prefix;
+      for (
+        let size = prefix.length;
+        size + body.length + suffix.length < LOOPBACK_RESPONSE_BYTES;
+        size += body.length
+      ) {
+        yield body;
+      }
+      yield suffix;
+    }
+    const stream = Readable.from(chunks(), { objectMode: false });
     let sentBytes = 0;
-    let stopped = false;
-    let prefixSent = false;
-    const prefixChunk = Buffer.from('{"user":{"id":"');
-    const bodyChunk = Buffer.alloc(64 * 1024, 0x61);
-    const suffixChunk = Buffer.from('"}}');
-    const writeBuffer = (buffer: Buffer) => {
-      sentBytes += buffer.length;
-      if (!res.write(buffer)) {
-        res.once("drain", writeChunks);
-        return false;
-      }
-      return true;
-    };
-    const writeChunks = () => {
-      if (!prefixSent) {
-        prefixSent = true;
-        if (!writeBuffer(prefixChunk)) {
-          return;
-        }
-      }
-      while (true) {
-        if (stopped) {
-          return;
-        }
-        if (sentBytes + bodyChunk.length + suffixChunk.length >= LOOPBACK_RESPONSE_BYTES) {
-          break;
-        }
-        if (!writeBuffer(bodyChunk)) {
-          return;
-        }
-      }
-      if (!stopped) {
-        sentBytes += suffixChunk.length;
-        res.end(suffixChunk);
-      }
-    };
+    stream.on("data", (chunk: Buffer) => {
+      sentBytes += chunk.length;
+    });
     res.writeHead(200, { connection: "close", "content-type": "application/json" });
     res.on("close", () => {
-      stopped = true;
-      resolveClosed(sentBytes);
+      stream.destroy();
+      closed.resolve(sentBytes);
     });
-    req.on("aborted", () => {
-      stopped = true;
-      res.destroy();
-    });
-    writeChunks();
+    req.on("aborted", () => res.destroy());
+    // pipe owns backpressure; response closure stops the remaining generator.
+    stream.pipe(res);
   });
-  return { server, closed };
+  return { server, closed: closed.promise };
 }
 
 function streamedErrorResponse(body: string, limit: number) {
@@ -130,14 +205,7 @@ function streamedErrorResponse(body: string, limit: number) {
 
 describe("ClickClack HTTP client", () => {
   it("creates, updates, and reads managed discussion channels", async () => {
-    const channel = {
-      id: "chn_discussion",
-      route_id: "discussion-route",
-      workspace_id: "wsp_1",
-      name: "release-planning",
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    };
+    const channel = { id: "chn_discussion" };
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ channel }, { status: 201 }))
@@ -162,12 +230,7 @@ describe("ClickClack HTTP client", () => {
     });
     await client.latestChannelMessages("chn_discussion", 30);
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://clickclack.example/api/workspaces/wsp_1/channels",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+    expectRequest(fetchMock.mock.calls, 1, "workspaces/wsp_1/channels", "POST", {
       name: "release-planning",
       kind: "public",
       external_managed: true,
@@ -175,86 +238,36 @@ describe("ClickClack HTTP client", () => {
       external_url: "https://control.example/chat/main",
       sidebar_section: "Sessions",
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "https://clickclack.example/api/channels/chn_discussion",
-      expect.objectContaining({ method: "PATCH" }),
-    );
-    expect(requestBodyJson(fetchMock.mock.calls[1]?.[1])).toEqual({
+    expectRequest(fetchMock.mock.calls, 2, "channels/chn_discussion", "PATCH", {
       archived: true,
       name: "release-done",
       sidebar_section: "Archive",
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "https://clickclack.example/api/channels/chn_discussion/messages?limit=200",
-      expect.any(Object),
-    );
+    expectRequest(fetchMock.mock.calls, 3, "channels/chn_discussion/messages?limit=200");
   });
 
   it("merges recent thread replies into the global latest-message window", async () => {
-    const root = {
-      id: "msg_root",
-      workspace_id: "wsp_1",
-      channel_id: "chn_discussion",
-      author_id: "usr_root",
-      thread_root_id: "msg_root",
-      channel_seq: 10,
-      body: "Old root",
-      body_format: "markdown" as const,
-      created_at: "2026-07-19T10:00:00.000Z",
-      thread_state: {
-        root_message_id: "msg_root",
-        reply_count: 1,
-        last_reply_at: "2026-07-19T13:00:00.000Z",
-        last_reply_author_ids: ["usr_reply"],
-      },
-    };
+    const root = historyRoot(10, 1);
     const newerRoot = {
       ...root,
       id: "msg_newer",
-      author_id: "usr_newer",
-      thread_root_id: "msg_newer",
       channel_seq: 11,
-      body: "New root",
       created_at: "2026-07-19T12:00:00.000Z",
-      thread_state: {
-        root_message_id: "msg_newer",
-        reply_count: 0,
-        last_reply_author_ids: [],
-      },
+      thread_state: { root_message_id: "msg_newer", reply_count: 0, last_reply_author_ids: [] },
     };
     const reply = {
       ...root,
       id: "msg_reply",
-      author_id: "usr_reply",
       parent_message_id: "msg_root",
       thread_seq: 1,
-      body: "Recent reply",
       created_at: "2026-07-19T13:00:00.000Z",
       thread_state: undefined,
     };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        Response.json({
-          messages: [newerRoot],
-          oldest_seq: 11,
-          newest_seq: 11,
-          has_older: true,
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          messages: [root],
-          oldest_seq: 10,
-          newest_seq: 10,
-          has_older: false,
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({ root, replies: [reply], thread_state: root.thread_state }),
-      );
+    const fetchMock = jsonResponses(
+      { messages: [newerRoot], oldest_seq: 11, newest_seq: 11, has_older: true },
+      { messages: [root], oldest_seq: 10, newest_seq: 10, has_older: false },
+      { replies: [reply] },
+    );
     const client = createTestClient(fetchMock);
 
     const result = await client.latestChannelMessages("chn_discussion", 2);
@@ -266,58 +279,28 @@ describe("ClickClack HTTP client", () => {
       ],
       truncated: false,
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(
+    expectRequest(
+      fetchMock.mock.calls,
       2,
-      "https://clickclack.example/api/channels/chn_discussion/messages?limit=200&before_seq=11",
-      expect.any(Object),
+      "channels/chn_discussion/messages?limit=200&before_seq=11",
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "https://clickclack.example/api/messages/msg_root/thread?limit=200",
-      expect.any(Object),
-    );
+    expectRequest(fetchMock.mock.calls, 3, "messages/msg_root/thread?limit=200");
   });
 
   it("fails closed when a capped thread response cannot contain the latest replies", async () => {
-    const root = {
-      id: "msg_root",
-      workspace_id: "wsp_1",
-      channel_id: "chn_discussion",
-      author_id: "usr_root",
-      thread_root_id: "msg_root",
-      channel_seq: 1,
-      body: "Root",
-      body_format: "markdown" as const,
-      created_at: "2026-07-19T10:00:00.000Z",
-      thread_state: {
-        root_message_id: "msg_root",
-        reply_count: 201,
-        last_reply_at: "2026-07-19T13:00:00.000Z",
-        last_reply_author_ids: ["usr_reply"],
-      },
-    };
+    const root = historyRoot(1, 201);
     const oldestReply = {
       ...root,
       id: "msg_oldest_reply",
       parent_message_id: "msg_root",
       thread_seq: 1,
-      body: "Oldest reply",
       created_at: "2026-07-19T10:01:00.000Z",
       thread_state: undefined,
     };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        Response.json({
-          messages: [root],
-          oldest_seq: 1,
-          newest_seq: 1,
-          has_older: false,
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({ root, replies: [oldestReply], thread_state: root.thread_state }),
-      );
+    const fetchMock = jsonResponses(
+      { messages: [root], oldest_seq: 1, newest_seq: 1, has_older: false },
+      { replies: [oldestReply] },
+    );
     const client = createTestClient(fetchMock);
 
     const result = await client.latestChannelMessages("chn_discussion", 30);
@@ -334,18 +317,10 @@ describe("ClickClack HTTP client", () => {
         messages: [
           {
             id: `msg_${current}`,
-            workspace_id: "wsp_1",
-            channel_id: "chn_discussion",
-            author_id: "usr_1",
-            thread_root_id: `msg_${current}`,
             channel_seq: current,
-            body: `Message ${current}`,
-            body_format: "markdown",
             created_at: `2026-07-19T10:00:${String(current % 60).padStart(2, "0")}.000Z`,
             thread_state: {
-              root_message_id: `msg_${current}`,
               reply_count: 0,
-              last_reply_author_ids: [],
             },
           },
         ],
@@ -364,43 +339,19 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("replaces the authenticated bot command menu", async () => {
-    const botCommand = {
-      id: "botcmd_1",
-      workspace_id: "wsp_1",
-      bot_user_id: "usr_bot",
-      command: "/status",
-      description: "Show agent status",
-      args_hint: "",
-      created_at: "2026-07-15T00:00:00.000Z",
-      updated_at: "2026-07-15T00:00:00.000Z",
-    };
-    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({ bot_commands: [botCommand] }),
-    );
+    const botCommand = { id: "botcmd_1", command: "/status" };
+    const fetchMock = jsonFetch({ bot_commands: [botCommand] });
     const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     const result = await client.setBotCommands([
-      {
-        command: "status",
-        description: "Show agent status",
-        args_hint: "",
-      },
+      { command: "status", description: "Show agent status", args_hint: "" },
     ]);
 
     expect(result).toEqual([botCommand]);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://clickclack.example/api/bots/self/commands",
-      expect.objectContaining({ method: "PUT" }),
-    );
+    expectRequest(fetchMock.mock.calls, 1, "bots/self/commands", "PUT");
     const init = fetchMock.mock.calls[0]?.[1];
     expect(requestBodyJson(init)).toEqual({
-      commands: [
-        {
-          command: "status",
-          description: "Show agent status",
-          args_hint: "",
-        },
-      ],
+      commands: [{ command: "status", description: "Show agent status", args_hint: "" }],
     });
     const headers = new Headers(init?.headers);
     expect(headers.get("Authorization")).toBe("Bearer fake");
@@ -418,54 +369,32 @@ describe("ClickClack HTTP client", () => {
     });
     const legacyEvents = await client.events("workspace-1", "cursor-900");
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
+    expectRequest(
+      fetchMock.mock.calls,
       1,
-      "https://clickclack.example/api/realtime/events?workspace_id=workspace-1&after_cursor=cursor-500&limit=500&include_tail=true",
-      expect.any(Object),
+      "realtime/events?workspace_id=workspace-1&after_cursor=cursor-500&limit=500&include_tail=true",
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
+    expectRequest(
+      fetchMock.mock.calls,
       2,
-      "https://clickclack.example/api/realtime/events?workspace_id=workspace-1&after_cursor=cursor-900",
-      expect.any(Object),
+      "realtime/events?workspace_id=workspace-1&after_cursor=cursor-900",
     );
     expect(page).toEqual({ events: [], tailCursor: "cursor-900" });
     expect(legacyEvents).toEqual([]);
   });
 
-  it("sends only safe bounded request correlation", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({ user: { id: "usr_1" } }),
-    );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      correlationId: " fakeco.case_1 ",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
-
+  it.each<[string, string | null]>([
+    [" fakeco.case_1 ", "fakeco.case_1"],
+    ["bad\rcorrelation", null],
+  ])("sends only safe request correlation: %j", async (correlationId, expected) => {
+    const fetchMock = jsonFetch({ user: { id: "usr_1" } });
+    const client = createTestClient(fetchMock, { correlationId });
     await client.me();
-
-    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("X-Correlation-ID")).toBe("fakeco.case_1");
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("X-Correlation-ID")).toBe(
+      expected,
+    );
     expect(normalizeClickClackCorrelationId("bad\ncorrelation")).toBeUndefined();
     expect(normalizeClickClackCorrelationId("x".repeat(129))).toBeUndefined();
-  });
-
-  it("omits invalid request correlation instead of constructing an unsafe header", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({ user: { id: "usr_1" } }),
-    );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      correlationId: "bad\rcorrelation",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
-
-    await client.me();
-
-    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.has("X-Correlation-ID")).toBe(false);
   });
 
   it("bounds oversized success JSON responses and closes the stream early", async () => {
@@ -504,22 +433,8 @@ describe("ClickClack HTTP client", () => {
     const fieldB = ["client", "secret"].join("_");
     const valueA = ["redact", "fixture", "a", "123"].join("_");
     const valueB = ["redact", "fixture", "b", "123"].join("_");
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            safe: "diagnostic",
-            [fieldA]: valueA,
-            [fieldB]: valueB,
-          }),
-          { status: 502 },
-        ),
-    );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "test-token",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const fetchMock = jsonFetch({ safe: "diagnostic", [fieldA]: valueA, [fieldB]: valueB }, 502);
+    const client = createTestClient(fetchMock as unknown as typeof fetch, { token: "test-token" });
 
     let message = "";
     try {
@@ -532,52 +447,30 @@ describe("ClickClack HTTP client", () => {
     expect(message).not.toContain(valueB);
   });
 
-  it("POSTs durable activity rows with kind and turn_id", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_9" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    const message = await client.createActivityMessage({
-      channelId: "chn_1",
-      body: "ran bash",
-      kind: "agent_tool",
-      turnId: "t1",
-    });
-
-    expect(message.id).toBe("msg_9");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://clickclack.example/api/channels/chn_1/messages",
-      expect.objectContaining({ method: "POST" }),
-    );
-    const init = fetchMock.mock.calls[0]?.[1];
-    expect(requestBodyJson(init)).toEqual({
-      body: "ran bash",
-      kind: "agent_tool",
-      turn_id: "t1",
-    });
-  });
-
-  it("includes quoted_message_id on a channel message when quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_q" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await client.createChannelMessage("chn_1", "ack", { quotedMessageId: "msg_root" });
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
-      body: "ack",
-      quoted_message_id: "msg_root",
-    });
+  it.each([
+    [
+      "channel",
+      { channelId: "chn_1" },
+      "ran bash",
+      "agent_tool",
+      "msg_9",
+      "channels/chn_1/messages",
+    ],
+    [
+      "DM",
+      { conversationId: "dcn_1" },
+      "thinking about it",
+      "agent_commentary",
+      "msg_10",
+      "dms/dcn_1/messages",
+    ],
+  ] as const)("creates %s activity rows", async (_label, target, body, kind, id, path) => {
+    const fetchMock = jsonFetch({ message: { id } }, 201);
+    const client = createTestClient(fetchMock);
+    expect(
+      await client.createActivityMessage({ ...target, body, kind, turnId: "t1" }),
+    ).toMatchObject({ id });
+    expectRequest(fetchMock.mock.calls, 1, path, "POST", { body, kind, turn_id: "t1" });
   });
 
   it("serializes retry nonces and reads persisted attachments", async () => {
@@ -596,11 +489,7 @@ describe("ClickClack HTTP client", () => {
       body: "retry-safe",
       nonce: "media-queue-1",
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "https://clickclack.example/api/messages/msg_retry",
-      expect.any(Object),
-    );
+    expectRequest(fetchMock.mock.calls, 2, "messages/msg_retry");
     expect(persisted.attachments).toEqual([{ id: "upl_1" }]);
   });
 
@@ -615,25 +504,7 @@ describe("ClickClack HTTP client", () => {
     }
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        Response.json(
-          {
-            upload: {
-              id: "upl_1",
-              workspace_id: "wsp_1",
-              owner_id: "usr_1",
-              filename: "viewer-proof.ts",
-              content_type: "text/typescript",
-              byte_size: 19,
-              width: 0,
-              height: 0,
-              duration_ms: 0,
-              created_at: "2026-07-11T00:00:00Z",
-            },
-          },
-          { status: 201 },
-        ),
-      )
+      .mockResolvedValueOnce(Response.json({ upload: { id: "upl_1" } }, { status: 201 }))
       .mockResolvedValueOnce(Response.json({ ok: true }));
     const client = createTestClient(fetchMock as unknown as typeof fetch);
 
@@ -653,8 +524,10 @@ describe("ClickClack HTTP client", () => {
     expect(uploadBlobPart).toBeInstanceOf(Uint8Array);
     const uploadBytes = uploadBlobPart as Uint8Array;
     expect(uploadBytes.buffer).toBe(uploadBuffer.buffer);
-    expect(uploadBytes.byteOffset).toBe(uploadBuffer.byteOffset);
-    expect(uploadBytes.byteLength).toBe(uploadBuffer.byteLength);
+    expect(uploadBytes).toMatchObject({
+      byteOffset: uploadBuffer.byteOffset,
+      byteLength: uploadBuffer.byteLength,
+    });
     const uploadRequest = fetchMock.mock.calls[0];
     expect(uploadRequest?.[0]).toBe(
       "https://clickclack.example/api/uploads?workspace_id=wsp_1&nonce=upload-queue-1",
@@ -667,8 +540,7 @@ describe("ClickClack HTTP client", () => {
     expect(uploadHeaders.has("Content-Type")).toBe(false);
     const file = (uploadInit.body as FormData).get("file");
     expect(file).toBeInstanceOf(File);
-    expect((file as File).name).toBe("viewer-proof.ts");
-    expect((file as File).type).toBe("text/typescript");
+    expect(file).toMatchObject({ name: "viewer-proof.ts", type: "text/typescript" });
     expect(await (file as File).text()).toBe("const proof = true;");
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "https://clickclack.example/api/messages/msg_1/attachments",
@@ -676,137 +548,35 @@ describe("ClickClack HTTP client", () => {
     expect(requestBodyJson(fetchMock.mock.calls[1]?.[1])).toEqual({ upload_id: "upl_1" });
   });
 
-  it("finds durable uploads by nonce and treats only 404 as absent", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        Response.json({
-          upload: {
-            id: "upl_1",
-            workspace_id: "wsp_1",
-            owner_id: "usr_1",
-            nonce: "upload-queue-1",
-            filename: "viewer-proof.ts",
-            content_type: "text/typescript",
-            byte_size: 19,
-            width: 0,
-            height: 0,
-            duration_ms: 0,
-            created_at: "2026-07-11T00:00:00Z",
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json(
-          { error: "missing" },
-          { status: 404, headers: { "X-ClickClack-Upload-Nonce": "supported" } },
+  it.each([
+    { kind: "upload", nonce: "upload-queue-1", found: { id: "upl_1", nonce: "upload-queue-1" } },
+    {
+      kind: "message",
+      nonce: "message-queue-1",
+      found: { id: "msg_1", attachments: [{ id: "upl_1" }] },
+    },
+  ] as const)(
+    "looks up $kind nonces and distinguishes absent, unsupported, and failed",
+    async ({ kind, nonce, found }) => {
+      const fetchMock = nonceResponses(kind === "upload" ? "Upload" : "Message", { [kind]: found });
+      const client = createTestClient(fetchMock);
+      const find = (value: string) =>
+        kind === "upload"
+          ? client.findUploadByNonce({ workspaceId: "wsp_1", nonce: value })
+          : client.findMessageByNonce({ workspaceId: "wsp_1", nonce: value });
+      await expect(find(nonce)).resolves.toEqual(expect.objectContaining(found));
+      await expectNonceErrors(find, kind);
+      expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(
+        [nonce, "missing", "unsupported", "broken"].map(
+          (value) =>
+            `https://clickclack.example/api/${kind}s/by-nonce?workspace_id=wsp_1&nonce=${value}`,
         ),
-      )
-      .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
-      .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await expect(
-      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "upload-queue-1" }),
-    ).resolves.toEqual(expect.objectContaining({ id: "upl_1", nonce: "upload-queue-1" }));
-    await expect(
-      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "missing" }),
-    ).resolves.toBeUndefined();
-    await expect(
-      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "unsupported" }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("does not support durable upload nonce lookup"),
-      cause: expect.objectContaining({ status: 404 }),
-    });
-    await expect(
-      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "broken" }),
-    ).rejects.toThrow("ClickClack 503");
-    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=upload-queue-1",
-      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=missing",
-      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=unsupported",
-      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=broken",
-    ]);
-  });
-
-  it("finds durable messages by nonce and distinguishes unsupported servers", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        Response.json({
-          message: {
-            id: "msg_1",
-            workspace_id: "wsp_1",
-            author_id: "usr_1",
-            thread_root_id: "msg_1",
-            body: "retry-safe",
-            body_format: "markdown",
-            created_at: "2026-07-13T00:00:00Z",
-            attachments: [{ id: "upl_1" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json(
-          { error: "missing" },
-          { status: 404, headers: { "X-ClickClack-Message-Nonce": "supported" } },
-        ),
-      )
-      .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
-      .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await expect(
-      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "message-queue-1" }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        id: "msg_1",
-        attachments: [{ id: "upl_1" }],
-      }),
-    );
-    await expect(
-      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "missing" }),
-    ).resolves.toBeUndefined();
-    await expect(
-      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "unsupported" }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("does not support durable message nonce lookup"),
-      cause: expect.objectContaining({ status: 404 }),
-    });
-    await expect(
-      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "broken" }),
-    ).rejects.toThrow("ClickClack 503");
-    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=message-queue-1",
-      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=missing",
-      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=unsupported",
-      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=broken",
-    ]);
-  });
-
-  it("omits quoted_message_id on a channel message when not quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_p" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await client.createChannelMessage("chn_1", "hello");
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({ body: "hello" });
-  });
+      );
+    },
+  );
 
   it("includes quoted_message_id on a direct message when quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_dm_q" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
+    const fetchMock = jsonFetch({ message: { id: "msg_dm_q" } }, 201);
     const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await client.createDirectMessage("dcn_1", "ack", { quotedMessageId: "msg_root" });
@@ -827,58 +597,20 @@ describe("ClickClack HTTP client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("routes DM activity rows through the conversation create path", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ message: { id: "msg_10" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await client.createActivityMessage({
-      conversationId: "dcn_1",
-      body: "thinking about it",
-      kind: "agent_commentary",
-      turnId: "t1",
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://clickclack.example/api/dms/dcn_1/messages",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
-
   it("PATCHes message bodies for activity row coalescing", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_9", body: "longer" } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
+    const fetchMock = jsonFetch({ message: { id: "msg_9", body: "longer" } }, 200);
     const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await client.updateMessageBody("msg_9", "longer");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://clickclack.example/api/messages/msg_9",
-      expect.objectContaining({ method: "PATCH" }),
-    );
+    expectRequest(fetchMock.mock.calls, 1, "messages/msg_9", "PATCH");
     const init = fetchMock.mock.calls[0]?.[1];
     expect(requestBodyJson(init)).toEqual({ body: "longer" });
   });
 
   it("POSTs ephemeral agent progress frames to the realtime endpoint", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({ event: { id: "evt_1" } }, { status: 202 }),
-    );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "placeholder",
-      fetch: fetchMock,
-    });
+    const fetchMock = jsonFetch({ event: { id: "evt_1" } }, 202);
+    const client = createTestClient(fetchMock, { token: "placeholder" });
 
     await client.publishEphemeral({
       workspaceId: "wsp_1",
@@ -887,11 +619,7 @@ describe("ClickClack HTTP client", () => {
       payload: { op: "append", turn_id: "msg_1" },
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://clickclack.example/api/realtime/ephemeral",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+    expectRequest(fetchMock.mock.calls, 1, "realtime/ephemeral", "POST", {
       workspace_id: "wsp_1",
       channel_id: "chn_1",
       type: "agent.progress",
@@ -899,25 +627,13 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
-  it("accepts an empty 204 ephemeral success response", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "placeholder",
-      fetch: fetchMock,
-    });
-
-    await expect(
-      client.publishEphemeral({
-        workspaceId: "wsp_1",
-        channelId: "chn_1",
-        type: "agent.progress",
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("aborts a stalled ephemeral request", async () => {
     vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), delay);
+      return controller.signal;
+    });
     try {
       const fetchMock = vi.fn(
         async (_input: string | URL | Request, init?: RequestInit): Promise<Response> =>
@@ -933,11 +649,7 @@ describe("ClickClack HTTP client", () => {
             );
           }),
       );
-      const client = createClickClackClient({
-        baseUrl: "https://clickclack.example",
-        token: "placeholder",
-        fetch: fetchMock,
-      });
+      const client = createTestClient(fetchMock, { token: "placeholder" });
 
       const pending = client.publishEphemeral({
         workspaceId: "wsp_1",
@@ -948,8 +660,10 @@ describe("ClickClack HTTP client", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       await rejected;
+      expect(timeout).toHaveBeenCalledWith(15_000);
       expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeDefined();
     } finally {
+      timeout.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -984,26 +698,83 @@ describe("createClickClackClient websocket", () => {
     }
   }
 
-  it("delivers a valid event frame above the server request-body limit", async () => {
-    // The server wraps and re-encodes accepted request payloads, so the event
-    // frame can legitimately be larger than its 1 MiB request-body limit.
-    const frame = JSON.stringify({
-      id: "evt-1",
-      cursor: "cursor-1",
-      type: "agent.progress",
-      workspace_id: "workspace-1",
-      created_at: "2026-07-09T00:00:00Z",
-      payload: { line: { text: "x".repeat(CLICKCLACK_REQUEST_BODY_LIMIT_BYTES) } },
-    });
-    expect(Buffer.byteLength(frame)).toBeGreaterThan(CLICKCLACK_REQUEST_BODY_LIMIT_BYTES);
-
+  it.each([
+    ["accepts a valid frame above the request limit", CLICKCLACK_REQUEST_BODY_LIMIT_BYTES, true],
+    ["rejects a frame above the inbound limit", CLICKCLACK_INBOUND_JSON_LIMIT_BYTES + 1, false],
+  ] as const)("%s", async (_label, size, delivered) => {
+    // Accepted request payloads grow when the server wraps them as events.
+    const frame = delivered
+      ? JSON.stringify({
+          id: "evt-1",
+          cursor: "cursor-1",
+          type: "agent.progress",
+          workspace_id: "workspace-1",
+          created_at: "2026-07-09T00:00:00Z",
+          payload: { line: { text: "x".repeat(size) } },
+        })
+      : "x".repeat(size);
+    if (delivered) {
+      expect(Buffer.byteLength(frame)).toBeGreaterThan(CLICKCLACK_REQUEST_BODY_LIMIT_BYTES);
+    }
     const result = await runFrameCase(frame);
-    expect(result.delivered).toBe(true);
-  });
-
-  it("rejects an oversized inbound frame before it reaches the event parser", async () => {
-    const result = await runFrameCase("x".repeat(CLICKCLACK_INBOUND_JSON_LIMIT_BYTES + 1));
-    expect(result.delivered).toBe(false);
-    expect(result.error).toMatch(/max payload/i);
+    expect(result.delivered).toBe(delivered);
+    if (!delivered) {
+      expect(result.error).toMatch(/max payload/i);
+    }
   });
 });
+
+it.each([false, true])(
+  "rechecks the message caller after effect preparation (retired=%s)",
+  async (retired) => {
+    const preparing = createDeferred();
+    const prepared = createDeferred();
+    const dispatched = createDeferred();
+    const response = createDeferred<Response>();
+    const caller = new AbortController();
+    const failure = new Error("ClickClack caller retired");
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+    };
+    const fetch = vi.fn<typeof globalThis.fetch>(() => {
+      dispatched.resolve();
+      return response.promise;
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch,
+      beforeRequest: () => caller.signal.throwIfAborted(),
+    });
+    const sending = client.createChannelMessage("chn_1", "hello").then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await Promise.race([
+        preparing.promise,
+        dispatched.promise.then(() => {
+          throw new Error("dispatched before preparation");
+        }),
+      ]);
+      expect(fetch).not.toHaveBeenCalled();
+      if (retired) {
+        caller.abort(failure);
+      }
+      prepared.resolve();
+      if (!retired) {
+        await dispatched.promise;
+        caller.abort(failure);
+      }
+      response.resolve(Response.json({ message: { id: "msg_1" } }));
+      expect(await sending).toEqual(retired ? { error: failure } : { value: { id: "msg_1" } });
+      expect(fetch).toHaveBeenCalledTimes(retired ? 0 : 1);
+    } finally {
+      prepared.resolve();
+      response.resolve(Response.json({ message: { id: "msg_1" } }));
+      await sending;
+      effectGate.prepare = undefined;
+    }
+  },
+);

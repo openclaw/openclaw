@@ -10,7 +10,7 @@ import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-u
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { i18n } from "../../i18n/index.ts";
 import { buildModelProviderCards } from "./data.ts";
-import { mount, props, text } from "./view.test-support.ts";
+import { mount, props, text } from "./view.test-support.tsx";
 
 beforeEach(async () => {
   await i18n.setLocale("en");

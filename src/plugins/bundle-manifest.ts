@@ -24,10 +24,16 @@ import {
 } from "./plugin-cache-files.js";
 
 /** Relative manifest path for Codex-style plugin bundles. */
-export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
+const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
-export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
-export const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
+const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+export const BUNDLE_MANIFEST_PATHS: Readonly<Record<PluginBundleFormat, string>> = {
+  agent: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
+  claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+  codex: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+  cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+};
 const AGENT_BUNDLE_EXTENSION_NAMESPACE = "ai.openclaw";
 const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MAX_AGENT_BUNDLE_MANIFEST_BYTES = 256 * 1024;
@@ -41,6 +47,7 @@ type BundlePluginManifest = {
   version?: string;
   skills: string[];
   settingsFiles?: string[];
+  onboardingSkill?: string;
   // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
   hooks: string[];
   bundleFormat: PluginBundleFormat;
@@ -142,22 +149,7 @@ function resolveCodexComponentDirs(
   return pluginCacheExistsSync(path.join(rootDir, component)) ? [component] : [];
 }
 
-function resolveCursorCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveBundleComponentPaths(raw.commands, rootDir, [".cursor/commands"]);
-}
-
-function resolveCursorSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return mergeBundlePathLists(
-    resolveBundleComponentPaths(raw.skills, rootDir, ["skills"]),
-    resolveCursorCommandRootDirs(raw, rootDir),
-  );
-}
-
-function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveBundleComponentPaths(raw.subagents ?? raw.agents, rootDir, [".cursor/agents"]);
-}
-
-function resolveBundleComponentPaths(
+export function resolveBundleComponentPaths(
   value: unknown,
   rootDir: string,
   defaults: string[],
@@ -169,11 +161,22 @@ function resolveBundleComponentPaths(
   return mergeBundlePathLists(existingDefaults, declared);
 }
 
-function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
+function resolveCursorComponents(
+  raw: Record<string, unknown>,
+  rootDir: string,
+): Pick<BundlePluginManifest, "skills" | "capabilities"> {
+  const commands = resolveBundleComponentPaths(raw.commands, rootDir, [".cursor/commands"]);
+  const skills = mergeBundlePathLists(
+    resolveBundleComponentPaths(raw.skills, rootDir, ["skills"]),
+    commands,
+  );
+  const agents = resolveBundleComponentPaths(raw.subagents ?? raw.agents, rootDir, [
+    ".cursor/agents",
+  ]);
   const capabilities = [
-    ...(resolveCursorSkillDirs(raw, rootDir).length > 0 ? ["skills"] : []),
-    ...(resolveCursorCommandRootDirs(raw, rootDir).length > 0 ? ["commands"] : []),
-    ...(resolveCursorAgentDirs(raw, rootDir).length > 0 ? ["agents"] : []),
+    ...(skills.length > 0 ? ["skills"] : []),
+    ...(commands.length > 0 ? ["commands"] : []),
+    ...(agents.length > 0 ? ["agents"] : []),
   ];
   for (const [capability, defaultPath] of [
     ["hooks", ".cursor/hooks.json"],
@@ -187,15 +190,7 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
       capabilities.push(capability);
     }
   }
-  return capabilities;
-}
-
-function resolveAgentSkillDirs(rootDir: string): string[] {
-  try {
-    return pluginCacheStatSync(path.join(rootDir, "skills"))?.isDirectory() ? ["skills"] : [];
-  } catch {
-    return [];
-  }
+  return { skills, capabilities };
 }
 
 function resolveAgentActivation(
@@ -229,14 +224,13 @@ export function loadBundleManifest(params: {
   rejectHardlinks?: boolean;
 }): BundleManifestLoadResult {
   const rejectHardlinks = params.rejectHardlinks ?? true;
+  // Unknown runtime inputs retain the manifest reader's Claude fallback.
   const manifestRelativePath =
-    params.bundleFormat === "codex"
-      ? CODEX_BUNDLE_MANIFEST_RELATIVE_PATH
-      : params.bundleFormat === "cursor"
-        ? CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH
-        : params.bundleFormat === "agent"
-          ? AGENT_BUNDLE_MANIFEST_RELATIVE_PATH
-          : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
+    params.bundleFormat === "codex" ||
+    params.bundleFormat === "cursor" ||
+    params.bundleFormat === "agent"
+      ? BUNDLE_MANIFEST_PATHS[params.bundleFormat]
+      : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
   const loaded = loadBundleManifestFile({
     rootDir: params.rootDir,
     ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
@@ -285,7 +279,9 @@ export function loadBundleManifest(params: {
         manifestPath: loaded.manifestPath,
       };
     }
-    manifest.skills = resolveAgentSkillDirs(params.rootDir);
+    manifest.skills = pluginCacheStatSync(path.join(params.rootDir, "skills"))?.isDirectory()
+      ? ["skills"]
+      : [];
     manifest.activation = resolveAgentActivation(raw, loaded.manifestPath);
     manifest.capabilities = [
       ...(manifest.skills.length > 0 ? ["skills"] : []),
@@ -312,10 +308,32 @@ export function loadBundleManifest(params: {
         }
       }
     } else if (params.bundleFormat === "cursor") {
-      manifest.skills = resolveCursorSkillDirs(raw, params.rootDir);
-      manifest.capabilities = buildCursorCapabilities(raw, params.rootDir);
+      Object.assign(manifest, resolveCursorComponents(raw, params.rootDir));
     } else {
       Object.assign(manifest, resolveClaudeComponents(raw, params.rootDir));
+    }
+  }
+  const extensions = isRecord(raw.extensions) ? raw.extensions : undefined;
+  const openai = isRecord(extensions?.["com.openai"]) ? extensions["com.openai"] : undefined;
+  const onboardingSkill = normalizeOptionalString(openai?.onboardingSkill);
+  if (onboardingSkill) {
+    const relative = path.normalize(onboardingSkill);
+    const packaged =
+      !path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      path.basename(relative) === "SKILL.md" &&
+      manifest.skills.some((root) => {
+        const fromRoot = path.relative(
+          path.resolve(params.rootDir, root),
+          path.resolve(params.rootDir, relative),
+        );
+        return (
+          fromRoot !== ".." && !fromRoot.startsWith(`..${path.sep}`) && !path.isAbsolute(fromRoot)
+        );
+      });
+    if (packaged) {
+      manifest.onboardingSkill = relative;
     }
   }
   return { ok: true, manifest, manifestPath: loaded.manifestPath };

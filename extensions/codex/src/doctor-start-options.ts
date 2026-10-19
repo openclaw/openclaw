@@ -29,7 +29,7 @@ export async function resolveCodexDoctorStartOptions(params: {
 }): Promise<
   { status: "selected"; start: CodexAppServerStartOptions } | { status: "skipped"; reason: string }
 > {
-  const pluginConfig = params.cfg.plugins?.entries?.codex?.config;
+  const pluginConfig = readCodexPluginConfig(params.cfg.plugins?.entries?.codex?.config);
   const start = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env }).start;
   if (start.transport !== "stdio") {
     return { status: "skipped", reason: "Codex uses a remote app-server transport." };
@@ -65,13 +65,18 @@ export async function resolveCodexDoctorStartOptions(params: {
   }
   if (
     params.cfg.plugins?.entries?.codex?.enabled === true &&
-    readCodexPluginConfig(pluginConfig).sessionCatalog?.enabled !== false
+    pluginConfig.sessionCatalog?.enabled !== false
   ) {
     // Passive catalogs use the package even when no agent routes turns through Codex.
     candidates.push({ ...start, managedCommandOrder: "package-only" });
   }
   for (const candidate of candidates) {
-    const resolved = await resolveStartOptions(candidate, { pluginRoot: params.pluginRoot });
+    // Doctor verifies the shipped package every install falls back to, never a
+    // user-installed Codex, so update checks stay independent of PATH.
+    const resolved = await resolveStartOptions(candidate, {
+      pluginRoot: params.pluginRoot,
+      preferInstalled: false,
+    });
     if (!isDesktopCommand(resolved.command)) {
       return { status: "selected", start: resolved };
     }

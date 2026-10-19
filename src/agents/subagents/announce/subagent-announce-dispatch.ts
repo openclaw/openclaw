@@ -1,26 +1,27 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.contracts.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
+import type { SubagentCompletionDeliveryState } from "../registry/subagent-registry-read.types.js";
+
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
-type SubagentAnnounceDeliveryDisposition =
-  | "delivered"
-  | "session_queued"
-  | "intentional_non_delivery"
-  | "retryable"
-  | "ambiguous"
-  | "permanent_failure";
+type SubagentAnnounceDeliveryDisposition = NonNullable<
+  SubagentCompletionDeliveryState["disposition"]
+>;
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
   | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
+  | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_turn_pending"
   | "source_owner_changed"
   | "steer_dropped"
   | "visible_reply_missing";
-
-type SubagentAnnounceSteerOutcome =
-  | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
-  | { status: "none" | "dropped" | "source_owner_changed" };
 
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
@@ -54,6 +55,45 @@ type SubagentAnnounceDispatchPhaseResult = {
   error?: string;
 };
 
+export type SubagentAnnounceDirectParams = {
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  targetRequesterSessionKey: string;
+  triggerMessage: string;
+  internalEvents?: AgentInternalEvent[];
+  expectsCompletionMessage: boolean;
+  completionTarget?: "parent";
+  completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
+  requireVisibleReply?: boolean;
+  requireDirectDelivery?: boolean;
+  bestEffortDeliver?: boolean;
+  directIdempotencyKey: string;
+  completionDirectOrigin?: DeliveryContext;
+  directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
+  sourceSessionKey?: string;
+  sourceTool?: string;
+  settleWakeSourceSessionKeys?: readonly string[];
+  isSourceSessionEffectsAllowed?: () => boolean;
+  sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
+  /** Reconcile an already-admitted public settle turn; never dispatch or send. */
+  recoveryReceiptOnly?: true;
+  /** Additional source guard released by the accepting Gateway or injection owner. */
+  isSourceSessionAdmissionAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
+  requesterIsSubagent: boolean;
+  createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  onDeliveryError?: (error: unknown) => void;
+  signal?: AbortSignal;
+  onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
+  onBeforeDispatch?: () => void | Promise<void>;
+  resolveGatewayContext?: GatewayContextResolver;
+  controllerInput?: SessionControllerInput;
+};
+
 export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
   return {
     delivered: false,
@@ -63,106 +103,4 @@ export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
     terminal: true,
     disposition: "intentional_non_delivery",
   };
-}
-
-function mapSteerOutcomeToDeliveryResult(
-  outcome: SubagentAnnounceSteerOutcome,
-): SubagentAnnounceDeliveryResult {
-  if (outcome.status === "steered") {
-    return {
-      delivered: true,
-      path: "steered",
-      deliveredAt: outcome.deliveredAt,
-      enqueuedAt: outcome.enqueuedAt,
-    };
-  }
-  if (outcome.status === "source_owner_changed") {
-    return sourceOwnerChangedResult();
-  }
-  return {
-    delivered: false,
-    path: "none",
-    ...(outcome.status === "dropped" ? { reason: "steer_dropped" } : {}),
-  };
-}
-
-export async function runSubagentAnnounceDispatch(params: {
-  expectsCompletionMessage: boolean;
-  requireDirectDelivery?: boolean;
-  signal?: AbortSignal;
-  steer: () => Promise<SubagentAnnounceSteerOutcome>;
-  direct: () => Promise<SubagentAnnounceDeliveryResult>;
-}): Promise<SubagentAnnounceDeliveryResult> {
-  const phases: SubagentAnnounceDispatchPhaseResult[] = [];
-  const appendPhase = (
-    phase: SubagentAnnounceDispatchPhase,
-    result: SubagentAnnounceDeliveryResult,
-  ) => {
-    phases.push({
-      phase,
-      delivered: result.delivered,
-      path: result.path,
-      deliveredAt: result.deliveredAt,
-      enqueuedAt: result.enqueuedAt,
-      ...(result.reason ? { reason: result.reason } : {}),
-      error: result.error,
-    });
-  };
-  const withPhases = (result: SubagentAnnounceDeliveryResult): SubagentAnnounceDeliveryResult => ({
-    ...result,
-    phases,
-  });
-
-  if (params.signal?.aborted) {
-    return withPhases({
-      delivered: false,
-      path: "none",
-    });
-  }
-
-  // Settle synthesis needs its own delivery turn; steering can inherit a
-  // message-tool-only completion turn and silently suppress the final reply.
-  const allowSteerFallback = !params.requireDirectDelivery && params.expectsCompletionMessage;
-  if (!params.requireDirectDelivery && !params.expectsCompletionMessage) {
-    const primarySteerOutcome = await params.steer();
-    const primarySteer = mapSteerOutcomeToDeliveryResult(primarySteerOutcome);
-    appendPhase("steer-primary", primarySteer);
-    if (
-      primarySteer.delivered ||
-      primarySteer.terminal ||
-      primarySteerOutcome.status === "dropped"
-    ) {
-      return withPhases(primarySteer);
-    }
-  }
-
-  // Completion handoff prefers direct delivery first so the completion agent's
-  // final visible message wins before falling back to steering.
-  const primaryDirect = await params.direct();
-  appendPhase("direct-primary", primaryDirect);
-  if (
-    !allowSteerFallback ||
-    primaryDirect.delivered ||
-    primaryDirect.reason === "requester_turn_pending" ||
-    primaryDirect.disposition === "session_queued" ||
-    primaryDirect.disposition === "intentional_non_delivery" ||
-    primaryDirect.disposition === "ambiguous" ||
-    primaryDirect.disposition === "permanent_failure"
-  ) {
-    return withPhases(primaryDirect);
-  }
-
-  if (params.signal?.aborted) {
-    return withPhases(primaryDirect);
-  }
-
-  const fallbackSteerOutcome = await params.steer();
-  const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
-  appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered || fallbackSteer.terminal) {
-    return withPhases(fallbackSteer);
-  }
-
-  // Keep the direct failure authoritative; dropped fallback remains in its phase.
-  return withPhases(primaryDirect);
 }

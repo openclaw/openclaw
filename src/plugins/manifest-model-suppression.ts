@@ -21,6 +21,7 @@ import { getPluginMetadataSnapshotCache } from "./plugin-cache.js";
 import {
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
+  prepareProviderEndpoints,
 } from "./plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
@@ -55,6 +56,7 @@ function listManifestModelCatalogSuppressions(params: {
 function prepareNativeCatalogOwners(plugins: PluginMetadataSnapshot["plugins"]) {
   const owners = new Map<string, { pluginId: string; provider: string; native: boolean } | null>();
   for (const plugin of plugins) {
+    const endpoints = prepareProviderEndpoints(plugin.providerEndpoints);
     for (const [provider, catalog] of Object.entries(plugin.modelCatalog?.providers ?? {})) {
       const normalizedBaseUrl = catalog.baseUrl && normalizePluginProviderBaseUrl(catalog.baseUrl);
       if (!normalizedBaseUrl) {
@@ -64,7 +66,7 @@ function prepareNativeCatalogOwners(plugins: PluginMetadataSnapshot["plugins"]) 
       const owner = {
         pluginId: plugin.id,
         provider: normalizeLowercaseStringOrEmpty(provider),
-        native: (plugin.providerEndpoints ?? []).some(
+        native: endpoints.some(
           (endpoint) =>
             endpoint.endpointClass !== "custom" &&
             endpoint.endpointClass !== "local" &&
@@ -98,15 +100,7 @@ function buildManifestSuppressionError(params: {
 }
 
 function normalizeBaseUrlHost(baseUrl: string | null | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    return normalizeSuppressionHost(new URL(trimmed).hostname);
-  } catch {
-    return "";
-  }
+  return normalizeSuppressionHost(URL.parse(baseUrl?.trim() ?? "")?.hostname ?? "");
 }
 
 function normalizeSuppressionHost(host: string): string {

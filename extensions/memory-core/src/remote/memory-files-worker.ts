@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import type { MessagePort } from "node:worker_threads";
 import { createFileWatchNotifier, root } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   buildFileEntry,
@@ -12,13 +14,20 @@ import {
   type MemoryWorkspaceWatchRequest,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+export async function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
+  const worker = await import("./memory-watch.worker.js");
+  await worker.serveLocalMemoryWatches(port);
+}
+
 type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
 
 type MaintenanceCommand = {
   [K in keyof MemoryWorkspaceMaintenance]: {
     operation: "maintenance";
     method: K;
-    args: Parameters<MemoryWorkspaceMaintenance[K]>;
+    args: K extends "writeDreams" | "appendCorpus"
+      ? [filePath: string, content: string]
+      : Parameters<MemoryWorkspaceMaintenance[K]>;
   };
 }[keyof MemoryWorkspaceMaintenance];
 
@@ -49,6 +58,7 @@ export async function serveMemoryFiles(options: {
   watch?: boolean;
 }): Promise<void> {
   if (options.watch) {
+    const runInBackgroundContext = AsyncLocalStorage.snapshot();
     const { MemoryFileWatcher } = await import("../memory/file-watcher.js");
     const lines = createInterface({ input: options.input, crlfDelay: Infinity });
     let watcher: InstanceType<typeof MemoryFileWatcher> | undefined;
@@ -83,6 +93,7 @@ export async function serveMemoryFiles(options: {
         const request = JSON.parse(line) as MemoryWorkspaceWatchRequest;
         const notify = (event: "change" | "unavailable") => notifier?.send(event);
         watcher = new MemoryFileWatcher({
+          runInBackgroundContext,
           workspaceDir: path.resolve(options.workspace),
           agentId: request.agentId,
           settings: request.settings,

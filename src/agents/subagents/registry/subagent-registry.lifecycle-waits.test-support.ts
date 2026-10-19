@@ -130,6 +130,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
 
   return {
     flushAsync,
+    waitForRun,
     waitForDeliveredCleanup,
     waitForFrozenResult,
     waitForFrozenResultText,

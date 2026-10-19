@@ -60,6 +60,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -760,6 +761,9 @@ class InitialOnboardingLayoutTest {
         awaitHeldRefresh()
         gateway.releaseNodeLists()
         awaitUnapprovedRefreshCompletion()
+        composeRule.mainClock.advanceTimeUntil(timeoutMillis = 1_000) {
+          composeRule.onNodeWithText("Still waiting for approval").isDisplayed()
+        }
         composeRule.onNodeWithText("Still waiting for approval").assertIsDisplayed()
       }
 

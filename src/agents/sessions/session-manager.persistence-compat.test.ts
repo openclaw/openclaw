@@ -9,14 +9,13 @@ import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
-  readSessionTranscriptWatermark,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
-  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -153,95 +152,6 @@ describe("SessionManager persistence compatibility", () => {
     );
   });
 
-  it("preserves and rebases trailing metadata, labels, and leaf controls", async () => {
-    const { dir, scope } = createScope("sqlite-remove-controls-session");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const events = [
-      header(scope.sessionId, dir),
-      row("message", "user", null, { message: { role: "user", content: "question" } }),
-      row("message", "temporary", "user", { message: buildAssistantMessage("temporary") }),
-      row("label", "temporary-label", "temporary", { targetId: "temporary", label: "retry" }),
-      row("label", "nested-temporary-label", "temporary-label", {
-        targetId: "temporary-label",
-        label: "nested retry",
-      }),
-      row("custom", "plugin-state", "nested-temporary-label", {
-        customType: "plugin-state",
-        data: { enabled: true },
-      }),
-      row("session_info", "session-info", "plugin-state", { name: "kept session" }),
-      row("leaf", "leaf-control", "session-info", {
-        targetId: "temporary",
-        appendParentId: "temporary",
-      }),
-    ];
-    expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
-    const generationBefore = readSessionTranscriptWatermark(scope).generation;
-    const manager = SessionManager.open(scope, dir);
-
-    expect(
-      manager.removeTrailingEntries((entry) => entry.id === "temporary", {
-        preserveTrailing: (entry) =>
-          entry.type === "custom" || entry.type === "label" || entry.type === "session_info",
-      }),
-    ).toBe(1);
-
-    expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
-    expect(await loadTranscriptEvents(scope)).toMatchObject([
-      { type: "session" },
-      { id: "user", parentId: null, type: "message" },
-      { id: "plugin-state", parentId: "user", type: "custom" },
-      { id: "session-info", parentId: "plugin-state", type: "session_info" },
-      {
-        id: "leaf-control",
-        parentId: "session-info",
-        targetId: "user",
-        appendParentId: "user",
-        type: "leaf",
-      },
-    ]);
-  });
-
-  it("allows stale suffix cleanup to remain a no-op when its target is absent", async () => {
-    const { dir, scope, persist } = createScope("sqlite-remove-concurrent-noop-session");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await persist("base", { role: "user", content: "question" });
-    const manager = SessionManager.open(scope, dir);
-    await persist("concurrent", { role: "user", content: "concurrent" });
-
-    expect(manager.removeTrailingEntries((entry) => entry.id === "absent")).toBe(0);
-    expect(manager.buildSessionContext().messages).toMatchObject([
-      { role: "user", content: "question" },
-    ]);
-    expect(await loadTranscriptEvents(scope)).toMatchObject([
-      { id: scope.sessionId },
-      { id: "base" },
-      { id: "concurrent" },
-    ]);
-  });
-
-  it("rejects stale suffix removal without deleting concurrent history", async () => {
-    const { dir, scope, persist } = createScope("sqlite-remove-concurrent-session");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await persist("base", { role: "user", content: "question" });
-    await persist("temporary", buildAssistantMessage("temporary"));
-    const manager = SessionManager.open(scope, dir);
-    await persist("concurrent", { role: "user", content: "concurrent" });
-
-    expect(() => manager.removeTrailingEntries((entry) => entry.id === "temporary")).toThrow(
-      "SQLite transcript changed while preparing suffix removal",
-    );
-    expect(manager.buildSessionContext().messages).toMatchObject([
-      { role: "user", content: "question" },
-      { role: "assistant", content: [{ type: "text", text: "temporary" }] },
-    ]);
-    expect(
-      (await loadTranscriptEvents(scope)).map((event) =>
-        event && typeof event === "object" && "id" in event ? event.id : undefined,
-      ),
-    ).toEqual([scope.sessionId, "base", "temporary", "concurrent"]);
-  });
-
   it("retains the append transaction fence when another write starts after commit", async () => {
     const { dir, scope, persist } = createScope("sqlite-append-fence-session");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -271,139 +181,96 @@ describe("SessionManager persistence compatibility", () => {
     ]);
   });
 
-  it.each(["bounded-sqlite", "identity", "writer", "lifecycle"])(
-    "keeps the live tree unchanged after a rejected %s tail rewrite",
-    async (failure) => {
-      const { dir, scope } = createScope("tail-rewrite");
-      const initialEntry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        activeWriterRunId: "original-writer",
-        lifecycleRevision: "original-lifecycle",
-      };
-      await upsertSessionEntryCore(scope, initialEntry);
-      const seed = SessionManager.open(scope, dir);
-      const earlierId = seed.appendMessage(makeUserMessage("earlier history", 1));
-      const questionId = seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
-      const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
-      const metadataId = seed.appendCustomEntry("preserved-state", { retained: true });
-      const labelId = seed.appendLabelChange(temporaryId, "temporary label");
-      const originalEvents = loadTranscriptEventsSync(scope);
-      const manager = SessionManager.open(
-        scope,
-        dir,
-        failure === "bounded-sqlite" ? { maxEvents: 3, maxBytes: 4096 } : undefined,
-      );
-      const database = openOpenClawAgentDatabase({
-        agentId: scope.agentId,
-        path: resolveSessionTranscriptDatabasePath(scope),
-      });
-      const readRows = () =>
-        database.db
-          .prepare(
-            "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          )
-          .all(scope.sessionId);
-      const readManager = () => ({
-        entries: manager.getEntries(),
-        leafId: manager.getLeafId(),
-        appendParentId: manager.getAppendParentId(),
-        label: manager.getLabel(temporaryId),
-        target: manager.getSessionTarget(),
-        context: manager.buildSessionContext(),
-      });
-      const beforeRows = readRows();
-      const beforeManager = structuredClone(readManager());
-      if (failure.endsWith("sqlite")) {
-        database.db.exec(`CREATE TRIGGER reject_tail_rewrite BEFORE INSERT ON transcript_events
+  it("keeps the bounded tree unchanged after a rejected tail rewrite", async () => {
+    const { dir, scope } = createScope("tail-rewrite");
+    const initialEntry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      activeWriterRunId: "original-writer",
+      lifecycleRevision: "original-lifecycle",
+    };
+    await upsertSessionEntryCore(scope, initialEntry);
+    const seed = SessionManager.open(scope, dir);
+    const earlierId = seed.appendMessage(makeUserMessage("earlier history", 1));
+    const questionId = seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
+    const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
+    const metadataId = seed.appendCustomEntry("preserved-state", { retained: true });
+    const labelId = seed.appendLabelChange(temporaryId, "temporary label");
+    const originalEvents = loadTranscriptEventsSync(scope);
+    const manager = SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 });
+    const database = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: resolveSessionTranscriptDatabasePath(scope),
+    });
+    const readRows = () =>
+      database.db
+        .prepare("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+        .all(scope.sessionId);
+    const readManager = () => ({
+      entries: manager.getEntries(),
+      leafId: manager.getLeafId(),
+      appendParentId: manager.getAppendParentId(),
+      label: manager.getLabel(temporaryId),
+      target: manager.getSessionTarget(),
+      context: manager.buildSessionContext(),
+    });
+    const beforeRows = readRows();
+    const beforeManager = structuredClone(readManager());
+    database.db.exec(`CREATE TRIGGER reject_tail_rewrite BEFORE INSERT ON transcript_events
           BEGIN SELECT RAISE(ABORT, 'tail rewrite failed'); END;`);
-      } else {
-        await updateSessionEntry(scope, () =>
-          failure === "identity"
-            ? { sessionId: "replacement-session" }
-            : failure === "writer"
-              ? { activeWriterRunId: "replacement-writer" }
-              : { lifecycleRevision: "replacement-lifecycle" },
-        );
-      }
-      const remove = () =>
-        manager.removeTrailingEntries((entry) => entry.id === temporaryId, {
-          preserveTrailing: (entry) => entry.type === "custom" || entry.type === "label",
-        });
-      const rewrite = () =>
-        withOwnedSessionTranscriptWrites(
-          {
-            ...(failure === "writer" || failure === "lifecycle"
-              ? {
-                  sessionTarget: {
-                    ...scope,
-                    expectedWriterRunId: initialEntry.activeWriterRunId,
-                    expectedLifecycleRevision: initialEntry.lifecycleRevision,
-                  },
-                }
-              : {}),
-            withTranscriptWrite: async (run) => await run(),
-          },
-          async () => remove(),
-        );
+    const remove = () =>
+      manager.removeTrailingEntries((entry) => entry.id === temporaryId, {
+        preserveTrailing: (entry) => entry.type === "custom" || entry.type === "label",
+      });
+    const rewrite = () =>
+      withOwnedSessionTranscriptWrites(
+        { withTranscriptWrite: async (run) => await run() },
+        async () => remove(),
+      );
 
-      await expect(rewrite()).rejects.toThrow();
-      expect(readRows()).toEqual(beforeRows);
-      expect(readManager()).toEqual(beforeManager);
+    await expect(rewrite()).rejects.toThrow();
+    expect(readRows()).toEqual(beforeRows);
+    expect(readManager()).toEqual(beforeManager);
 
-      if (failure.endsWith("sqlite")) {
-        database.db.exec("DROP TRIGGER reject_tail_rewrite");
-      } else {
-        await upsertSessionEntryCore(scope, initialEntry);
+    database.db.exec("DROP TRIGGER reject_tail_rewrite");
+    await expect(rewrite()).resolves.toBe(1);
+    expect(manager.getEntry(temporaryId)).toBeUndefined();
+    expect(manager.getLabel(temporaryId)).toBeUndefined();
+    // The next reader must work immediately, without waiting for a projection rebuild.
+    const reopened = SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 });
+    const expectedRetained = structuredClone(
+      originalEvents.filter(
+        (event) => !isRecord(event) || (event.id !== temporaryId && event.id !== labelId),
+      ),
+    );
+    for (const event of expectedRetained) {
+      if (isRecord(event) && event.id === metadataId) {
+        event.parentId = questionId;
       }
-      await expect(rewrite()).resolves.toBe(1);
-      expect(manager.getEntry(temporaryId)).toBeUndefined();
-      expect(manager.getLabel(temporaryId)).toBeUndefined();
-      // The next reader must work immediately, without waiting for a projection rebuild.
-      const reopened =
-        failure === "bounded-sqlite"
-          ? SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 })
-          : SessionManager.open(scope, dir);
-      if (failure === "bounded-sqlite") {
-        const expectedRetained = structuredClone(
-          originalEvents.filter(
-            (event) => !isRecord(event) || (event.id !== temporaryId && event.id !== labelId),
-          ),
-        );
-        for (const event of expectedRetained) {
-          if (isRecord(event) && event.id === metadataId) {
-            event.parentId = questionId;
-          }
-        }
-        const durable = loadTranscriptEventsSync(scope);
-        const controls = durable.filter((event) => parseOpaqueLeafEntry(event));
-        expect(controls).toHaveLength(1);
-        const control = parseOpaqueLeafEntry(controls[0]);
-        expect(control).toMatchObject({ parentId: metadataId, targetId: questionId });
-        expect(control?.appendParentId ?? control?.targetId).toBe(questionId);
-        expect(durable.filter((event) => !parseOpaqueLeafEntry(event))).toEqual(expectedRetained);
-        const full = SessionManager.open(scope, dir);
-        expect(full.getBranch().map((entry) => entry.id)).toEqual([earlierId, questionId]);
-        expect(reopened.getBranch()).toEqual(full.getBranch());
-        expect(reopened.buildSessionContext()).toEqual(full.buildSessionContext());
-        // The bounded public view normalizes an omitted parent; storage must retain its real ID.
-        expect(manager.getEntries()).toEqual(
-          expectedRetained.flatMap((event) =>
-            isRecord(event) && event.id === metadataId ? [{ ...event, parentId: null }] : [],
-          ),
-        );
-        expect(
-          manager
-            .getPersistedEntries()
-            .filter((event) => isRecord(event) && event.id === metadataId),
-        ).toEqual(expectedRetained.filter((event) => isRecord(event) && event.id === metadataId));
-        expect(manager.getLeafId()).toBe(questionId);
-        expect(manager.getAppendParentId()).toBe(questionId);
-      } else {
-        expect(reopened.getPersistedEntries()).toEqual(manager.getPersistedEntries());
-      }
-    },
-  );
+    }
+    const durable = loadTranscriptEventsSync(scope);
+    const controls = durable.filter((event) => parseOpaqueLeafEntry(event));
+    expect(controls).toHaveLength(1);
+    const control = parseOpaqueLeafEntry(controls[0]);
+    expect(control).toMatchObject({ parentId: metadataId, targetId: questionId });
+    expect(control?.appendParentId ?? control?.targetId).toBe(questionId);
+    expect(durable.filter((event) => !parseOpaqueLeafEntry(event))).toEqual(expectedRetained);
+    const full = SessionManager.open(scope, dir);
+    expect(full.getBranch().map((entry) => entry.id)).toEqual([earlierId, questionId]);
+    expect(reopened.getBranch()).toEqual(full.getBranch());
+    expect(reopened.buildSessionContext()).toEqual(full.buildSessionContext());
+    // The bounded public view normalizes an omitted parent; storage must retain its real ID.
+    expect(manager.getEntries()).toEqual(
+      expectedRetained.flatMap((event) =>
+        isRecord(event) && event.id === metadataId ? [{ ...event, parentId: null }] : [],
+      ),
+    );
+    expect(
+      manager.getPersistedEntries().filter((event) => isRecord(event) && event.id === metadataId),
+    ).toEqual(expectedRetained.filter((event) => isRecord(event) && event.id === metadataId));
+    expect(manager.getLeafId()).toBe(questionId);
+    expect(manager.getAppendParentId()).toBe(questionId);
+  });
 });
 
 it("keeps file fixture appends and rewrites readable after an unterminated record", async () => {
@@ -441,13 +308,39 @@ function expectSingleUser(events: unknown[], key: string) {
 }
 
 describe("SessionManager user idempotency", () => {
-  it("preserves distinct keyed user turns with the same visible text", () => {
-    const manager = SessionManager.inMemory();
-    const message = { ...makeUserMessage("same question", 1), idempotencyKey: "first:user" };
-    const first = manager.appendMessage(message);
-    const second = { ...message, idempotencyKey: "second-run:user", timestamp: 2 };
-    expect(manager.appendMessage(second)).not.toBe(first);
-    expect(manager.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+  it.each([
+    { kind: "subagent-completion-direct", adopts: true },
+    { kind: "channel-final", adopts: false },
+    { kind: undefined, adopts: false },
+  ] as const)("keyed replay behind a $kind mirror (adopts: $adopts)", async ({ kind, adopts }) => {
+    const { dir, scope, user, persist } = await userSession();
+    await persist("wake-user", user);
+    expect(
+      await appendAssistantMessageToSessionTranscript({
+        ...scope,
+        text: "Synthetic child result",
+        idempotencyKey: "announce:child:text-direct",
+        ...(kind ? { deliveryMirror: { kind } } : {}),
+      }),
+    ).toMatchObject({ ok: true });
+    const manager = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxBytes: 100_000,
+      maxEvents: 100,
+    });
+    if (adopts) {
+      expect(await manager.appendMessageAsync(user)).toBe("wake-user");
+      expect(manager.appendMessage(user)).toBe("wake-user");
+    } else {
+      // Unmarked historical mirrors and ordinary final replies still close turns.
+      await expect(manager.appendMessageAsync(user)).rejects.toThrow(
+        "Session transcript keyed user is outside the current turn",
+      );
+      expect(() => manager.appendMessage(user)).toThrow(
+        "Session transcript keyed user is outside the current turn",
+      );
+    }
+    expectSingleUser(await loadTranscriptEvents(scope), user.idempotencyKey);
   });
 
   it("allows an explicitly caller-checked keyed user append", () => {

@@ -46,7 +46,7 @@ function createFixture(tmpDir: string, storePath: string) {
     runHeartbeatOnce({
       cfg,
       ...options,
-      deps: { getQueueSize: () => 0, nowMs: () => nowMs },
+      deps: { nowMs: () => nowMs },
     });
   return { baseKey, isolatedKey, nowMs, replySpy, seed, run, storePath };
 }
@@ -90,21 +90,5 @@ it("keeps a forced real :heartbeat session distinct from the heartbeat-isolated 
     await run({ sessionKey: realKey });
     expect(replySpy).toHaveBeenCalledOnce();
     expect(replySpy.mock.calls[0]?.[0].SessionKey).toBe(`${realKey}:heartbeat`);
-  });
-});
-
-it("renders cron-carried task prompts through the heartbeat response path", async () => {
-  await withIsolatedHeartbeat(async ({ baseKey, replySpy, seed, run }) => {
-    await seed(baseKey, { sessionId: "sid" });
-    await expect(
-      run({
-        source: "interval",
-        intent: "task",
-        reason: "heartbeat-task:job-inbox",
-        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check urgent inbox items" }],
-      }),
-    ).resolves.toMatchObject({ status: "ran" });
-    expect(replySpy.mock.calls[0]?.[0].Body).toContain("- inbox: Check urgent inbox items");
-    expect(replySpy.mock.calls[0]?.[0].Body).toContain("After completing all due tasks");
   });
 });

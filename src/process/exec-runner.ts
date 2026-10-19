@@ -41,6 +41,7 @@ import {
   createSanitizedCommandError,
   isPlainCommandExitFailure,
   isPlainCommandSignalFailure,
+  recordCommandProcessFailure,
   resolveProcessExitCode,
   TIMEOUT_EXIT_CODE,
   type SpawnResult,
@@ -54,9 +55,7 @@ import {
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
 import { setProcessTimeout } from "./process-deadline.js";
-
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
-const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
@@ -121,6 +120,14 @@ export async function runCommandBuffersWithTimeout(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<BufferSpawnResult> {
   return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false, true);
+}
+
+/** Retain raw bytes with UTF-8 capture boundaries, independent of the Windows console page. */
+export async function runUtf8CommandBuffersWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<BufferSpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true, true);
 }
 
 async function runCommandWithOutputEncoding(
@@ -257,6 +264,20 @@ async function runCommandWithOutputEncoding(
   let waitingForSpawn = startupReady !== undefined;
   const startupCanceled = createDeferredCore<Exclude<CommandTerminationReason, "exit">>();
   const nodeChild = child.nodeChildProcess;
+  let inputReleased = options.beforeInput ? false : undefined;
+  const failedProcess = (error: unknown, cleanup: SpawnResult["cleanup"] = "uncertain") => {
+    const failure = recordCommandProcessFailure(error, {
+      pid: nodeChild.pid,
+      code: childExitState?.code ?? nodeChild.exitCode ?? null,
+      cleanup,
+      inputReleased,
+      termination:
+        termination === "output-limit"
+          ? "signal"
+          : (termination ?? (nodeChild.signalCode ? "signal" : "exit")),
+    });
+    return Object.assign(failure, { cleanup });
+  };
   const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
   const resolvedNoOutputTimeoutMs = clampPositiveTimerTimeoutMs(noOutputTimeoutMs);
   const ownsOutputDeadline =
@@ -388,7 +409,10 @@ async function runCommandWithOutputEncoding(
       ]);
     } catch (error) {
       clearTimers();
-      throw error;
+      throw failedProcess(
+        error,
+        nodeChild instanceof BrokerChild && nodeChild.notStarted ? "normal" : "uncertain",
+      );
     }
     if (interrupted) {
       clearTimers();
@@ -551,6 +575,8 @@ async function runCommandWithOutputEncoding(
         }
         throw new TypeError("Child input admission must complete synchronously");
       }
+      // A partial write or synchronous stream failure cannot claim withheld input.
+      inputReleased = true;
       nodeChild.stdin.end(input);
     } catch (cause) {
       inputAdmissionError = toErrorObject(cause, "Child input admission failed");
@@ -559,29 +585,36 @@ async function runCommandWithOutputEncoding(
     }
   }
 
-  const result = await child.finally(() => {
-    commandSettled = true;
-    clearTimers();
-    releaseOutput?.();
-  });
+  const result = await child
+    .finally(() => {
+      commandSettled = true;
+      clearTimers();
+      releaseOutput?.();
+    })
+    .catch((error: unknown) => {
+      throw failedProcess(error);
+    });
   if (result.timedOut) {
     termination ??= "timeout";
   }
-  let cleanup = await processCleanup;
+  let cleanup = await processCleanup.catch((error: unknown) => {
+    throw failedProcess(error);
+  });
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   if (cleanup === "normal" && resolvedSignal) {
     cleanup = "uncertain";
   }
   if (inputAdmissionError) {
-    throw Object.assign(inputAdmissionError, { cleanup });
+    throw failedProcess(inputAdmissionError, cleanup);
   }
   if (terminatingOutputError) {
-    throw Object.assign(terminatingOutputError, { cleanup });
+    throw failedProcess(terminatingOutputError, cleanup);
   }
   if (outputObserverError !== undefined) {
-    throw Object.assign(toErrorObject(outputObserverError, "Command output observer failed"), {
+    throw failedProcess(
+      toErrorObject(outputObserverError, "Command output observer failed"),
       cleanup,
-    });
+    );
   }
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
@@ -595,27 +628,6 @@ async function runCommandWithOutputEncoding(
     !result.isCanceled &&
     !result.isMaxBuffer &&
     !result.isTerminated;
-  if (isCauseLessWindowsShimResult) {
-    // A patched Windows runtime can populate exitCode shortly after close.
-    // Settle that state before the shim fallback can infer a clean exit.
-    for (
-      let elapsedMs = 0;
-      elapsedMs < WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS;
-      elapsedMs += WINDOWS_CLOSE_STATE_POLL_MS
-    ) {
-      if (
-        childExitState?.code != null ||
-        childExitState?.signal != null ||
-        nodeChild.exitCode != null ||
-        nodeChild.signalCode != null
-      ) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, WINDOWS_CLOSE_STATE_POLL_MS);
-      });
-    }
-  }
   if (
     result.failed &&
     !termination &&
@@ -629,18 +641,12 @@ async function runCommandWithOutputEncoding(
     )
   ) {
     const error = createSanitizedCommandError(result);
-    Object.assign(error, {
-      cleanup:
-        typeof nodeChild.pid === "number"
-          ? cleanup === "normal"
-            ? "uncertain"
-            : cleanup
-          : "normal",
-    });
+    const failedCleanup =
+      typeof nodeChild.pid === "number" ? (cleanup === "normal" ? "uncertain" : cleanup) : "normal";
     if (outputErrorStream) {
       Object.assign(error, { outputErrorStream });
     }
-    throw error;
+    throw failedProcess(error, failedCleanup);
   }
 
   const killIssuedByAbort = termination === "signal" || termination === "output-limit";

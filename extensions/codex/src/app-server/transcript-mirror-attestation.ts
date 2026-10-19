@@ -27,6 +27,10 @@ export function buildCodexMirrorDedupeIdentity(message: MirroredAgentMessage): s
   return `${message.role}:${createHash("sha256").update(payload).digest("hex").slice(0, 16)}`;
 }
 
+export function buildCodexMirrorIdempotencyKey(scope: string, identity: string): string {
+  return `${scope}:${identity}`;
+}
+
 const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
 const MIRROR_SOURCE_FINGERPRINT_META_KEY = "mirrorSourceFingerprint" as const;
 const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;

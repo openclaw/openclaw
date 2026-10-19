@@ -1,4 +1,3 @@
-// Shell completion runtime: cache paths, profile installation, and shell detection.
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -79,24 +78,12 @@ export function resolveShellFromEnv(
   return platform === "win32" ? "powershell" : "zsh";
 }
 
-function sanitizeCompletionBasename(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "openclaw";
-  }
-  return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
-}
-
-function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "completions");
-}
-
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
 export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
-  const basename = sanitizeCompletionBasename(binName);
+  const basename = (binName.trim() || "openclaw").replace(/[^a-zA-Z0-9._-]/g, "-");
   return path.join(
-    resolveCompletionCacheDir(),
+    resolveStateDir(process.env, os.homedir),
+    "completions",
     `${basename}.${shell === "powershell" ? "ps1" : shell}`,
   );
 }
@@ -152,10 +139,6 @@ export function formatCompletionReloadCommand(shell: CompletionShell, scriptPath
   const homePrefix = scriptPath.startsWith("~/") ? "~/" : "";
   const value = scriptPath.slice(homePrefix.length);
   return `source ${homePrefix}${quoteCompletionPath(shell, value)}`;
-}
-
-function isCompletionProfileHeader(line: string): boolean {
-  return line.trim() === "# OpenClaw Completion";
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
@@ -370,7 +353,7 @@ function updateCompletionProfile(
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
-    if (isCompletionProfileHeader(line)) {
+    if (line.trim() === "# OpenClaw Completion") {
       const following = lines[i + 1] ?? "";
       if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
         filtered.push(line);
@@ -402,7 +385,7 @@ function updateCompletionProfile(
     const next = filtered.join("\n");
     return { next, changed: next !== content, hadExisting };
   }
-  const trimmed = filtered.join("\n").trimEnd();
+  const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
@@ -513,7 +496,6 @@ export async function isCompletionInstalled(
 }
 
 /**
- * Check if the profile uses the slow dynamic completion pattern.
  * Returns true if profile has `source <(openclaw completion ...)` instead of cached file.
  */
 export async function usesSlowDynamicCompletion(

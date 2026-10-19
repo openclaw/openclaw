@@ -2,41 +2,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
+import { readUpdateTargetCliOptions } from "../cli/update-cli/update-command-cli-options.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import {
-  parseOpenClawSchemaVersions,
-  type OpenClawSchemaVersions,
-} from "../state/openclaw-schema-versions.js";
+import * as schemaVersions from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
+import * as canaryCmd from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
-import {
-  observeUpdateCandidateStartup,
-  waitForUpdateCandidateReadiness,
-} from "./update-candidate-canary-readiness.js";
-import {
-  createCanaryReceiptObserver,
-  type CanaryReceiptCallbacks,
-} from "./update-candidate-canary-receipts.js";
+import * as readiness from "./update-candidate-canary-readiness.js";
+import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
-import {
-  applyUpdateDoctorLintReport,
-  parseUpdateDoctorLintReport,
-  UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX,
-} from "./update-doctor-lint.js";
+import * as lint from "./update-doctor-lint.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -44,32 +33,38 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
+import { createUpdateDoctorSectionTiming } from "./update-doctor-section-timing.js";
 import {
+  createUpdateCanaryFailureFacts,
   createUpdateFailureFact,
   parseConfigFailureFacts,
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type CanaryPhase =
-  | "snapshot"
-  | "doctor"
-  | "lint"
-  | "config"
-  | "plugins"
-  | "runtime"
-  | "startup"
-  | "readiness";
+type CanaryPhase = canaryCmd.UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
+
+type CanaryOutcome =
+  | { status: "ok" }
+  | {
+      status: "error";
+      reason:
+        | "doctor-failed"
+        | "candidate-checks-timeout"
+        | "candidate-snapshot-failed"
+        | "runtime-verification-failed";
+    };
 
 type CanaryResult = {
   phase: CanaryPhase;
   durationMs: number;
   logTail: string[];
   steps: UpdateStepResult[];
-  candidateSchemaVersions?: OpenClawSchemaVersions;
+  candidateSchemaVersions?: schemaVersions.OpenClawSchemaVersions;
   gatewayRestartCompletion?: boolean;
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
@@ -77,27 +72,27 @@ type CanaryResult = {
     gateway: { host: "127.0.0.1"; port: number };
     mcpAppSandbox: "disabled";
   };
-} & (
-  | { status: "ok" }
-  | {
-      status: "error";
-      reason: "doctor-failed" | "candidate-checks-timeout" | "runtime-verification-failed";
-    }
-);
+} & CanaryOutcome;
 
 /** Rehearse the exact candidate against private SQLite snapshots while the serving generation stays up. */
-export async function validateUpdateCandidateCanary(
-  params: {
-    root: string;
-    config: OpenClawConfig;
-    stateDir: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    env?: NodeJS.ProcessEnv;
-    nodeRunner?: string;
-    assertCurrent?: () => void;
-  } & CanaryReceiptCallbacks,
-): Promise<CanaryResult> {
+export async function validateUpdateCandidateCanary(params: {
+  root: string;
+  /** Serving updater's discovery, not the staged worker's package. */
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
+  config: OpenClawConfig;
+  stateDir: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+  nodeRunner?: string;
+  fullIntegrityCheck?: boolean;
+  assertCurrent?: () => void;
+  /** Startup-only callers must prove the preserved input boots without Doctor repair. */
+  migrationPolicy?: "rehearse" | "startup-only";
+  /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
+  onStep?: (step: UpdateStepResult) => void | Promise<void>;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
+}): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
   let cleanupUncertain = false;
@@ -109,10 +104,40 @@ export async function validateUpdateCandidateCanary(
   let stepStartedAt = started;
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
-  const receipts = createCanaryReceiptObserver(params);
+  const currentStep = (exitCode: number | null): UpdateStepResult => ({
+    ...activeStep,
+    cwd: params.root,
+    durationMs: Date.now() - stepStartedAt,
+    exitCode,
+  });
+  const { onStep, onProgress } = params;
+  let receiptFailed = false;
+  const reportReceipt = async <Value>(
+    callback: ((value: Value) => void | Promise<void>) | undefined,
+    value: Value,
+  ) => {
+    try {
+      await callback?.(value);
+    } catch (error) {
+      receiptFailed = true;
+      throw error;
+    }
+  };
+  // Each check is announced before it runs; the awaited receipt admits the progress writer first.
+  const beginStep = async (step: typeof activeStep) => {
+    activeStep = step;
+    stepStartedAt = Date.now();
+    stepLogTail.length = 0;
+    await reportReceipt(onProgress, {
+      step: step.name,
+      status: "in_progress",
+      startedAtMs: stepStartedAt,
+      detail: step.command,
+    });
+  };
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
-    await receipts.onStep?.(step);
+    await reportReceipt(onStep, step);
   };
   const cleanupRehearsal = async () => {
     if (!rehearsal) {
@@ -128,15 +153,28 @@ export async function validateUpdateCandidateCanary(
             : "candidate-plugin-inventory-cleanup",
         onProgress: params.onProgress,
         onWarning: recordStep,
+        onRemoved: recordStep,
       });
     }
   };
-  let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let candidateSchemaVersions: schemaVersions.OpenClawSchemaVersions | undefined;
   let gatewayRestartCompletion = false;
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let listenerIsolation: CanaryResult["listenerIsolation"];
-  let phase: CanaryPhase = "runtime";
+  const progress: { phase: CanaryPhase } = { phase: "runtime" };
+  const finish = (outcome: CanaryOutcome, phase = progress.phase): CanaryResult => ({
+    ...outcome,
+    phase,
+    durationMs: Date.now() - started,
+    logTail,
+    candidateSchemaVersions,
+    gatewayRestartCompletion,
+    ...(outcome.status === "ok" && doctorConfigWrites ? { doctorConfigWrites } : {}),
+    ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
+    listenerIsolation,
+    steps,
+  });
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
     const safe = redactSupportString(
@@ -157,7 +195,7 @@ export async function validateUpdateCandidateCanary(
   const launch = (
     entry: string,
     args: string[],
-    observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "onStdout"> = {},
+    observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "hidesLine" | "onStdout"> = {},
   ) => {
     params.signal?.throwIfAborted();
     return launchCanary({
@@ -188,8 +226,14 @@ export async function validateUpdateCandidateCanary(
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
+      if (params.migrationPolicy === "startup-only") {
+        throw new Error(
+          "The candidate lacks the runtime required to prove preserved-input startup",
+          { cause: error },
+        );
+      }
       const message = "This version uses the current updater to finish installation";
-      const step: UpdateStepResult = {
+      await recordStep({
         name: "candidate-recovery",
         command: "--check",
         cwd: params.root,
@@ -197,31 +241,25 @@ export async function validateUpdateCandidateCanary(
         exitCode: null,
         stdoutTail: message,
         advisory: { kind: "candidate-runtime-unavailable", message },
-      };
-      await recordStep(step);
+      });
       // Older targets also lack the isolated canary CLI; retain their shipped finalization path.
-      return { status: "ok", phase, durationMs: Date.now() - started, logTail, steps };
+      return { status: "ok", phase: "runtime", durationMs: Date.now() - started, logTail, steps };
     }
-    const policy = resolveUpdateDoctorExecutionPolicy({
-      targetVersion: await readPackageVersion(params.root),
-      allowGatewayServiceRepair: false,
-    });
-    if (!policy.fix) {
-      throw new Error("Cannot check migrations without changing the running service");
+    if (params.migrationPolicy !== "startup-only") {
+      const policy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: await readPackageVersion(params.root),
+      });
+      if (!policy.fix) {
+        throw new Error("Cannot check migrations without changing the running service");
+      }
     }
-    phase = "snapshot";
-    activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
-    stepStartedAt = Date.now();
+    progress.phase = "snapshot";
     // Admit the progress writer before the child chooses its snapshot source.
     // This receipt precedes work; streamed progress below keeps its stage owner.
-    await receipts.onInitialProgress?.({
-      step: "candidate-state-snapshot",
-      status: "in_progress",
-      startedAtMs: stepStartedAt,
-      detail: "Preparing update checks",
-    });
+    await beginStep({ name: "candidate-state-snapshot", command: "Preparing update checks" });
     rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
+      sourceBundledPlugins: params.sourceBundledPlugins,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,
@@ -230,15 +268,13 @@ export async function validateUpdateCandidateCanary(
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       onProgress: params.onProgress,
+      migrationPolicy: params.migrationPolicy,
+      fullIntegrityCheck: params.fullIntegrityCheck,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
-    const snapshotDuration = Date.now() - stepStartedAt;
     const snapshotStep: UpdateStepResult = {
-      ...activeStep,
-      cwd: params.root,
-      durationMs: snapshotDuration,
-      exitCode: 0,
+      ...currentStep(0),
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
       warnings: rehearsal.snapshotWarnings,
@@ -251,36 +287,23 @@ export async function validateUpdateCandidateCanary(
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
     };
-    const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
-      {
-        phase: "doctor",
-        name: "candidate-doctor",
-        args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-      },
-      {
-        phase: "lint",
-        name: "candidate-doctor-lint",
-        args: ["doctor", "--lint", "--json", "--severity-min", "error"],
-      },
-      {
-        phase: "config",
-        name: "candidate-config",
-        args: ["config", "validate", "--json"],
-      },
-      {
-        phase: "plugins",
-        name: "candidate-plugins",
-        args: ["plugins", "list", "--json"],
-      },
-      {
-        phase: "runtime",
-        name: "candidate-recovery",
-        // After a schema bump only a fresh candidate may finalize the run;
-        // prove its full recovery import graph before live state changes.
-        entry: continuationEntry,
-        args: ["--check"],
-      },
-    ];
+    const commands = canaryCmd.buildUpdateCanaryCommands({
+      continuationEntry,
+      migrationPolicy: params.migrationPolicy,
+      fullIntegrityCheck:
+        params.migrationPolicy !== "startup-only" &&
+        params.fullIntegrityCheck &&
+        (
+          await readUpdateTargetCliOptions(
+            {
+              nodeRunner: params.nodeRunner ?? process.execPath,
+              entryPath: entry,
+              command: "doctor",
+            },
+            { cwd: params.root, baseEnv: env, timeoutMs: params.timeoutMs },
+          )
+        ).has("--full-integrity-check"),
+    });
     // Each fresh process may inspect the private state again, including the Gateway.
     const processBudget = resolveSqliteInspectionBudget(
       "update validation",
@@ -303,13 +326,17 @@ export async function validateUpdateCandidateCanary(
       }
       return milliseconds;
     };
+    const operatorTrace = env.OPENCLAW_GATEWAY_STARTUP_TRACE;
     for (const command of commands) {
-      phase = command.phase;
+      const { phase } = command;
+      progress.phase = phase;
       activeLintStep = undefined;
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
-      activeStep = { name: command.name, command: command.args.join(" ") };
-      stepStartedAt = Date.now();
-      stepLogTail.length = 0;
+      // Only Doctor traces its existing sections; later children keep the operator's setting.
+      env.OPENCLAW_GATEWAY_STARTUP_TRACE = operatorTrace;
+      const sectionTiming = phase === "doctor" ? createUpdateDoctorSectionTiming(env) : undefined;
+      Object.assign(env, sectionTiming?.env);
+      await beginStep({ name: command.name, command: command.args.join(" ") });
       startBudget();
       remaining();
       const doctorResultPath =
@@ -323,9 +350,11 @@ export async function validateUpdateCandidateCanary(
       let checksCompletedAt: number | undefined;
       const disposalWarnings: string[] = [];
       const running = launch(command.entry ?? entry, command.args, {
+        hidesLine: sectionTiming?.hidesLine,
         onLine: (line) => {
+          sectionTiming?.observeLine(line);
           const plain = stripVTControlCharacters(line).trim();
-          if (phase === "lint" && plain.startsWith(UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX)) {
+          if (phase === "lint" && plain.startsWith(lint.UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX)) {
             disposalWarnings.push(redactSupportString(plain, { env, stateDir: params.stateDir }));
           }
           if (phase === "doctor" && /^(?:└\s*)?Doctor complete\.$/u.test(plain)) {
@@ -335,7 +364,7 @@ export async function validateUpdateCandidateCanary(
         onStdout: (stdout) => {
           if (phase === "lint") {
             try {
-              parseUpdateDoctorLintReport(stdout);
+              lint.parseUpdateDoctorLintReport(stdout);
               checksCompletedAt ??= Date.now();
             } catch {
               checksCompletedAt = undefined;
@@ -344,6 +373,7 @@ export async function validateUpdateCandidateCanary(
         },
       });
       let code: number | null = null;
+      let signal: NodeJS.Signals | null = null;
       let doctorAdvisory: UpdateStepResult["advisory"];
       let doctorReceipt: UpdatePostInstallDoctorResult | null = null;
       const pluginFailures: UpdateFailureFact[] = [];
@@ -356,13 +386,14 @@ export async function validateUpdateCandidateCanary(
         // Freeze the winning outcome before teardown can make a killed child
         // emit a successful close event.
         code = outcome.status === "completed" ? outcome.value : 1;
+        signal = outcome.status === "completed" ? running.child.signalCode : null;
         timedOut = outcome.status === "deadline";
         if (timedOut) {
           const elapsed = Date.now() - stepStartedAt;
           // Freeze this child's result before termination can emit late completion output.
           const lintReport =
             phase === "lint" && checksCompletedAt !== undefined && !running.outputExceeded()
-              ? parseUpdateDoctorLintReport(running.stdout(), env)
+              ? lint.parseUpdateDoctorLintReport(running.stdout(), env)
               : undefined;
           const completed = checksCompletedAt !== undefined && (phase === "doctor" || lintReport);
           timeoutMessage = `candidate-migration-rehearsal: ${phase} exceeded budget after ${Math.ceil(elapsed / 1000)} s (${stepLogTail.at(-1) ?? "no progress output"})`;
@@ -384,7 +415,7 @@ export async function validateUpdateCandidateCanary(
             doctorResultPath,
             doctorResultOptions,
           );
-          if (doctorReceipt?.status === "error") {
+          if (doctorReceipt?.status === "error" && !signal) {
             code = 1;
           }
           doctorConfigChanges = doctorReceipt?.configChanges ?? [];
@@ -414,11 +445,9 @@ export async function validateUpdateCandidateCanary(
       activeLintStep =
         phase === "lint"
           ? {
-              ...activeStep,
-              cwd: params.root,
-              durationMs: Date.now() - stepStartedAt,
-              exitCode: running.child.exitCode,
+              ...currentStep(running.child.exitCode),
               signal: running.child.signalCode,
+              stderrTail: signal ? running.stderrTail() : undefined,
               killed: running.child.killed,
               termination: timedOut ? "timeout" : running.child.signalCode ? "signal" : "exit",
               outputLimitExceeded: running.outputExceeded(),
@@ -427,7 +456,7 @@ export async function validateUpdateCandidateCanary(
           : undefined;
       params.signal?.throwIfAborted();
       const lintReport = activeLintStep
-        ? applyUpdateDoctorLintReport(activeLintStep, running.stdout(), code, env)
+        ? lint.applyUpdateDoctorLintReport(activeLintStep, running.stdout(), code, env)
         : undefined;
       doctorAdvisory ??= activeLintStep?.advisory;
       if (code === 0 && phase === "plugins") {
@@ -439,17 +468,13 @@ export async function validateUpdateCandidateCanary(
             pluginFailures.push(createUpdateFailureFact(fact, env));
           }
         };
-        const inventory: unknown = running.outputExceeded()
+        const inventory = running.outputExceeded()
           ? undefined
-          : JSON.parse(running.stdout());
-        const plugins =
-          isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : undefined;
-        const registry =
-          isRecord(inventory) && isRecord(inventory.registry) ? inventory.registry : undefined;
+          : asOptionalRecord(JSON.parse(running.stdout()));
+        const plugins = Array.isArray(inventory?.plugins) ? inventory.plugins : undefined;
+        const registry = asOptionalRecord(inventory?.registry);
         const diagnostics = [
-          ...(isRecord(inventory) && Array.isArray(inventory.diagnostics)
-            ? inventory.diagnostics
-            : []),
+          ...(Array.isArray(inventory?.diagnostics) ? inventory.diagnostics : []),
           ...(Array.isArray(registry?.diagnostics) ? registry.diagnostics : []),
         ];
         const failedPluginIds = new Set<string>();
@@ -488,7 +513,7 @@ export async function validateUpdateCandidateCanary(
         const contract: unknown = running.outputExceeded()
           ? undefined
           : JSON.parse(running.stdout());
-        candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
+        candidateSchemaVersions = schemaVersions.parseOpenClawSchemaVersions(contract);
         gatewayRestartCompletion = isRecord(contract) && contract.gatewayRestartCompletion === true;
         doctorConfigWrites = isRecord(contract) && contract.doctorConfigWrites === "pid-start-v1";
         if (!candidateSchemaVersions) {
@@ -497,12 +522,18 @@ export async function validateUpdateCandidateCanary(
         }
       }
       const step: UpdateStepResult = activeLintStep ?? {
-        ...activeStep,
-        cwd: params.root,
-        durationMs: Date.now() - stepStartedAt,
-        exitCode: timedOut ? null : code,
-        ...(timedOut ? { termination: "timeout" as const } : {}),
+        ...currentStep(timedOut ? null : code),
+        // Keep the check verdict when a later native crash evicts the rolling log tail.
+        ...(phase === "doctor" && checksCompletedAt !== undefined
+          ? { stdoutTail: "Doctor complete." }
+          : {}),
+        ...(timedOut
+          ? { termination: "timeout" as const }
+          : signal
+            ? { termination: "signal" as const, signal, stderrTail: running.stderrTail() }
+            : {}),
       };
+      sectionTiming?.annotate(step);
       if (doctorAdvisory) {
         step.advisory = doctorAdvisory;
       } else if (exitWarning && code === 0) {
@@ -528,53 +559,43 @@ export async function validateUpdateCandidateCanary(
         if (!findings?.length && phase === "config" && !running.outputExceeded()) {
           findings = parseConfigFailureFacts(running.stdout(), env);
         }
-        step.failureFacts = findings?.length
-          ? findings
-          : [
-              createUpdateFailureFact(
-                {
-                  check: phase,
-                  code:
-                    timedOut && !exitWarning
-                      ? "candidate-checks-timeout"
-                      : phase === "doctor" || phase === "lint"
-                        ? "doctor-failed"
-                        : `candidate-${phase}-failed`,
-                  message: timedOut
-                    ? failureMessage
-                    : (running.stderrDiagnostic() ?? failureMessage),
-                },
-                env,
-              ),
-            ];
+        step.failureFacts = createUpdateCanaryFailureFacts({
+          phase,
+          name: command.name,
+          signal,
+          timedOut,
+          exitWarning,
+          failureMessage,
+          diagnostic: running.stderrDiagnostic(),
+          findings,
+          env,
+        });
       }
       steps.push(step);
       if (code !== 0 && !doctorAdvisory) {
         throw new Error(failureMessage);
       }
-      await receipts.onStep?.(step);
+      await reportReceipt(onStep, step);
     }
     if (!candidateSchemaVersions) {
       throw new Error("The update did not report its supported database versions");
     }
-    phase = "startup";
-    activeStep = { name: "candidate-gateway-startup", command: "gateway run" };
-    stepStartedAt = Date.now();
-    stepLogTail.length = 0;
+    progress.phase = "startup";
+    await beginStep({ name: "candidate-gateway-startup", command: "gateway run" });
     startBudget();
     remaining();
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
-    const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
+    const startup = readiness.observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
     const running = launch(entry, [...args, "--port", String(port)], {
-      onLine: startupProgress.onLine,
+      onLine: startup.onLine,
     });
     const abortExited = () => processExit.abort();
     running.child.once("exit", abortExited);
     running.child.once("error", abortExited);
     let startupFailure: unknown;
     try {
-      const probeFailure = await waitForUpdateCandidateReadiness({
+      const probeFailure = await readiness.waitForUpdateCandidateReadiness({
         port,
         workDeadline,
         started,
@@ -583,7 +604,7 @@ export async function validateUpdateCandidateCanary(
         assertCurrent: params.assertCurrent,
         hasExited: () => running.processExited() || running.hasExited(),
         getExitReason: running.stderrDiagnostic,
-        startupProgress: startupProgress.milestones,
+        startupProgress: startup.milestones,
         onWarning: async (message) => {
           startupWarnings.push(message);
           capture(message);
@@ -596,7 +617,7 @@ export async function validateUpdateCandidateCanary(
         env,
         stateDir: params.stateDir,
         onEndpoint: (endpoint) => {
-          phase = endpoint === "startupz" ? "startup" : "readiness";
+          progress.phase = endpoint === "startupz" ? "startup" : "readiness";
         },
         capture,
       });
@@ -604,10 +625,7 @@ export async function validateUpdateCandidateCanary(
         capture("Update checks reached their time limit; Gateway readiness remains unverified.");
       }
       const step: UpdateStepResult = {
-        ...activeStep,
-        cwd: params.root,
-        durationMs: Date.now() - stepStartedAt,
-        exitCode: probeFailure ? null : 0,
+        ...currentStep(probeFailure ? null : 0),
         ...(startupWarnings.length ? { warnings: startupWarnings } : {}),
         ...(probeFailure
           ? {
@@ -630,38 +648,24 @@ export async function validateUpdateCandidateCanary(
         primaryFailure: startupFailure,
       });
     }
-    return {
-      status: "ok",
-      phase,
-      durationMs: Date.now() - started,
-      logTail,
-      candidateSchemaVersions,
-      gatewayRestartCompletion,
-      ...(doctorConfigWrites ? { doctorConfigWrites } : {}),
-      ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
-      listenerIsolation,
-      steps,
-    };
+    return finish({ status: "ok" });
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       cleanupUncertain = true;
       throw error;
     }
-    if (receipts.hasFailed()) {
+    if (receiptFailed) {
       // A receipt refusal must not become a failed candidate check or be reported again.
       throw error;
     }
+    const { phase } = progress;
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
-    const failureLine = capture(`${displayPhase}: ${coerceErrorMessage(error)} (${durationMs}ms)`);
+    const message = coerceErrorMessage(error);
+    const failureLine = capture(`${displayPhase}: ${message} (${durationMs}ms)`);
     let failed = steps.at(-1);
     if (!failed || (failed.exitCode === 0 && failed !== activeLintStep) || failed.advisory) {
-      failed = activeLintStep ?? {
-        ...activeStep,
-        cwd: params.root,
-        durationMs: Date.now() - stepStartedAt,
-        exitCode: 1,
-      };
+      failed = activeLintStep ?? currentStep(1);
       steps.push(failed);
     }
     if (error instanceof UpdateSnapshotCapacityError) {
@@ -676,7 +680,7 @@ export async function validateUpdateCandidateCanary(
           check: phase === "readiness" ? "readyz" : phase === "startup" ? "startupz" : phase,
           code:
             phase === "doctor" || phase === "lint" ? "doctor-failed" : `candidate-${phase}-failed`,
-          message: coerceErrorMessage(error),
+          message,
         },
         env,
       ),
@@ -687,29 +691,29 @@ export async function validateUpdateCandidateCanary(
       failed.failureFacts.some(
         (fact) => failureLine === `${displayPhase}: ${fact.message} (${durationMs}ms)`,
       );
-    failed.stderrTail = stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
+    failed.stderrTail ??=
+      phase === "snapshot"
+        ? message
+        : stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
-      await receipts.onStep?.(failed);
+      await reportReceipt(onStep, failed);
     } catch (recordingError) {
       cleanupUncertain = hasCommandProcessCleanupError(recordingError);
       throw recordingError;
     }
-    return {
-      status: "error",
-      reason: failed.failureFacts.some((fact) => fact.code === "candidate-checks-timeout")
-        ? "candidate-checks-timeout"
-        : phase === "doctor" || phase === "lint"
-          ? "doctor-failed"
-          : "runtime-verification-failed",
+    return finish(
+      {
+        status: "error",
+        reason: failed.failureFacts.some((fact) => fact.code === "candidate-checks-timeout")
+          ? "candidate-checks-timeout"
+          : phase === "doctor" || phase === "lint"
+            ? "doctor-failed"
+            : phase === "snapshot"
+              ? "candidate-snapshot-failed"
+              : "runtime-verification-failed",
+      },
       phase,
-      durationMs: Date.now() - started,
-      logTail,
-      candidateSchemaVersions,
-      gatewayRestartCompletion,
-      ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
-      listenerIsolation,
-      steps,
-    };
+    );
   } finally {
     if (!cleanupUncertain) {
       await cleanupRehearsal();

@@ -1,7 +1,14 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  generateConversationLabel as generateTopicLabel,
+  resolveChunkMode,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -18,13 +25,6 @@ import {
 } from "./bot-message-dispatch-session.js";
 import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
-import { resolveAgentDir } from "./bot-message-dispatch.agent.runtime.js";
-import {
-  generateTopicLabel,
-  getAgentScopedMediaLocalRoots,
-  resolveAutoTopicLabelConfig,
-  resolveChunkMode,
-} from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
   TelegramDispatchTurn,
@@ -47,11 +47,7 @@ function includeStickerDescription(params: {
   body: string | undefined;
   formattedDescription: string;
 }): string {
-  if (!params.body) {
-    return params.formattedDescription;
-  }
-  const current = params.body.trim();
-  if (!current) {
+  if (!params.body?.trim()) {
     return params.formattedDescription;
   }
   if (params.body.includes(params.formattedDescription)) {
@@ -78,18 +74,21 @@ function resolveTelegramQuoteContext(params: {
     replyQuoteText && !context.ctxPayload.ReplyToIsExternal
       ? resolveTelegramReplyId(context.ctxPayload.ReplyToId)
       : undefined;
+  const replyQuotePosition =
+    typeof context.ctxPayload.ReplyToQuotePosition === "number"
+      ? context.ctxPayload.ReplyToQuotePosition
+      : undefined;
+  const replyQuoteEntities = Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
+    ? context.ctxPayload.ReplyToQuoteEntities
+    : undefined;
   const replyQuoteTargetsBotMessage = context.msg.reply_to_message?.from?.is_bot === true;
   const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
   if (replyToMode !== "off") {
     if (replyQuoteText && replyQuoteMessageId != null) {
       addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
         text: replyQuoteText,
-        ...(typeof context.ctxPayload.ReplyToQuotePosition === "number"
-          ? { position: context.ctxPayload.ReplyToQuotePosition }
-          : {}),
-        ...(Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-          ? { entities: context.ctxPayload.ReplyToQuoteEntities }
-          : {}),
+        ...(replyQuotePosition !== undefined ? { position: replyQuotePosition } : {}),
+        ...(replyQuoteEntities ? { entities: replyQuoteEntities } : {}),
       });
     }
     addTelegramNativeQuoteCandidate(
@@ -122,14 +121,9 @@ function resolveTelegramQuoteContext(params: {
   return {
     draftReplyToMessageId,
     replyQuoteByMessageId,
-    replyQuoteEntities: Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-      ? context.ctxPayload.ReplyToQuoteEntities
-      : undefined,
+    replyQuoteEntities,
     replyQuoteMessageId,
-    replyQuotePosition:
-      typeof context.ctxPayload.ReplyToQuotePosition === "number"
-        ? context.ctxPayload.ReplyToQuotePosition
-        : undefined,
+    replyQuotePosition,
     replyQuoteText,
   };
 }
@@ -232,6 +226,7 @@ function scheduleDmTopicLabel(params: {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
+        maxLength: 128,
         cfg: params.cfg,
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
@@ -259,16 +254,13 @@ export const dispatchTelegramMessage = async (
     runtime,
     replyToMode,
     telegramCfg,
-    telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
-  const telegramDeps =
-    injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
   const richMessagesParams = {
@@ -278,7 +270,7 @@ export const dispatchTelegramMessage = async (
   };
   const richMessages = resolveTelegramRichMessages(richMessagesParams);
   const tableMode = resolveTelegramTableMode(richMessagesParams);
-  const resolvedReasoningLevel = resolveTelegramReasoningLevel({
+  const resolvedReasoningLevel = await resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
     agentId: dispatchContext.route.agentId,
@@ -309,7 +301,6 @@ export const dispatchTelegramMessage = async (
     richMessages,
     statusReactionController: status.controller,
     tableMode,
-    telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);
@@ -327,71 +318,67 @@ export const dispatchTelegramMessage = async (
   };
 
   let isFirstTurnInSession = false;
-  let dispatchWasSuperseded: boolean;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  try {
-    await prepareTelegramSticker({ cfg, context: dispatchContext });
-    if (isDmTopic) {
-      try {
-        const sessionKey = dispatchContext.ctxPayload.SessionKey;
-        if (sessionKey) {
-          isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-            .entry?.systemSent;
-        } else {
-          logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
-        }
-      } catch (err) {
-        logVerbose(`auto-topic-label: session store error: ${String(err)}`);
-      }
-    }
-    loadFreshSessionEntry.clear();
-    // Media hydration and other pre-dispatch work can outlive the durable
-    // ingress watchdog. Never enter the reply pipeline after that owner has
-    // already fenced this attempt; the canonical spool row will retry it.
-    if (isDispatchSuperseded()) {
-      status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
-      return { kind: "completed" };
-    }
-    if (status.controller && !isRoomEvent) {
-      void status.controller.setThinking();
-    }
+  await prepareTelegramSticker({ cfg, context: dispatchContext });
+  if (isDmTopic) {
     try {
-      turnDispatched = await runTelegramDispatchTurn(turn);
+      const sessionKey = dispatchContext.ctxPayload.SessionKey;
+      if (sessionKey) {
+        isFirstTurnInSession = !(
+          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+        ).entry?.systemSent;
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
+      }
     } catch (err) {
-      turn.dispatchError = err;
+      logVerbose(`auto-topic-label: session store error: ${String(err)}`);
+    }
+  }
+  loadFreshSessionEntry.clear();
+  // Media hydration and other pre-dispatch work can outlive the durable
+  // ingress watchdog. Never enter the reply pipeline after that owner has
+  // already fenced this attempt; the canonical spool row will retry it.
+  if (isDispatchSuperseded()) {
+    status.finalizeInBackground("cancelled", "cancelled finalize");
+    return { kind: "completed" };
+  }
+  if (status.controller && !isRoomEvent) {
+    void status.controller.setThinking();
+  }
+  try {
+    turnDispatched = await runTelegramDispatchTurn(turn);
+  } catch (err) {
+    turn.dispatchError = err;
+    turn.previewLifecycle.observeFailure(
+      isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+    );
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+  } finally {
+    // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
+    turn.progressCompositor.cancel();
+    await turn.draftEventQueue;
+    try {
+      await finalizePendingAnswerBlockDraft(turn);
+    } catch (err) {
+      turn.dispatchError ??= err;
       turn.previewLifecycle.observeFailure(
         isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
       );
-      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
-    } finally {
-      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
-      turn.progressCompositor.cancel();
-      await turn.draftEventQueue;
-      try {
-        await finalizePendingAnswerBlockDraft(turn);
-      } catch (err) {
-        turn.dispatchError ??= err;
-        turn.previewLifecycle.observeFailure(
-          isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
-        );
-        runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
-      }
-      await cleanupDrafts(turn, isDispatchSuperseded());
+      runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
     }
-  } finally {
-    dispatchWasSuperseded = isDispatchSuperseded();
+    await cleanupDrafts(turn, isDispatchSuperseded());
   }
-
+  const dispatchWasSuperseded = isDispatchSuperseded();
   if (turnDispatched === false) {
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done" }, "finalize");
+      status.finalizeInBackground("done", "finalize");
     }
     return { kind: "completed" };
   }
@@ -473,7 +460,7 @@ export const dispatchTelegramMessage = async (
       : null);
 
   if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
-    status.finalizeInBackground({ outcome: "error" }, "error finalize");
+    status.finalizeInBackground("error", "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -496,16 +483,13 @@ export const dispatchTelegramMessage = async (
   });
   if (status.controller) {
     status.finalizeInBackground(
-      {
-        outcome:
-          turn.agentRunFailed ||
-          turn.dispatchError != null ||
-          turn.previewLifecycle.finalFailed ||
-          (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
-          sentFallback
-            ? "error"
-            : "done",
-      },
+      turn.agentRunFailed ||
+        turn.dispatchError != null ||
+        turn.previewLifecycle.finalFailed ||
+        (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+        sentFallback
+        ? "error"
+        : "done",
       "finalize",
     );
   }

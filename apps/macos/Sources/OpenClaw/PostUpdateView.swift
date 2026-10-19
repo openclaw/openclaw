@@ -53,8 +53,8 @@ struct PostUpdateView: View {
         switch self.model.phase {
         case .failed:
             HStack {
-                Button("Update guide") { PostUpdateController.shared.openUpdateGuide() }
-                Button("Ask Discord") { PostUpdateController.shared.openDiscord() }
+                Button("Update guide") { AppActivation.shared.open(PostUpdateController.updateGuideURL) }
+                Button("Ask Discord") { AppActivation.shared.open(PostUpdateController.discordURL) }
                 Spacer()
                 Button("Retry") { PostUpdateController.shared.retry() }
                     .buttonStyle(.borderedProminent)

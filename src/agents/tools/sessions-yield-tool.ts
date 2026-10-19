@@ -7,11 +7,17 @@ import { jsonResult, readToolStringParam } from "./common.js";
 const NO_PENDING_CHILD_COMPLETION_MESSAGE =
   'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
 
-export type SessionsYieldClaimResult =
+/**
+ * A harness runtime's yield claim: true when this turn owns a pending completion,
+ * or the children an earlier turn left pending that will resume the session.
+ */
+export type SessionsYieldRuntimeClaim =
   | boolean
-  | { messageWaitRegistered: boolean }
-  | { error: string }
   | { pendingChildren: readonly UnsettledRequesterChild[] };
+export type SessionsYieldClaimResult =
+  | SessionsYieldRuntimeClaim
+  | { messageWaitRegistered: boolean }
+  | { error: string };
 export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
 export type SessionsYieldCallback = (
   message: string,
@@ -46,7 +52,7 @@ function formatPendingChildrenMessage(children: readonly UnsettledRequesterChild
   }
   if (paused.length > 0) {
     parts.push(
-      `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. Send that continuation with sessions_send if this session owns it; otherwise the work stays waiting.`,
+      `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting.`,
     );
   }
   parts.push("This turn owns no new claim, so no yield is needed: end this turn normally.");
@@ -57,7 +63,7 @@ const SessionsYieldToolSchema = Type.Object({
   waitFor: Type.Optional(
     Type.Literal("message", {
       description:
-        "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
+        "Pause an unfinished subagent until an incoming continuation. Does not send or schedule that message or submit a final result.",
     }),
   ),
   message: Type.Optional(
@@ -66,7 +72,7 @@ const SessionsYieldToolSchema = Type.Object({
   acknowledgment: Type.Optional(
     Type.String({
       description:
-        "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
+        "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
     }),
   ),
 });
@@ -84,8 +90,11 @@ export function createSessionsYieldTool(opts?: {
     // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
     // tool must stay visible even when tool search compacts the catalog.
     catalogMode: "direct-only",
+    // A yield waits, so it must pause an async-tool response: the next request then
+    // delivers this response's async results ahead of the yield result.
+    async: false,
     description:
-      'End this turn for pending child completion events; this is not a final-result submission. For background tools, follow their result\'s continuation instructions. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
+      'End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions. Unfinished subagents awaiting an incoming continuation must set waitFor:"message". For background tools, follow their continuation instructions. Collector runs require explicit collection instead.',
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -105,7 +114,7 @@ export function createSessionsYieldTool(opts?: {
         return jsonResult({
           status: "deferred",
           message:
-            "Earlier async tool results are still being delivered. Finish this response to receive them, then yield again only if external work still requires waiting.",
+            "Earlier async tool results from this response arrive with this result. Use them, then yield again only if external work still requires waiting.",
         });
       }
       const claim = await opts.claimYield?.(
@@ -127,7 +136,10 @@ export function createSessionsYieldTool(opts?: {
         // Advisory, not a failure: the model keeps the turn and nothing the user asked for failed.
         return jsonResult({
           status: "nothing_pending",
-          message: NO_PENDING_CHILD_COMPLETION_MESSAGE,
+          message:
+            waitFor === "message"
+              ? "No pending completion or eligible active native task is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete."
+              : NO_PENDING_CHILD_COMPLETION_MESSAGE,
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.

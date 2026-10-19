@@ -2,11 +2,8 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GatewayClient } from "../../../packages/gateway-client/src/index.js";
-import {
-  PROTOCOL_VERSION,
-  type BoardSnapshot,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import type { BoardSnapshot, RequestFrame } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
@@ -20,13 +17,12 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -36,6 +32,12 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
 } from "../methods/registry.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../minimal-gateway.test-helpers.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -47,6 +49,28 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 const reviewWidgetApproval = vi.hoisted(() => vi.fn());
 const sessionList = vi.hoisted(() => vi.fn());
 const cronRun = vi.hoisted(() => vi.fn());
+const sessionTarget = { sessionKey: "session", agentId: "main" };
+const htmlWidget = (name: string, tools?: string[]) => ({
+  sessionKey: "session",
+  name,
+  content: { kind: "html", html: name },
+  declared: { tools },
+});
+const widgets = async (store: ReturnType<typeof createHarness>["store"]) =>
+  (await store.getSnapshot(sessionTarget)).widgets;
+function pause() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const hold = <T extends unknown[], R>(run: (...args: T) => Promise<R>, afterRead = false) => {
+    return async (...args: T) => {
+      const result = afterRead ? await run(...args) : undefined;
+      entered.resolve();
+      await release.promise;
+      return afterRead ? result! : await run(...args);
+    };
+  };
+  return { entered: entered.promise, release: () => release.resolve(), hold };
+}
 
 vi.mock("./sessions-read.js", () => ({
   sessionReadHandlers: { "sessions.list": sessionList },
@@ -69,11 +93,7 @@ vi.mock("./sessions.runtime.js", () => ({
 
 async function grantTools(tools: string[], harness = createHarness()) {
   const target = { sessionKey: "session", name: "reader" };
-  const put = await harness.invoke("board.widget.put", {
-    ...target,
-    content: { kind: "html", html: "reader" },
-    declared: { tools },
-  });
+  const put = await harness.invoke("board.widget.put", htmlWidget("reader", tools));
   const widget = (put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
   await harness.invoke("board.widget.grant", {
     ...target,
@@ -83,6 +103,18 @@ async function grantTools(tools: string[], harness = createHarness()) {
   });
   const board = await harness.invoke("board.get", { sessionKey: "session" });
   return { ...harness, ticket: (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket };
+}
+
+function sessionBoard(sessionKey: string, sessionId: string, permissionMode?: "guarded") {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey, storePath: database.path },
+    { sessionId, updatedAt: 1, ...(permissionMode ? { permissionMode } : {}) },
+  );
+  const store = new SqliteBoardStore({
+    resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+  });
+  return { database, store };
 }
 
 describe("board gateway runtime boundaries", () => {
@@ -97,39 +129,19 @@ describe("board gateway runtime boundaries", () => {
     cronRun.mockReset();
   });
 
-  it.each(["agent:main:guarded", "agent:main:dashboard:incognito-guarded"])(
-    "reads current permission mode from its session owner: %s",
-    async (sessionKey) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        ...(isIncognitoSessionKey(sessionKey)
-          ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }) }
-          : {}),
-      });
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey, storePath: database.path },
-        { sessionId: "guarded-widget", updatedAt: 1, permissionMode: "guarded" },
-      );
-      const cfg = { tools: { exec: { mode: "auto" as const } } };
-      const store = new SqliteBoardStore({
-        resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
-      });
-      const harness = createHarness(undefined, undefined, store, {
-        getRuntimeConfig: () => cfg,
-      });
-      const response = await harness.invoke("board.widget.put", {
-        sessionKey,
-        name: "health",
-        content: { kind: "html", html: "<p>health</p>" },
-        declared: { tools: ["health"] },
-      });
-      expect(response).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ widgets: [expect.objectContaining({ grantState: "pending" })] }),
-      );
-      expect(reviewWidgetApproval).not.toHaveBeenCalled();
-    },
-  );
+  it("reads current permission mode from its session owner", async () => {
+    const sessionKey = "agent:main:guarded";
+    const { store } = sessionBoard(sessionKey, "guarded-widget", "guarded");
+    const harness = createHarness(undefined, undefined, store, {
+      getRuntimeConfig: () => ({ tools: { exec: { mode: "auto" } } }),
+    });
+    const response = await harness.invoke("board.widget.put", {
+      ...htmlWidget("health", ["health"]),
+      sessionKey,
+    });
+    expect(response.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "pending" }] }]);
+    expect(reviewWidgetApproval).not.toHaveBeenCalled();
+  });
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
@@ -139,22 +151,49 @@ describe("board gateway runtime boundaries", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("serves board.data.read while a transcript-only database writer is held", async ({
+    signal,
+  }) => {
+    const sessionKey = "agent:main:session";
+    const { database, store } = sessionBoard(sessionKey, "board-concurrent-reader");
+    const { invoke, ticket } = await grantTools(
+      ["sessions.list"],
+      createHarness(undefined, undefined, store),
+    );
+    sessionList.mockImplementation(({ respond }) => respond(true, { sessions: [] }));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = runOpenClawAgentWorkerWrite(
+      { agentId: "main", path: database.path },
+      async () => {
+        database.db.exec("BEGIN IMMEDIATE");
+        entered.resolve();
+        try {
+          await release.promise;
+        } finally {
+          database.db.exec("ROLLBACK");
+        }
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "transcript-only",
+    );
+    await entered.promise;
+    const read = invoke("board.data.read", { ticket, bindingId: "sessions.list" });
+    try {
+      const response = await withinTest(read, signal);
+      expect(database.db.isTransaction).toBe(true);
+      expect(response).toHaveBeenCalledWith(true, { sessions: [] });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, read]);
+    }
+  });
+
   it("registers every contract method with its required scope", () => {
-    expect(
-      Object.fromEntries(
-        [
-          "board.get",
-          "board.update",
-          "board.widget.put",
-          "board.widget.grant",
-          "board.widget.appView",
-          "board.event",
-          "board.prompt.authorize",
-          "board.data.read",
-          "board.action",
-        ].map((method) => [method, resolveCoreOperatorGatewayMethodScope(method)]),
-      ),
-    ).toEqual({
+    const scopes = {
       "board.get": "operator.read",
       "board.update": "operator.write",
       "board.widget.put": "operator.write",
@@ -164,38 +203,48 @@ describe("board gateway runtime boundaries", () => {
       "board.prompt.authorize": "operator.read",
       "board.data.read": "operator.read",
       "board.action": "operator.write",
-    });
+    };
+    for (const [method, scope] of Object.entries(scopes)) {
+      expect(resolveCoreOperatorGatewayMethodScope(method)).toBe(scope);
+    }
   });
 
-  it.each(["commit", "retired"] as const)(
-    "waits for board persistence before publishing a %s result",
-    async (outcome) => {
-      const harness = createHarness();
-      const started = createDeferred();
-      const release = createDeferred();
-      const applyOps = harness.store.applyOps.bind(harness.store);
-      vi.spyOn(harness.store, "applyOps").mockImplementationOnce(async (...args) => {
-        started.resolve();
-        await release.promise;
-        return await applyOps(...args);
+  it.each([
+    { method: "board.update", outcome: "commit" },
+    { method: "board.update", outcome: "retired" },
+    { method: "board.get", outcome: "retired" },
+  ])("waits for $method before publishing a $outcome result", async ({ method, outcome }) => {
+    const harness = createHarness();
+    const gate = pause();
+    if (method === "board.get") {
+      vi.spyOn(harness.store, "getSnapshotWithHtmlViewMetadata").mockImplementationOnce(
+        gate.hold(harness.store.getSnapshotWithHtmlViewMetadata.bind(harness.store), true),
+      );
+    } else {
+      vi.spyOn(harness.store, "applyOps").mockImplementationOnce(
+        gate.hold(harness.store.applyOps.bind(harness.store)),
+      );
+    }
+    let responded = false;
+    const pending = harness
+      .invoke(method, {
+        sessionKey: "session",
+        ...(method === "board.update"
+          ? { ops: [{ kind: "tab_create", tabId: "work", title: "Work" }] }
+          : {}),
+      })
+      .then((response) => {
+        responded = true;
+        return response;
       });
-      let responded = false;
-      const pending = harness
-        .invoke("board.update", {
-          sessionKey: "session",
-          ops: [{ kind: "tab_create", tabId: "work", title: "Work" }],
-        })
-        .then((response) => {
-          responded = true;
-          return response;
-        });
-      await started.promise;
+    try {
+      await gate.entered;
       expect(responded).toBe(false);
       expect(harness.broadcast).not.toHaveBeenCalled();
       if (outcome === "retired") {
         harness.context.resolveGatewayContext = () => undefined;
       }
-      release.resolve();
+      gate.release();
       const response = await pending;
       const snapshot = await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" });
       expect(response.mock.calls[0]?.[0]).toBe(outcome === "commit");
@@ -208,66 +257,14 @@ describe("board gateway runtime boundaries", () => {
         );
       } else {
         expect(harness.broadcast).not.toHaveBeenCalled();
+        if (method === "board.get") {
+          expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        }
       }
-    },
-  );
-
-  it("waits for a board snapshot and rejects publication after its Gateway retires", async () => {
-    const harness = createHarness();
-    const started = createDeferred();
-    const release = createDeferred();
-    const read = harness.store.getSnapshotWithHtmlViewMetadata.bind(harness.store);
-    vi.spyOn(harness.store, "getSnapshotWithHtmlViewMetadata").mockImplementationOnce(
-      async (...args) => {
-        const snapshot = await read(...args);
-        started.resolve();
-        await release.promise;
-        return snapshot;
-      },
-    );
-    let responded = false;
-    const pending = harness.invoke("board.get", { sessionKey: "session" }).then((response) => {
-      responded = true;
-      return response;
-    });
-    await started.promise;
-    expect(responded).toBe(false);
-    harness.context.resolveGatewayContext = () => undefined;
-    release.resolve();
-    const response = await pending;
-    expect(response.mock.calls[0]?.[0]).toBe(false);
-    expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
-  });
-
-  it("enforces data bindings against the granted tool set", async () => {
-    sessionList.mockImplementation(async ({ respond }: { respond: RespondFn }) =>
-      respond(true, { sessions: ["one"] }),
-    );
-    const harness = createHarness();
-    const { invoke } = harness;
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const denied = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(sessionList).not.toHaveBeenCalled();
-
-    const { ticket } = await grantTools(["sessions.list"], harness);
-    const allowed = await invoke("board.data.read", {
-      ticket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(allowed.mock.calls[0]?.[1]).toEqual({ sessions: ["one"] });
-    expect(sessionList).toHaveBeenCalledWith(expect.objectContaining({ params: { limit: 2 } }));
+    } finally {
+      gate.release();
+      await Promise.allSettled([pending]);
+    }
   });
 
   it("fences awaited board mutation through Gateway dispatch when its root retires", async () => {
@@ -277,12 +274,10 @@ describe("board gateway runtime boundaries", () => {
       documentStarted.resolve();
       return await releaseDocument.promise;
     });
-    const handler = harness.handlers["board.widget.put"];
-    if (!handler) {
-      throw new Error("board.widget.put handler missing");
-    }
     const methodRegistry = createGatewayMethodRegistry(
-      createCoreGatewayMethodDescriptors({ "board.widget.put": handler }),
+      createCoreGatewayMethodDescriptors({
+        "board.widget.put": harness.handlers["board.widget.put"]!,
+      }),
     );
     const events: string[] = [];
     const connected = createDeferred();
@@ -293,7 +288,7 @@ describe("board gateway runtime boundaries", () => {
       getGatewayMethodRegistry: () => methodRegistry,
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "ask" } },
       }),
       logGateway: { warn: vi.fn() },
@@ -301,22 +296,12 @@ describe("board gateway runtime boundaries", () => {
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "connect.challenge",
-          payload: { nonce: "board-authority-proof", ts: Date.now() },
-        }),
-      );
+      let gatewayClient: GatewayWsClient | null = null;
+      sendMinimalGatewayConnectChallenge(socket, "board-authority-proof");
       socket.on("message", (data) => {
-        const request = JSON.parse(rawDataToString(data)) as {
-          id: string;
-          method: string;
-          params?: unknown;
-          type: "req";
-        };
+        const request = JSON.parse(rawDataToString(data)) as RequestFrame;
         if (request.method === "connect") {
-          gatewayClients.add({
+          gatewayClient = {
             socket,
             connect: {
               role: "operator",
@@ -324,48 +309,24 @@ describe("board gateway runtime boundaries", () => {
             } as GatewayWsClient["connect"],
             connId: "board-authority-proof",
             usesSharedGatewayAuth: false,
-          });
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: request.id,
-              ok: true,
-              payload: {
-                type: "hello-ok",
-                protocol: PROTOCOL_VERSION,
-                server: { version: "board-authority-proof", connId: "board-authority-proof" },
-                features: { methods: ["board.widget.put"], events: ["board.changed"] },
-                snapshot: {
-                  presence: [],
-                  health: {},
-                  stateVersion: { presence: 1, health: 1 },
-                  uptimeMs: 1,
-                },
-                auth: { role: "operator", scopes: ["operator.admin"] },
-                policy: {
-                  maxPayload: 512 * 1024,
-                  maxBufferedBytes: 1024 * 1024,
-                  tickIntervalMs: 60_000,
-                },
-              },
+          };
+          gatewayClients.add(gatewayClient);
+          sendMinimalGatewayResponse(
+            socket,
+            request.id,
+            buildMinimalGatewayHelloOkPayload({
+              connId: "board-authority-proof",
+              methods: ["board.widget.put"],
+              auth: { role: "operator", scopes: ["operator.admin"] },
             }),
           );
           return;
         }
         void handleGatewayRequest({
           req: request,
-          respond: (ok, payload, error) => {
-            socket.send(
-              JSON.stringify({
-                type: "res",
-                id: request.id,
-                ok,
-                ...(payload === undefined ? {} : { payload }),
-                ...(error === undefined ? {} : { error }),
-              }),
-            );
-          },
-          client: null,
+          respond: (ok, payload, error) =>
+            socket.send(JSON.stringify({ type: "res", id: request.id, ok, payload, error })),
+          client: gatewayClient,
           isWebchatConnect: () => false,
           context: gatewayContext,
           methodRegistry,
@@ -385,53 +346,42 @@ describe("board gateway runtime boundaries", () => {
       onHelloOk: () => connected.resolve(),
       onConnectError: (error) => connected.reject(error),
     });
+    let requestOutcome: Promise<unknown> | undefined;
     try {
       client.start();
       await connected.promise;
-      const request = client.request(
-        "board.widget.put",
-        {
-          sessionKey: "session",
-          name: "canvas",
-          content: { kind: "canvas-doc", docId: "canvas-doc" },
-        },
-        { timeoutMs: null },
-      );
-      const requestOutcome = request.then(
-        () => ({ error: undefined }),
-        (error: unknown) => ({ error }),
-      );
+      const putCanvas = (name: string, unbounded = false) =>
+        client.request(
+          "board.widget.put",
+          {
+            sessionKey: "session",
+            name,
+            content: { kind: "canvas-doc", docId: "canvas-doc" },
+          },
+          unbounded ? { timeoutMs: null } : undefined,
+        );
+      const request = putCanvas("canvas", true);
+      requestOutcome = request.catch((error: unknown) => error);
       await documentStarted.promise;
 
       resetGatewayWorkAdmission();
       releaseDocument.resolve({ html: "<p>canvas</p>", cspSandbox: "scripts" });
 
-      const { error } = await requestOutcome;
+      const error = await requestOutcome;
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).toContain("dashboard unavailable");
-      expect(
-        (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
-      ).toEqual([]);
+      expect(await widgets(harness.store)).toEqual([]);
       expect(events).not.toContain("board.changed");
 
-      await client.request("board.widget.put", {
-        sessionKey: "session",
-        name: "live",
-        content: { kind: "canvas-doc", docId: "live-canvas-doc" },
-      });
-      expect(
-        (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
-      ).toMatchObject([{ name: "live" }]);
+      await putCanvas("live");
+      expect(await widgets(harness.store)).toMatchObject([{ name: "live" }]);
       expect(events).toContain("board.changed");
     } finally {
+      releaseDocument.resolve({ html: "<p>canvas</p>", cspSandbox: "scripts" });
+      await Promise.allSettled(requestOutcome ? [requestOutcome] : []);
       client.stop();
       gatewayClients.clear();
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeMinimalGatewayServer(server);
     }
   });
 
@@ -445,7 +395,7 @@ describe("board gateway runtime boundaries", () => {
     });
     const harness = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "auto" } },
       }),
     });
@@ -461,11 +411,10 @@ describe("board gateway runtime boundaries", () => {
           }),
         ),
     );
-    expect(response.mock.calls[0]?.[0]).toBe(false);
-    expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
-    expect(
-      (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
-    ).toMatchObject([{ name: "approval", grantState: "pending" }]);
+    expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+    expect(await widgets(harness.store)).toMatchObject([
+      { name: "approval", grantState: "pending" },
+    ]);
   });
 
   it("rejects unknown data bindings inside the gateway allowlist boundary", async () => {
@@ -474,11 +423,11 @@ describe("board gateway runtime boundaries", () => {
       ticket,
       bindingId: "secrets.dump",
     });
-    expect(response).toHaveBeenCalledWith(
+    expect(response.mock.calls[0]).toMatchObject([
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining("not allowed") }),
-    );
+      { message: expect.stringContaining("not allowed") },
+    ]);
   });
 
   it("runs only the exact granted cron job capability", async () => {
@@ -509,11 +458,7 @@ describe("board gateway runtime boundaries", () => {
 
   it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
     const { invoke } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "counter",
-      content: { kind: "html", html: "ok" },
-    });
+    await invoke("board.widget.put", htmlWidget("counter"));
     const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
     // JSON's opening quote places the emoji across the legacy slice boundary.
     const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;

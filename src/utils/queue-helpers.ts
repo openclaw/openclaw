@@ -1,23 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/**
- * Shared queue overflow, debounce, and collection helpers.
- *
- * Queue owners use these helpers to cap pending work, summarize dropped items,
- * debounce drains, and force individual collection when cross-channel ordering matters.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QueueDropPolicy } from "../config/types.queue.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
-/** Pending overflow summary state produced by the summarize drop policy. */
 type QueueSummaryState = {
   droppedCount: number;
   summaryLines: string[];
 };
 
-/** Queue overflow strategy for future admissions. */
-type QueueDropPolicy = "summarize" | "old" | "new";
-
-/** Generic capped queue state with shared overflow summary fields. */
 type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
@@ -73,12 +63,9 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
   params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
 }
 
-/** Normalize whitespace and elide one dropped item for queue summaries. */
-function buildQueueSummaryLine(text: string, limit = 160): string {
+function buildQueueSummaryLine(text: string): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
-  return cleaned.length <= limit
-    ? cleaned
-    : `${truncateUtf16Safe(cleaned, Math.max(0, limit - 1)).trimEnd()}…`;
+  return cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`;
 }
 
 /** Count identities that are still pending in the queue, excluding active deliveries. */
@@ -88,12 +75,6 @@ export function countPendingQueueItems<T>(items: readonly T[], inFlight?: Readon
   }
   return items.reduce((count, item) => count + (inFlight.has(item) ? 0 : 1), 0);
 }
-
-type DrainQueueItemOptions<T> = {
-  inFlight?: Set<T>;
-  shouldRestoreOnError?: (item: T) => boolean;
-  onDiscard?: (item: T) => void;
-};
 
 /** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
@@ -155,7 +136,6 @@ export function applyQueueDropPolicy<T>(params: {
   return true;
 }
 
-/** Wait until the queue has been quiet for its debounce window. */
 export function waitForQueueDebounce(
   queue: {
     debounceMs: number;
@@ -175,15 +155,10 @@ export function waitForQueueDebounce(
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
-    let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let observedEnqueuedAt: number | undefined;
     let observedAtMs = 0;
     const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       if (timer !== undefined) {
         clearTimeout(timer);
       }
@@ -214,76 +189,6 @@ export function waitForQueueDebounce(
   });
 }
 
-/** Mark one queue as draining unless another drain is already active. */
-export function beginQueueDrain<T extends { draining: boolean }>(
-  map: Map<string, T>,
-  key: string,
-): T | undefined {
-  const queue = map.get(key);
-  if (!queue || queue.draining) {
-    return undefined;
-  }
-  queue.draining = true;
-  return queue;
-}
-
-export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): void {
-  for (const item of processed) {
-    const idx = items.indexOf(item);
-    if (idx !== -1) {
-      items.splice(idx, 1);
-    }
-  }
-}
-
-/** Run and remove the next queued item, returning false when empty. */
-export async function drainNextQueueItem<T>(
-  items: T[],
-  run: (item: T) => Promise<void>,
-  options?: DrainQueueItemOptions<T>,
-): Promise<boolean> {
-  const next = items[0];
-  if (!next) {
-    return false;
-  }
-  // Mark the item as in-flight so applyQueueDropPolicy skips it during the
-  // await window when the shared items array is still mutated by enqueuers.
-  options?.inFlight?.add(next);
-  try {
-    await run(next);
-    // Keep the identity protected until its successful by-reference removal.
-    removeQueuedItemsByRef(items, [next]);
-  } catch (error) {
-    if (!(options?.shouldRestoreOnError?.(next) ?? true)) {
-      removeQueuedItemsByRef(items, [next]);
-      options?.onDiscard?.(next);
-    }
-    throw error;
-  } finally {
-    options?.inFlight?.delete(next);
-  }
-  return true;
-}
-
-/** Drain one collect step using mutable queue collection state. */
-export async function drainCollectQueueStep<T>(params: {
-  collectState: { forceIndividualCollect: boolean };
-  isCrossChannel: boolean;
-  items: T[];
-  run: (item: T) => Promise<void>;
-  reserveOptions?: DrainQueueItemOptions<T>;
-}): Promise<"skipped" | "drained" | "empty"> {
-  if (!params.collectState.forceIndividualCollect && !params.isCrossChannel) {
-    return "skipped";
-  }
-  if (params.isCrossChannel) {
-    // Once cross-channel items appear, future collection stays individual to preserve ordering.
-    params.collectState.forceIndividualCollect = true;
-  }
-  const drained = await drainNextQueueItem(params.items, params.run, params.reserveOptions);
-  return drained ? "drained" : "empty";
-}
-
 /** Render a collect prompt from queued items and optional overflow summary. */
 export function buildCollectPrompt<T>(params: {
   title: string;
@@ -299,22 +204,4 @@ export function buildCollectPrompt<T>(params: {
     blocks.push(params.renderItem(item, idx));
   });
   return blocks.join("\n\n");
-}
-
-/** Return true when queued items span keys or explicitly mark cross-channel state. */
-export function hasCrossChannelItems<T>(
-  items: T[],
-  resolveKey: (item: T) => { key?: string; cross?: boolean },
-): boolean {
-  let firstKey: string | undefined;
-
-  for (const item of items) {
-    const resolved = resolveKey(item);
-    if (resolved.cross || (resolved.key && firstKey && resolved.key !== firstKey)) {
-      return true;
-    }
-    firstKey ||= resolved.key;
-  }
-
-  return false;
 }

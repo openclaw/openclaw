@@ -135,6 +135,8 @@ const spawnModelAutoSelectionSchema = z.object({
 const sessionSpawnContextSchema = z
   .object({
     requesterProfileId: normalizedRequiredStringSchema.optional(),
+    gitContributorProfileId: normalizedRequiredStringSchema.optional(),
+    requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     resolvedModel: z
@@ -147,13 +149,28 @@ const sessionSpawnContextSchema = z
       version: z.literal(1),
       allow: stringListSchema,
       deny: stringListSchema,
+      delegatedToolPolicy: z
+        .object({
+          requesterSessionKey: normalizedRequiredStringSchema,
+          targetAgentId: normalizedRequiredStringSchema,
+          deny: stringListSchema,
+          requesterDeny: stringListSchema,
+        })
+        .strict()
+        .optional(),
     }),
     spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
     ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
+    ...(context.gitContributorProfileId
+      ? { gitContributorProfileId: context.gitContributorProfileId }
+      : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
+      : {}),
+    ...(context.requesterSenderIsOwner !== undefined
+      ? { requesterSenderIsOwner: context.requesterSenderIsOwner }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
     ...(context.inheritedPermissionMode

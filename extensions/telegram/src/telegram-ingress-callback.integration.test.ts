@@ -1,34 +1,27 @@
 // Real grammY command handling and SQLite ingress, with a loopback Telegram API.
-import { once } from "node:events";
-import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import type { Message } from "grammy/types";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createChannelIngressQueueForTests,
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, expect, it, vi } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
 import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
+import { afterAll, expect, it, vi } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
-import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
-import * as callbackQueryAnswerState from "./callback-query-answer-state.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { runTelegramChannelInboundEventWithHarness as runInbound } from "./bot.test-helpers.js";
+import * as callbackAnswers from "./callback-query-answer-state.js";
+import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
 } from "./runtime.test-support.js";
+import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 
@@ -39,17 +32,31 @@ const downstream = vi.hoisted(() =>
   })),
 );
 const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-native-admission-");
+const menuSyncs = vi.hoisted(() => new Set<Promise<void>>());
+const fixture = useTelegramHttpFixture();
+
+vi.mock("./bot-native-command-menu.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bot-native-command-menu.js")>();
+  return {
+    ...actual,
+    syncTelegramMenuCommands: (params: Parameters<typeof actual.syncTelegramMenuCommands>[0]) => {
+      const pending = actual.syncTelegramMenuCommands(params);
+      menuSyncs.add(pending);
+      return pending;
+    },
+  };
+});
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: vi.fn(async () => []),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return {
     ...actual,
-    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
-      await runTelegramChannelInboundEventWithHarness(
-        actual,
-        params,
-        async (dispatchParams) => await downstream(dispatchParams.ctx),
-      ),
+    runChannelInboundEvent: (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
+      runInbound(actual, params, ({ ctx }) => downstream(ctx)),
   };
 });
 
@@ -58,24 +65,18 @@ it.each(["none", "middleware", "handler"] as const)(
   async (recovery) => {
     downstream.mockClear();
     const stateDir = sessionDirs.make();
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const env = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramAccountThrottlersForTest();
-    setTelegramRuntime(
-      createPluginRuntimeMock({
-        state: {
-          openChannelIngressQueue: (
-            options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
-          ) => createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-            createPluginStateKeyedStoreForTests<T>("telegram", options),
-        },
-      }),
-    );
+    installTelegramIngressQueueRuntime(() => stateDir);
 
-    const requests: Array<{ method: string; payload: Record<string, unknown> }> = [];
+    const waitFor = (assertion: () => void) => vi.waitFor(assertion, { interval: 10 });
+    const callbackRequests = () =>
+      fixture.requests.filter(({ method }) => method === "answerCallbackQuery");
     const runtimeErrors: unknown[] = [];
+    const actor = { id: 111, is_bot: false, first_name: "Ada" };
+    const chat = { id: 111, type: "private", first_name: "Ada" } as const;
     let menu: Message.TextMessage | undefined;
     let heldMenuResponse: ServerResponse | undefined;
     const heldAnswerResponses: ServerResponse[] = [];
@@ -84,82 +85,73 @@ it.each(["none", "middleware", "handler"] as const)(
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, result }));
     };
-    const server = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
-        const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
-          string,
-          unknown
-        >;
-        const method = request.url?.split("/").at(-1) ?? "";
-        requests.push({ method, payload });
-        if (method === "answerCallbackQuery" && !releaseAnswers) {
-          const answerCount = requests.filter((entry) => entry.method === method).length;
-          if (recovery === "middleware" && answerCount === 1) {
-            response.writeHead(503, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify({ ok: false, error_code: 503, description: "ACK unavailable" }),
-            );
-          } else {
-            heldAnswerResponses.push(response);
-          }
-          return;
-        }
-        if (method === "sendMessage" && payload.reply_markup) {
-          menu = {
-            message_id: 80,
-            date: 1_736_380_800,
-            chat: { id: 111, type: "private", first_name: "Ada" },
-            from: telegramBotInfoForTest,
-            text: String(payload.text),
-            reply_markup: payload.reply_markup as Message.TextMessage["reply_markup"],
-          };
-          heldMenuResponse = response;
-          return;
-        }
+    const failAnswer = (response: ServerResponse) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: false, error_code: 503, description: "ACK unavailable" }));
+    };
+    const releaseHeldAnswers = () => {
+      releaseAnswers = true;
+      for (const response of heldAnswerResponses.splice(0)) {
         sendResult(response, true);
-      })().catch((error: unknown) =>
-        response.destroy(error instanceof Error ? error : new Error(String(error))),
-      );
-    });
+      }
+    };
+    fixture.handleRequest = (method, payload, response) => {
+      if (method === "answerCallbackQuery" && !releaseAnswers) {
+        const answerCount = callbackRequests().length;
+        if (recovery === "middleware" && answerCount === 1) {
+          failAnswer(response);
+        } else {
+          heldAnswerResponses.push(response);
+        }
+        return true;
+      }
+      if (method === "sendMessage" && payload.reply_markup) {
+        menu = {
+          message_id: 80,
+          date: 1_736_380_800,
+          chat,
+          from: telegramBotInfoForTest,
+          text: String(payload.text),
+          reply_markup: payload.reply_markup as Message.TextMessage["reply_markup"],
+        };
+        heldMenuResponse = response;
+        return true;
+      }
+      sendResult(response, true);
+      return true;
+    };
+    const apiRoot = fixture.cfg.channels.telegram.apiRoot;
     const telegramTransport = { fetch, sourceFetch: fetch, close: async () => {} };
     let monitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
-    const readHandlerAnswer = vi.spyOn(
-      callbackQueryAnswerState,
-      "getTelegramCallbackQueryAnswerPromise",
-    );
+    const handlerAnswerRead = Promise.withResolvers<void>();
+    const getHandlerAnswer = callbackAnswers.getTelegramCallbackQueryAnswerPromise;
+    const readHandlerAnswer = vi
+      .spyOn(callbackAnswers, "getTelegramCallbackQueryAnswerPromise")
+      .mockImplementation((ctx) => {
+        const answer = getHandlerAnswer(ctx);
+        handlerAnswerRead.resolve();
+        return answer;
+      });
     try {
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const cfg: OpenClawConfig = {
         commands: { native: true, nativeSkills: false },
         channels: { telegram: { apiRoot, dmPolicy: "open", allowFrom: ["*"] } },
         session: { store: path.join(stateDir, "sessions.json") },
       };
+      setRuntimeConfigSnapshot(cfg);
       const bot = await createTelegramBot({
         token: "123456:loopback-token",
         botInfo: telegramBotInfoForTest,
         config: cfg,
         telegramTransport,
-        telegramDeps: {
-          ...defaultTelegramBotDeps,
-          getRuntimeConfig: () => cfg,
-          listSkillCommandsForAgents: () => [],
-          readChannelAllowFromStore: async () => [],
-        },
-        runtime: {
-          log: () => {},
-          error: (error) => runtimeErrors.push(error),
-          exit: () => {
-            throw new Error("unexpected runtime exit");
-          },
-        },
+        runtime: { ...fixture.runtime, error: (error) => runtimeErrors.push(error) },
       });
       const answerRequests = vi.spyOn(bot.api, "answerCallbackQuery");
+      const expectAdmissionConsumed = () => {
+        expect(
+          callbackAnswers.takeTelegramCallbackQueryAdmissionAnswer(bot, "native-menu-callback"),
+        ).toBeUndefined();
+      };
       monitor = createTelegramTransportIngressMonitor({
         stateDir,
         bot,
@@ -169,14 +161,13 @@ it.each(["none", "middleware", "handler"] as const)(
         onError: (error) => runtimeErrors.push(error),
       });
       const queue = openTelegramIngressQueue({ stateDir });
-      const actor = { id: 111, is_bot: false, first_name: "Ada" };
       monitor.start();
       await monitor.admit({
         update_id: 1,
         message: {
           message_id: 1,
           date: 1_736_380_800,
-          chat: { id: 111, type: "private", first_name: "Ada" },
+          chat,
           from: actor,
           text: "/usage",
           entities: [{ type: "bot_command", offset: 0, length: 6 }],
@@ -202,12 +193,17 @@ it.each(["none", "middleware", "handler"] as const)(
           data: button && "callback_data" in button ? button.callback_data : undefined,
         },
       };
+      const settleDuplicates = async () => {
+        await monitor!.admit(callbackUpdate);
+        await monitor!.admit(callbackUpdate);
+        releaseHeldAnswers();
+        await Promise.allSettled(answerRequests.mock.results.map((result) => result.value));
+      };
       await monitor.admit(callbackUpdate);
-      await vi.waitFor(
-        () =>
-          expect(requests.filter(({ method }) => method === "answerCallbackQuery")).toHaveLength(1),
-        { timeout: 1_000, interval: 10 },
-      );
+      await vi.waitFor(() => expect(callbackRequests()).toHaveLength(1), {
+        timeout: 1_000,
+        interval: 10,
+      });
       expect(await queue.listClaims()).toHaveLength(1);
       expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
       expect(downstream).not.toHaveBeenCalled();
@@ -220,33 +216,18 @@ it.each(["none", "middleware", "handler"] as const)(
         expect(heldMenuResponse).toBeDefined();
         sendResult(heldMenuResponse!, menu);
         heldMenuResponse = undefined;
+        // Wait for the router, not a polling deadline, before checking ACK recovery.
+        await handlerAnswerRead.promise;
         if (recovery === "handler") {
-          // Let the real router consume the pending admission answer before rejecting it.
-          await vi.waitFor(() => expect(readHandlerAnswer).toHaveBeenCalled(), { interval: 10 });
           const firstResponse = heldAnswerResponses.shift();
           expect(firstResponse).toBeDefined();
-          firstResponse!.writeHead(503, { "content-type": "application/json" });
-          firstResponse!.end(
-            JSON.stringify({ ok: false, error_code: 503, description: "ACK unavailable" }),
-          );
+          failAnswer(firstResponse!);
         }
-        await vi.waitFor(() => expect(answerRequests).toHaveBeenCalledTimes(2), { interval: 10 });
-        await vi.waitFor(() => expect(heldAnswerResponses).toHaveLength(1), { interval: 10 });
-        await monitor.admit(callbackUpdate);
-        await monitor.admit(callbackUpdate);
-        releaseAnswers = true;
-        for (const response of heldAnswerResponses.splice(0)) {
-          sendResult(response, true);
-        }
-        await Promise.allSettled(answerRequests.mock.results.map((result) => result.value));
-        const callbackRequests = requests.filter(({ method }) => method === "answerCallbackQuery");
-        expect(callbackRequests).toHaveLength(2);
-        expect(
-          callbackQueryAnswerState.takeTelegramCallbackQueryAdmissionAnswer(
-            bot,
-            "native-menu-callback",
-          ),
-        ).toBeUndefined();
+        await waitFor(() => expect(answerRequests).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(heldAnswerResponses).toHaveLength(1));
+        await settleDuplicates();
+        expect(callbackRequests()).toHaveLength(2);
+        expectAdmissionConsumed();
       }
       if (heldMenuResponse) {
         sendResult(heldMenuResponse, menu);
@@ -255,30 +236,15 @@ it.each(["none", "middleware", "handler"] as const)(
       await monitor.waitForIdle();
       expect(downstream).toHaveBeenCalledOnce();
 
-      const completedAnswerCount = requests.filter(
-        ({ method }) => method === "answerCallbackQuery",
-      ).length;
+      const completedAnswerCount = callbackRequests().length;
       releaseAnswers = false;
       await monitor.admit(callbackUpdate);
-      await vi.waitFor(() => expect(heldAnswerResponses).toHaveLength(1), { interval: 10 });
-      await monitor.admit(callbackUpdate);
-      await monitor.admit(callbackUpdate);
-      releaseAnswers = true;
-      for (const response of heldAnswerResponses.splice(0)) {
-        sendResult(response, true);
-      }
-      await Promise.allSettled(answerRequests.mock.results.map((result) => result.value));
+      await waitFor(() => expect(heldAnswerResponses).toHaveLength(1));
+      await settleDuplicates();
       await monitor.waitForIdle();
-      expect(requests.filter(({ method }) => method === "answerCallbackQuery")).toHaveLength(
-        completedAnswerCount + 1,
-      );
+      expect(callbackRequests()).toHaveLength(completedAnswerCount + 1);
       expect(downstream).toHaveBeenCalledOnce();
-      expect(
-        callbackQueryAnswerState.takeTelegramCallbackQueryAdmissionAnswer(
-          bot,
-          "native-menu-callback",
-        ),
-      ).toBeUndefined();
+      expectAdmissionConsumed();
     } finally {
       releaseAnswers = true;
       for (const response of heldAnswerResponses) {
@@ -291,28 +257,14 @@ it.each(["none", "middleware", "handler"] as const)(
       }
       await monitor?.waitForIdle();
       await monitor?.stop();
-      // Menu sync has its own queue; finish it before closing the loopback API.
-      await new Promise<void>((resolve, reject) => {
-        enqueueTelegramMenuSync({
-          ownerKey: resolveTelegramMenuRemoteOwner({ botId: telegramBotInfoForTest.id }).queueKey,
-          sync: async () => resolve(),
-          onError: reject,
-        });
-      });
+      await Promise.all(menuSyncs);
+      menuSyncs.clear();
       readHandlerAnswer.mockRestore();
-      await telegramTransport.close();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      clearRuntimeConfigSnapshot();
       clearTelegramRuntimeForTest();
       resetTelegramAccountThrottlersForTest();
       resetPluginStateStoreForTests({ closeDatabase: false });
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
+      env.restore();
     }
     expect(runtimeErrors).toEqual([]);
     expect(downstream).toHaveBeenCalledOnce();

@@ -10,28 +10,47 @@ read_when:
 
 ## Remote proof policy for agents
 
-Agent sessions run trusted development tests, changed gates, typecheck/lint,
-and builds locally by default, broadening only when the touched contract
-requires it. Never execute untrusted repository tooling locally. Use Crabbox
-when the environment is part of the proof: clean-machine, install/package,
-Docker, E2E, live, desktop, or cross-platform work, or when the operator
-explicitly requests remote proof. Do not use Crabbox merely as generic compute
-offload. The configured Testbox workflow hydrates credentials, so untrusted
-contributor or fork code must use secretless fork CI or sanitized direct AWS
-Crabbox instead.
+Use the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy)
+to select a qualified proof route. Prefer bounded local proof on an available
+host; expensive checks and busy or unqualified local hosts can use remote proof.
+Never execute untrusted repository tooling locally; use
+secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 
-Do not pre-warm for anticipated work. Acquire the backend lazily when the
-first environment-sensitive command is ready, reuse the returned `tbx_...` id
-for later remote commands, sync the current checkout on every run, and stop it
-before handoff. Let the previous command and its cleanup finish before
-another synchronization or reuse of that lease.
+Acquire only when the command is ready; reuse task-owned leases and stop them
+before handoff. Finish commands and cleanup before syncing or reusing a lease.
 
 Testbox `run` and `warmup` use the workflow from `main` so new allocations
 inherit the maintained spending limits. The wrapper overrides configured workflow
 refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
-workflow and job selection still support the high-memory profile.
+workflow and job selection support explicit focused, routine, and high-memory
+profiles. The default stays 16-class until real smaller-machine qualification
+passes; neither `--class` nor `--type` sizes delegated Testbox leases.
+
+| Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
+| -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4-class     | 60 minutes           | 60 minutes                |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8-class     | 60 minutes           | 120 minutes               |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16-class    | 60 minutes           | 240 minutes               |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32-class    | 240 minutes          | 240 minutes               |
+
+Deadlines include hydration. The larger maximum requires an explicit workflow
+`timeout_minutes` input; Crabbox does not forward that input, and `--ttl` does
+not extend a Testbox job. Runner classes are requested labels; verify actual
+CPU and RAM before selecting a workload. See the
+[observed runner capacity](/ci/runners#blacksmith-runner-capacity).
+
+Select with `--blacksmith-workflow .github/workflows/<workflow> --blacksmith-job check`
+on a fresh lease. Small profiles are opt-in qualification candidates, not proof
+that arbitrary compiler or lint graphs fit. Capture actual CPU affinity, cgroup
+limits, peak memory, OOM events, hydration and payload time before promoting a
+workload; runner labels alone do not establish usable RAM. All profiles retain
+the same 32-slot concurrency namespace; memory-heavy proof still shares four
+of those slots. Hash collisions can queue even when another slot is free.
+Stop only task-owned queued allocations; do not compensate with a larger box
+or force expensive work locally.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
@@ -39,14 +58,18 @@ base, dependency inputs, and Testbox preparation fingerprint under
 dependencies, preparation, and workflow inputs, including immediately before
 delegation. Source-only edits and commits can reuse that prepared box. The
 allocation receipt remains unchanged, while each command records its current
-source revision and syncs the checkout. A HEAD change during that command's
-preparation still stops delegation; rerun from the current candidate.
+source revision and syncs the checkout. Source edits during preparation are best
+effort; finish editing before starting proof, or rerun from the intended candidate.
 This source-refresh contract belongs to the OpenClaw wrapper's trusted task
 path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.69.0 or newer.
+these checks. All providers require Crabbox 0.77.0 or newer.
+
+For direct and coordinator-managed leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window, and the earlier deadline wins. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
+
+Crabbox trusted configuration owns `directLeases: deny` and its `directLeaseAllow` exceptions; use its configured coordinator route instead of direct credentials when denied. Coordinator-backed `crabbox list` shows live leases by default; `--retained` adds kept terminal resources whose cleanup is unconfirmed. Retain the exact lease ID and local recovery state until blocking `crabbox stop --provider <provider> --id <lease> --wait` confirms cleanup. A successful workload or a missing live-list row is not cleanup proof.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -82,7 +105,7 @@ conflicting with required tracked source stops the run before upload.
 The command binds the bundle digest and raw source tree. Before running the payload,
 the receiver applies deletions and restores file bytes, symlink target bytes, and
 Git executable modes, then verifies the filesystem directly. Git text filters do not
-normalize this snapshot. Missing, stale, or mismatched bundles fail closed.
+normalize this snapshot. Missing, stale, or mismatched bundles are rejected.
 Producer-declared deletions must also be absent, even when the remote index has lost
 them. Deletions use the same privacy policy as source selection; unknown ignored
 runtime data is preserved. Unexpected nonignored receiver files stop the run instead
@@ -94,8 +117,13 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
-The [local test commands](/reference/test/local) are the normal trusted development path. Keep proof
-proportional to the touched contract.
+The synthetic transport commit can change between wrapper calls even when the
+source tree is unchanged. Build and consume artifacts whose freshness is bound
+to Git `HEAD` in one payload, as CI does within one checkout. Separate calls can
+trigger an unintended rebuild. Do not rewrite freshness stamps to bypass this
+check.
+
+See [local commands](/reference/test/local) for focused development proof.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
@@ -104,7 +132,7 @@ tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
 a trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and refuse to run unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and verify remote `git rev-parse HEAD` equals the full
@@ -118,6 +146,31 @@ credential-hydrated Testbox workflow.
 Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
+
+## Focused Android proof
+
+Select the Android entry when a focused Gradle task needs a fresh Testbox:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox \
+  --blacksmith-workflow .github/workflows/ci-android-focused-testbox.yml \
+  --blacksmith-job check --label android-proof -- \
+  node scripts/run-android-gradle.mts --proof \
+  :app:testPlayDebugUnitTest --tests ai.openclaw.app.AndroidLicenseNoticesTest
+```
+
+The Android entry and existing shell preparation action prepare the
+same pinned Java/SDK as Android CI and the frozen native-generation dependencies.
+The Android entry uses the existing focused runner budget; ordinary focused
+Testboxes do not install Android. SDK discovery and the Gradle Java property work
+in non-login SSH shells as well as the hydration job.
+
+`--proof` verifies prerequisites before starting Gradle. Unavailable prerequisites
+produce one actionable diagnostic and a nonzero result, explicitly recording
+that no tests executed. Ordinary Gradle invocations remain unchanged. After
+Gradle starts, build/generation failures still do not count as executed tests;
+use the selected task's test XML reports to establish execution and results.
+Linux ARM cannot provide this proof with Google's x86_64 AAPT2 artifact.
 
 ## Testbox runner sizing
 
@@ -150,7 +203,7 @@ See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
 
 ## Crabbox repository setup
 
-The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
+The [Crabbox skill](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/SKILL.md)
 owns portable lease, trust, sync, and cleanup procedures. This section owns the
 OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
 and task-owned worktrees do not require another confirmation; preserve unrelated
@@ -168,6 +221,14 @@ owning its prepared environment. Direct providers use
 `.github/workflows/crabbox-hydrate.yml`. Keep the resolved provider unless the
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
+
+When provider readiness fails, the wrapper reports the failed or missing doctor
+check names with bounded, sanitized messages and classification hints. Successful
+checks and other provider details are omitted; a count identifies additional
+failures beyond the summary limit. Errors retain the doctor exit status and
+recovery instructions, including login guidance for broker authentication failures.
+Use `crabbox doctor --provider <provider> --json` to inspect the full report locally
+before sharing it.
 
 The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
 native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
@@ -189,7 +250,7 @@ candidate. A dirty or occupied sibling is not a reason to stop and ask.
 
 Mantis uses the same plugin-owned discovery and managed installation. Relative
 executable overrides and `PATH` entries resolve from its requested `--repo-root`,
-and version probes run there with the same environment as lease commands. Its workflows
+and version checks run there with the same environment as lease commands. Its workflows
 prepare the executable with `node scripts/crabbox-setup.mjs`; the command prints
 the selected binary and verified version as JSON and, in GitHub Actions, adds its
 directory to `GITHUB_PATH`. Later QA and media commands reuse that executable.
@@ -219,8 +280,9 @@ use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
-  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
-  while another command owns the lease.
+  After a temporary-source run, the wrapper restores retained Blacksmith and
+  AWS lease claims to the invoking checkout. A claim transferred elsewhere is
+  left untouched. Do not sync or reclaim while another command owns the lease.
 - Wrapper reuse requires the local SSH key created by Crabbox. A missing key
   requires a fresh warmup. Leases created directly by Blacksmith remain usable
   through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
@@ -246,14 +308,15 @@ tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
 Commits on the same retained source ref keep the mirror reusable; each command
-still records its full current witness and rechecks the source revision before sealing.
+records its captured source witness.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
-or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+or unresolved owner uses fresh staging. Avoid editing source during freezing;
+the capsule uses its captured selection and bytes without a final source rescan.
+Cache metadata, payload, witness repository or ref, or Git-version mismatches
 rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
@@ -269,13 +332,14 @@ The sync root admits at most 32 mirror slots. Allocation evicts the least
 recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
 protected and count toward the limit. If no slot can be safely reclaimed, the run
 uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
-`staging recover <id>` can remove one under its exclusive lock. Automatic abandoned
-staging recovery leaves idle mirrors available for reuse. Interrupted commands
-retain the existing witness, claim, and diagnostic recovery requirements.
+`staging recover <id>` can remove one under its exclusive lock. Idle mirrors remain
+available for reuse until ordinary allocation eviction or explicit recovery.
+Interrupted commands retain the existing witness, claim, and diagnostic recovery
+requirements.
 An eviction records disposal before deleting bytes and keeps its slot reserved
 until deletion finishes. If interrupted, `staging inspect` reports the recorded
-disposal as a recovery candidate; automatic recovery or `staging recover <id>`
-can resume it after acquiring the exclusive slot lock. Replaced directories and
+disposal as a recovery candidate; `staging recover <id>` can resume it after
+acquiring the exclusive slot lock. Replaced directories and
 unknown metadata remain protected. Concurrent allocators recheck capacity after
 deletion; a slot being disposed still counts toward the 32-slot limit.
 A separate disposal receipt survives the final directory and lock removal, so
@@ -356,7 +420,7 @@ seed preparation, remain held because parent-command completion does not certify
 those helpers. Their ordinary execution is unchanged. Earlier experimental
 receipt versions also remain protected.
 Explicit recovery can retry pending diagnostic preservation after a destination
-problem is repaired. Automatic recovery leaves artifact or claim failures held.
+problem is repaired. Artifact or claim failures remain held until resolved.
 Missing or changed saved outputs prevent removal; recovery never recreates a
 vanished original repository to invent a preservation destination.
 
@@ -372,34 +436,79 @@ Witness verification proves that the selected ref's objects are present and conn
 On Git 2.50+, it skips unrelated reference-database checks, so stray files such as
 Finder `.DS_Store` under `.git/refs` do not block recovery. Explicit `staging recover`
 scales its work budget with witness object storage: 120 seconds plus 30 seconds per
-GiB, at most 30 minutes. Automatic recovery after a wrapper command keeps the
-120-second bound.
+GiB, at most 30 minutes.
 Failure reasons distinguish an exhausted budget, reference-database errors, and
 missing or unconnected objects.
 
 Recovery does not create backup repositories, archives, or permanent refs. A stage's
 own Git objects or bundle do not count as another copy. Live or uncertain owners,
 unrecorded writer settlement, interrupted recovery ownership, substituted metadata,
-other boot/process namespaces, and historical unmarked directories remain protected.
-Recovery is limited to the same boot and a known PID namespace; even a reboot of
-the same computer leaves earlier copies protected. Full worktrees also remain
+other hosts or PID namespaces, and historical unmarked directories remain protected.
+New receipts record platform, stable host identity, boot ID, and PID namespace.
+A different boot on the same host and PID namespace proves the old producer is
+absent; recovery does not probe its potentially recycled PID. Same-boot recovery
+still checks PID absence. Missing host provenance and legacy domain mismatches
+remain protected unless explicitly qualified below.
+Idle mirrors retain their separate exclusive-lock recovery contract. Directory
+ownership records include the resolved filesystem path, inode, birthtime, and macOS volume
+UUID, so APFS device-number changes across reboots do not invalidate that identity.
+Legacy device/inode records accept a macOS device-only change only when the
+directory predates its receipt and the existing path and ownership checks pass.
+Inspection never rewrites receipts; successful owner updates persist the stronger
+identity and retain the original timestamp bound for remaining legacy evidence.
+Changed identities, unknown siblings, and incomplete metadata remain protected.
+If a recorded volume UUID cannot currently be verified, recovery also remains
+protected until the OS volume lookup succeeds.
+Full worktrees also remain
 protected because hooks, filters, and raw source require separate proof. Their
 ordinary cleanup retains the remaining staging if exact Git registration removal
 fails, including its receipt when registration was eligible. Repo-local copies
-remain unmarked. There is no global worktree prune or force-recovery option.
+remain unmarked. There is no global worktree prune or blanket force-recovery option.
 
-Source-transfer commands inspect at most 64 bounded headers with a 250-ms soft
-discovery budget. This scan does not hash payloads, search Git history, or query a
-provider. A temporary cursor advances subsequent scans past protected entries;
-`staging inspect --after <nextCursor>` also pages the local report. After successful
-normal completion the wrapper attempts at most one discovered candidate. Help,
-listing, version output, and cancellation do not start old-stage recovery, and a
-recovery failure does not change the completed command's result. Inspection reports
-incomplete scans and elapsed time; bulk verification is separately bounded and can
-take longer. Unsupported filesystem durability, including native Windows directory
-flushes, prevents orphan recovery while preserving ordinary operation. Normal
-cleanup still removes its own successful or dirty-source staging without requiring
-an independent recovery witness.
+For one legacy capsule from an earlier boot of this host, inspect eligibility first:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging inspect <id> --same-host-prior-boot
+```
+
+This is read-only: it does not create locks, update receipts, preserve outputs, or
+delete staging. It returns `eligible`, the exact `receiptSha256`, and any refusal.
+Only after reviewing that specific copy, confirm the same host and prior boot:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging recover <id> \
+  --confirm-same-host-prior-boot --receipt-sha256 <digest-from-inspection>
+```
+
+Confirmation requires a pre-boot receipt mtime, a different legacy domain when
+recorded, current host/boot evidence, and matching UUID-backed sync-root and
+directory identities. UUID-unavailable filesystems cannot use this legacy path.
+The original timestamp is retained across confirmed retries; each retry still
+requires a new explicit confirmation bound to the current receipt bytes.
+The confirmation is recorded in the receipt and command result, never reused as
+automatic authorization. It does not replace metadata completeness, settlement,
+native-claim, independent-source, or diagnostic-preservation checks.
+
+Recovery checks local users with bounded `lsof` scans and refuses live users,
+incomplete output, or unavailable inspection. Only the recovery process's exact
+held mirror-lock file is exempt. Recovery reacquires its exclusive locks and
+revalidates receipt, identities, and producer-absence evidence after awaited work.
+Per-ID `staging inspect <id>` also previews ordinary recovery; idle mirrors and
+completed disposal records retain their separate slot-locked workflow.
+
+`staging inspect` reads at most 64 bounded headers with a 250-ms soft budget after
+the initial volume lookup. This scan does not hash payloads, search Git history, or
+query a provider. Use `staging inspect --after <nextCursor>` to page the local report
+with its returned cursor. Inspection reports incomplete scans and elapsed time;
+per-ID recovery verification is separately bounded and can take longer.
+
+Use `staging inspect` to find retained staging, then `staging recover <id>` for one
+selected candidate. Ordinary commands do not scan or recover unrelated abandoned
+staging. Mirror allocation retains slot-locked eviction, including resuming
+eligible recorded disposals. Ordinary commands clean up their own successful or
+dirty-source staging without an independent recovery witness. Unsupported
+filesystem durability, including native Windows directory flushes, prevents orphan
+recovery while preserving ordinary operation.
 
 These are local artifacts, not published or fully sanitized proof. Blacksmith's
 native failure bundle contains captured stdout/stderr and diagnostic metadata;
@@ -417,7 +526,7 @@ The shared skill's command placeholders map to the focused commands in this
 guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
 untrusted path above invokes the installed trusted CLI, never the PR's wrapper.
 For an explicitly selected local-container lane, the existing example image is
-`node:24-bookworm` and the install command is
+`node:24-trixie` and the install command is
 `corepack pnpm install --frozen-lockfile --store-dir .pnpm-store`, followed by
 the chosen test. Keep `--no-hydrate` and a repository-local dependency store
 when host caches cannot cross filesystems. The OpenClaw broker login endpoint

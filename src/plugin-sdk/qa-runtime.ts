@@ -1,11 +1,13 @@
 import { createServer } from "node:net";
 import path from "node:path";
-// QA runtime helpers register and execute plugin QA scenarios from local files.
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { mergeAttemptToolMediaPayloads } from "../agents/embedded-agent-runner/run/tool-media-payloads.js";
+export { wrapPromptDataBlock } from "../agents/sanitize-for-prompt.js";
+export { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 export {
   createLazyCliRuntimeLoader,
@@ -110,14 +112,6 @@ type QaRuntimeSurface = Pick<
   };
 };
 
-function isMissingQaRuntimeError(error: unknown) {
-  return (
-    error instanceof Error &&
-    (error.message === "Unable to resolve bundled plugin public surface qa-lab/runtime-api.js" ||
-      error.message.startsWith("Unable to open bundled plugin public surface "))
-  );
-}
-
 const loadQaLabRuntimeModule = loadQaRunnerRuntimeModule as unknown as () => QaRuntimeSurface;
 export { loadQaLabRuntimeModule as loadQaRuntimeModule };
 
@@ -126,7 +120,11 @@ function isQaRuntimeAvailableStrict(): boolean {
     loadQaLabRuntimeModule();
     return true;
   } catch (error) {
-    if (isMissingQaRuntimeError(error)) {
+    if (
+      error instanceof Error &&
+      (error.message === "Unable to resolve bundled plugin public surface qa-lab/runtime-api.js" ||
+        error.message.startsWith("Unable to open bundled plugin public surface "))
+    ) {
       return false;
     }
     throw error;

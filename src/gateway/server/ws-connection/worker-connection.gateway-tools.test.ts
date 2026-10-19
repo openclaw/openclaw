@@ -70,35 +70,41 @@ describe("worker Gateway tool dispatch", () => {
     );
   });
 
-  it.each(["feature", "authority"] as const)(
-    "rejects a missing %s before dispatch",
-    async (missing) => {
-      vi.useFakeTimers();
-      const harness = attachHarness({
-        identity: {
-          ...ATTACHED_IDENTITY,
-          protocolFeatures:
-            missing === "feature"
-              ? ATTACHED_IDENTITY.protocolFeatures.filter(
-                  (feature) => feature !== WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
-                )
-              : ATTACHED_IDENTITY.protocolFeatures,
-        },
-      });
-      harness.sendConnect();
-      await vi.advanceTimersByTimeAsync(0);
-      if (missing === "authority") {
-        harness.service.validateWorkerConnection.mockReturnValue("placement-mismatch");
-      }
-      harness.sendRequest(WORKER_GATEWAY_TOOL_METHODS.invoke, request);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(harness.service.invokeGatewayTool).not.toHaveBeenCalled();
-      expect(harness.close).toHaveBeenCalledWith(
-        1008,
-        missing === "feature" ? "method-not-allowed" : "placement-mismatch",
-      );
-    },
-  );
+  it.each([
+    { failure: "feature", reason: "method-not-allowed" },
+    { failure: "authority", reason: "placement-mismatch" },
+    { failure: "caller-supplied authority", reason: "invalid-frame" },
+    { failure: "retired surface", reason: "method-not-allowed" },
+  ] as const)("rejects $failure before dispatch", async ({ failure, reason }) => {
+    vi.useFakeTimers();
+    const harness = attachHarness({
+      identity: {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures:
+          failure === "feature"
+            ? ATTACHED_IDENTITY.protocolFeatures.filter(
+                (feature) => feature !== WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+              )
+            : ATTACHED_IDENTITY.protocolFeatures,
+      },
+    });
+    harness.sendConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    if (failure === "authority") {
+      harness.service.validateWorkerConnection.mockReturnValue("placement-mismatch");
+    }
+    harness.sendRequest(
+      failure === "retired surface" ? "worker.toolSurface" : WORKER_GATEWAY_TOOL_METHODS.invoke,
+      failure === "retired surface"
+        ? {}
+        : failure === "caller-supplied authority"
+          ? { ...request, sessionId: "other" }
+          : request,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.service.invokeGatewayTool).not.toHaveBeenCalled();
+    expect(harness.close).toHaveBeenCalledWith(1008, reason);
+  });
 
   it("rejects duplicate in-flight request IDs without dispatching another operation", async () => {
     vi.useFakeTimers();
@@ -117,26 +123,5 @@ describe("worker Gateway tool dispatch", () => {
     expect(harness.close).toHaveBeenCalledWith(1008, "invalid-frame");
     completion.resolve();
     await vi.advanceTimersByTimeAsync(0);
-  });
-
-  it("rejects caller-supplied source authority", async () => {
-    vi.useFakeTimers();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    harness.sendConnect();
-    await vi.advanceTimersByTimeAsync(0);
-    harness.sendRequest(WORKER_GATEWAY_TOOL_METHODS.invoke, { ...request, sessionId: "other" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(harness.service.invokeGatewayTool).not.toHaveBeenCalled();
-    expect(harness.close).toHaveBeenCalledWith(1008, "invalid-frame");
-  });
-
-  it("rejects the retired tool surface request", async () => {
-    vi.useFakeTimers();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    harness.sendConnect();
-    await vi.advanceTimersByTimeAsync(0);
-    harness.sendRequest("worker.toolSurface", {});
-    await vi.advanceTimersByTimeAsync(0);
-    expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed");
   });
 });

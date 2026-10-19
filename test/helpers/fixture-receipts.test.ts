@@ -131,38 +131,36 @@ describe("fixture receipts", () => {
     }
   });
 
-  it("rejects pending exit observation when closed", async ({ signal }) => {
-    const receipts = await withinTest(openFixtureReceiptChannel(), signal);
-    const rejected = expect(receipts.waitForExit("missing")).rejects.toThrow(
-      "closed while waiting for exit in missing",
-    );
-    try {
-      await withinTest(receipts.close(), signal);
-      await withinTest(rejected, signal);
-    } finally {
-      await receipts.close();
-    }
-  });
-
-  it("rejects malformed messages for receipt and exit waiters", async ({ signal }) => {
-    const receipts = await withinTest(openFixtureReceiptChannel(), signal);
-    const receiptRejected = expect(receipts.waitFor("child", "ready")).rejects.toThrow(
-      "Malformed fixture receipt",
-    );
-    const exitRejected = expect(receipts.waitForExit("child")).rejects.toThrow(
-      "Malformed fixture receipt",
-    );
-    const fixture = nodeChild(
-      receipts.endpoint,
-      'connectReceipts().write(JSON.stringify({ announce: 42 }) + "\\n");',
-    );
-    try {
-      await withinTest(Promise.all([receiptRejected, exitRejected]), signal);
-    } finally {
-      await receipts.close();
-      await fixture.close();
-    }
-  });
+  it.for(["closed", "malformed"])(
+    "rejects pending waiters when %s",
+    async (failure, { signal }) => {
+      const receipts = await withinTest(openFixtureReceiptChannel(), signal);
+      const malformed = failure === "malformed";
+      const receiptRejected = malformed
+        ? expect(receipts.waitFor("child", "ready")).rejects.toThrow("Malformed fixture receipt")
+        : undefined;
+      const exitRejected = expect(
+        receipts.waitForExit(malformed ? "child" : "missing"),
+      ).rejects.toThrow(
+        malformed ? "Malformed fixture receipt" : "closed while waiting for exit in missing",
+      );
+      const fixture = malformed
+        ? nodeChild(
+            receipts.endpoint,
+            'connectReceipts().write(JSON.stringify({ announce: 42 }) + "\\n");',
+          )
+        : undefined;
+      try {
+        if (!malformed) {
+          await withinTest(receipts.close(), signal);
+        }
+        await withinTest(Promise.all([receiptRejected, exitRejected]), signal);
+      } finally {
+        await receipts.close();
+        await fixture?.close();
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "releases a shell reader from a FIFO",

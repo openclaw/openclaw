@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type {
   ConnectParams,
   RequestFrame,
+  ResponseFrame,
   errorShape,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -20,6 +21,7 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { RemoteIngressPrincipalSnapshot } from "../client-identity-types.js";
 import type { GatewayClientRegistry } from "../client-registry.js";
 import type {
   GatewayConnectionTransport,
@@ -37,7 +39,11 @@ export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
 
-type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
+type WsSendResult =
+  // In-process bootstrap responses have no encoded frame.
+  | { kind: "sent"; bytes?: number }
+  | { kind: "unavailable" }
+  | { kind: "serialization"; error: unknown };
 
 export type GatewayWsMessageHandlerParams = {
   socket: GatewayConnectionTransport;
@@ -93,6 +99,20 @@ export type GatewayWsMessageHandlerParams = {
   logWsControl: SubsystemLogger;
 };
 
+export type GatewayConnectAttachTiming =
+  | "deviceAuthorizationMs"
+  | "deviceLookupMs"
+  | "deviceTokensMs"
+  | "nodePreparationMs"
+  | "identityMs"
+  | "profileEnsureMs"
+  | "profileAuthorityMs"
+  | "scopeGrantMs"
+  | "operatorDeviceMs"
+  | "sessionRegistrationMs"
+  | "snapshotMs"
+  | "helloDescriptorsMs";
+
 export type GatewayConnectPhaseContext = {
   handler: GatewayWsMessageHandlerParams;
   frame: RequestFrame;
@@ -117,11 +137,20 @@ export type GatewayConnectPhaseContext = {
     message: string,
     options?: Parameters<typeof errorShape>[2],
   ) => void;
-  sendFrame: (obj: unknown) => Promise<void>;
+  sendFrame: (obj: ResponseFrame) => Promise<void>;
   /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
   onHelloDelivered: () => void;
+  onPairingWait: () => void;
+  /** Nested wall times for the connect response log; direct bootstrap callers may omit it. */
+  recordAttachTiming?: (phase: GatewayConnectAttachTiming, startedAt: number) => void;
+  setConnectPhase?: (phase: "profile-ensure" | "profile-authority" | "registration") => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
+  pendingDeviceMetadata?: {
+    deviceId: string;
+    identity: import("../../../infra/device-pairing-access.js").DevicePairingAccessIdentity;
+    patch: Partial<import("../../../infra/device-pairing-core.types.js").PairedDeviceMetadataPatch>;
+  };
   pendingNodePairingCleanup: {
     value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
@@ -132,6 +161,7 @@ export type GatewayConnectPhaseContext = {
 };
 
 export type AuthenticatedGatewayConnect = {
+  remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
   authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;

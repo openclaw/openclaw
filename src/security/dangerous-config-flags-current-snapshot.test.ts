@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "./dangerous-config-flags-current.js";
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
@@ -32,7 +32,7 @@ describe("collectEnabledInsecureOrDangerousFlags current metadata snapshot", () 
     vi.mocked(resolvePluginConfigContractsById).mockClear();
   });
 
-  it("uses current plugin metadata contracts when the caller prefers the gateway snapshot", () => {
+  it("uses current plugin metadata contracts without resolving manifests", () => {
     vi.mocked(getCurrentPluginMetadataSnapshot).mockReturnValue({
       normalizePluginId: (pluginId: string) => pluginId,
       byPluginId: new Map([
@@ -49,7 +49,7 @@ describe("collectEnabledInsecureOrDangerousFlags current metadata snapshot", () 
       ]),
     } as unknown as ReturnType<typeof getCurrentPluginMetadataSnapshot>);
 
-    const flags = collectEnabledInsecureOrDangerousFlags(
+    const flags = collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(
       asConfig({
         plugins: {
           entries: {
@@ -61,7 +61,6 @@ describe("collectEnabledInsecureOrDangerousFlags current metadata snapshot", () 
           },
         },
       }),
-      { preferCurrentPluginMetadataSnapshot: true },
     );
 
     expect(flags).toContain("plugins.entries.acpx.config.permissionMode=approve-all");

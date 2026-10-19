@@ -21,7 +21,27 @@ An error naming the **Gateway state database** identifies a storage failure obse
 
 A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
 
+Gateway write requests such as `sessions.create` also report disk-full guidance with `UNAVAILABLE` and `details.code: "SQLITE_FULL"`. Free space on the Gateway host before continuing. When the worker cannot confirm the write outcome, `retryable` is false: check whether the session or change exists before retrying. The failure does not prove that nothing was saved.
+
 Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
+
+## Provider rejected the request
+
+A reply beginning with `LLM request rejected:` includes the provider's request-validation message. OpenClaw redacts credentials, bounds the diagnostic, and displays it as literal text rather than exposing the full response body. Known context, token-limit, and storage failures retain their specific recovery guidance.
+
+For `Invalid service_tier argument`, check the selected model and speed setting. A provider or account supporting Fast or Ultrafast does not mean every model supports that tier. Retry with Standard (`/fast off`) or select a model that supports the requested tier. This error alone does not mean the conversation is corrupt. See [OpenAI Fast mode](/providers/openai/advanced#fast-mode).
+
+## Connection to the AI service failed
+
+If a reply says OpenClaw could not connect to the AI service, check the provider connection. For a local model, confirm that its server is running and reachable at the configured URL. A server that stops during a turn can leave completed work in the conversation; check those results before retrying. Use `openclaw logs --follow` for connection diagnostics.
+
+## Unreadable conversation history
+
+If a reply says OpenClaw could not read the conversation's history, ask the Gateway operator to try `openclaw doctor --fix` on the host and profile that own the session. This notice also appears for unmentioned group turns when silent replies are allowed.
+
+Doctor can restore a missing header when the stored transcript entries already use the supported format. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
+
+See [Doctor's session repairs](/gateway/doctor/state-and-sessions) and [running Doctor](/gateway/doctor/running).
 
 ## No replies
 
@@ -47,11 +67,29 @@ Common signatures:
 - `pairing request` → sender needs approval.
 - `blocked` / `allowlist` → sender/channel was filtered by policy.
 
+A `Session delivery: entry <id> was dead-lettered and moved to failed` warning means a queued session delivery finished terminal cleanup and will not be replayed. Use the queue entry ID to correlate earlier logs, then check the conversation before retrying: an interrupted delivery may already have produced side effects. Batch recovery includes the finalized entry in its failure count.
+
+For saved `sessions_send` updates, `Session delivery endpoint was replaced` means the source or destination no longer matches the session identity and lifecycle generation that accepted the update, or was archived. Recovery records a notice in the destination conversation before cancelling automatic delivery. The saved input remains retained, but subsequent boots do not retry it. Resend the update if it is still needed; recovery never redirects it across a reset or replacement. Permission and temporary storage failures remain eligible for later recovery.
+
+Recovery warnings include the input ID, age in milliseconds, and a hashed session key. Replacement warnings also identify the source or target endpoint and its previous and current session IDs and lifecycle generations. Use these fields to correlate repeated inputs without logging message content or raw session keys. If the notice cannot be saved, the input remains eligible for recovery.
+
 Related:
 
 - [Channel troubleshooting](/channels/troubleshooting)
 - [Groups](/channels/groups)
 - [Pairing](/channels/pairing)
+
+If a shared model catalog worker exits and its automatic runtime replacement fails,
+opening the model picker, preparing a chat, or sending a new message can check the
+failed runtime again without restarting the Gateway. The picker shows **Loading
+models…** while checking, then returns to **Models unavailable** if preparation
+still fails. Repeated foreground checks have a short cooldown. Cron and Heartbeat
+get one check per failure episode; later scheduled runs do not keep rebuilding a
+runtime that remains unavailable. Existing messages and tasks are not replayed.
+
+This recovery still waits for earlier preparation work to settle. A preparation
+that never finishes, unrelated configuration errors, and Gateway shutdown require
+their own diagnosis; a model check does not bypass those lifecycle boundaries.
 
 ## Dashboard control UI connectivity
 
@@ -67,7 +105,7 @@ openclaw gateway status --json
 
 Look for:
 
-- Correct probe URL and dashboard URL.
+- Correct check URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
 - Clients that connect without the required device identity. The current Control UI can create and sign identity over plain HTTP; see [Insecure HTTP](/web/control-ui#insecure-http).
 

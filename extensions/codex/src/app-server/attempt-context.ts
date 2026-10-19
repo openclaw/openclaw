@@ -1,14 +1,16 @@
-import { createHash } from "node:crypto";
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
-  buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
+  prepareWatchedSessionsHarnessContext,
   type AgentMessage,
+  type AnyAgentTool,
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { classifyAgentToolSource } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -22,7 +24,6 @@ import {
   getCodexContextFileDisplayBasename,
   isNonEmptyString,
   normalizeCodexContextFilePath,
-  type CodexBootstrapFile,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
@@ -32,16 +33,42 @@ import {
   readCodexMirroredSessionHistoryMessages,
   type CodexMirroredSessionHistoryTarget,
 } from "./session-history.js";
-import { stabilizeJsonValue } from "./thread-fingerprints.js";
 import {
-  areCodexDynamicToolFingerprintsCompatible,
   buildContextEngineBinding,
   isContextEngineBindingCompatible,
   type CodexContextEngineThreadBootstrapProjection,
-} from "./thread-lifecycle.js";
+} from "./thread-context-engine.js";
+import {
+  stabilizeJsonValue,
+  areCodexDynamicToolFingerprintsCompatible,
+} from "./thread-fingerprints.js";
 
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
+
+// Projected schema identities survive report refreshes; do not reserialize the
+// entire deferred catalog when workspace references or local egress change.
+const deferredSchemaChars = new WeakMap<object, number | null>();
+
+function measureDeferredSchemaChars(
+  schema: CodexDynamicToolFunctionSpec["inputSchema"],
+): number | null {
+  if (schema === null || typeof schema !== "object") {
+    return JSON.stringify(schema).length;
+  }
+  const cached = deferredSchemaChars.get(schema);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let chars: number | null;
+  try {
+    chars = JSON.stringify(schema).length;
+  } catch {
+    chars = null;
+  }
+  deferredSchemaChars.set(schema, chars);
+  return chars;
+}
 
 export async function readMirroredSessionHistoryMessages(
   params: CodexMirroredSessionHistoryTarget & {
@@ -89,7 +116,6 @@ export function readContextEngineThreadBootstrapProjection(
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
-  projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
   legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
@@ -117,13 +143,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
   }
-  const projectionChanged =
-    bindingProjection.mode !== "thread_bootstrap" ||
-    bindingProjection.epoch !== params.projection.epoch ||
-    bindingProjection.fingerprint !== params.projection.fingerprint;
-  return projectionChanged
-    ? { project: true, reason: "projection-mismatch" }
-    : { project: false, reason: "matching-thread-bootstrap-binding" };
+  return { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
 export function buildCodexSystemPromptReport(params: {
@@ -136,16 +156,29 @@ export function buildCodexSystemPromptReport(params: {
   parentLocalEgress?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
+  sourceTools?: readonly AnyAgentTool[];
 }): CodexSystemPromptReport {
-  const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
+  const tools = flattenCodexDynamicToolFunctions(params.tools);
+  const sources = new Map((params.sourceTools ?? []).map((tool) => [tool.name, tool]));
+  const toolEntries = tools
+    .filter((tool) => !tool.deferLoading)
+    .map((tool) => buildCodexToolReportEntry(tool, sources.get(tool.name)));
+  const deferredEntries = tools
+    .filter((tool) => tool.deferLoading)
+    .map((tool) => {
+      const { source, sourceName, mcp } = classifyAgentToolSource(sources.get(tool.name) ?? tool);
+      return {
+        name: tool.name,
+        source,
+        sourceName,
+        serverName: mcp?.serverName,
+        schemaChars: measureDeferredSchemaChars(tool.inputSchema),
+      };
+    });
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
-  const bootstrapMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
-  );
-  const bootstrapTotalMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars,
-  );
+  const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
+  const bootstrapTotalMaxChars = params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars;
   return {
     source: "run",
     generatedAt: Date.now(),
@@ -162,19 +195,7 @@ export function buildCodexSystemPromptReport(params: {
       nonProjectContextChars: params.developerInstructions.length,
       hash: sha256Text(params.developerInstructions),
     },
-    injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
-      bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
-      injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
-      omitReferenceFiles: params.omitWorkspaceReferences,
-      omitPersonalProfiles: !params.parentLocalEgress,
-      developerInstructionFiles: [
-        ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
-        ...(params.workspaceBootstrapContext.personaFiles ?? []),
-      ],
-      memoryToolRoutedBootstrapFiles:
-        params.workspaceBootstrapContext.memoryToolRoutedBootstrapFiles ?? [],
-      memoryToolRouted: params.workspaceBootstrapContext.memoryToolRouted === true,
-    }),
+    injectedWorkspaceFiles: buildCodexBootstrapInjectionStats(params),
     skills: {
       promptChars: skillsPrompt.length,
       hash: sha256Text(skillsPrompt),
@@ -184,6 +205,10 @@ export function buildCodexSystemPromptReport(params: {
       listChars: 0,
       schemaChars,
       entries: toolEntries,
+      deferred: {
+        entries: deferredEntries,
+        schemaChars: deferredEntries.reduce((sum, tool) => sum + (tool.schemaChars ?? 0), 0),
+      },
     },
   };
 }
@@ -200,65 +225,54 @@ function buildCodexSkillReportEntries(
   }));
 }
 
-function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
+function buildCodexToolReportEntry(
+  tool: CodexDynamicToolFunctionSpec,
+  sourceTool?: AnyAgentTool,
+): CodexToolReportEntry {
   const summary = tool.description.trim();
-  return {
-    name: tool.name,
-    summaryChars: summary.length,
-    summaryHash: sha256Text(summary),
-    ...(tool.deferLoading === true
-      ? { schemaChars: 0, schemaHash: stableJsonHash(null), propertiesCount: null }
-      : buildCodexToolSchemaStats(tool.inputSchema)),
-  };
-}
-
-function buildCodexToolSchemaStats(
-  schema: JsonValue,
-): Pick<CodexToolReportEntry, "schemaChars" | "schemaHash" | "propertiesCount"> {
-  const schemaChars = (() => {
-    try {
-      return JSON.stringify(schema).length;
-    } catch {
-      return 0;
-    }
-  })();
+  const schema = tool.inputSchema;
+  let schemaChars: number;
+  try {
+    schemaChars = JSON.stringify(schema).length;
+  } catch {
+    schemaChars = 0;
+  }
+  const { source, sourceName, mcp } = classifyAgentToolSource(sourceTool ?? tool);
   const properties =
     isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
   return {
+    name: tool.name,
+    source,
+    sourceName,
+    ...(mcp ? { serverName: mcp.serverName } : {}),
+    summaryChars: summary.length,
+    summaryHash: sha256Text(summary),
     schemaChars,
     schemaHash: stableJsonHash(schema),
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
 }
 
-function sha256Text(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function stableJsonHash(value: JsonValue): string {
   return sha256Text(JSON.stringify(stabilizeJsonValue(value)) ?? "null");
 }
 
-function buildCodexBootstrapInjectionStats(params: {
-  bootstrapFiles: CodexBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
-  omitReferenceFiles?: boolean;
-  omitPersonalProfiles?: boolean;
-  developerInstructionFiles?: EmbeddedContextFile[];
-  memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
-  memoryToolRouted?: boolean;
-}): CodexSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedIndex = indexCodexContextFileContent(params.injectedFiles);
-  const developerInstructionIndex = indexCodexContextFileContent(
-    params.developerInstructionFiles ?? [],
-  );
+function buildCodexBootstrapInjectionStats(
+  params: Parameters<typeof buildCodexSystemPromptReport>[0],
+): CodexSystemPromptReport["injectedWorkspaceFiles"] {
+  const context = params.workspaceBootstrapContext;
+  const readInjected = indexCodexContextFileContent(context.promptContextFiles ?? []);
+  const readDeveloperInstruction = indexCodexContextFileContent([
+    ...(context.threadDeveloperInstructionFiles ?? []),
+    ...(context.personaFiles ?? []),
+  ]);
   const memoryToolRoutedPaths = new Set(
-    (params.memoryToolRoutedBootstrapFiles ?? [])
+    (context.memoryToolRoutedBootstrapFiles ?? [])
       .map((file) => readNonEmptyString(file.path))
       .filter(isNonEmptyString)
       .map(normalizeCodexContextFilePath),
   );
-  return params.bootstrapFiles.map((file) => {
+  return context.bootstrapFiles.map((file) => {
     const fileName = readNonEmptyString(file.name);
     const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
     const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
@@ -266,12 +280,11 @@ function buildCodexBootstrapInjectionStats(params: {
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const memoryToolRoutedFile =
       baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
-      params.memoryToolRouted === true &&
+      context.memoryToolRouted === true &&
       memoryToolRoutedPaths.has(normalizeCodexContextFilePath(pathValue));
     const injected = memoryToolRoutedFile
       ? undefined
-      : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
-        readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
+      : (readInjected(pathValue, fileName) ?? readDeveloperInstruction(pathValue, fileName));
     if (
       !file.missing &&
       injected === undefined &&
@@ -280,6 +293,7 @@ function buildCodexBootstrapInjectionStats(params: {
       return {
         name: displayName,
         path: pathValue,
+        origin: file.origin,
         missing: false,
         rawChars,
         injectionStatus: "native_unverified",
@@ -288,15 +302,15 @@ function buildCodexBootstrapInjectionStats(params: {
       };
     }
     const omitted =
-      (params.omitPersonalProfiles && file.personalUser === true) ||
+      (!params.parentLocalEgress && file.personalUser === true) ||
       memoryToolRoutedFile ||
-      (params.omitReferenceFiles &&
-        readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
+      (params.omitWorkspaceReferences && readInjected(pathValue, fileName) !== undefined);
     const injectedChars = omitted ? 0 : (injected?.length ?? 0);
     const truncated = omitted ? false : !file.missing && injectedChars < rawChars;
     return {
       name: displayName,
       path: pathValue,
+      origin: file.origin,
       missing: file.missing,
       rawChars,
       injectedChars,
@@ -305,10 +319,7 @@ function buildCodexBootstrapInjectionStats(params: {
   });
 }
 
-function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
-  byPath: Map<string, string>;
-  byBaseName: Map<string, string>;
-} {
+function indexCodexContextFileContent(files: EmbeddedContextFile[]) {
   const byPath = new Map<string, string>();
   const byBaseName = new Map<string, string>();
   for (const file of files) {
@@ -324,26 +335,14 @@ function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
       byBaseName.set(baseName, file.content);
     }
   }
-  return { byPath, byBaseName };
-}
-
-function readCodexIndexedContextFileContent(
-  index: { byPath: Map<string, string>; byBaseName: Map<string, string> },
-  pathValue: string,
-  fileName: string | undefined,
-): string | undefined {
-  const baseName = getCodexContextFileBasename(fileName ?? pathValue);
-  return (
-    index.byPath.get(pathValue) ??
-    (fileName ? index.byPath.get(fileName) : undefined) ??
-    (baseName ? index.byBaseName.get(baseName) : undefined)
-  );
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return (pathValue: string, fileName: string | undefined): string | undefined => {
+    const baseName = getCodexContextFileBasename(fileName ?? pathValue);
+    return (
+      byPath.get(pathValue) ??
+      (fileName ? byPath.get(fileName) : undefined) ??
+      (baseName ? byBaseName.get(baseName) : undefined)
+    );
+  };
 }
 
 export function buildCodexOpenClawPromptContext(params: {
@@ -377,19 +376,21 @@ export function buildCodexOpenClawPromptContext(params: {
  * Sessions section must be re-surfaced here or Codex-backed main sessions
  * keep refusing cross-session questions (openclaw#114797).
  */
-export function buildCodexWatchedSessionsContext(params: {
+export async function prepareCodexWatchedSessionsContext(params: {
   attempt: EmbeddedRunAttemptParams;
   dynamicTools: readonly CodexDynamicToolSpec[];
   sessionKey?: string;
   sandboxed?: boolean;
-}): string | undefined {
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
   }
-  return buildWatchedSessionsHarnessContext({
+  return prepareWatchedSessionsHarnessContext({
     config: params.attempt.config,
     sessionKey: params.sessionKey,
     sandboxed: params.sandboxed,
+    assertCurrent: params.assertCurrent,
     toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
       normalizeLowercaseStringOrEmpty(tool.name),
     ),
@@ -482,13 +483,7 @@ export function resolveCodexDeliveryHintPreservedInputRange(params: {
   }
   const promptWithoutDeliveryHintStart = prompt.length - promptWithoutDeliveryHint.length;
   const inputStart = Math.max(promptInputRange.start, promptWithoutDeliveryHintStart);
-  const inputEnd = Math.max(
-    inputStart,
-    Math.min(
-      promptInputRange.end,
-      promptWithoutDeliveryHint.length + promptWithoutDeliveryHintStart,
-    ),
-  );
+  const inputEnd = Math.max(inputStart, promptInputRange.end);
   const decoratedPromptSuffixStart = decoratedPrompt.length - promptWithoutDeliveryHint.length;
   const requestHeader = "Current user request:\n";
   const requestHeaderStart = decoratedPromptSuffixStart - requestHeader.length;

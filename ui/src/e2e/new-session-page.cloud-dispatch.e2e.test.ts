@@ -52,7 +52,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-where-trigger");
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await trigger.click();
       await place.getByRole("button", { name: "aws", exact: true }).click();
       await place.getByRole("button", { name: "Fast", exact: true }).click();

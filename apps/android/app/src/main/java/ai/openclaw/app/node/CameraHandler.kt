@@ -24,7 +24,6 @@ class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
   private val setCameraAudioCaptureActive: (Boolean) -> Boolean,
-  private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
   suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
@@ -43,28 +42,23 @@ class CameraHandler(
     val camLog = cameraLogger(logFile, "camera.snap")
     try {
       logFile?.writeText("") // clear
-      camLog("starting, params=$paramsJson")
       val res =
         try {
-          camLog("calling camera.snap()")
-          val r = camera.snap(paramsJson)
-          camLog("success, payload size=${r.length}")
-          r
+          camera.snap(paramsJson)
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
-          camLog("inner error: ${err::class.java.simpleName}: ${err.message}")
-          camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
+          camLog("inner error: ${err::class.java.simpleName} code=$code")
+          camLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
-      camLog("returning result")
       return GatewaySession.InvokeResult.ok(res)
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      camLog("outer error: ${err::class.java.simpleName}: ${err.message}")
-      camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
+      camLog("outer error: ${err::class.java.simpleName}")
+      camLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera snap failed")
     }
   }
@@ -81,22 +75,18 @@ class CameraHandler(
     val ownedClipFile = AtomicReference<java.io.File?>()
     try {
       clipLogFile?.writeText("") // clear
-      clipLog("starting, params=$paramsJson includeAudio=$includeAudio")
       val filePayload =
         try {
-          clipLog("calling camera.clip()")
-          val r =
-            camera.clip(paramsJson) { file ->
+          camera
+            .clip(paramsJson) { file ->
               check(ownedClipFile.compareAndSet(null, file)) { "camera clip already owns a file" }
             }
-          clipLog("success, file size=${r.file.length()}")
-          r
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
-          clipLog("inner error: ${err::class.java.simpleName}: ${err.message}")
-          clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
+          clipLog("inner error: ${err::class.java.simpleName} code=$code")
+          clipLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
       val rawBytes = filePayload.file.length()
@@ -110,15 +100,14 @@ class CameraHandler(
 
       val bytes = withContext(Dispatchers.IO) { filePayload.file.readBytes() }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-      clipLog("returning base64 payload")
       return GatewaySession.InvokeResult.ok(
         """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}""",
       )
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")
-      clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
+      clipLog("outer error: ${err::class.java.simpleName}")
+      clipLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
       try {

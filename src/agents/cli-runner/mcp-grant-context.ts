@@ -9,7 +9,9 @@ import {
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
+import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
 const cliMcpDelegationCapability = Symbol("cliMcpDelegationCapability");
@@ -21,6 +23,7 @@ export function finalizeCliMcpGrant(
   nativeAuthorityPending: boolean,
   source: Pick<
     RunCliAgentParams,
+    | "config"
     | "admittedRunContext"
     | "assertCurrent"
     | "messageActionTurnCapability"
@@ -47,6 +50,7 @@ export function finalizeCliMcpGrant(
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     admittedRunContext: source.admittedRunContext,
+    toolPolicyConfig: source.config,
     messageActionTurnCapability: source.messageActionTurnCapability,
     abortSignal: source.abortSignal,
     assertCurrent: source.assertCurrent,
@@ -55,7 +59,7 @@ export function finalizeCliMcpGrant(
 }
 
 export function buildCliMcpDelegationCapabilityBinding(capability: DelegationCapability): object {
-  return capability === "report_only" ? { [cliMcpDelegationCapability]: capability } : {};
+  return capability !== "full" ? { [cliMcpDelegationCapability]: capability } : {};
 }
 
 function readCliMcpDelegationCapability(run: object): DelegationCapability | undefined {
@@ -63,7 +67,9 @@ function readCliMcpDelegationCapability(run: object): DelegationCapability | und
     return undefined;
   }
   const capability = run[cliMcpDelegationCapability];
-  return capability === "full" || capability === "report_only" ? capability : undefined;
+  return capability === "full" || capability === "report_only" || capability === "host_only"
+    ? capability
+    : undefined;
 }
 
 function buildCliMcpExecSession(
@@ -76,6 +82,9 @@ function buildCliMcpExecSession(
       ? SESSION_PERMISSION_BY_EXEC_MODE[execOverrides.mode]
       : permissionMode;
   const execSession = {
+    sandbox: sessionEntry?.sandbox,
+    sandboxMode: sessionEntry?.sandboxMode,
+    createdActor: sessionEntry?.createdActor,
     execHost: normalizeOptionalString(sessionEntry?.execHost),
     execNode: normalizeOptionalString(sessionEntry?.execNode),
     ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
@@ -123,8 +132,7 @@ function buildCliMcpChannelContext(
   senderId?: string | null,
 ): McpLoopbackRequestContext["channelContext"] {
   const resolvedSenderId =
-    normalizeOptionalString(senderId ?? undefined) ??
-    normalizeOptionalString(channelContext?.sender?.id);
+    normalizeOptionalString(senderId) ?? normalizeOptionalString(channelContext?.sender?.id);
   const chatId = normalizeOptionalString(channelContext?.chat?.id);
   if (!resolvedSenderId && !chatId) {
     return undefined;
@@ -164,16 +172,20 @@ export function buildCliMcpGrantContext(params: {
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
   const execSession = buildCliMcpExecSession(params.run.sessionEntry, params.run.execOverrides);
+  const sessionPermissionPolicy = resolveStoredSessionPermissionPolicy(
+    params.run.sessionEntry,
+    params.run.workspaceDir,
+  );
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
-  const senderName = normalizeOptionalString(params.run.senderName ?? undefined);
-  const senderUsername = normalizeOptionalString(params.run.senderUsername ?? undefined);
-  const senderE164 = normalizeOptionalString(params.run.senderE164 ?? undefined);
-  const groupId = normalizeOptionalString(params.run.groupId ?? undefined);
-  const groupChannel = normalizeOptionalString(params.run.groupChannel ?? undefined);
-  const groupSpace = normalizeOptionalString(params.run.groupSpace ?? undefined);
-  const spawnedBy = normalizeOptionalString(params.run.spawnedBy ?? undefined);
+  const senderName = normalizeOptionalString(params.run.senderName);
+  const senderUsername = normalizeOptionalString(params.run.senderUsername);
+  const senderE164 = normalizeOptionalString(params.run.senderE164);
+  const groupId = normalizeOptionalString(params.run.groupId);
+  const groupChannel = normalizeOptionalString(params.run.groupChannel);
+  const groupSpace = normalizeOptionalString(params.run.groupSpace);
+  const spawnedBy = normalizeOptionalString(params.run.spawnedBy);
   const messageProvider = resolveGatewayMessageChannel(
     params.run.messageChannel ?? params.run.messageProvider,
   );
@@ -190,6 +202,14 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    requesterOrigin: captureRequesterOrigin({ ...params.run, sessionKey }),
+    operatorProfileId: params.run.operatorProfileId,
+    conversationId: params.run.conversationId,
+    chatType: params.run.chatType,
+    ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
+    ...(params.run.conversationToolPolicy
+      ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
+      : {}),
     ...(params.run.trustedInternalHandoff
       ? {
           trustedInternalHandoff: params.run.trustedInternalHandoff,
@@ -207,9 +227,6 @@ export function buildCliMcpGrantContext(params: {
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
-    ...(params.run.skillWorkshopProposalRevision
-      ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
-      : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
     ...(delegationCapability ? { delegationCapability } : {}),
@@ -249,11 +266,15 @@ export function buildCliMcpGrantContext(params: {
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,
+    ...(params.run.gitContributorProfileId
+      ? { gitContributorProfileId: params.run.gitContributorProfileId }
+      : {}),
     nodeExecAllowed: true,
     ...(execSession ? { execSession } : {}),
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(params.run.continuesConversation ? { continuesConversation: true } : {}),
     ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

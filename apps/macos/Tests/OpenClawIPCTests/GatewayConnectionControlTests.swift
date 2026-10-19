@@ -649,7 +649,7 @@ private func assertConfigLookupCannotRecreateRoute(
         let params = try #require(talkRequestFrame["params"] as? [String: Any])
         #expect(params["sessionId"] as? String == "talk-session-1")
 
-        let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+        let socketGeneration = try #require(await connection.socketGenerationState.activeGeneration)
         await connection._test_handleDisconnect(socketGeneration: socketGeneration)
         let eventAfterDisconnect = try await TestWait.value(of: nextEvent, "realtime disconnect")
         #expect(eventAfterDisconnect == nil)
@@ -799,7 +799,7 @@ private func assertConfigLookupCannotRecreateRoute(
         do {
             try await connection.refresh()
             let transport = try await connection.acquireRealtimeTalkTransport()
-            let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+            let socketGeneration = try #require(await connection.socketGenerationState.activeGeneration)
             try await operation(connection, transport, socketGeneration)
         } catch {
             await connection.shutdown()
@@ -1523,7 +1523,7 @@ extension GatewayConnectionControlTests {
                 AppStateStore.shared.connectionMode = mode
                 AppStateStore.shared.isPaused = false
                 manager._testResetGatewayStartTask()
-                manager.setTestingDesiredActive(true)
+                manager.desiredActive = true
                 manager.setTestingStatus(.stopped)
                 manager.setTestingConnection(connection)
                 manager.setTestingSkipControlChannelRefresh(true)
@@ -1544,7 +1544,7 @@ extension GatewayConnectionControlTests {
                     manager.setTestingStatus(.stopped)
                     manager.setTestingConnection(nil)
                     manager.setTestingSkipControlChannelRefresh(false)
-                    manager.setTestingDesiredActive(false)
+                    manager.desiredActive = false
                     GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                     GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                     GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)

@@ -4,6 +4,7 @@ import {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import {
   consumeMarkdownRawHtmlLine,
   findMarkdownRawHtmlRanges,
@@ -112,9 +113,13 @@ type StreamingMarkdownCacheEntry = {
 type StreamingMarkdownState = {
   input?: { source: string; normalized: string };
   split?: StreamingMarkdownCacheEntry;
-  rendered?: { options: string; markdown: string; html: string };
+  rendered?: { options: string; markdown: string; html: string; hasHtml: boolean };
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();
+
+export function streamingMarkdownStableHtml(streamKey?: string): string {
+  return streamKey ? (streamingCache.get(streamKey)?.rendered?.html ?? "") : "";
+}
 
 export function streamingMarkdownState(streamKey?: string): StreamingMarkdownState | undefined {
   if (!streamKey) {
@@ -123,13 +128,27 @@ export function streamingMarkdownState(streamKey?: string): StreamingMarkdownSta
   const state = streamingCache.get(streamKey) ?? {};
   streamingCache.delete(streamKey);
   streamingCache.set(streamKey, state);
-  if (streamingCache.size > STREAMING_CACHE_LIMIT) {
-    const oldest = streamingCache.keys().next().value;
-    if (oldest !== undefined) {
-      streamingCache.delete(oldest);
+  pruneMapToMaxSize(streamingCache, STREAMING_CACHE_LIMIT);
+  return state;
+}
+
+export function hasStreamingMarkdownHtml(markdown: string): boolean {
+  let index = markdown.indexOf("<");
+  if (index === -1) {
+    return false;
+  }
+  for (const [start, end] of findMarkdownCodeSpans(markdown)) {
+    if (index < start) {
+      return true;
+    }
+    if (index < end) {
+      index = markdown.indexOf("<", end);
+    }
+    if (index === -1) {
+      return false;
     }
   }
-  return state;
+  return true;
 }
 
 function findStreamingCodeSpans(markdown: string, start: number): Array<[number, number]> {

@@ -1,4 +1,4 @@
-import { applySessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
+import { writeSessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
 import { readSessionEntrySelectionSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-replacement-state.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
@@ -21,6 +21,7 @@ export function mutateAcpSessionEntryInWorker(
   options: OpenClawAgentDatabaseOptions,
   input: AcpSessionEntryMutationInput,
   admit: (stage: "transaction" | "commit", publication?: unknown) => void,
+  ownReceipt = true,
 ): AcpSessionEntryMutationResult {
   assertCanonicalSessionKeyWrite(input.sessionKey, input.agentId);
   return runOpenClawAgentWriteTransaction(
@@ -29,7 +30,7 @@ export function mutateAcpSessionEntryInWorker(
         throw new Error("ACP entry mutation lost its canonical database owner");
       }
       admit("transaction");
-      const prepared = readSessionEntrySelectionSnapshot(database, input.sessionKey, true);
+      const prepared = readSessionEntrySelectionSnapshot(database, input.sessionKey, true, true);
       const existing = prepared[0]?.entry;
       assertAcpSessionMutationEntry(
         existing,
@@ -41,7 +42,9 @@ export function mutateAcpSessionEntryInWorker(
       const base = existing ?? (mutation.kind === "touch" ? mutation.fallbackEntry : undefined);
       if (!base) {
         const result = { entry: null };
-        deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+        if (ownReceipt) {
+          deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+        }
         admit("commit");
         return result;
       }
@@ -50,28 +53,30 @@ export function mutateAcpSessionEntryInWorker(
           ? mergeSessionEntry(base, { updatedAt: mutation.updatedAt })
           : structuredClone(base);
       delete next.acp;
-      const changed = applySessionEntryPatchInDatabase(database, {
-        operationLabel: "session-entry.patch",
-        validateCanonicalKeys: false,
-        readSnapshot: (current) =>
-          readSessionEntrySelectionSnapshot(current, input.sessionKey, true),
-        prepared,
+      const changed = writeSessionEntryPatchInDatabase(database, {
+        fresh: prepared,
         sessionKey: input.sessionKey,
         writeBase: base,
-        next: mutation.kind === "clear-legacy" && !base.acp ? undefined : next,
+        next,
         options: {},
       });
       const publication = changed.identity
-        ? prepareSessionEntryReplacementPublication({
-            pendingArchiveRecovery: false,
-            previous: changed.identity.previous,
-            current: changed.identity.current,
-            maintenancePlans: [],
-            membershipInvalidatedKeys: [],
-          })
+        ? prepareSessionEntryReplacementPublication(
+            {
+              pendingArchiveRecovery: false,
+              previous: changed.identity.previous,
+              current: changed.identity.current,
+              maintenancePlans: [],
+              membershipInvalidatedKeys: [],
+            },
+            database,
+            { postimages: changed.postimages },
+          )
         : undefined;
       const result = { entry: changed.entry, ...(publication ? { publication } : {}) };
-      deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+      if (ownReceipt) {
+        deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+      }
       admit("commit", publication);
       return result;
     },

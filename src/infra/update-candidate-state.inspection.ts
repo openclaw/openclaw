@@ -13,9 +13,22 @@ import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
-import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateStateInspectionDiagnostics,
+  type UpdateStateInspectionProgress,
+} from "./update-candidate-state.diagnostics.js";
 import { withUpdateStateInspectionWork } from "./update-candidate-state.process.js";
 import type { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+
+// Worker progress replaces these labels once the selected step reports its own phase.
+const WORKER_STARTUP_PHASES = new Map<unknown, string>([
+  ["versions", "schema inspection startup"],
+  ["database-generations", "database generation verification"],
+  ["database-backup", "database backup"],
+  ["database-restore-preparation", "database restore preparation"],
+  ["runtime-retention", "runtime dependency inventory"],
+]);
 
 export async function runUpdateStateInspectionWorker(params: {
   input: { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv } & Record<
@@ -30,7 +43,12 @@ export async function runUpdateStateInspectionWorker(params: {
   databases: Awaited<ReturnType<typeof readUpdateStateDatabaseSizes>>;
   timeoutMs?: number;
   readOnlySource?: string;
-  ioBudget?: "probe" | "deadline";
+  sources?: readonly string[];
+  ioBudget?: "deadline";
+  /** Best-effort callers continue after failure and compose their own guidance. */
+  retryAdvice?: boolean;
+  maxOutputBytes?: number;
+  onProgress?: (progress: UpdateStateInspectionProgress) => void;
 }) {
   const selectedUrl = resolveRuntimeWorkerUrl({
     ...(params.readOnlySource
@@ -49,13 +67,16 @@ export async function runUpdateStateInspectionWorker(params: {
     : undefined;
   const inspection = createUpdateStateInspectionDiagnostics({
     operation: "State schema inspection",
-    phase:
-      params.input.mode === "versions" ? "schema inspection startup" : "shared database discovery",
+    phase: WORKER_STARTUP_PHASES.get(params.input.mode) ?? "shared database discovery",
+    // Size admission omits missing files, so callers that verify absence name their full scope.
     paths: params.readOnlySource
       ? [params.readOnlySource]
-      : params.input.mode === "versions"
-        ? params.databases.map((database) => database.path)
-        : [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")],
+      : (params.sources ??
+        (params.input.mode === "discover"
+          ? [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")]
+          : params.databases.map((database) => database.path))),
+    retryAdvice: params.retryAdvice,
+    onProgress: params.onProgress,
   });
   try {
     const timeoutMs = Math.max(
@@ -77,6 +98,7 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
+                includeLocalStoreVersions: true,
                 env: {
                   HOME: params.sourceEnv.HOME,
                   OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,
@@ -92,7 +114,7 @@ export async function runUpdateStateInspectionWorker(params: {
           },
           killGraceMs: 500,
           killProcessTree: true,
-          maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+          maxOutputBytes: { stdout: params.maxOutputBytes ?? 1024 * 1024, stderr: 20_000 },
           outputCapture: { stdout: "head", stderr: "discard" },
           terminateOnOutputLimit: { stdout: true },
           onOutputChunk: inspection.onOutputChunk,
@@ -113,8 +135,6 @@ export async function runUpdateStateInspectionWorker(params: {
                 ),
                 timeoutMs,
                 signal: params.signal,
-                nodeRunner: params.nodeRunner,
-                env: params.sourceEnv,
               },
               run,
             ),
@@ -130,10 +150,9 @@ export async function runUpdateStateInspectionWorker(params: {
     const result = await work;
     return { ...result, stderr: inspection.stderr(), inspection };
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      params.signal?.throwIfAborted();
     }
-    params.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
 }
@@ -144,11 +163,13 @@ export function parseUpdateStateInspectionWorker<T>(
 ): T {
   if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
     const signal = result.signal ? `, signal ${result.signal}` : "";
-    throw result.inspection.failure(
-      result.stderr ||
-        (result.outputLimitExceeded ? "Worker output exceeded its capture limit" : result.stdout),
-      `${result.termination}${signal}`,
+    const failure = result.inspection.failure(
+      result.stderr || (result.outputLimitExceeded ? "" : result.stdout),
+      `${result.outputLimitExceeded ? "output-limit" : result.termination}${signal}`,
     );
+    const code =
+      !result.outputLimitExceeded && result.stderr.split(/\r?\n/u).find(isPublicUpdateFailureCode);
+    throw code ? Object.assign(failure, { code }) : failure;
   }
   try {
     return schema.parse(JSON.parse(result.stdout));

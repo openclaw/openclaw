@@ -22,6 +22,13 @@ export const COMMAND_PALETTE_SHORTCUT = {
   platformSpecific: true,
 } as const satisfies KeyboardShortcutDefinition;
 
+// Keep the displayed shortcut stable while accepting familiar editor aliases.
+export const COMMAND_PALETTE_SHORTCUTS = [
+  COMMAND_PALETTE_SHORTCUT,
+  { modifiers: ["mod"], key: "p", platformSpecific: true },
+  { modifiers: ["mod", "shift"], key: "p", platformSpecific: true },
+] as const satisfies readonly KeyboardShortcutDefinition[];
+
 // Serialized into sandbox documents before widget scripts run. Object methods
 // keep the factory self-contained through bundling, with pristine operations
 // captured once so widget prototype changes cannot redefine a host shortcut.

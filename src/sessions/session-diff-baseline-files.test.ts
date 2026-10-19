@@ -4,10 +4,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  readMainDatabasePosixLocks,
+  readSqliteShmPosixLocks,
+} from "../infra/sqlite-posix-locks.test-support.js";
+import { collectCheckoutDiff, collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 function git(root: string, ...args: string[]) {
   execFileSync("git", ["-C", root, ...args], { stdio: "pipe" });
@@ -38,9 +46,73 @@ function storedFingerprint(
 }
 
 describe("session diff baseline file capture", () => {
+  it
+    .skipIf(process.platform !== "linux" && process.platform !== "darwin")
+    .each(["database", "hardlink", "memory-reindex"])(
+    "preserves live SQLite locks for a %s candidate",
+    async (kind) => {
+      const root = repository();
+      const state = path.join(root, "state");
+      await fs.mkdir(state);
+      vi.stubEnv("OPENCLAW_STATE_DIR", state);
+      const pathname =
+        kind === "hardlink"
+          ? path.join(tempDirs.make("session-diff-live-db-"), "agent.sqlite")
+          : path.join(
+              root,
+              kind === "memory-reindex"
+                ? "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555"
+                : "agent.sqlite",
+            );
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(pathname);
+      try {
+        writer.exec(
+          "PRAGMA journal_mode=WAL; CREATE TABLE notes(body TEXT); BEGIN; SELECT * FROM notes;",
+        );
+        if (kind === "hardlink") {
+          await fs.link(pathname, path.join(root, "notes.txt"));
+          await fs.link(`${pathname}-shm`, path.join(root, "mapping.txt"));
+        }
+        const mainLocks = readMainDatabasePosixLocks(pathname);
+        const shmLocks = readSqliteShmPosixLocks(`${pathname}-shm`);
+        expect(mainLocks).not.toEqual([]);
+        expect(shmLocks).not.toEqual([]);
+
+        const baseline = await collectCheckoutDiffBaseline({ cwd: root });
+
+        // Query locks before any new SQLite connection can truncate the unlocked SHM.
+        expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);
+        expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
+        expect(baseline?.files).toEqual([]);
+        expect(baseline?.truncated).toBe(true);
+        const files = (await fs.readdir(root)).filter(
+          (name) => name !== ".git" && name !== "state",
+        );
+        // A baseline captured by an older release must not reopen the same files either.
+        const diff = await collectCheckoutDiff({
+          cwd: root,
+          sessionId: "s1",
+          baseline: {
+            version: 1,
+            root,
+            sessionId: "s1",
+            files: files.map((name) => ({ path: name, fingerprint: "old" })),
+          },
+        });
+        expect(diff.files.map((file) => file.path).toSorted()).toEqual(files.toSorted());
+        expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);
+        expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
+      } finally {
+        writer.close();
+      }
+    },
+  );
+
   it("retains unchanged content when modification time changes during the display read", async () => {
     const root = repository();
-    const file = path.join(root, "work.bin");
+    const file = path.join(root, "work.sqlite.ts");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const bytes = Buffer.from([0, 1, 255, 2, 0, 3]);
     await fs.writeFile(file, bytes, { mode: 0o640 });
     const stat = await fs.stat(file);
@@ -65,8 +137,8 @@ describe("session diff baseline file capture", () => {
     expect(touched).toBe(true);
     expect(baseline?.files).toEqual([
       {
-        path: "work.bin",
-        fingerprint: storedFingerprint("work.bin", `${stat.mode}\0${stat.size}`, bytes),
+        path: "work.sqlite.ts",
+        fingerprint: storedFingerprint("work.sqlite.ts", `${stat.mode}\0${stat.size}`, bytes),
       },
     ]);
     expect(baseline?.truncated).toBeUndefined();
@@ -138,5 +210,29 @@ describe("session diff baseline file capture", () => {
     expect(baseline?.files.map((entry) => entry.path)).toEqual([...included, "30-empty.txt"]);
     expect(baseline?.truncated).toBe(true);
     await expect(fs.readFile(outside, "utf8")).resolves.toBe("outside bytes\n");
+  });
+
+  it("ignores pre-session edits to branch-added files in the uncommitted view", async () => {
+    const root = repository();
+    await fs.writeFile(path.join(root, "base.txt"), "base\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "base");
+    git(root, "checkout", "-qb", "feature");
+    await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "feature");
+    await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
+    const captured = await collectCheckoutDiffBaseline({ cwd: root });
+    const baseline = captured && { ...captured, sessionId: "s1" };
+    const sessionPaths = async () =>
+      (
+        await collectCheckoutDiff({ cwd: root, scope: "uncommitted", baseline, sessionId: "s1" })
+      ).files.map((file) => file.path);
+
+    await expect(sessionPaths()).resolves.toEqual([]);
+
+    await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
+
+    await expect(sessionPaths()).resolves.toEqual(["feature.txt"]);
   });
 });

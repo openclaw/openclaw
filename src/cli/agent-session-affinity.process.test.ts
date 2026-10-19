@@ -71,7 +71,7 @@ describe("agent --local session affinity at HTTP egress", () => {
               model: { primary: "affinity-fixture/affinity-fixture" },
               params: { cacheRetention: testCase.retention },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

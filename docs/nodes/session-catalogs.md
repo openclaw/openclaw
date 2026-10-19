@@ -9,13 +9,19 @@ title: "Node session catalogs"
 sidebarTitle: "Session catalogs"
 ---
 
-Catalog listing waits up to one second per provider, concurrently. Providers that
-finish within that budget return normally. A slow provider returns
-`catalog.error.code: "catalog_pending"`; when available, its last successful page
+Cold catalog listing waits up to one second per provider, concurrently. Providers that
+finish within that budget return normally. When a page is already available for
+the same caller and query, listing returns it promptly while discovery refreshes
+in the background; an already-settled refresh returns its fresh page instead.
+A slow provider returns
+`catalog.error.code: "catalog_pending"`; when available, its latest available page
 for the same caller and query is included with hosts marked `pending: true` and
-a stale-results message. A failed refresh can likewise return the last page with
+a stale-results message. A failed catalog enumeration can likewise return that page with
 `catalog.error.code: "catalog_stale"` and the underlying error in its message.
-Other providers remain usable. Late results refresh the page for the next list;
+Completed host results are authoritative, including offline or unavailable hosts;
+the Gateway does not replace those results with older rows, even while another
+host is pending. Providers own their
+host snapshot freshness and invalidation. Other providers remain usable. Late results refresh the page for the next list;
 existing host progress updates remain supported.
 
 These fallback pages are bounded in memory and invalidated by configuration or
@@ -23,6 +29,10 @@ provider registration changes and catalog archive operations. Every delivery
 rechecks current visibility and local session identity. The one-second budget
 covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
+
+Paired-node discovery reuses the current committed node inventory while pairing
+writes are queued. A committed pairing change invalidates that inventory before
+the next read, including when a node's access is revoked.
 
 With diagnostics enabled, slow-provider warnings report elapsed time, including
 queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it
@@ -148,8 +158,11 @@ operator catalog and paired-node catalog commands without disabling Anthropic
 models or the Claude CLI backend.
 A remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
-when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
-the node pairing upgrade when those commands first appear.
+when the Anthropic plugin is enabled and its Claude projects directory exists:
+`$CLAUDE_CONFIG_DIR/projects/` when the app's environment sets
+`CLAUDE_CONFIG_DIR`, otherwise `~/.claude/projects/`. Claude Desktop metadata
+always comes from the user's home directory. Approve the node pairing upgrade
+when those commands first appear.
 
 A native node host with the Claude CLI available also advertises
 `anthropic.claude.terminal.resume.v1`. Eligible CLI and Desktop rows can open

@@ -1,5 +1,4 @@
 import type { NodeWorkerBundleInstallInput } from "../../worker/node-bundle-install-protocol.js";
-import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import {
   createArtifactTransferService,
   type ArtifactTransferOptions,
@@ -14,7 +13,6 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
   return {
     ...transfer,
     prepare(params: {
-      node: NodeWorkerSupervisorNodeProof;
       gatewayNamespace: string;
       artifact: WorkerBundleArtifact;
       bundlePrewarm?: 1;
@@ -23,12 +21,13 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
       onProgress?: (servedBytes: number) => void;
       onInterrupted?: (servedBytes: number, reason: string) => void;
     }): { token: string; input: NodeWorkerBundleInstallInput } {
-      // The caller closes over this exact node proof; copied node IDs are not authority.
+      // The caller's live-authority check owns the node binding.
       const { token } = transfer.prepare({
         ...params,
         artifactKey: params.artifact.bundleHash,
         ttlMs: workerBootstrapOperationTimeoutMs(params.artifact),
-        maxServes: 1,
+        // Allow ranged resumes, bounded by the size-derived lifetime and exact live owner.
+        maxServes: 256,
       });
       return {
         token,

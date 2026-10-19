@@ -11,7 +11,10 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export async function prepareAuthenticatedProfile(options: GatewayRequestHandlerOptions) {
+export async function prepareAuthenticatedProfile(
+  options: GatewayRequestHandlerOptions,
+  includeProfile = false,
+) {
   const { client } = options;
   const lifetime = readGatewayRequestMutationAuthority(options);
   const profileReference = client?.authenticatedUserProfile?.profileId;
@@ -45,7 +48,9 @@ export async function prepareAuthenticatedProfile(options: GatewayRequestHandler
     profileReference ??
     (legacyEmail ? await ensureProfileIdForEmail(legacyEmail, {}, assertConnection) : undefined);
   assertConnection();
-  const profile = reference ? await prepareUserProfileRoleAuthority(reference) : undefined;
+  const profile = reference
+    ? await prepareUserProfileRoleAuthority(reference, { includeProfile })
+    : undefined;
   assertConnection();
   // Bind the alias after authority capture to reject relinking between the two reads.
   if (
@@ -61,7 +66,7 @@ export async function prepareAuthenticatedProfile(options: GatewayRequestHandler
     }
   };
   assertCurrent();
-  return { profileId: profile?.profileId, assertCurrent };
+  return { profileId: profile?.profileId, listItem: profile?.listItem, assertCurrent };
 }
 
 export async function prepareProfileMutationAccess(
@@ -137,6 +142,7 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
             sharedOwner ? authenticatedProfileId : role?.profileId,
             role?.role ?? null,
             cfg,
+            role?.githubLogin ?? null,
           );
     if (policy && !policy.scopes.includes("operator.admin")) {
       throw new Error("Profile administration requires operator.admin");

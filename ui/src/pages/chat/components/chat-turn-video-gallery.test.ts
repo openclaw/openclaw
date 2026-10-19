@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import * as turnBoundary from "../chat-turn-boundary.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
   createAttachmentBlock,
@@ -15,9 +16,11 @@ import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 
 const container = document.createElement("div");
 afterEach(() => {
-  render(nothing, container);
+  cleanupSolid();
   container.remove();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   resetChatThreadState();
 });
 
@@ -121,43 +124,62 @@ it("projects a whole turn across run frames, but never another user turn, divide
   expect(forwarded.get("b")?.map((entry) => entry.key)).toEqual(["b"]);
 });
 
-it("keeps duplicate positioned video slots and sibling messages, but not persisted mirrors", async () => {
+it("keeps duplicate video slots and each sibling message's source authority, but not persisted mirrors", async () => {
+  vi.useFakeTimers();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
-  const source = "https://example.com/repeated.mp4";
+  const source = `/tmp/openclaw/${crypto.randomUUID()}-repeated.mp4`;
+  const fetchMock = vi.fn<typeof fetch>(async () =>
+    Response.json({
+      available: true,
+      mediaTicket: "gallery-ticket",
+      mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
   const message = createAssistantMessage(
     [
       createAttachmentBlock(source, "video", "Repeated", "video/mp4"),
       { type: "text", text: "Between clips" },
       createAttachmentBlock(source, "video", "Repeated", "video/mp4"),
     ],
-    { __openclaw: { media: [{ path: source, contentType: "video/mp4" }] } },
+    {
+      __openclaw: {
+        id: "first-video-message",
+        media: [{ path: source, contentType: "video/mp4" }],
+      },
+    },
   );
-  const sibling = createAssistantMessage([
-    createAttachmentBlock("https://example.com/last.mp4", "video", "Last", "video/mp4"),
-  ]);
+  const sibling = createAssistantMessage(
+    [createAttachmentBlock(source, "video", "Last", "video/mp4")],
+    { __openclaw: { id: "last-video-message" } },
+  );
   const turn = [
     { key: "first", message },
     { key: "last", message: sibling },
   ];
   let opened: ImageLightboxItem | undefined;
   document.body.append(container);
-  render(
-    renderMessageGroup(
+  const harness = createMessageGroupHarness(container);
+  const rerender = () =>
+    harness.render(
       createMessageGroup(message, "assistant", { messages: [{ key: "first", message }] }),
       {
         showReasoning: false,
         showToolCalls: false,
         assistantName: "OpenClaw",
         assistantAvatar: null,
+        sessionKey: "agent:main:video-gallery",
+        mediaOwner: rerender,
         getTurnVideoMessages: () => turn,
         onOpenImage: (item) => {
           opened = item;
         },
       },
-    ),
-    container,
-  );
+    );
+  onTestFinished(() => releaseChatMediaResourceOwner(rerender));
+  rerender();
+  await vi.advanceTimersByTimeAsync(0);
   const players = [...container.querySelectorAll("openclaw-chat-video-player")];
   expect(players).toHaveLength(2);
   await Promise.all(players.map((player) => player.updateComplete));
@@ -166,4 +188,26 @@ it("keeps duplicate positioned video slots and sibling messages, but not persist
   const entries = await Promise.all(opened!.gallery!.items.map((load) => load()));
   expect(entries.map((item) => item?.title)).toEqual(["Repeated", "Repeated", "Last"]);
   expect(entries.every((item) => item?.kind === "video" && item.connectVideo)).toBe(true);
+  const expectedMessageIds = ["first-video-message", "first-video-message", "last-video-message"];
+  for (const [index, item] of entries.entries()) {
+    const video = document.createElement("video");
+    const disconnect = item!.connectVideo!(video, vi.fn());
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(video.src).toContain("mediaTicket=gallery-ticket");
+      const params = new URL(video.src).searchParams;
+      expect(params.get("source")).toBe(source);
+      expect(params.get("messageId")).toBe(expectedMessageIds[index]);
+      expect(params.get("sessionKey")).toBe("agent:main:video-gallery");
+    } finally {
+      disconnect();
+    }
+  }
+  expect(
+    fetchMock.mock.calls.map(([url]) =>
+      new URL(url instanceof Request ? url.url : url, window.location.origin).searchParams.get(
+        "messageId",
+      ),
+    ),
+  ).toEqual(["first-video-message", "last-video-message"]);
 });

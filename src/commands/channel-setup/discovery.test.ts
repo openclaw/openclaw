@@ -1,6 +1,6 @@
 // Channel setup discovery tests cover visible setup choices from bundled, installed, and trusted catalog sources.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
+import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.types.js";
 import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 
@@ -43,7 +43,8 @@ vi.mock("../../secrets/channel-env-vars.js", () => ({
   getChannelEnvVars: () => [],
 }));
 
-import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./discovery.js";
+import { resolveChannelSetupEntries } from "./discovery.js";
+import { listManifestInstalledChannelIds } from "./trusted-catalog.js";
 
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {

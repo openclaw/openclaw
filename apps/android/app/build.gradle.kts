@@ -299,7 +299,9 @@ val generateNativeI18n =
     sourceFiles.from(
       listOf(
         "scripts/android-app-i18n.ts",
+        "scripts/native-i18n-inventory.ts",
         "scripts/native-i18n-locales.ts",
+        "scripts/lib/canonical-json.mjs",
         "scripts/lib/direct-run.mjs",
         "packages/normalization-core/src/expect.ts",
         "apps/.i18n/native-source.json",
@@ -340,6 +342,11 @@ ksp {
 }
 
 android {
+  sourceSets
+    .getByName("androidTest")
+    .kotlin.directories
+    .add(rootProject.file("release-validation/src/main/java").path)
+
   namespace = "ai.openclaw.app"
   // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
   // targetSdk stays separate so runtime behavior changes remain an explicit migration.

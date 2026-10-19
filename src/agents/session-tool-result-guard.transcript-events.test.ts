@@ -1,13 +1,19 @@
+import fs from "node:fs";
 import path from "node:path";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -16,8 +22,12 @@ import {
   persistCompactionBoundaryWithSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
-import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
+import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
+import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -31,7 +41,6 @@ import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -39,19 +48,36 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
+import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { persistAgentSessionMessage } from "./sessions/agent-session-transcript.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
-import {
-  prepareCodeModeSourceAppend,
-  takeCodeModeResponseSource,
-  wrapStreamFnCodeModeSource,
-} from "./transcript-code-mode-source.js";
 
-const assistantText = (text: string) =>
-  makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+const publicationFailure = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+// mock-isolation: Only the post-commit publisher fails; persistence and owner selection stay real.
+vi.mock("../config/sessions/session-accessor.sqlite-events.js", async (importOriginal) => {
+  const events =
+    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-events.js")>();
+  return {
+    ...events,
+    publishTranscriptUpdate: (...args: Parameters<typeof events.publishTranscriptUpdate>) =>
+      publicationFailure.error
+        ? Promise.reject(publicationFailure.error)
+        : events.publishTranscriptUpdate(...args),
+  };
+});
+
+const assistantText = (
+  text: string,
+  fields: Partial<Parameters<typeof makeAgentAssistantMessage>[0]> = {},
+) => makeAgentAssistantMessage({ content: [{ type: "text", text }], ...fields });
+const assistantContent = (text: string) => ({
+  role: "assistant",
+  content: [{ type: "text", text }],
+});
 const model = makeProviderModelFixture({
   id: "test-model",
   api: "openai-responses",
@@ -64,18 +90,6 @@ const codeCall = (id: string) => ({
   name: "exec",
   arguments: { code: "const API_TOKEN = computeToken(); return API_TOKEN;" },
 });
-async function withSource(message: ReturnType<typeof makeAgentAssistantMessage>) {
-  const stream = createAssistantMessageEventStream();
-  if (message.stopReason === "error") {
-    stream.push({ type: "error", reason: "error", error: message });
-  } else {
-    stream.push({ type: "done", reason: "toolUse", message });
-  }
-  return await (
-    await wrapStreamFnCodeModeSource(() => stream, new Set(["exec"]))(model, { messages: [] })
-  ).result();
-}
-
 function installWriteHook(
   handler: (
     event: PluginHookBeforeMessageWriteEvent,
@@ -99,8 +113,12 @@ function collectUpdates() {
   return updates;
 }
 
-async function openPersistedSessionManager(lifecycleRevision?: string) {
+async function openPersistedSessionManager(
+  lifecycleRevision?: string,
+  config: OpenClawConfig = {},
+) {
   const root = tempDirs.make("openclaw-transcript-events-");
+  setRuntimeConfigSnapshot(config);
   const sessionId = `session-${fixtureId++}`;
   const target = {
     agentId: "main",
@@ -113,8 +131,21 @@ async function openPersistedSessionManager(lifecycleRevision?: string) {
     ...target,
     entry: sessionEntry,
   });
-  return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
+  const sessionManager = SessionManager.open(target, root);
+  const guard = (options: Parameters<typeof guardSessionManager>[1] = {}) =>
+    guardSessionManager(sessionManager, {
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      ...options,
+    });
+  const messages = () => SessionManager.open(target, root).buildSessionContext().messages;
+  return { root, sessionManager, target, sessionEntry, guard, messages };
 }
+
+beforeEach(() => {
+  publicationFailure.error = undefined;
+  setRuntimeConfigSnapshot({});
+});
 
 afterEach(async () => {
   resetGlobalHookRunner();
@@ -123,22 +154,162 @@ afterEach(async () => {
   }
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("guardSessionManager transcript updates", () => {
-  it("preserves prepared source and redaction when a concurrent append forces a retry", async () => {
-    const { sessionManager: manager, target } = await openPersistedSessionManager();
-    const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));
-    installSessionToolResultGuard(manager, {
-      config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
+  async function openSourceProjection(deferred: boolean) {
+    const { guard, target } = await openPersistedSessionManager();
+    const runId = `source-${target.sessionId}`;
+    const manager = guard({ runId });
+    const gateway = createAgentEventTestHarness();
+    gateway.register(runId, target.sessionKey, runId);
+    const sourceEvents: AgentEventRuntimePayload[] = [];
+    const unsubscribeAgent = subscribeAgentEvents(async (event) => {
+      if (event.runId === runId) {
+        if (event.stream === "assistant") {
+          sourceEvents.push(event);
+        }
+        await gateway.handler(event);
+      }
     });
+    const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
+      if (event.sessionId === target.sessionId) {
+        gateway.handler.retireTranscript(event);
+      }
+    });
+    const finishing = createDeferred();
+    const finish = createDeferred();
+    const source = createSubscribedSessionHarness({
+      runId,
+      ...(deferred ? { onBeforeTerminalDelivery: () => undefined } : {}),
+      onBeforeLifecycleTerminal: () => {
+        finishing.resolve();
+        return finish.promise;
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stream = (message: ReturnType<typeof assistantText>) => {
+      source.emit({ type: "message_start", message: { ...message, content: [] } });
+      source.emit({
+        type: "message_update",
+        message: { ...message },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: message.content
+            .flatMap((block) => (block.type === "text" ? [block.text] : []))
+            .join("\n"),
+        },
+      });
+    };
+    const commit = (message: Parameters<typeof persistAgentSessionMessage>[1]) =>
+      persistAgentSessionMessage(manager, message, { invalidateSerializedPrefixCache: false });
+    const snapshot = async () => {
+      await unsubscribeAgent.drain();
+      gateway.chatRunState.flushPendingText(runId);
+      return projectInFlightRunSnapshot({ chatRunState: gateway.chatRunState, runId }).text;
+    };
+    return {
+      ...source,
+      manager,
+      sourceEvents,
+      stream,
+      commit,
+      snapshot,
+      finishing,
+      async close() {
+        finish.resolve();
+        await source.subscription.waitForPendingEvents();
+        source.subscription.unsubscribe();
+        await unsubscribeAgent();
+        unsubscribeTranscript();
+        await gateway.handler.dispose();
+        gateway.chatRunState.clear();
+        vi.useRealTimers();
+      },
+    };
+  }
+
+  it.each(["superseded", "retained by steer"])(
+    "retires a committed deferred occurrence %s without hiding identical later output",
+    async (prior) => {
+      const h = await openSourceProjection(true);
+      const first = assistantText("[[reply_to_current]] Repeated answer.");
+      const second = assistantText("Repeated answer.");
+      try {
+        h.stream(first);
+        h.emit({ type: "message_end", message: first });
+        const firstId = await h.commit(first);
+        assert(firstId);
+        expect(h.manager.getEntry(firstId)).toMatchObject({
+          type: "message",
+          message: { role: "assistant" },
+        });
+        expect(h.sourceEvents).toEqual([]);
+        if (prior === "retained by steer") {
+          const steer = makeUserMessage("Continue with the same answer", 1);
+          h.emit({ type: "message_start", message: steer });
+          h.emit({ type: "message_end", message: steer });
+          await h.commit(steer);
+        }
+        h.stream(second);
+        h.emit({ type: "message_end", message: second });
+        h.emit({ type: "agent_end", messages: [first, second] });
+        await h.finishing.promise;
+
+        expect(h.sourceEvents.map((event) => event.data.text)).toEqual(
+          prior === "superseded" ? ["Repeated answer."] : ["Repeated answer.", "Repeated answer."],
+        );
+        expect(await h.snapshot()).toBe("Repeated answer.");
+        await h.commit(second);
+        expect(await h.snapshot()).toBe("");
+      } finally {
+        await h.close();
+      }
+    },
+  );
+
+  it("retires a prior committed source after the next identical item starts", async () => {
+    const h = await openSourceProjection(false);
+    const first = assistantText("[[reply_to_current]] Same answer.");
+    const second = assistantText("Same answer.");
+    try {
+      h.stream(first);
+      h.emit({ type: "message_end", message: first });
+      await h.subscription.waitForPendingEvents();
+      expect(await h.snapshot()).toBe("Same answer.");
+      h.stream(second);
+      await h.subscription.waitForPendingEvents();
+      expect(await h.snapshot()).toBe("Same answer.\n\nSame answer.");
+      await h.commit(first);
+      expect(await h.snapshot()).toBe("Same answer.");
+
+      h.emit({
+        type: "message_update",
+        message: assistantText("Same answer. Continued."),
+        assistantMessageEvent: { type: "text_delta", delta: " Continued." },
+      });
+      await h.subscription.waitForPendingEvents();
+      expect(await h.snapshot()).toBe("Same answer. Continued.");
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("preserves source text when a concurrent append forces a retry", async () => {
+    const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
+    const {
+      root,
+      sessionManager: manager,
+      target,
+    } = await openPersistedSessionManager(undefined, config);
+    const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));
+    installSessionToolResultGuard(manager, { config });
     const toolCall = codeCall("retry-source");
-    const emitted = await withSource(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }, toolCall],
-        stopReason: "toolUse",
-      }),
-    );
+    const emitted = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }, toolCall],
+      stopReason: "toolUse",
+    });
     const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
     const exec = db.exec.bind(db);
     let injected = false;
@@ -156,15 +327,13 @@ describe("guardSessionManager transcript updates", () => {
     });
     let entryId: string;
     try {
-      entryId = manager.appendMessage(
-        emitted,
-        prepareCodeModeSourceAppend({}, emitted, takeCodeModeResponseSource(emitted)),
-      );
+      entryId = manager.appendMessage(emitted);
       expect(execSpy).toHaveBeenCalledWith("ROLLBACK");
     } finally {
       execSpy.mockRestore();
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(root);
+    closeOpenClawAgentDatabasesForTest(root);
     const entries = SessionManager.open(target).getBranch();
     expect(entries.map(({ id, parentId }) => ({ id, parentId }))).toEqual([
       { id: baseId, parentId: null },
@@ -172,7 +341,7 @@ describe("guardSessionManager transcript updates", () => {
       { id: entryId, parentId: "concurrent-assistant" },
     ]);
     expect(entries.at(-1)).toMatchObject({
-      message: { content: [{ type: "text", text: "opaque(abcdef…qrst)" }, toolCall] },
+      message: { content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }, toolCall] },
     });
   });
 
@@ -200,91 +369,104 @@ describe("guardSessionManager transcript updates", () => {
       .getBranch()
       .filter((entry) => entry.type === "compaction");
     expect(compactions).toMatchObject([
-      {
-        __openclaw: { runId: "run-first", itemId: "compaction-run-first" },
-      },
-      {
-        __openclaw: { runId: "run-second", itemId: "compaction-run-second" },
-      },
+      { __openclaw: { runId: "run-first", itemId: "compaction-run-first" } },
+      { __openclaw: { runId: "run-second", itemId: "compaction-run-second" } },
     ]);
     expect(loadSessionEntry(target)?.compactionCount).toBe(2);
   });
 
-  it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
-    const { root, target, sessionEntry } = await openPersistedSessionManager();
-    const recorderTarget = { ...target, sessionEntry };
-    const ambient = createUserTurnTranscriptRecorder({
-      input: { text: "Active turn", timestamp: 1, idempotencyKey: "active:user" },
-      target: recorderTarget,
-    });
-    const source = createUserTurnTranscriptRecorder({
-      input: { text: "Steered source", timestamp: 2, idempotencyKey: "steered:user" },
-      target: recorderTarget,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
-    try {
-      await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
-      await ambient.persistApproved();
-      const approvalHook = vi.fn(({ message }: PluginHookBeforeMessageWriteEvent) => {
-        if (message.role !== "user") {
-          return undefined;
-        }
-        return {
-          message: {
-            ...message,
-            content: `[approved] ${typeof message.content === "string" ? message.content : ""}`,
-          },
-        };
+  it.each(["physical", "alias"])(
+    "consumes staged input via the %s database path through a reused guard with one approval",
+    async (locator) => {
+      const { root, target, sessionEntry } = await openPersistedSessionManager();
+      const recorderTarget = { ...target, sessionEntry };
+      const aliasRoot = path.join(root, "alias");
+      fs.symlinkSync(root, aliasRoot, "junction");
+      const aliasedTarget = {
+        ...recorderTarget,
+        storePath: path.join(aliasRoot, path.relative(root, target.storePath)),
+      };
+      const ambient = createUserTurnTranscriptRecorder({
+        input: { text: "Active turn", timestamp: 1, idempotencyKey: "active:user" },
+        target: recorderTarget,
       });
-      installWriteHook(approvalHook);
-      expect(await source.stageApproved!({ runId: "steered", assertCurrent: () => {} })).toBe(true);
-      const approved = await source.resolveMessage();
-      if (!approved) {
-        throw new Error("Expected approved steering input");
+      const source = createUserTurnTranscriptRecorder({
+        input: { text: "Steered source", timestamp: 2, idempotencyKey: "steered:user" },
+        target: locator === "alias" ? aliasedTarget : recorderTarget,
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+      try {
+        await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
+        await ambient.persistApproved();
+        const approvalHook = vi.fn(({ message }: PluginHookBeforeMessageWriteEvent) => {
+          if (message.role !== "user") {
+            return undefined;
+          }
+          return {
+            message: {
+              ...message,
+              content: `[approved] ${typeof message.content === "string" ? message.content : ""}`,
+            },
+          };
+        });
+        installWriteHook(approvalHook);
+        const manager = guardSessionManager(await SessionManager.openAsync(target, root), {
+          ...target,
+          preparedUserTurnMessage: await ambient.resolveMessage(),
+          preparedUserTurnTranscriptRecorder: ambient,
+          suppressNextUserMessagePersistence: true,
+        });
+        expect(await source.stageApproved!({ runId: "steered", assertCurrent: () => {} })).toBe(
+          true,
+        );
+        const approved = await source.resolveMessage();
+        assert(approved, "Expected approved steering input");
+        const pending = await listSessionPendingInputs(target);
+        expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
+        const guarded = guardSessionManager(manager, {
+          ...target,
+          preparedUserTurnMessage: approved,
+          preparedUserTurnTranscriptRecorder: source,
+        });
+        const runtimeMessage = { ...approved, content: "Rendered source prompt" };
+
+        expect(source.getAdmissionReceipt()).toBeUndefined();
+        expect(source.isPendingInputConsumed?.()).toBe(false);
+        // The reused guard must recover the current source, not its first turn's recorder.
+        const entryId = await persistAgentSessionMessage(guarded, runtimeMessage, {
+          invalidateSerializedPrefixCache: false,
+        });
+
+        assert(entryId);
+        expect(entryId).toBe(pending.items[0]?.id);
+        expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
+        expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
+        expect(source.isPendingInputConsumed?.()).toBe(true);
+        expect(source.getPersistedMessage?.()).toEqual(approved);
+        expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+        expect(approvalHook).toHaveBeenCalledOnce();
+
+        const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));
+        expect(approvalHook).toHaveBeenCalledTimes(2);
+        expect(guarded.getEntry(unstagedId)).toMatchObject({
+          message: { role: "user", content: "[approved] Unstaged source" },
+        });
+      } finally {
+        source.finishPendingInput?.("interrupted");
+        ambient.finishPendingInput?.("interrupted");
       }
-      const pending = listSessionPendingInputs(target);
-      expect(pending.total).toBe(1);
-      const guarded = guardSessionManager(SessionManager.open(target, root), {
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        preparedUserTurnMessage: await ambient.resolveMessage(),
-        preparedUserTurnTranscriptRecorder: ambient,
-        suppressNextUserMessagePersistence: true,
-      });
-      const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
-        { role: "user", content: "Rendered steering prompt", timestamp: 2 },
-        { message: approved, recorder: source },
-      );
+    },
+  );
 
-      expect(source.getAdmissionReceipt()).toBeUndefined();
-      // The already-running turn's async context is not the steered input's custody.
-      const entryId = ambient.withPendingInput!(() => guarded.appendMessage(runtimeMessage));
-
-      expect(entryId).toBe(pending.items[0]?.id);
-      expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
-      expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
-      expect(source.getPersistedMessage?.()).toEqual(approved);
-      expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
-      expect(approvalHook).toHaveBeenCalledOnce();
-
-      const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));
-      expect(approvalHook).toHaveBeenCalledTimes(2);
-      expect(guarded.getEntry(unstagedId)).toMatchObject({
-        message: { role: "user", content: "[approved] Unstaged source" },
-      });
-    } finally {
-      source.finishPendingInput?.("interrupted");
-      ambient.finishPendingInput?.("interrupted");
-    }
-  });
-
-  it("combines explicit redaction with one fresh SQLite admission across replay", async () => {
-    const { root, target, sessionEntry, sessionManager } = await openPersistedSessionManager();
+  it("preserves text with one fresh SQLite admission across replay despite logging patterns", async () => {
+    const config = { logging: { redactPatterns: [String.raw`private-note=([^\s]+)`] } };
+    const { root, target, guard, sessionEntry } = await openPersistedSessionManager(
+      undefined,
+      config,
+    );
     const message = {
-      role: "user" as const,
-      content: "private-note=fixture-only-redaction-value",
-      idempotencyKey: "redacted-admission:user",
-      timestamp: 1,
+      ...makeUserMessage("private-note=fixture-only-redaction-value", 1),
+      idempotencyKey: "faithful-admission:user",
     };
     const assertOriginalInputCommit = vi.fn(() => {
       expect(
@@ -301,10 +483,8 @@ describe("guardSessionManager transcript updates", () => {
     const admitted = vi.fn();
     assert(recorder.setAdmissionHandler);
     recorder.setAdmissionHandler(admitted);
-    const guarded = guardSessionManager(sessionManager, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      config: { logging: { redactPatterns: [String.raw`private-note=([^\s]+)`] } },
+    const guarded = guard({
+      config,
       preparedUserTurnMessage: message,
       preparedUserTurnTranscriptRecorder: recorder,
     });
@@ -321,9 +501,9 @@ describe("guardSessionManager transcript updates", () => {
       .getBranch()
       .filter((entry) => entry.type === "message");
     expect(persisted).toMatchObject([
-      { id: entryId, message: { role: "user", content: "private-note=***" } },
+      { id: entryId, message: { role: "user", content: message.content } },
     ]);
-    expect(JSON.stringify(persisted)).not.toContain(message.content);
+    expect(JSON.stringify(persisted)).toContain(message.content);
   });
 
   it("admits an excluded ingress user through a stale bounded manager without appending", async () => {
@@ -353,8 +533,7 @@ describe("guardSessionManager transcript updates", () => {
     const marked = vi.spyOn(recorder, "markRuntimePersisted");
     const updates = collectUpdates();
     const guarded = guardSessionManager(stale, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
+      ...target,
       preparedUserTurnMessage: message,
       preparedUserTurnTranscriptRecorder: recorder,
     });
@@ -395,7 +574,7 @@ describe("guardSessionManager transcript updates", () => {
   });
 
   it("drops selected mentions when a write hook mutates their text in place", async () => {
-    const { target, sessionManager } = await openPersistedSessionManager();
+    const { guard } = await openPersistedSessionManager();
     const message = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "Hi @Taylor" }],
@@ -408,11 +587,7 @@ describe("guardSessionManager transcript updates", () => {
       }
       return { message: runtimeMessage };
     });
-    const guarded = guardSessionManager(sessionManager, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      preparedUserTurnMessage: message,
-    });
+    const guarded = guard({ preparedUserTurnMessage: message });
     const entryId = guarded.appendMessage(message);
     expect(guarded.getEntry(entryId)).toMatchObject({
       message: { role: "user", content: [{ type: "text", text: "Hi @Morgan" }] },
@@ -420,13 +595,50 @@ describe("guardSessionManager transcript updates", () => {
     expect(guarded.getEntry(entryId)).not.toHaveProperty("message.__openclaw.humanMentions");
   });
 
+  it.each(["appendMessage", "appendMessageAsync"] as const)(
+    "preserves saved messages and records publication failure through %s",
+    async (append) => {
+      const { sessionManager, target } = await openPersistedSessionManager();
+      const guarded = guardSessionManager(sessionManager, target);
+      const warnings = createWarnLogCapture("transcript-publication-failure");
+      const unhandled: unknown[] = [];
+      const onUnhandled = (error: unknown) => unhandled.push(error);
+      process.on("unhandledRejection", onUnhandled);
+      const message = assistantText("synthetic private message");
+      publicationFailure.error = new Error("synthetic private publication detail");
+      try {
+        const entryId = await guarded[append](message);
+        assert(entryId);
+        // A real event-loop turn observes process-level rejections, beyond promise microtasks.
+        await yieldToEventLoop();
+        expect(unhandled).toEqual([]);
+        expect(await warnings.findText("Transcript update publication failed")).toContain(
+          "reload the session",
+        );
+        expect(await warnings.findText("synthetic private")).toBeUndefined();
+        publicationFailure.error = undefined;
+        const nextId = await guarded[append](assistantText("still running"));
+        expect(SessionManager.open(target).getBranch()).toMatchObject([
+          { id: entryId, message },
+          { id: nextId, message: { content: [{ type: "text", text: "still running" }] } },
+        ]);
+      } finally {
+        publicationFailure.error = undefined;
+        process.off("unhandledRejection", onUnhandled);
+        warnings.cleanup();
+      }
+    },
+  );
+
   it("broadcasts the committed SQLite owner when a callback rebinds the manager", async () => {
     const updates = collectUpdates();
-    const { sessionManager: sm, target } = await openPersistedSessionManager("original-lifecycle");
+    const {
+      sessionManager: sm,
+      target,
+      guard,
+    } = await openPersistedSessionManager("original-lifecycle");
     const replacement = await openPersistedSessionManager("replacement-lifecycle");
-    const guarded = guardSessionManager(sm, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
+    const guarded = guard({
       onMessagePersisted: () => {
         sm.setSessionTarget(replacement.target);
       },
@@ -448,68 +660,19 @@ describe("guardSessionManager transcript updates", () => {
     expect(updates[0]?.messageId).not.toBe("");
   });
 
-  it("caches real tool result sequence before final assistant messages", async () => {
-    const updates = collectUpdates();
-    const { sessionManager: sm, target } = await openPersistedSessionManager();
-    sm.appendMessage(makeUserMessage("existing prompt", 1));
-    const spy = vi.spyOn(sm, "getBranch");
-    const guarded = guardSessionManager(sm, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      runId: "run-owning-final",
-    });
-    guarded.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-    guarded.appendMessage(makeTextToolResult("call_1", "read", "tool output", false, 2));
-    guarded.appendMessage(assistantText("final answer"));
-    expect(
-      sm.getEntries().flatMap((entry) =>
-        entry.type === "message"
-          ? [
-              {
-                role: entry.message.role,
-                runId: asNullableRecord(asNullableRecord(entry.message)?.["__openclaw"])?.runId,
-              },
-            ]
-          : [],
-      ),
-    ).toEqual([
-      { role: "user", runId: undefined },
-      { role: "assistant", runId: "run-owning-final" },
-      { role: "toolResult", runId: "run-owning-final" },
-      { role: "assistant", runId: "run-owning-final" },
-    ]);
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(updates.map(({ messageSeq }) => messageSeq)).toEqual([2, 4]);
-    expect(
-      updates.map(
-        ({ message }) => asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.runId,
-      ),
-    ).toEqual(["run-owning-final", "run-owning-final"]);
-    expect(updates.map(({ runId }) => runId)).toEqual([undefined, "run-owning-final"]);
-    spy.mockRestore();
-  });
-
   it("refreshes run ownership and delivery preparation across reused managers", async () => {
     const updates = collectUpdates();
-    const { sessionManager: sm, target } = await openPersistedSessionManager();
-    const firstRun = guardSessionManager(sm, {
+    const { sessionManager: sm, guard } = await openPersistedSessionManager();
+    const firstRun = guard({
       skipBeforeMessageWriteHooks: true,
-      agentId: target.agentId,
       runId: "run-first",
-      sessionKey: target.sessionKey,
       prepareAssistantTranscriptMessage: (message) =>
         applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./first.json"] }),
     });
     firstRun.appendMessage(assistantText("first reply\nMEDIA:./first.json"));
-    guardSessionManager(sm, {
-      agentId: target.agentId,
-      runId: "run-second",
-      sessionKey: target.sessionKey,
-    }).appendMessage({ ...assistantText("second reply"), stopReason: "error" });
+    guard({ runId: "run-second" }).appendMessage(
+      assistantText("second reply", { stopReason: "error" }),
+    );
     guardSessionManager(sm).appendMessage(assistantText("unowned reply"));
     expect(updates[0]?.message).toMatchObject({
       content: [{ type: "text", text: "first reply\nMEDIA:./first.json" }],
@@ -529,56 +692,46 @@ describe("guardSessionManager transcript updates", () => {
   });
 });
 
-describe("deferred assistant error transcript", () => {
+describe("append-only assistant errors with deferred display", () => {
   async function setup() {
-    const { sessionManager: manager, target } = await openPersistedSessionManager();
-    const owner = createAssistantErrorTranscript({ runId: "run-test" });
+    const { sessionManager: manager, messages } = await openPersistedSessionManager();
+    const owner = createAssistantErrorTranscript();
     installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
-    return { target, owner, manager };
+    return { messages, owner, manager };
   }
 
   it("preserves failed-attempt tool calls before their persisted results through recovery and replay", async () => {
-    const { target, owner, manager } = await setup();
+    const { messages: persistedMessages, owner, manager } = await setup();
     const toolCall = codeCall("call-exec");
     const failed = makeAgentAssistantMessage({
       content: [{ type: "text", text: "I" }, toolCall],
       stopReason: "error",
       errorMessage: "provider rate limit",
     });
-    const emitted = await withSource(failed);
+    manager.appendMessage(failed);
     manager.appendMessage(
-      emitted,
-      prepareCodeModeSourceAppend({}, emitted, takeCodeModeResponseSource(emitted)),
+      makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      content: [{ type: "text", text: "Persisted result" }],
-      isError: false,
-      timestamp: 1,
-    });
     owner.clear();
-    manager.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Recovered" }],
-        timestamp: 2,
-      }),
-    );
-    await owner.settle(false);
+    manager.appendMessage(assistantText("Recovered", { timestamp: 2 }));
+    owner.settle(false);
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const messages = SessionManager.open(target).buildSessionContext().messages;
+    const messages = persistedMessages();
     expect(messages).toMatchObject([
-      { role: "assistant", content: [toolCall], stopReason: "toolUse" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I" }, toolCall],
+        stopReason: "error",
+        errorMessage: "provider rate limit",
+      },
       {
         role: "toolResult",
         toolCallId: toolCall.id,
         content: [{ type: "text", text: "Persisted result" }],
       },
-      { role: "assistant", content: [{ type: "text", text: "Recovered" }] },
+      assistantContent("Recovered"),
     ]);
-    expect(messages[0]).not.toHaveProperty("errorMessage");
     const normalized = normalizeAssistantReplayContent(messages);
     const replay = transformMessages(
       normalized.filter(
@@ -587,35 +740,43 @@ describe("deferred assistant error transcript", () => {
       ),
       model,
     );
-    expect(replay).toEqual(normalized);
+    expect(replay).toMatchObject([
+      { role: "assistant", content: [toolCall], stopReason: "toolUse" },
+      { role: "toolResult", toolCallId: toolCall.id },
+      assistantContent("Recovered"),
+    ]);
+    expect(normalizeAssistantReplayContent([failed, messages[1]!, messages[2]!])).toEqual(
+      normalized,
+    );
   });
 
-  it("preserves canonical media without partial text when recovery succeeds", async () => {
-    const { target, owner, manager } = await setup();
+  it("preserves the original partial text and media when recovery succeeds", async () => {
+    const { messages, owner, manager } = await setup();
     const facts = {
       __openclaw: {
         media: [{ url: "https://example.invalid/report.pdf", contentType: "application/pdf" }],
       },
     };
     manager.appendMessage({
-      ...makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Here" }],
-        stopReason: "error",
-        errorMessage: "retry",
-      }),
+      ...assistantText("Here", { stopReason: "error", errorMessage: "retry" }),
       ...facts,
     });
     owner.clear();
     manager.appendMessage(assistantText("Recovered"));
-    await owner.settle(false);
-    expect(SessionManager.open(target).buildSessionContext().messages).toMatchObject([
-      { role: "assistant", content: [], stopReason: "stop", ...facts },
-      { role: "assistant", content: [{ type: "text", text: "Recovered" }] },
+    owner.settle(false);
+    expect(messages()).toMatchObject([
+      {
+        ...assistantContent("Here"),
+        stopReason: "error",
+        errorMessage: "retry",
+        ...facts,
+      },
+      assistantContent("Recovered"),
     ]);
   });
 
-  it("keeps terminal partial text and its error without duplicating tool facts or usage", async () => {
-    const { target, owner, manager } = await setup();
+  it("keeps one original terminal error without splitting text, tool facts, or usage", async () => {
+    const { messages, owner, manager } = await setup();
     const displayText = { type: "text", text: "Displayed partial answer" };
     const attachment = { type: "attachment", url: "https://example.invalid/report.pdf" };
     const failed = {
@@ -632,47 +793,35 @@ describe("deferred assistant error transcript", () => {
     failed.usage = { ...failed.usage, output: 7, totalTokens: 7 };
     manager.appendMessage(failed);
     manager.appendMessage(makeTextToolResult("call-terminal", "read", "Result", false, 1));
-    await owner.settle(true);
-    await owner.settle(true);
-    const messages = SessionManager.open(target).buildSessionContext().messages;
-    expect(messages).toMatchObject([
+    owner.settle(true);
+    owner.settle(true);
+    expect(messages()).toMatchObject([
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call-terminal" }],
-        openclawDisplayContent: [attachment],
+        content: [
+          { type: "text", text: "Partial answer" },
+          { type: "toolCall", id: "call-terminal" },
+        ],
+        openclawDisplayContent: [displayText, attachment],
         usage: { output: 7 },
-      },
-      { role: "toolResult", toolCallId: "call-terminal" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Partial answer" }],
-        openclawDisplayContent: [displayText],
         stopReason: "error",
         errorMessage: "terminal failure",
-        usage: { output: 0 },
       },
+      { role: "toolResult", toolCallId: "call-terminal" },
     ]);
   });
 
-  it("revalidates the captured writer before committing a terminal failure", async () => {
-    const { target, owner, manager } = await setup();
-    let active = true;
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: target,
-        assertCommitAllowed: () => {
-          if (!active) {
-            throw new Error("writer retired");
-          }
-        },
-        withTranscriptWrite: async (operation) => await operation(),
-      },
-      async () => {
-        manager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
-      },
-    );
-    active = false;
-    await expect(owner.settle(true)).rejects.toThrow("writer retired");
-    expect(SessionManager.open(target).getBranch()).toHaveLength(0);
-  });
+  it.each([false, true])(
+    "settles display only after an error is recorded (failed=%s)",
+    (failed) => {
+      const owner = createAssistantErrorTranscript();
+      const message = makeAgentAssistantMessage({ content: [], stopReason: "error" });
+      const replaceStream = vi.fn();
+      owner.record(message);
+      owner.bindStream(message, replaceStream);
+      owner.settle(failed);
+      expect(replaceStream.mock.calls).toEqual(failed ? [] : [[false]]);
+      expect(owner.snapshot()).toBeUndefined();
+    },
+  );
 });

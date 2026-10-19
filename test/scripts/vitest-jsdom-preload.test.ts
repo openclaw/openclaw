@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 
@@ -16,7 +17,13 @@ async function run(root: string, args: string[], signal: AbortSignal) {
   const code = await lifetime.track(
     runManagedCommand({
       bin: resolveTestNodeExecPath(),
-      args: ["--no-warnings", `--import=${preload}`, ...args],
+      args: [
+        "--no-warnings",
+        "--import",
+        resolveTsxImport(process.cwd()),
+        `--import=${preload}`,
+        ...args,
+      ],
       cwd: root,
       signal,
       timeoutMs: 10_000,

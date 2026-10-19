@@ -12,15 +12,20 @@ import {
   validateChannelsPairingDismissParams,
   validateChannelsPairingListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveChannelAccount } from "../../channels/account-resolution.js";
+import {
+  describeChannelAccount,
+  resolveChannelAccount,
+  resolvePluginDmPolicy,
+} from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { hasConfiguredCommandOwners } from "../../commands/doctor-command-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bootstrapCommandOwnerFromPairing } from "../../pairing/command-owner.js";
 import {
+  approveChannelPairingCode,
   approveChannelPairingRequest,
   CHANNEL_PAIRING_PENDING_MAX,
   CHANNEL_PAIRING_PENDING_TTL_MS,
@@ -29,46 +34,19 @@ import {
   resolveChannelPairingRequestId,
 } from "../../pairing/pairing-store.js";
 import { formatForLog } from "../ws-log.js";
+import { captureLocalStateMutationGuard } from "./local-state-owner.js";
 import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type PairingAccount = {
   plugin: ChannelPlugin;
+  pairing: NonNullable<ChannelPlugin["pairing"]>;
   accountId: string;
   accountLabel?: string;
 };
 
 class InvalidPairingTargetError extends Error {}
-
-function resolvePairingPolicy(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: unknown;
-}): string | undefined {
-  const securityPolicy = params.plugin.security?.resolveDmPolicy?.({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account: params.account,
-  })?.policy;
-  if (securityPolicy) {
-    return securityPolicy;
-  }
-  const account = asRecord(params.account);
-  return resolveChannelDmPolicy({
-    account,
-    parent: asRecord(account?.config),
-    defaultPolicy: "pairing",
-  });
-}
-
-function resolvePairingAccountLabel(plugin: ChannelPlugin, account: unknown, cfg: OpenClawConfig) {
-  const described = plugin.config.describeAccount?.(account, cfg);
-  return (
-    normalizeOptionalString(described?.name) ?? normalizeOptionalString(asRecord(account)?.name)
-  );
-}
 
 async function listPairingAccounts(params: {
   cfg: OpenClawConfig;
@@ -77,13 +55,15 @@ async function listPairingAccounts(params: {
 }): Promise<PairingAccount[]> {
   const requestedChannel = normalizeOptionalLowercaseString(params.channel);
   const requestedAccount = normalizeOptionalLowercaseString(params.accountId);
-  const pairingPlugins = listChannelPlugins().filter((plugin) => plugin.pairing);
-  if (requestedChannel && !pairingPlugins.some((plugin) => plugin.id === requestedChannel)) {
+  const pairingPlugins = listChannelPlugins().flatMap((plugin) =>
+    plugin.pairing ? [{ plugin, pairing: plugin.pairing }] : [],
+  );
+  if (requestedChannel && !pairingPlugins.some(({ plugin }) => plugin.id === requestedChannel)) {
     throw new InvalidPairingTargetError(`unknown pairing channel: ${params.channel}`);
   }
 
   const accounts: PairingAccount[] = [];
-  for (const plugin of pairingPlugins) {
+  for (const { plugin, pairing } of pairingPlugins) {
     if (requestedChannel && plugin.id !== requestedChannel) {
       continue;
     }
@@ -95,15 +75,27 @@ async function listPairingAccounts(params: {
       const configured = plugin.config.isConfigured
         ? await plugin.config.isConfigured(account, params.cfg)
         : asRecord(account)?.configured !== false;
-      if (
-        !configured ||
-        resolvePairingPolicy({ plugin, cfg: params.cfg, accountId, account }) !== "pairing"
-      ) {
+      if (!configured) {
         continue;
       }
-      const accountLabel = resolvePairingAccountLabel(plugin, account, params.cfg);
+      const record = asRecord(account);
+      const policy =
+        (await resolvePluginDmPolicy({ plugin, cfg: params.cfg, accountId, account }))?.policy ||
+        resolveChannelDmPolicy({
+          account: record,
+          parent: asRecord(record?.config),
+          defaultPolicy: "pairing",
+        });
+      if (policy !== "pairing") {
+        continue;
+      }
+      const described = await describeChannelAccount({ plugin, account, cfg: params.cfg });
+      const accountLabel =
+        normalizeOptionalString(described?.name) ??
+        normalizeOptionalString(asRecord(account)?.name);
       accounts.push({
         plugin,
+        pairing,
         accountId,
         ...(accountLabel ? { accountLabel } : {}),
       });
@@ -116,22 +108,30 @@ async function resolvePairingAccount(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId: string;
+  respond: RespondFn;
 }): Promise<PairingAccount | null> {
-  const accounts = await listPairingAccounts(params);
-  return accounts.length === 1 ? (accounts[0] ?? null) : null;
+  try {
+    const accounts = await listPairingAccounts(params);
+    if (accounts.length === 1) {
+      return accounts[0] ?? null;
+    }
+    invalidPairingRequest(
+      params.respond,
+      `channel account does not use DM pairing: ${params.channel}:${params.accountId}`,
+    );
+  } catch (error) {
+    respondPairingFailure(params.respond, error);
+  }
+  return null;
 }
 
 function publicAccount(account: PairingAccount) {
-  const adapter = account.plugin.pairing;
-  if (!adapter) {
-    throw new Error(`Channel ${account.plugin.id} does not support pairing`);
-  }
   return {
     channel: account.plugin.id,
     channelLabel: account.plugin.meta.label,
     accountId: account.accountId,
     ...(account.accountLabel ? { accountLabel: account.accountLabel } : {}),
-    notifySupported: Boolean(adapter.notifyApproval),
+    notifySupported: Boolean(account.pairing.notifyApproval),
   };
 }
 
@@ -139,10 +139,6 @@ function publicRequest(params: {
   account: PairingAccount;
   request: Awaited<ReturnType<typeof listChannelPairingRequests>>[number];
 }): ChannelsPairingRequest {
-  const adapter = params.account.plugin.pairing;
-  if (!adapter) {
-    throw new Error(`Channel ${params.account.plugin.id} does not support pairing`);
-  }
   const metadata = params.request.meta
     ? Object.fromEntries(
         Object.entries(params.request.meta).filter(
@@ -154,29 +150,18 @@ function publicRequest(params: {
   const senderId = params.request.meta?.senderId ?? params.request.id;
   return {
     requestId: resolveChannelPairingRequestId(params.account.plugin.id, params.request),
-    channel: params.account.plugin.id,
-    channelLabel: params.account.plugin.meta.label,
-    accountId: params.account.accountId,
-    ...(params.account.accountLabel ? { accountLabel: params.account.accountLabel } : {}),
+    ...publicAccount(params.account),
     senderId,
-    senderLabel: adapter.idLabel,
+    senderLabel: params.account.pairing.idLabel,
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
     createdAt: params.request.createdAt,
     lastSeenAt: params.request.lastSeenAt,
     expiresAt: new Date(createdAtMs + CHANNEL_PAIRING_PENDING_TTL_MS).toISOString(),
-    notifySupported: Boolean(adapter.notifyApproval),
   };
 }
 
-function invalidPairingAccount(respond: RespondFn, channel: string, accountId: string): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `channel account does not use DM pairing: ${channel}:${accountId}`,
-    ),
-  );
+function invalidPairingRequest(respond: RespondFn, message: string): void {
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
 function respondPairingFailure(respond: RespondFn, error: unknown): void {
@@ -192,11 +177,54 @@ function respondPairingFailure(respond: RespondFn, error: unknown): void {
   );
 }
 
+function capturePairingCliGuard(expectedOwnerId: string, opts: GatewayRequestHandlerOptions) {
+  if (!opts.client?.connect.scopes?.includes("operator.admin")) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin", {
+        details: { mutationAccepted: false },
+      }),
+    );
+    return null;
+  }
+  try {
+    return captureLocalStateMutationGuard(expectedOwnerId, opts);
+  } catch (error) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error), {
+        details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+        retryable: false,
+      }),
+    );
+    return null;
+  }
+}
+
 export const channelPairingHandlers: GatewayRequestHandlers = {
   "channels.pairing.list": defineValidatedGatewayHandler(
     "channels.pairing.list",
     validateChannelsPairingListParams,
-    async ({ params, respond, context }) => {
+    async (opts) => {
+      const { params, respond, context } = opts;
+      if ("format" in params) {
+        const assertCurrent = capturePairingCliGuard(params.expectedOwnerId, opts);
+        if (!assertCurrent) {
+          return;
+        }
+        await respondUnavailableOnThrow(respond, async () => {
+          const requests = await listChannelPairingRequests(
+            params.channel,
+            process.env,
+            params.accountId,
+            assertCurrent,
+          );
+          respond(true, requests, undefined);
+        });
+        return;
+      }
       try {
         const cfg = context.getRuntimeConfig();
         const accounts = await listPairingAccounts({
@@ -235,22 +263,27 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
   "channels.pairing.approve": defineValidatedGatewayHandler(
     "channels.pairing.approve",
     validateChannelsPairingApproveParams,
-    async ({ params, respond, context }) => {
-      let cfg: OpenClawConfig;
-      let account: PairingAccount | null;
-      try {
-        cfg = context.getRuntimeConfig();
-        account = await resolvePairingAccount({
-          cfg,
-          channel: params.channel,
-          accountId: params.accountId,
+    async (opts) => {
+      const { params, respond, context } = opts;
+      if ("code" in params) {
+        const assertCurrent = capturePairingCliGuard(params.expectedOwnerId, opts);
+        if (!assertCurrent) {
+          return;
+        }
+        await respondUnavailableOnThrow(respond, async () => {
+          const approved = await approveChannelPairingCode({
+            channel: params.channel,
+            code: params.code,
+            accountId: params.accountId,
+            assertCurrent,
+          });
+          respond(true, approved, undefined);
         });
-      } catch (error) {
-        respondPairingFailure(respond, error);
         return;
       }
-      if (!account?.plugin.pairing) {
-        invalidPairingAccount(respond, params.channel, params.accountId);
+      const cfg = context.getRuntimeConfig();
+      const account = await resolvePairingAccount({ ...params, cfg, respond });
+      if (!account) {
         return;
       }
       try {
@@ -258,14 +291,10 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
           channel: account.plugin.id,
           accountId: account.accountId,
           requestId: params.requestId,
-          pairingAdapter: account.plugin.pairing,
+          pairingAdapter: account.pairing,
         });
         if (!approved) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "pending DM access request no longer exists"),
-          );
+          invalidPairingRequest(respond, "pending DM access request no longer exists");
           return;
         }
 
@@ -289,7 +318,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
 
         let notification: "not-requested" | "sent" | "unsupported" | "failed" = "not-requested";
         if (params.notify === true) {
-          if (!account.plugin.pairing.notifyApproval) {
+          if (!account.pairing.notifyApproval) {
             notification = "unsupported";
           } else {
             try {
@@ -298,7 +327,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
                 accountId: account.accountId,
                 id: approved.id,
                 cfg,
-                pairingAdapter: account.plugin.pairing,
+                pairingAdapter: account.pairing,
                 ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
               });
               notification = "sent";
@@ -331,20 +360,12 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     "channels.pairing.dismiss",
     validateChannelsPairingDismissParams,
     async ({ params, respond, context }) => {
-      let account: PairingAccount | null;
-      try {
-        const cfg = context.getRuntimeConfig();
-        account = await resolvePairingAccount({
-          cfg,
-          channel: params.channel,
-          accountId: params.accountId,
-        });
-      } catch (error) {
-        respondPairingFailure(respond, error);
-        return;
-      }
+      const account = await resolvePairingAccount({
+        ...params,
+        cfg: context.getRuntimeConfig(),
+        respond,
+      });
       if (!account) {
-        invalidPairingAccount(respond, params.channel, params.accountId);
         return;
       }
       await respondUnavailableOnThrow(respond, async () => {
@@ -354,11 +375,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
           requestId: params.requestId,
         });
         if (!dismissed) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "pending DM access request no longer exists"),
-          );
+          invalidPairingRequest(respond, "pending DM access request no longer exists");
           return;
         }
         respond(

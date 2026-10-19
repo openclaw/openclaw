@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
@@ -101,14 +102,14 @@ export function resolveRealtimeVoiceBargeIn(params: {
   if (params.capabilities?.supportsBargeIn === false || params.outputAudioMode === "continuous") {
     return false;
   }
-  if (typeof params.configuredBargeIn === "boolean") {
-    return params.configuredBargeIn;
-  }
-  return resolveRealtimeVoiceInterruptResponseOnInputAudio(params.interruptResponseOnInputAudio);
+  return (
+    params.configuredBargeIn ??
+    resolveRealtimeVoiceInterruptResponseOnInputAudio(params.interruptResponseOnInputAudio)
+  );
 }
 
 export function resolveRealtimeVoiceMinBargeInAudioEndMs(configured: number | undefined): number {
-  return typeof configured === "number" ? configured : 250;
+  return configured ?? 250;
 }
 
 function resolveRealtimeVoiceWakeNamePolicy(params: {
@@ -139,7 +140,7 @@ function resolveRealtimeVoiceWakeNames(params: {
       .filter((name): name is string => Boolean(name));
     return sortRealtimeVoiceActivationNames(uniqueStrings(configured));
   }
-  const agent = params.cfg.agents?.list?.find((candidate) => candidate.id === params.agentId);
+  const agent = resolveAgentEntry(params.cfg, params.agentId);
   const configuredAgentNames = [agent?.name, agent?.identity?.name]
     .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
     .filter((name): name is string => Boolean(name));

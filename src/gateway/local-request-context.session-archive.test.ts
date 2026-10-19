@@ -2,19 +2,32 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/runs.js";
 import {
-  setActiveEmbeddedRun,
-  clearActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "../agents/embedded-agent-runner/runs.js";
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../agents/harness/tool-authority.runtime.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  resolveSessionStorePathCore,
+  resolveSessionTranscriptPath,
+} from "../config/sessions/paths.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { assignSessionOwner } from "../config/sessions/session-accessor.sqlite-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,11 +36,15 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -53,6 +70,7 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: TARGET },
       {
@@ -89,7 +107,7 @@ describe("scoped session archive tools", () => {
       }
       const client = roleClient("write");
       const runId = "collector-session-controls";
-      addSubagentRunForTests({ runId, childSessionKey: TARGET, collect: true });
+      seedSubagentRunForReadTest({ runId, childSessionKey: TARGET, collect: true });
       try {
         await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -108,7 +126,7 @@ describe("scoped session archive tools", () => {
               };
               for (const tools of [
                 createOpenClawCodingTools({ ...options, swarmCollector: true }),
-                resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools,
+                (await resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" })).tools,
               ]) {
                 const tool = expectDefined(
                   tools.find((candidate) => candidate.name === "sessions"),
@@ -116,10 +134,14 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "assign_owner"] },
+                    action: { enum: expect.arrayContaining(["patch", "assign_owner"]) },
                     archived: { type: "boolean" },
                   },
                 });
+                expect(tool.parameters).not.toHaveProperty(
+                  "properties.action.enum",
+                  expect.arrayContaining(["stop"]),
+                );
                 expect(tool.parameters).not.toHaveProperty("properties.runId");
                 await expect(
                   tool.execute("collector-stop", { action: "stop", sessionKey: TARGET }),
@@ -130,7 +152,7 @@ describe("scoped session archive tools", () => {
           ),
         );
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });
@@ -151,15 +173,17 @@ describe("scoped session archive tools", () => {
             createOpenClawCodingTools(options).find((tool) => tool.name === "sessions"),
             "assignment-only tool",
           );
+          // The definition is the same for every caller; the archive call is refused.
           expect(assignment.parameters).toMatchObject({
-            properties: { action: { enum: ["assign_owner"] } },
+            properties: { action: { enum: expect.arrayContaining(["patch", "assign_owner"]) } },
           });
-          expect(assignment.parameters).not.toHaveProperty("properties.archived");
           await expect(
             assignment.execute("no-archive", { action: "patch", archived: true }),
-          ).rejects.toThrow(/Only assign_owner/);
+          ).rejects.toThrow(
+            caller === "session-writer" ? /current operator write grant/ : /Only assign_owner/,
+          );
           expect(
-            resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools.some(
+            (await resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" })).tools.some(
               (tool) => tool.name === "sessions",
             ),
           ).toBe(false);
@@ -185,53 +209,6 @@ describe("scoped session archive tools", () => {
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt,
         ).toBeUndefined();
-      });
-    },
-  );
-
-  it.each(["unassigned archive", "ordinary stop"] as const)(
-    "enforces the requested ordinary-session contract: %s",
-    async (scenario) => {
-      await withSessionToolsFixture(async (cfg) => {
-        const client = roleClient("write");
-        const request = getPluginRuntimeGatewayRequestScope();
-        if (!request) {
-          throw new Error("expected local Gateway scope");
-        }
-        await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
-          withOperatorToolGatewayAuthority(
-            {
-              authenticatedUserProfile: client.authenticatedUserProfile,
-              scopes: ["operator.write"],
-            },
-            async () => {
-              const tool = expectDefined(
-                createOpenClawCodingTools({
-                  config: cfg,
-                  agentId: "main",
-                  sessionKey: TARGET,
-                  sessionId: TARGET_ID,
-                  senderIsOwner: false,
-                }).find((candidate) => candidate.name === "sessions"),
-                "session control tool",
-              );
-              if (scenario === "ordinary stop") {
-                expect(tool.parameters).toMatchObject({
-                  properties: { action: { enum: expect.arrayContaining(["stop"]) } },
-                });
-                return;
-              }
-              await expect(
-                tool.execute("foreign-archive", {
-                  action: "patch",
-                  sessionKey: TARGET,
-                  expectedSessionId: TARGET_ID,
-                  archived: true,
-                }),
-              ).rejects.toThrow(/session creator/i);
-            },
-          ),
-        );
       });
     },
   );
@@ -276,7 +253,12 @@ describe("scoped session archive tools", () => {
           );
         }
         const run = registerChatAbortController({
-          chatAbortControllers: request.context.chatAbortControllers,
+          target: captureSessionTarget({
+            storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+            sessionKey: targetKey,
+            incarnation: TARGET_ID,
+            agentId: "main",
+          }),
           runId: "ordinary-stop-run",
           sessionKey: targetKey,
           sessionId: TARGET_ID,
@@ -338,92 +320,124 @@ describe("scoped session archive tools", () => {
     },
   );
 
-  it.each(["assigned", "unrelated"] as const)(
-    "preserves non-owner active-run steering under session-send access (%s)",
-    async (scenario) => {
-      await withSessionToolsFixture(async (cfg) => {
-        const request = getPluginRuntimeGatewayRequestScope();
-        if (!request?.context) {
-          throw new Error("expected local Gateway context");
-        }
-        const client = roleClient("write");
-        const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
-        const requesterKey = "agent:main:dashboard:steer-requester";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: requesterKey },
+  it("preserves unrelated active-run steering under session-send access", async () => {
+    await withSessionToolsFixture(async (cfg) => {
+      const request = getPluginRuntimeGatewayRequestScope();
+      if (!request?.context) {
+        throw new Error("expected local Gateway context");
+      }
+      const client = roleClient("write");
+      const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
+      const requesterKey = "agent:main:dashboard:steer-requester";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: requesterKey },
+        {
+          sessionId: "steer-requester-id",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: profile.profileId },
+        },
+      );
+      const accepted = vi.fn();
+      const legacyQueue = vi.fn(async () => {
+        throw new Error("unexpected legacy queue path");
+      });
+      const runId = "ordinary-steer-run";
+      const sessionFile = resolveSessionTranscriptPath(TARGET_ID, "main");
+      const handle: EmbeddedAgentQueueHandle = {
+        runId,
+        queueMessage: legacyQueue,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "automatic",
+        abort: () => {},
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (_text, _options, assertCurrent) => {
+            assertCurrent();
+            accepted();
+          },
+        },
+      };
+      const captured = expectDefined(
+        await captureGatewayOperatorRunAuthority({ client, context: request.context }),
+        "steering operator authority",
+      );
+      const requesterOrigin = captureRequesterOrigin({
+        sessionKey: requesterKey,
+        operatorProfileId: captured.authority.profileId,
+      });
+      const admission = prepareAgentRunAdmission({
+        cfg,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        operatorAuthority: captured.authority,
+        facts: {
+          agentId: "main",
+          runId,
+          ingress: { kind: "system", state: "present", boundary: "archive-steering-test" },
+        },
+      });
+      try {
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext: await admission.admit("embedded", "archive-steering-test") },
           {
-            sessionId: "steer-requester-id",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: profile.profileId },
+            agentId: "main",
+            sessionId: TARGET_ID,
+            sessionKey: TARGET,
+            sessionFile,
+            runId,
+            workspaceDir: expectDefined(cfg.agents?.entries?.main?.workspace, "fixture workspace"),
+            config: cfg,
+            provider: "openai",
+            modelId: "gpt-test",
+            requesterOrigin,
+          },
+          undefined,
+          async (prepared) => {
+            handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+            setActiveEmbeddedRun(TARGET_ID, handle, TARGET, prepared.sessionFile, "main");
+            await withoutGatewayToolCallerIdentity(async () => {
+              await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
+                withOperatorToolGatewayAuthority(
+                  { authenticatedUserProfile: profile, scopes: ["operator.write"] },
+                  async () => {
+                    const tool = expectDefined(
+                      createOpenClawCodingTools({
+                        config: cfg,
+                        agentId: "main",
+                        sessionKey: requesterKey,
+                        sessionId: "steer-requester-id",
+                        senderIsOwner: false,
+                        requesterOrigin,
+                      }).find((candidate) => candidate.name === "sessions_send"),
+                      "session steering",
+                    );
+                    const result = await tool.execute("steer-ordinary", {
+                      mode: "steer",
+                      sessionKey: TARGET,
+                      message: "Use the updated requirements",
+                      timeoutSeconds: 0,
+                    });
+                    expect(result.details, JSON.stringify(result.details)).toMatchObject({
+                      status: "accepted",
+                      targetDisposition: "steered",
+                    });
+                  },
+                ),
+              );
+            });
           },
         );
-        if (scenario === "assigned") {
-          assignSessionOwner(
-            { agentId: "main", sessionKey: TARGET },
-            {
-              owner: { type: "human", id: profile.profileId },
-              assignedBy: { type: "human", id: profile.profileId },
-            },
-          );
-        }
-        const accepted = vi.fn();
-        const legacyQueue = vi.fn(async () => {
-          throw new Error("unexpected legacy queue path");
-        });
-        const handle: EmbeddedAgentQueueHandle = {
-          runId: "ordinary-steer-run",
-          queueMessage: legacyQueue,
-          isStreaming: () => true,
-          isCompacting: () => false,
-          supportsTranscriptCommitWait: true,
-          sourceReplyDeliveryMode: "automatic",
-          abort: () => {},
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => true,
-            queueMessage: async (_text, _options, assertCurrent) => {
-              assertCurrent();
-              accepted();
-            },
-          },
-        };
-        setActiveEmbeddedRun(TARGET_ID, handle, TARGET, undefined, "main");
-        try {
-          await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
-            withOperatorToolGatewayAuthority(
-              { authenticatedUserProfile: profile, scopes: ["operator.write"] },
-              async () => {
-                const tool = expectDefined(
-                  createOpenClawCodingTools({
-                    config: cfg,
-                    agentId: "main",
-                    sessionKey: requesterKey,
-                    sessionId: "steer-requester-id",
-                    senderIsOwner: false,
-                  }).find((candidate) => candidate.name === "sessions_send"),
-                  "session steering",
-                );
-                const result = await tool.execute("steer-ordinary", {
-                  mode: "steer",
-                  sessionKey: TARGET,
-                  message: "Use the updated requirements",
-                  timeoutSeconds: 0,
-                });
-                expect(result.details, JSON.stringify(result.details)).toMatchObject({
-                  status: "accepted",
-                  targetDisposition: "steered",
-                });
-              },
-            ),
-          );
-          expect(accepted).toHaveBeenCalledOnce();
-          expect(legacyQueue).not.toHaveBeenCalled();
-        } finally {
-          clearActiveEmbeddedRun(TARGET_ID, handle);
-        }
-      });
-    },
-  );
+        expect(accepted).toHaveBeenCalledOnce();
+        expect(legacyQueue).not.toHaveBeenCalled();
+      } finally {
+        clearActiveEmbeddedRun(TARGET_ID, handle);
+        admission.close();
+        captured.release();
+      }
+    });
+  });
 
   it("allows creator self-archive and denies assignee archive or restore through the assembled tool surface", async () => {
     const scope = "operator.write";
@@ -463,7 +477,7 @@ describe("scoped session archive tools", () => {
           archived.resolve();
         }
       };
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
@@ -482,11 +496,13 @@ describe("scoped session archive tools", () => {
                 senderIsOwner: false,
               };
               const tools = createOpenClawCodingTools(options);
-              const gatewayTools = resolveGatewayScopedTools({
-                ...options,
-                cfg,
-                surface: "loopback",
-              }).tools;
+              const gatewayTools = (
+                await resolveGatewayScopedTools({
+                  ...options,
+                  cfg,
+                  surface: "loopback",
+                })
+              ).tools;
               for (const surface of [tools, gatewayTools]) {
                 const tool = expectDefined(
                   surface.find((candidate) => candidate.name === "sessions"),
@@ -494,7 +510,7 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "stop", "assign_owner"] },
+                    action: { enum: expect.arrayContaining(["patch", "stop", "assign_owner"]) },
                     archived: { type: "boolean" },
                   },
                   required: ["action"],

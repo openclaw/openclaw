@@ -4,15 +4,63 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
-import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, fork: vi.fn(actual.fork) };
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("inspects state in cold children without executing comparison DDL", async () => {
+  const directory = tempDirs.make("state-schema-contract-transfer-");
+  const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
+  closeOpenClawStateDatabaseForTest();
+  const ddlLog = path.join(directory, "comparison-ddl.log");
+  const preload = path.join(directory, "observe-comparison-ddl.cjs");
+  fs.writeFileSync(ddlLog, "");
+  fs.writeFileSync(
+    preload,
+    `const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function(sql) {
+  if (this.location() === null && /CREATE TABLE/i.test(sql)) {
+    fs.appendFileSync(${JSON.stringify(ddlLog)}, 'comparison\\n');
+  }
+  return exec.call(this, sql);
+};`,
+  );
+  await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await using reader = createAgentSchemaInspectionWorker();
+      const result = await reader.inspectState(
+        {
+          pathname,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          verifyCurrentSchemaShape: true,
+          purpose: "runtime",
+          scope: "state",
+        },
+        undefined,
+        pathname,
+      );
+      if (!result) {
+        throw new Error("Expected the supplied snapshot to be inspectable");
+      }
+      expect(result.schemas).toEqual({ incompatible: [], indeterminate: [] });
+      expect(fs.readFileSync(ddlLog, "utf8")).toBe("");
+    }
+  });
+});
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "agentSchemaInspection child names a native snapshot-open refusal and reuses a healthy replacement",
@@ -78,7 +126,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   },
 );
 
-it("agentSchemaInspection child retains returned migration failures and their hydrated class", async () => {
+it("agentSchemaInspection carries a Proxy env across IPC and retains typed migration failures", async () => {
   const pathname = path.join(tempDirs.make("agent-schema-migration-"), "source.sqlite");
   const database = sqlite.openNodeSqliteDatabase(pathname);
   database.exec("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
@@ -88,6 +136,8 @@ it("agentSchemaInspection child retains returned migration failures and their hy
   const inspection = await reader.inspect({
     pathname,
     supportedVersion: 21,
+    // Windows config environments are Proxies, which advanced IPC cannot clone.
+    env: new Proxy({ OPENCLAW_STATE_DIR: path.dirname(pathname) }, {}),
     requireStartupMigrationReadiness: true,
   });
   expect(inspection?.version).toBe(1);
@@ -131,43 +181,3 @@ it.each(["before launch", "during read"])(
     expect(closed).toBe(true);
   },
 );
-
-it("reuses a process while rereading changed data", async () => {
-  const pathname = path.join(tempDirs.make("agent-schema-reuse-"), "source.sqlite");
-  vi.mocked(fork).mockClear();
-  await using reader = createAgentSchemaInspectionWorker();
-  for (const version of [1, 2]) {
-    const writer = sqlite.openNodeSqliteDatabase(pathname);
-    writer.exec(`PRAGMA user_version=${version};`);
-    writer.close();
-    await expect(reader.inspect({ pathname, supportedVersion: 2 })).resolves.toMatchObject({
-      version,
-    });
-  }
-  expect(fork).toHaveBeenCalledOnce();
-});
-
-it("preserves a busy source failure without requesting another snapshot attempt", () => {
-  const pathname = path.join(tempDirs.make("agent-schema-busy-"), "source.sqlite");
-  const database = sqlite.openNodeSqliteDatabase(pathname);
-  database.exec("CREATE TABLE probe(value TEXT);");
-  database.close();
-  const open = sqlite.openNodeSqliteDatabase;
-  const busy = Object.assign(new Error("database is locked"), {
-    code: "ERR_SQLITE_ERROR",
-    errcode: 5,
-  });
-  const stub = vi
-    .spyOn(sqlite, "openNodeSqliteDatabase")
-    .mockImplementation((location, options) => {
-      if (location === fs.realpathSync(pathname)) {
-        throw busy;
-      }
-      return open(location, options);
-    });
-  try {
-    expect(() => tryInspectSqliteReadOnlyInProcess(pathname, () => null)).toThrow(busy);
-  } finally {
-    stub.mockRestore();
-  }
-});

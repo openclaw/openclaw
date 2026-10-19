@@ -14,6 +14,7 @@ const GOOGLE_LIVE_MAX_TOOL_CALL_IDS = 1_024;
 type GoogleLivePendingToolCall = {
   name: string;
   cancelled: boolean;
+  controller?: AbortController;
 };
 
 export type GoogleLiveFunctionCall = {
@@ -34,18 +35,15 @@ type GoogleLiveToolOwnerOptions = {
 export class GoogleLiveToolOwner {
   private readonly pendingCalls = new Map<string, GoogleLivePendingToolCall>();
   private readonly seenCallIds = new Set<string>();
-  private readonly abortControllers = new Map<string, AbortController>();
 
   constructor(private readonly options: GoogleLiveToolOwnerOptions) {}
 
   release(): void {
-    const abortControllers = [...this.abortControllers.values()];
-    this.abortControllers.clear();
+    for (const call of this.pendingCalls.values()) {
+      call.controller?.abort();
+    }
     this.pendingCalls.clear();
     this.seenCallIds.clear();
-    for (const controller of abortControllers) {
-      controller.abort();
-    }
   }
 
   hasPendingConsult(): boolean {
@@ -73,9 +71,14 @@ export class GoogleLiveToolOwner {
       return;
     }
     this.seenCallIds.add(callId);
-    this.pendingCalls.set(callId, { name, cancelled: false });
+    const pending: GoogleLivePendingToolCall = { name, cancelled: false };
+    this.pendingCalls.set(callId, pending);
 
-    if (!this.isSupportedTool(name)) {
+    if (
+      name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
+      name !== REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME &&
+      name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+    ) {
       const message = `Tool "${name}" is not available in browser Talk`;
       if (!this.submitResult(callId, { error: message })) {
         return;
@@ -98,7 +101,7 @@ export class GoogleLiveToolOwner {
       this.submitDescribeView(callId);
       return;
     }
-    await this.runAgentTool(name, callId, call.args);
+    await this.runAgentTool(pending, callId, call.args);
   }
 
   cancel(ids: string[] | undefined): void {
@@ -109,29 +112,35 @@ export class GoogleLiveToolOwner {
         continue;
       }
       call.cancelled = true;
-      const abortController = this.abortControllers.get(callId);
-      if (abortController) {
-        abortController.abort();
+      if (call.controller) {
+        call.controller.abort();
       } else {
         this.pendingCalls.delete(callId);
       }
     }
   }
 
-  private isSupportedTool(name: string): boolean {
-    return (
-      name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME ||
-      name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME ||
-      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
-    );
-  }
-
-  private async runAgentTool(name: string, callId: string, args: unknown): Promise<void> {
+  private async runAgentTool(
+    call: GoogleLivePendingToolCall,
+    callId: string,
+    args: unknown,
+  ): Promise<void> {
     const abortController = new AbortController();
-    this.abortControllers.set(callId, abortController);
+    call.controller = abortController;
     try {
+      const { ctx } = this.options;
+      const activeContext: RealtimeTalkTransportContext = {
+        ...ctx,
+        callbacks: {
+          onStatus: (status, detail) => {
+            if (!this.options.isClosed()) {
+              ctx.callbacks.onStatus?.(status, detail);
+            }
+          },
+        },
+      };
       const params = {
-        ctx: this.createActiveContext(),
+        ctx: activeContext,
         callId,
         args: args ?? {},
         signal: abortController.signal,
@@ -140,13 +149,22 @@ export class GoogleLiveToolOwner {
           this.submitResult(toolCallId, result);
         },
       };
-      if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
+      if (call.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
         await submitRealtimeTalkAgentControl(params);
       } else {
         await submitRealtimeTalkConsult({ ...params, submitAbortResult: false });
       }
     } finally {
-      this.finishExecution(callId, abortController);
+      if (call.cancelled) {
+        this.pendingCalls.delete(callId);
+        if (
+          call.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
+          !this.options.isClosed() &&
+          !this.hasPendingConsult()
+        ) {
+          this.options.ctx.callbacks.onStatus?.("listening");
+        }
+      }
     }
   }
 
@@ -171,20 +189,6 @@ export class GoogleLiveToolOwner {
     });
   }
 
-  private createActiveContext(): RealtimeTalkTransportContext {
-    const { ctx } = this.options;
-    return {
-      ...ctx,
-      callbacks: {
-        onStatus: (status, detail) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onStatus?.(status, detail);
-          }
-        },
-      },
-    };
-  }
-
   private submitResult(callId: string, result: unknown): boolean {
     const call = this.pendingCalls.get(callId);
     if (!call || call.cancelled) {
@@ -198,23 +202,5 @@ export class GoogleLiveToolOwner {
     }
     this.pendingCalls.delete(callId);
     return true;
-  }
-
-  private finishExecution(callId: string, abortController: AbortController): void {
-    if (this.abortControllers.get(callId) === abortController) {
-      this.abortControllers.delete(callId);
-    }
-    const call = this.pendingCalls.get(callId);
-    if (!call?.cancelled) {
-      return;
-    }
-    this.pendingCalls.delete(callId);
-    if (
-      call.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
-      !this.options.isClosed() &&
-      !this.hasPendingConsult()
-    ) {
-      this.options.ctx.callbacks.onStatus?.("listening");
-    }
   }
 }

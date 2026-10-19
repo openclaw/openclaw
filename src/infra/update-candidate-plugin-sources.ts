@@ -10,9 +10,10 @@ import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run
 export function inspectUpdateCandidatePluginSource(
   entry: { pluginId: string; rootDir: string; entryFile: string },
   warnings: string[],
+  dependencyLookupBoundary?: Parameters<typeof inspectPluginSourceDependencies>[1],
 ) {
   try {
-    return inspectPluginSourceDependencies([entry]);
+    return inspectPluginSourceDependencies([entry], dependencyLookupBoundary);
   } catch (error) {
     if (!(error instanceof SyntaxError)) {
       throw error;
@@ -50,19 +51,14 @@ export function resolveUpdateCandidatePluginSourceEntries(
       rootConfig: config,
     }).enabled;
     const packageManifest = candidate.packageManifest;
+    const addEntry = (entryFile: string, rootDir = candidate.rootDir) => {
+      entries.set(entryFile, { pluginId, rootDir, entryFile });
+    };
     if (enabled) {
-      entries.set(candidate.source, {
-        pluginId,
-        rootDir: candidate.rootDir,
-        entryFile: candidate.source,
-      });
+      addEntry(candidate.source);
     }
     if (candidate.setupSource && (enabled || packageManifest?.setupFeatures?.configPromotion)) {
-      entries.set(candidate.setupSource, {
-        pluginId,
-        rootDir: candidate.rootDir,
-        entryFile: candidate.setupSource,
-      });
+      addEntry(candidate.setupSource);
     }
     if (
       !manifest.ok ||
@@ -78,11 +74,7 @@ export function resolveUpdateCandidatePluginSourceEntries(
       packageManifest,
     });
     if (doctor) {
-      entries.set(doctor.modulePath, {
-        pluginId,
-        rootDir: doctor.boundaryRoot,
-        entryFile: doctor.modulePath,
-      });
+      addEntry(doctor.modulePath, doctor.boundaryRoot);
     }
   }
   return [...entries.values()];

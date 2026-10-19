@@ -1,4 +1,6 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
@@ -39,7 +41,6 @@ type McpLoopbackToolCallObservers = {
 type McpLoopbackToolCallCapture = McpLoopbackToolCallObservers & {
   generation: number;
   inFlight: number;
-  activityVersion: number;
   activityWaiters: Set<() => void>;
 };
 
@@ -90,7 +91,6 @@ function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
 }
 
 function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCapture): void {
-  capture.activityVersion += 1;
   for (const resolve of capture.activityWaiters) {
     resolve();
   }
@@ -111,7 +111,6 @@ export function beginMcpLoopbackToolCallCapture({
     ...observers,
     generation: nextToolCallCaptureGeneration,
     inFlight: 0,
-    activityVersion: 0,
     activityWaiters: new Set(),
   });
 }
@@ -270,30 +269,23 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
   capture: McpLoopbackToolCallCapture,
   timeoutMs: number,
 ): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (active: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      capture.activityWaiters.delete(resolveActivity);
-      resolve(active);
-    };
-    const resolveActivity = () => finish(true);
-    const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
-    timer.unref?.();
-    capture.activityWaiters.add(resolveActivity);
-  });
+  const activity = createDeferredCore<boolean>();
+  const resolveActivity = () => activity.resolve(true);
+  capture.activityWaiters.add(resolveActivity);
+  try {
+    return await raceWithTimeout(activity.promise, Math.max(0, timeoutMs), () => false, {
+      ref: false,
+    });
+  } finally {
+    capture.activityWaiters.delete(resolveActivity);
+  }
 }
 
-/** Wait for admitted calls to settle and for a quiet request-admission grace. */
+/** Wait for admitted requests and tool calls to settle before closing their grant. */
 export async function waitForMcpLoopbackToolCallCaptureIdle(
   captureKey: string,
   options: {
     timeoutMs: number;
-    admissionGraceMs: number;
   },
 ): Promise<boolean> {
   const normalizedKey = captureKey.trim();
@@ -301,9 +293,9 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
   if (!capture) {
     return true;
   }
-  const deadline = Date.now() + Math.max(0, options.timeoutMs);
+  const deadline = performance.now() + Math.max(0, options.timeoutMs);
   while (toolCallCaptures.get(normalizedKey) === capture) {
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
       return false;
     }
@@ -311,21 +303,7 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
       await waitForMcpLoopbackToolCallCaptureActivity(capture, remainingMs);
       continue;
     }
-    const admissionGraceMs = Math.max(0, options.admissionGraceMs);
-    if (admissionGraceMs === 0) {
-      return true;
-    }
-    const activityVersion = capture.activityVersion;
-    const quietWaitMs = Math.min(admissionGraceMs, remainingMs);
-    const sawActivity = await waitForMcpLoopbackToolCallCaptureActivity(capture, quietWaitMs);
-    if (
-      !sawActivity &&
-      quietWaitMs === admissionGraceMs &&
-      capture.inFlight === 0 &&
-      capture.activityVersion === activityVersion
-    ) {
-      return true;
-    }
+    return true;
   }
   return true;
 }

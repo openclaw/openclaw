@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isAssistantRunEvent,
+  isTerminalRunEvent,
+  normalizeChatProjectionEvent,
+  readChatProjection,
+  readChatProjectionText,
+} from "./chat-projection.js";
 import { SdkRunReplay } from "./run-event-replay.js";
-import { iterateSdkRunEvents } from "./run-event-stream.js";
 import { readSdkRunTimestamp, resolveSdkRunWaitStatus } from "./run-terminal.js";
 import {
   GatewayClientTransport,
@@ -37,7 +43,6 @@ import type {
   ToolInvokeResult,
 } from "./types.js";
 
-/** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
   gateway?: "auto" | (string & {});
   url?: string;
@@ -46,6 +51,10 @@ export type OpenClawOptions = {
   requestTimeoutMs?: number;
   transport?: OpenClawTransport;
 };
+
+type RunTerminalSource =
+  | { kind: "canonical" }
+  | { kind: "chat" | "recovery"; eventType: OpenClawEvent["type"] };
 
 function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
   if (options.url) {
@@ -142,7 +151,6 @@ function requireToolsEffectiveSessionKey(params: ToolsEffectiveParams): ToolsEff
   return params;
 }
 
-/** Root SDK client with namespaces for agents, sessions, runs, and gateway APIs. */
 export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
@@ -296,13 +304,98 @@ export class OpenClaw {
     }
     const release = this.replay.observeRun(runId);
     try {
-      yield* iterateSdkRunEvents(
-        runId,
-        this.replay.snapshot(runId),
-        this.replay.events,
-        filter,
-        signal,
-      );
+      const replayEvents = this.replay.snapshot(runId);
+      let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
+      let terminalSource: RunTerminalSource | undefined = replayEvents.some(isTerminalRunEvent)
+        ? { kind: "canonical" }
+        : undefined;
+      let previousChatProjectionText: string | undefined;
+      const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
+        const data = asRecord(event.data);
+        if (
+          !event.raw &&
+          asRecord(data.recovery).projection === "chat" &&
+          typeof data.text === "string"
+        ) {
+          previousChatProjectionText = data.text;
+          return event;
+        }
+        const chatProjection = readChatProjection(event);
+        if (chatProjection) {
+          const isDelta = chatProjection.state === "delta";
+          if (isDelta ? hasCanonicalAssistantRunEvent : terminalSource) {
+            return undefined;
+          }
+          const runEvent = normalizeChatProjectionEvent(
+            event,
+            chatProjection,
+            previousChatProjectionText,
+          );
+          if (isDelta) {
+            const text = readChatProjectionText(chatProjection.payload);
+            if (text !== undefined) {
+              previousChatProjectionText = text;
+            }
+          } else {
+            terminalSource = { kind: "chat", eventType: runEvent.type };
+          }
+          return runEvent;
+        }
+        if (isAssistantRunEvent(event)) {
+          hasCanonicalAssistantRunEvent = true;
+        }
+        if (isTerminalRunEvent(event)) {
+          // Abort broadcasts can arrive chat-first. Collapse matching carriers,
+          // while preserving a later authoritative outcome that differs.
+          const duplicate =
+            terminalSource &&
+            terminalSource.kind !== "canonical" &&
+            terminalSource.eventType === event.type;
+          terminalSource = event.raw
+            ? { kind: "canonical" }
+            : { kind: "recovery", eventType: event.type };
+          if (duplicate) {
+            return undefined;
+          }
+        }
+        return event;
+      };
+      // Iterator creation subscribes before replay yields, so live events queue behind the snapshot.
+      const liveSource = this.replay.events.stream((event) => event.runId === runId);
+      const live = liveSource[Symbol.asyncIterator]();
+      const stop = () => {
+        void live.return?.();
+      };
+      signal?.addEventListener("abort", stop, { once: true });
+      try {
+        for (const event of replayEvents) {
+          if (signal?.aborted) {
+            return;
+          }
+          const runEvent = toRunStreamEvent(event);
+          if (!runEvent || (filter && !filter(runEvent))) {
+            continue;
+          }
+          yield runEvent;
+        }
+        while (true) {
+          if (signal?.aborted) {
+            break;
+          }
+          const next = await live.next();
+          if (next.done) {
+            break;
+          }
+          const runEvent = toRunStreamEvent(next.value);
+          if (!runEvent || (filter && !filter(runEvent))) {
+            continue;
+          }
+          yield runEvent;
+        }
+      } finally {
+        signal?.removeEventListener("abort", stop);
+        await live.return?.();
+      }
     } finally {
       release();
     }
@@ -360,7 +453,6 @@ export class OpenClaw {
   }
 }
 
-/** Agent-scoped helper for runs and identity lookups. */
 export class Agent {
   constructor(
     private readonly client: OpenClaw,
@@ -381,7 +473,6 @@ export class Agent {
   }
 }
 
-/** Run handle for streaming events, waiting, and cancellation. */
 export class Run {
   constructor(
     private readonly client: OpenClaw,
@@ -427,7 +518,6 @@ export class Run {
   }
 }
 
-/** Session handle for sending messages and session-scoped mutations. */
 export class Session {
   constructor(
     private readonly client: OpenClaw,
@@ -475,7 +565,6 @@ export class Session {
   }
 }
 
-/** Agent management namespace. */
 export class AgentsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -500,7 +589,6 @@ export class AgentsNamespace {
   }
 }
 
-/** Session management namespace. */
 export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -533,7 +621,6 @@ export class SessionsNamespace {
   }
 }
 
-/** Run creation and lifecycle namespace. */
 export class RunsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -583,7 +670,6 @@ class RpcNamespace {
   }
 }
 
-/** Model catalog and auth status namespace. */
 export class ModelsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "models");
@@ -598,7 +684,6 @@ export class ModelsNamespace extends RpcNamespace {
   }
 }
 
-/** Tool catalog, effective tool, and direct invocation namespace. */
 export class ToolsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "tools");
@@ -625,7 +710,6 @@ export class ToolsNamespace extends RpcNamespace {
   }
 }
 
-/** Run/session artifact listing and download namespace. */
 export class ArtifactsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "artifacts");
@@ -650,7 +734,6 @@ export class ArtifactsNamespace extends RpcNamespace {
   }
 }
 
-/** Approval request listing and response namespace. */
 export class ApprovalsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -666,7 +749,6 @@ export class ApprovalsNamespace {
   }
 }
 
-/** Environment discovery namespace. */
 export class EnvironmentsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "environments");

@@ -1,39 +1,46 @@
 export async function openNativeSessionMenu(params: {
-  menu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
+  pane: HTMLElement;
   signal: AbortSignal;
   isCurrent: () => boolean;
+  getMenu: () => HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | undefined;
 }): Promise<boolean> {
-  const { menu, signal, isCurrent } = params;
-  await menu.updateComplete;
-  const dropdown = menu.querySelector("wa-dropdown");
-  await dropdown?.updateComplete;
-  if (!dropdown || signal.aborted || !isCurrent() || !menu.isConnected) {
+  const { pane, signal, isCurrent, getMenu } = params;
+  // The pane can paint before its session metadata makes the header menu available.
+  const menu = await new Promise<HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null>(
+    (resolve) => {
+      const finish = (
+        resolvedMenu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null,
+      ) => {
+        observer.disconnect();
+        signal.removeEventListener("abort", cancelled);
+        resolve(resolvedMenu);
+      };
+      const check = () => {
+        if (signal.aborted || !isCurrent() || !pane.isConnected) {
+          finish(null);
+          return;
+        }
+        const renderedMenu = getMenu();
+        if (renderedMenu) {
+          finish(renderedMenu);
+        }
+      };
+      const observer = new MutationObserver(check);
+      const cancelled = () => finish(null);
+      // Removal is recorded on the pane's former ancestors, not the pane itself.
+      // A retained pane loses its selection through its own attributes.
+      observer.observe(pane.getRootNode(), { childList: true, subtree: true });
+      observer.observe(pane, { attributes: true });
+      signal.addEventListener("abort", cancelled, { once: true });
+      check();
+    },
+  );
+  if (!menu) {
     return false;
   }
-  if (dropdown.open) {
-    return true;
+  await menu.updateComplete;
+  if (signal.aborted || !isCurrent() || !menu.isConnected) {
+    return false;
   }
-  // Web Awesome's updateComplete precedes its popup/animation. Acknowledge
-  // only wa-after-show, and retire a pending open with its native command.
-  return new Promise((resolve) => {
-    const finish = (opened: boolean) => {
-      dropdown.removeEventListener("wa-after-show", shown);
-      dropdown.removeEventListener("wa-select", shown, true);
-      dropdown.removeEventListener("wa-hide", cancelled);
-      signal.removeEventListener("abort", cancelled);
-      if (!opened) {
-        dropdown.open = false;
-      }
-      resolve(opened);
-    };
-    const shown = () => finish(isCurrent() && menu.isConnected && dropdown.open);
-    const cancelled = () => finish(false);
-    dropdown.addEventListener("wa-after-show", shown);
-    // A fast selection proves the menu opened before its animation finishes.
-    // Capture it before the action closes the popup or navigates elsewhere.
-    dropdown.addEventListener("wa-select", shown, { capture: true });
-    dropdown.addEventListener("wa-hide", cancelled, { once: true });
-    signal.addEventListener("abort", cancelled, { once: true });
-    dropdown.open = true;
-  });
+  return menu.openMenu();
 }

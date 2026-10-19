@@ -16,19 +16,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
-import { copyRecordEntries } from "../shared/safe-record.js";
 import type { ProviderCatalogContext, ProviderCatalogResult, ProviderPlugin } from "./types.js";
-
-function addApiKeyToProvider(
-  provider: ModelProviderConfig,
-  apiKey: string,
-): (ModelProviderConfig & { apiKey: string }) | undefined {
-  try {
-    return { ...provider, apiKey };
-  } catch {
-    return undefined;
-  }
-}
 
 /** Finds a provider catalog template entry by normalized provider and template id. */
 export function findCatalogTemplate(params: {
@@ -89,30 +77,6 @@ export async function buildSingleProviderApiKeyCatalog(params: {
   };
 }
 
-/** Builds a multi-provider catalog result backed by one provider API key. */
-export async function buildPairedProviderApiKeyCatalog(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProviders: () =>
-    | Record<string, ModelProviderConfig>
-    | Promise<Record<string, ModelProviderConfig>>;
-}): Promise<ProviderCatalogResult> {
-  const apiKey = params.ctx.resolveProviderApiKey(normalizeProviderId(params.providerId)).apiKey;
-  if (!apiKey) {
-    return null;
-  }
-
-  const providers = await params.buildProviders();
-  return {
-    providers: Object.fromEntries(
-      copyRecordEntries<ModelProviderConfig>(providers).flatMap(([id, provider]) => {
-        const providerWithApiKey = addApiKeyToProvider(provider, apiKey);
-        return providerWithApiKey ? [[id, providerWithApiKey]] : [];
-      }),
-    ),
-  };
-}
-
 function countRawManifestCatalogModels(catalog: unknown): number | undefined {
   if (!catalog || typeof catalog !== "object") {
     return undefined;
@@ -170,7 +134,11 @@ function buildManifestCatalogModelInput(
       `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
     );
   }
-  return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
+  return (
+    model.input?.filter((item): item is "text" | "image" | "video" => item !== "document") ?? [
+      "text",
+    ]
+  );
 }
 
 function buildManifestCatalogModel(
@@ -200,6 +168,7 @@ function buildManifestCatalogModel(
       : {}),
     ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+    ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
     maxTokens: model.maxTokens,
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
@@ -261,7 +230,7 @@ export function buildEffectiveManifestProviderConfig(
   return models.length > 0 ? { baseUrl: firstRow.baseUrl, api: firstRow.api, models } : undefined;
 }
 
-export type ManifestProviderCatalogSurface = {
+type ManifestProviderCatalogSurface = {
   id: string;
   label: string;
   catalog: unknown;
@@ -321,6 +290,7 @@ export function buildManifestProviderCatalogFamily(params: {
           reasoning: entry.reasoning,
           input: [...entry.input],
           contextWindow: entry.contextWindow,
+          ...(entry.parameterCount !== undefined ? { parameterCount: entry.parameterCount } : {}),
         })),
       ),
   };

@@ -27,16 +27,27 @@ function owner(id: string, storageProviders: string[] = []) {
 }
 
 describe("storage provider registration", () => {
-  it("rejects an undeclared provider through the plugin API", () => {
+  it.each([
+    {
+      id: "archive",
+      declared: [],
+      message: "plugin must declare contracts.storageProviders for provider: archive",
+    },
+    {
+      id: "filesystem",
+      declared: ["filesystem"],
+      message: 'storage provider id "filesystem" is reserved for core',
+    },
+  ])("rejects forbidden provider $id through the plugin API", ({ id, declared, message }) => {
     const registry = createTestPluginRegistry();
     registry
-      .createApi(owner("fixture"), { config: {} })
-      .registerStorageProvider(provider("archive"));
-    expect(resolveStorageProvider(registry.registry, "archive")).toBeUndefined();
+      .createApi(owner("fixture", declared), { config: {} })
+      .registerStorageProvider(provider(id));
+    expect(resolveStorageProvider(registry.registry, id)).toBeUndefined();
     expect(registry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",
-        message: "plugin must declare contracts.storageProviders for provider: archive",
+        message,
       }),
     );
   });
@@ -58,19 +69,6 @@ describe("storage provider registration", () => {
     expect(registry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         message: "storage provider already registered: archive (first)",
-      }),
-    );
-  });
-
-  it("reserves the core filesystem provider", () => {
-    const registry = createTestPluginRegistry();
-    registry
-      .createApi(owner("fixture", ["filesystem"]), { config: {} })
-      .registerStorageProvider(provider("filesystem"));
-    expect(resolveStorageProvider(registry.registry, "filesystem")).toBeUndefined();
-    expect(registry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        message: 'storage provider id "filesystem" is reserved for core',
       }),
     );
   });

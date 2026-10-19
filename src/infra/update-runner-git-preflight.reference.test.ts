@@ -6,10 +6,20 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
-import { runFixtureGit as git } from "./update-runner-git-candidate.test-support.js";
+import {
+  runFixtureGit as git,
+  isolateGitIdentity,
+  writeGitFixtureManifest,
+  writeFixtureFiles,
+  expectHead,
+  expectFile,
+  expectMissing,
+  expectStep,
+  readText,
+} from "./update-runner-git-candidate.test-support.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { withGitTargetInspectionRoot } from "./update-runner-git-target.js";
-import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -19,11 +29,8 @@ describe("reference source candidate preparation", () => {
   let base: string;
   let installs: string[][];
   let builtInputs: Array<Record<string, string | null>>;
-  let prepared:
-    | { sha: string; parents: string[]; inputs: Record<string, string | null> }
-    | undefined;
+  let prepared: { parents: string[]; inputs: Record<string, string | null> } | undefined;
   let steps: UpdateStepResult[];
-  let managerVersion: string;
 
   const readInputs = async (directory: string) => {
     const inputs: Record<string, string | null> = {};
@@ -34,17 +41,47 @@ describe("reference source candidate preparation", () => {
       "operator-input.txt",
       ".fixture-env",
     ]) {
-      inputs[file] = await fs
-        .readFile(path.join(directory, file), "utf8")
-        .catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return null;
-          }
-          throw error;
-        });
+      inputs[file] = await readText(path.join(directory, file)).catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return null;
+        }
+        throw error;
+      });
     }
     return inputs;
   };
+
+  function prepare(
+    runCommand: CommandRunner,
+    options: Partial<Parameters<typeof runGitCandidatePreflight>[0]> = {},
+  ) {
+    const defaults = { runCommand, results: steps, timeoutMs: 5000, stepIndex: 0, totalSteps: 0 };
+    const step = (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv) => ({
+      ...defaults,
+      name,
+      argv,
+      cwd,
+      env,
+    });
+    return runGitCandidatePreflight({
+      gitRoot: root,
+      artifactRoot: root,
+      refreshedRemotes: [],
+      targetRevision: base,
+      beforeSha: base,
+      beforeRuntimeVerified: false,
+      needsCheckoutMain: false,
+      runCommand,
+      timeoutMs: 5000,
+      defaultCommandEnv: undefined,
+      steps,
+      step,
+      workStep: step,
+      beforeCandidate: async () => {},
+      validateCandidate: async () => {},
+      ...options,
+    });
+  }
 
   async function commit(file: string, contents: string) {
     await fs.writeFile(path.join(root, file), contents);
@@ -61,29 +98,17 @@ describe("reference source candidate preparation", () => {
   }
 
   beforeEach(async () => {
-    vi.stubEnv("GIT_CONFIG_COUNT", "0");
-    for (const key of [
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
+    isolateGitIdentity();
     root = await fs.realpath(temporary.make("reference-source-preflight-"));
     await git(root, "init", "--initial-branch=main");
     await git(root, "config", "user.name", "OpenClaw Test");
     await git(root, "config", "user.email", "openclaw@example.com");
     await git(root, "config", "commit.gpgsign", "false");
-    await fs.writeFile(
-      path.join(root, ".gitignore"),
-      "dist/\nnode_modules/\n.artifacts/\n.fixture-env\n",
-    );
-    await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.0.0" }),
-    );
+    await writeFixtureFiles(root, {
+      ".gitignore": "dist/\nnode_modules/\n.artifacts/\n.fixture-env\n",
+      "pnpm-workspace.yaml": "packages: []\n",
+    });
+    await writeGitFixtureManifest(root);
     await git(root, "add", ".");
     await git(root, "commit", "-m", "base");
     base = await git(root, "rev-parse", "HEAD");
@@ -91,7 +116,6 @@ describe("reference source candidate preparation", () => {
     builtInputs = [];
     prepared = undefined;
     steps = [];
-    managerVersion = "12.0.0";
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -139,34 +163,7 @@ describe("reference source candidate preparation", () => {
       try {
         const preparation = withGitTargetInspectionRoot(
           { root, runCommand, timeoutMs: 5000, onWarning: () => {} },
-          async (gitRoot, runInspectionCommand) => {
-            const step = (name: string, argv: string[], cwd: string): RunStepOptions => ({
-              name,
-              argv,
-              cwd,
-              runCommand: runInspectionCommand,
-              timeoutMs: 5000,
-              stepIndex: 0,
-              totalSteps: 0,
-            });
-            return runGitCandidatePreflight({
-              gitRoot,
-              artifactRoot: root,
-              refreshedRemotes: [],
-              targetRevision: base,
-              beforeSha: base,
-              beforeRuntimeVerified: false,
-              needsCheckoutMain: false,
-              runCommand: runInspectionCommand,
-              timeoutMs: 5000,
-              defaultCommandEnv: undefined,
-              steps: [],
-              step,
-              workStep: step,
-              beforeCandidate: async () => {},
-              validateCandidate: async () => {},
-            });
-          },
+          (gitRoot, runInspectionCommand) => prepare(runInspectionCommand, { gitRoot }),
         );
         await expect(preparation).rejects.toBe(
           phase === "joined-failure" ? joinedFailure : uncertainFailure,
@@ -176,8 +173,8 @@ describe("reference source candidate preparation", () => {
         if (phase === "joined-failure") {
           expect(commandsAfterFailure.some((argv) => argv.includes("remove"))).toBe(true);
           expect(commandsAfterFailure.some((argv) => argv.includes("prune"))).toBe(true);
-          await expect(fs.stat(path.dirname(worktree))).rejects.toMatchObject({ code: "ENOENT" });
-          await expect(fs.stat(path.dirname(mirror))).rejects.toMatchObject({ code: "ENOENT" });
+          await expectMissing(path.dirname(worktree));
+          await expectMissing(path.dirname(mirror));
         } else {
           expect(commandsAfterFailure).toEqual([]);
           expect(removalsAfterFailure).toEqual([]);
@@ -187,7 +184,7 @@ describe("reference source candidate preparation", () => {
             expect((await fs.stat(worktree)).isDirectory()).toBe(true);
           }
         }
-        expect(await git(root, "rev-parse", "HEAD")).toBe(base);
+        await expectHead(root, base);
       } finally {
         removal.mockRestore();
         // The real fixture commands already joined before the synthetic cleanup error.
@@ -224,41 +221,14 @@ describe("reference source candidate preparation", () => {
           await fs.mkdir(path.join(options.cwd, "dist", "control-ui"), { recursive: true });
           await fs.writeFile(path.join(options.cwd, "dist", "control-ui", "index.html"), "ready");
         }
-        return { code: 0, stdout: argv.includes("--version") ? managerVersion : "", stderr: "" };
+        return { code: 0, stdout: argv.includes("--version") ? "12.0.0" : "", stderr: "" };
       }
       throw new Error(`Unexpected candidate command: ${argv.join(" ")}`);
     };
-    const step = (
-      name: string,
-      argv: string[],
-      cwd: string,
-      env?: NodeJS.ProcessEnv,
-    ): RunStepOptions => ({
-      name,
-      argv,
-      cwd,
-      env,
-      runCommand,
-      timeoutMs: 5000,
-      stepIndex: 0,
-      totalSteps: 0,
-      results: steps,
-    });
-    const options = {
-      gitRoot: root,
-      artifactRoot: root,
-      refreshedRemotes: [],
+    return prepare(runCommand, {
       targetRevision: params.targetRevision,
       beforeSha: params.beforeSha,
       beforeRuntimeVerified: true,
-      needsCheckoutMain: false,
-      runCommand,
-      timeoutMs: 5000,
-      defaultCommandEnv: undefined,
-      steps,
-      step,
-      workStep: step,
-      beforeCandidate: async () => {},
       validateCandidate: params.validateCandidate ?? (async () => {}),
       referenceSource: {
         branch: params.branch,
@@ -266,19 +236,15 @@ describe("reference source candidate preparation", () => {
       },
       prepareCandidate: async (candidate: string) => {
         const head = await git(candidate, "rev-list", "--parents", "-n", "1", "HEAD");
-        const [sha, ...parents] = head.split(" ");
-        assert(sha);
-        prepared = { sha, parents, inputs: await readInputs(candidate) };
+        const [, ...parents] = head.split(" ");
+        prepared = { parents, inputs: await readInputs(candidate) };
       },
-    };
-    return runGitCandidatePreflight(options);
+    });
   }
 
   it("refuses divergent main before install or copying operator inputs", async () => {
     const beforeSha = await commit("local.txt", "local\n");
-    await git(root, "checkout", "-b", "upstream", base);
-    const targetRevision = await commit("target.txt", "target\n");
-    await git(root, "checkout", "main");
+    const targetRevision = await commitTarget("target.txt", "target\n");
     const copyBuildInputs = vi.fn(async () => {});
 
     expect(
@@ -286,8 +252,8 @@ describe("reference source candidate preparation", () => {
     ).toMatchObject({ status: "error" });
     expect(installs).toEqual([]);
     expect(copyBuildInputs).not.toHaveBeenCalled();
-    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-    expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("local\n");
+    await expectHead(root, beforeSha);
+    await expectFile(path.join(root, "local.txt"), "local\n");
   });
 
   it.each(["server", "HEAD"])(
@@ -313,71 +279,62 @@ describe("reference source candidate preparation", () => {
         "target.txt": "target\n",
       });
       expect(builtInputs).toEqual([prepared?.inputs]);
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectHead(root, beforeSha);
       expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
     },
   );
 
-  it.each([false, true])(
-    "builds accepted untracked and ignored inputs (same HEAD: %s)",
-    async (sameHead) => {
-      const targetRevision = sameHead ? base : await commitTarget("target.txt", "target\n");
-      const result = await preflight({
-        branch: "main",
-        beforeSha: base,
-        targetRevision,
-        copyBuildInputs: async (candidate) => {
-          expect(await git(candidate, "rev-parse", "HEAD")).toBe(targetRevision);
-          await fs.writeFile(path.join(candidate, "operator-input.txt"), "operator input\n");
-          await fs.writeFile(path.join(candidate, ".fixture-env"), "ignored input\n");
-        },
-      });
-
-      expect(result.status).toBe("ok");
-      expect(builtInputs).toEqual([
-        expect.objectContaining({
-          "operator-input.txt": "operator input\n",
-          ".fixture-env": "ignored input\n",
-        }),
-      ]);
-      expect(installs).toEqual([["pnpm", "install", "--frozen-lockfile"]]);
-      expect(await git(root, "rev-parse", "HEAD")).toBe(base);
-    },
-  );
-
-  it.each(["working", "index", "committed"] as const)(
-    "rejects %s source changes despite accepted untracked inputs",
+  it.each(["same-head", "updated", "working", "index", "committed"] as const)(
+    "admits operator inputs only while candidate source stays selected (%s)",
     async (kind) => {
-      const targetRevision = await commitTarget("target.txt", "target\n");
+      const accepted = kind === "same-head" || kind === "updated";
+      const targetRevision =
+        kind === "same-head" ? base : await commitTarget("target.txt", "target\n");
       const result = await preflight({
         branch: "main",
         beforeSha: base,
         targetRevision,
         copyBuildInputs: async (candidate) => {
-          await fs.writeFile(path.join(candidate, "operator-input.txt"), "operator input\n");
+          await expectHead(candidate, targetRevision);
+          await writeFixtureFiles(candidate, {
+            "operator-input.txt": "operator input\n",
+            ".fixture-env": "ignored input\n",
+          });
         },
-        validateCandidate: async (candidate) => {
-          await fs.writeFile(path.join(candidate, "target.txt"), "unpublished change\n");
-          if (kind !== "working") {
-            await git(candidate, "add", "target.txt");
-            if (kind === "index") {
-              await fs.writeFile(path.join(candidate, "target.txt"), "target\n");
-            } else {
-              await git(candidate, "commit", "-m", "unpublished change");
-            }
-          }
-        },
+        validateCandidate: accepted
+          ? undefined
+          : async (candidate) => {
+              await fs.writeFile(path.join(candidate, "target.txt"), "unpublished change\n");
+              if (kind !== "working") {
+                await git(candidate, "add", "target.txt");
+                if (kind === "index") {
+                  await fs.writeFile(path.join(candidate, "target.txt"), "target\n");
+                } else {
+                  await git(candidate, "commit", "-m", "unpublished change");
+                }
+              }
+            },
       });
-      expect(result.status).toBe("error");
-      expect(prepared).toBeUndefined();
-      expect(steps).toContainEqual(
-        expect.objectContaining({
+
+      if (accepted) {
+        expect(result.status).toBe("ok");
+        expect(builtInputs).toEqual([
+          expect.objectContaining({
+            "operator-input.txt": "operator input\n",
+            ".fixture-env": "ignored input\n",
+          }),
+        ]);
+        expect(installs).toEqual([["pnpm", "install", "--frozen-lockfile"]]);
+      } else {
+        expect(result.status).toBe("error");
+        expect(prepared).toBeUndefined();
+        expectStep(steps, {
           name:
             kind === "committed" ? "preflight-update-source-check" : "preflight-update-clean-check",
           exitCode: 1,
-        }),
-      );
-      expect(await git(root, "rev-parse", "HEAD")).toBe(base);
+        });
+      }
+      await expectHead(root, base);
     },
   );
 
@@ -390,8 +347,7 @@ describe("reference source candidate preparation", () => {
       );
       const result = await preflight({ branch: "main", beforeSha: base, targetRevision });
       expect(result).toMatchObject({ status: "error", reason: expect.stringContaining("pnpm") });
-      expect(installs).toEqual([]);
-      expect(builtInputs).toEqual([]);
+      expect({ installs, builtInputs }).toEqual({ installs: [], builtInputs: [] });
     },
   );
 });

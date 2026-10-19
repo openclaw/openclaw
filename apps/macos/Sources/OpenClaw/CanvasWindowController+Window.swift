@@ -32,7 +32,7 @@ extension CanvasWindowController {
         // Agent-driven presents must not steal focus: order front without app
         // activation or key status. becomesKeyOnlyIfNeeded gives the panel key
         // when the user clicks into it; user entry points own app activation.
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window)
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
         self.setCanvasVisible(true)
     }

@@ -92,21 +92,30 @@ export function reconcileNpmPluginLoadPath(params: {
   };
 }
 
-function isExactRegistryNpmSpec(spec: string | undefined): spec is string {
-  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
-  return parsed?.selectorKind === "exact-version";
-}
-
 export function resolveNpmInstallRecordSpec(params: {
   requestedSpec?: string;
   resolution?: NpmSpecResolution;
   pinResolvedRegistrySpec?: boolean;
 }): string | undefined {
   const resolvedSpec = params.resolution?.resolvedSpec;
-  if (!params.pinResolvedRegistrySpec || !isExactRegistryNpmSpec(resolvedSpec)) {
-    return params.requestedSpec;
-  }
-  return resolvedSpec;
+  return params.pinResolvedRegistrySpec &&
+    resolvedSpec &&
+    parseRegistryNpmSpec(resolvedSpec)?.selectorKind === "exact-version"
+    ? resolvedSpec
+    : params.requestedSpec;
+}
+
+export function recordPluginInstallInRecords(
+  records: Record<string, PluginInstallRecord> | undefined,
+  update: PluginInstallUpdate,
+): Record<string, PluginInstallRecord> {
+  const { pluginId, ...record } = update;
+  const installs = copyPluginInstallRecordMap(records);
+  setPluginInstallRecordMapEntry(installs, pluginId, {
+    ...record,
+    installedAt: record.installedAt ?? new Date().toISOString(),
+  });
+  return installs;
 }
 
 /** Replaces a plugin install record with the authoritative completed install. */
@@ -114,25 +123,16 @@ export function recordPluginInstall(
   cfg: OpenClawConfig,
   update: PluginInstallUpdate,
 ): OpenClawConfig {
-  const { pluginId, ...record } = update;
-  const nextRecord = {
-    ...record,
-    installedAt: record.installedAt ?? new Date().toISOString(),
-  };
-  const installs = copyPluginInstallRecordMap(cfg.plugins?.installs);
-  setPluginInstallRecordMapEntry(installs, pluginId, nextRecord);
-
   const next = {
     ...cfg,
     plugins: {
-      // cfg.plugins may be absent on first install; spreading undefined is {}.
       ...cfg.plugins,
-      installs,
+      installs: recordPluginInstallInRecords(cfg.plugins?.installs, update),
     },
   };
   return reconcileNpmPluginLoadPath({
     config: next,
-    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, pluginId),
-    nextInstall: nextRecord,
+    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, update.pluginId),
+    nextInstall: update,
   });
 }

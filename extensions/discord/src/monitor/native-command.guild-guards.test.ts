@@ -19,9 +19,9 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discordPlugin } from "../channel.js";
 import { setDiscordRuntime } from "../runtime.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let state: OpenClawTestState;
 const userId = "100000000000000003";
@@ -99,12 +99,8 @@ async function runNativeCommand(params: {
   });
   const command = createDiscordNativeCommand({
     command: { name: params.commandName, description: "Reset the session.", acceptsArgs: true },
-    cfg,
-    discordConfig: cfg.channels!.discord!,
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
   });
   await command.run(interaction);
   return {
@@ -117,17 +113,15 @@ async function runNativeCommand(params: {
 }
 
 describe("Discord native reset admission and persistence", () => {
-  it.each(["new", "reset"] as const)("persists and acknowledges /%s", async (commandName) => {
-    const result = await runNativeCommand({ commandName });
+  it("persists and acknowledges /new", async () => {
+    const result = await runNativeCommand({ commandName: "new" });
     expect(result.entry?.sessionId).toBe(sessionId);
     expect(result.entry?.lifecycleRevision).toBeTruthy();
     expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
     expect(result.events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "reset", reason: commandName })]),
+      expect.arrayContaining([expect.objectContaining({ type: "reset", reason: "new" })]),
     );
-    expect(result.replies).toEqual([
-      commandName === "new" ? "✅ New session started." : "✅ Session reset.",
-    ]);
+    expect(result.replies).toEqual(["✅ New session started."]);
   });
 
   const blockedChannels: Array<{

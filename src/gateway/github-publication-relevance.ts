@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
-import { gitHubPublicApi } from "./github-public-api.js";
+import { prepareSessionPullRequestGitHubRead } from "./control-ui-session-pr-request.js";
+import { sessionPullRequestRepositoryApiUrl } from "./control-ui-session-prs-checks.js";
 
 type AcceptedSnapshot = Pick<
   GitHubPublicationExecutionRow,
@@ -13,7 +14,7 @@ const gitObjectId = /^[a-f0-9]{40}$/iu;
 export async function isGitHubPublicationSuperseded(
   snapshot: AcceptedSnapshot,
   pullRequests: readonly ControlUiSessionPullRequest[],
-  { fetchImpl = fetch, assertCurrent }: { fetchImpl?: typeof fetch; assertCurrent: () => void },
+  { assertCurrent }: { assertCurrent: () => void },
 ): Promise<boolean> {
   assertCurrent();
   const tree = snapshot.workspace_tree;
@@ -34,35 +35,18 @@ export async function isGitHubPublicationSuperseded(
   if (candidates.length === 0) {
     return false;
   }
-  const identity = gitHubPublicApi.resolveGitHubApiCredentialScope();
-  const assertSelected = () => {
-    assertCurrent();
-    if (gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== identity.cacheScope) {
-      throw new Error("GitHub observation identity changed.");
-    }
-  };
-  const read = async (url: string): Promise<unknown> => {
-    assertSelected();
-    const response = await gitHubPublicApi.fetchGitHubApi(
-      url,
-      fetchImpl,
-      identity.token,
-      undefined,
-      {
-        assertSelected,
-        revalidate: async () => assertSelected(),
-      },
-    );
-    const value = await gitHubPublicApi.readGitHubJsonResponse(response);
-    assertSelected();
-    return value;
-  };
+  // The PR reader admits one recorded repository host before returning its candidates.
+  const read = prepareSessionPullRequestGitHubRead(
+    new URL(candidates[0]!.pr.url).hostname,
+    assertCurrent,
+    { optionalAuth: false },
+  );
   for (const { pr, head } of candidates) {
     try {
-      const root = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(pr.owner)}/${encodeURIComponent(pr.repo)}`;
+      const root = sessionPullRequestRepositoryApiUrl({ ...pr, apiBaseUrl: read.apiBaseUrl });
       // Git commit metadata omits file patches and proves dirty/re-written snapshots
       // when the published tree is byte-for-byte identical to the accepted tree.
-      const published = await read(`${root}/git/commits/${head}`);
+      const published = await read.request(`${root}/git/commits/${head}`);
       if (
         !isRecord(published) ||
         published.sha !== head ||
@@ -81,7 +65,7 @@ export async function isGitHubPublicationSuperseded(
       }
       // Page two retains comparison metadata without the first page’s file patches.
       // Only an accepted *committed* snapshot can use ancestry as coverage proof.
-      const compared = await read(`${root}/compare/${source}...${head}?per_page=1&page=2`);
+      const compared = await read.request(`${root}/compare/${source}...${head}?per_page=1&page=2`);
       if (!isRecord(compared) || (compared.status !== "ahead" && compared.status !== "identical")) {
         continue;
       }
@@ -96,7 +80,7 @@ export async function isGitHubPublicationSuperseded(
       // One unavailable head does not disprove coverage by another matching PR.
       // The shared transport owns cooldowns; never switch identities or suppress
       // revoked authority while continuing through candidates.
-      assertSelected();
+      read.assertCurrent();
     }
   }
   return false;

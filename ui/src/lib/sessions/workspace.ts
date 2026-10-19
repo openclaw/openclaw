@@ -1,18 +1,24 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 
-export function sessionWorkspaceFileKey(root: string | undefined, workspacePath: string): string {
-  return JSON.stringify(["file", root ?? "", workspacePath]);
+export function sessionWorkspaceFileKey(
+  sessionKey: string,
+  root: string | undefined,
+  workspacePath: string,
+): string {
+  return JSON.stringify(["file", sessionKey, root ?? "", workspacePath]);
 }
 
 export function isSessionWorkspaceFileSelected(
   activeId: string | null,
+  sessionKey: string,
   root: string | undefined,
   path: string,
   workspacePath?: string,
 ): boolean {
   // Requests and Show in Files can select a row before its canonical read completes.
   return (
-    activeId === `file:${path}` || activeId === sessionWorkspaceFileKey(root, workspacePath ?? path)
+    activeId === `file:${path}` ||
+    activeId === sessionWorkspaceFileKey(sessionKey, root, workspacePath ?? path)
   );
 }
 
@@ -29,6 +35,9 @@ export function resolveSessionWorkspace(params: {
   const row = params.session;
   if (!row) {
     return { root: null, label: null };
+  }
+  if (row.deviceFolder) {
+    return { root: row.deviceFolder.path, label: pathBasename(row.deviceFolder.path) };
   }
   if (row.repositoryWorkspaceId) {
     return {

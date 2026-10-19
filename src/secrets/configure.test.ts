@@ -125,7 +125,7 @@ describe("runSecretsConfigureInteractive", () => {
     fs.writeFileSync(resolverPath, "process.stdin.resume();\n");
     fs.chmodSync(resolverPath, 0o600);
     selectMock.mockResolvedValueOnce("preset");
-    selectMock.mockResolvedValueOnce("vault:vault:vault");
+    selectMock.mockImplementationOnce(({ options }) => options[0].value);
     selectMock.mockResolvedValueOnce("continue");
     loadPluginManifestRegistryMock.mockReturnValue({
       diagnostics: [],

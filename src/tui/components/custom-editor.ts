@@ -8,14 +8,11 @@ const KITTY_MODIFIERS = {
 };
 const LOCK_MODIFIER_MASK = 64 + 128;
 const SHORTCUT_HANDLERS = [
-  [Key.alt("enter"), "onAltEnter"],
-  [Key.alt("up"), "onAltUp"],
   [Key.ctrl("l"), "onCtrlL"],
   [Key.ctrl("o"), "onCtrlO"],
   [Key.ctrl("p"), "onCtrlP"],
   [Key.ctrl("g"), "onCtrlG"],
   [Key.ctrl("t"), "onCtrlT"],
-  [Key.shift("tab"), "onShiftTab"],
 ] as const;
 
 // Decodes Ctrl+Alt layout output into the intended printable AltGr character.
@@ -61,9 +58,6 @@ export class CustomEditor extends Editor {
   onCtrlO?: () => void;
   onCtrlP?: () => void;
   onCtrlT?: () => void;
-  onShiftTab?: () => void;
-  onAltEnter?: () => void;
-  onAltUp?: () => void;
   shouldSubmitAutocomplete?: (text: string) => boolean;
 
   /** Preserve raw submit text so the owner chooses local editor dispatch before trimming. */

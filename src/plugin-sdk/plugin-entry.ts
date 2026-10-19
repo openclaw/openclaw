@@ -21,6 +21,10 @@ export type {
 } from "../plugins/capability-catalog-context.types.js";
 export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type {
+  SuggestedWorkerProfile,
+  WorkerProfileSuggestionDiscovery,
+} from "../plugins/worker-profile-suggestion.types.js";
 
 export type {
   AgentHarness,
@@ -53,6 +57,8 @@ export type {
   OpenClawPluginSecurityAuditContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  OpenClawPluginServiceV2,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginAgentEventEmitParams,
@@ -73,6 +79,7 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginServiceSchedulerV1,
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
@@ -126,6 +133,7 @@ export type {
   ProviderReplayPolicyContext,
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
+  ProviderReplaySessionStateV2,
   ProviderResolveConfigApiKeyContext,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
@@ -133,6 +141,7 @@ export type {
   ProviderResolveWebSocketSessionPolicyContext,
   ProviderResolvedUsageAuth,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderThinkingPolicyContext,
   ProviderThinkingProfile,
   ProviderToolSchemaDiagnostic,
@@ -184,16 +193,8 @@ export type {
   PluginHookMessageReceivedEvent,
   PluginHookProviderUpdate,
   PluginHookSkillArtifact,
-  PluginHookSkillBundleFile,
-  PluginHookSkillBundleSnapshot,
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,
-  PluginHookSkillEvaluationFinding,
-  PluginHookSkillProposalChangedEvent,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
-  PluginHookSkillProposalEvaluationOutcome,
-  PluginHookSkillProposalKind,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {

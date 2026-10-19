@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -18,12 +19,12 @@ import {
   writeCameraPayloadToFile,
   writeCameraClipPayloadToFile,
 } from "../nodes-camera.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
+  parseNodeDurationMs,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeInteger,
   resolveCliNode,
@@ -76,10 +77,13 @@ export function registerNodesCameraCommands(nodes: Command) {
 
           const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
+          // Device fields come from the node; keep its control bytes off the operator's terminal.
+          const text = (value: unknown, fallback: string) =>
+            typeof value === "string" ? sanitizeTerminalText(value) : fallback;
           const rows = devices.map((device) => ({
-            Name: typeof device.name === "string" ? device.name : "Unknown Camera",
-            Position: typeof device.position === "string" ? device.position : muted("unspecified"),
-            ID: typeof device.id === "string" ? device.id : "",
+            Name: text(device.name, "Unknown Camera"),
+            Position: text(device.position, muted("unspecified")),
+            ID: text(device.id, ""),
           }));
           defaultRuntime.log(heading("Cameras"));
           defaultRuntime.log(
@@ -111,7 +115,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const facing = normalizeLowercaseStringOrEmpty(opts.facing) || undefined;
+          const facing =
+            opts.facing === undefined ? undefined : normalizeLowercaseStringOrEmpty(opts.facing);
           if (
             facing !== undefined &&
             facing !== "both" &&
@@ -129,7 +134,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const delayMs = parseOptionalNodeInteger(opts.delayMs, "--delay-ms", "non-negative");
           const deviceId = normalizeOptionalString(opts.deviceId);
           const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
-          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const node = await resolveCliNode(opts, opts.node ?? "");
           const nodeId = node.nodeId;
           if (deviceId && facing === "both" && node.platform?.toLowerCase() !== "linux") {
             throw new Error("facing=both is not allowed when --device-id is set");
@@ -154,7 +159,7 @@ export function registerNodesCameraCommands(nodes: Command) {
                 quality,
                 format: "jpg",
                 delayMs,
-                deviceId: deviceId || undefined,
+                deviceId,
               },
               timeoutMs,
             });
@@ -217,11 +222,11 @@ export function registerNodesCameraCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
           const facing = parseFacing(opts.facing ?? "front");
-          const durationMs = parseDurationMs(opts.duration ?? "3000");
+          const durationMs = parseNodeDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
           const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const deviceId = normalizeOptionalString(opts.deviceId);
-          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const node = await resolveCliNode(opts, opts.node ?? "");
           const nodeId = node.nodeId;
           const target = resolveCameraClipTarget({ facing, platform: node.platform });
 
@@ -233,7 +238,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               durationMs,
               includeAudio,
               format: "mp4",
-              deviceId: deviceId || undefined,
+              deviceId,
             },
             timeoutMs,
           });

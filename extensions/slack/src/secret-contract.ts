@@ -4,6 +4,7 @@ import {
   collectSimpleChannelFieldAssignments,
   createChannelSecretContract,
   hasOwnProperty,
+  isRecord,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 export const channelSecrets = createChannelSecretContract({
@@ -28,12 +29,7 @@ export const channelSecrets = createChannelSecretContract({
       resolveMode(account.mode) ?? baseMode;
     const hasNestedAuthTokenOverride = (account: Record<string, unknown>) => {
       const relay = account.relay;
-      return (
-        relay !== null &&
-        typeof relay === "object" &&
-        !Array.isArray(relay) &&
-        hasOwnProperty(relay as Record<string, unknown>, "authToken")
-      );
+      return isRecord(relay) && hasOwnProperty(relay, "authToken");
     };
     for (const [field, mode, label] of [
       ["appToken", "socket", "socket"],

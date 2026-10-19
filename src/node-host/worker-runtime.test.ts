@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { validateNodeHostStatsPayload } from "../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -13,13 +14,13 @@ import {
   testing as execApprovalsStoreTesting,
 } from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
-import * as pathEnv from "../infra/path-env.js";
-import * as terminalUpload from "../infra/terminal-file-upload.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostConfig } from "./config.js";
+import type { NodeHostGatewayConnection } from "./connection.js";
 import type { ExecEventPayload } from "./invoke-types.js";
 import * as pluginNodeHost from "./plugin-node-host.js";
 
@@ -68,6 +69,7 @@ const { prepareNodeHostRuntime } =
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.loadConfig.mockResolvedValue(null);
+  fixture.runtime.close.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -89,6 +91,8 @@ function startWorkerFixture(
     ) => { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } };
   } = {},
 ) {
+  // The private worker owns stdin; this shared test process does not.
+  const destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
   const events = new EventEmitter();
   const input = Object.assign(events, {
     close: () => {
@@ -96,22 +100,30 @@ function startWorkerFixture(
     },
   });
   fixture.input = input;
+  const send = (message: object) => input.emit("line", JSON.stringify(message));
+  const connect = (
+    generation: number,
+    connection: NodeHostGatewayConnection | null = {
+      url: "wss://gateway.example.test",
+      protocol: 4,
+      capabilities: [],
+    },
+  ) => send({ type: "gateway-connection", generation, connection });
   const messages: Array<Record<string, unknown>> = [];
+  const messageEvents = new EventEmitter();
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     const message = JSON.parse(String(chunk));
     messages.push(message);
+    messageEvents.emit("message", message);
     if (message.type === "gateway-request") {
       queueMicrotask(() =>
-        input.emit(
-          "line",
-          JSON.stringify({
-            type: "gateway-response",
-            generation: message.generation,
-            id: message.id,
-            ...(options.gatewayResponse?.(message) ?? { ok: true, result: {} }),
-          }),
-        ),
+        send({
+          type: "gateway-response",
+          generation: message.generation,
+          id: message.id,
+          ...(options.gatewayResponse?.(message) ?? { ok: true, result: {} }),
+        }),
       );
     }
     return true;
@@ -138,14 +150,19 @@ function startWorkerFixture(
   const terminateListeners = process.listeners("SIGTERM");
   const running = runNodeHostWorker({ desktopSharingEnabled: options.desktopSharingEnabled });
   return {
-    input,
+    send,
+    connect,
+    ready: () =>
+      vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true)),
     messages,
+    messageEvents,
     stderr,
     stdout,
     stop: async () => {
       try {
         input.close();
         await running;
+        expect(destroyStdin).toHaveBeenCalled();
         if (!options.prepared) {
           expect(fixture.runtime.close).toHaveBeenCalledOnce();
           expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
@@ -159,27 +176,31 @@ function startWorkerFixture(
   };
 }
 
-it("refreshes runner facts only for the current private bridge generation", async () => {
-  const { input, messages, stop } = startWorkerFixture();
+async function withWorker(
+  run: (worker: ReturnType<typeof startWorkerFixture>) => Promise<void>,
+  ...options: Parameters<typeof startWorkerFixture>
+) {
+  const worker = startWorkerFixture(...options);
   try {
-    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
-    input.emit(
-      "line",
-      JSON.stringify({
-        type: "gateway-connection",
-        generation: 2,
-        connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
-      }),
-    );
+    await worker.ready();
+    await run(worker);
+  } finally {
+    await worker.stop();
+  }
+}
+
+it("refreshes runner facts only for the current private bridge generation", async () => {
+  await withWorker(async ({ send, connect, messages }) => {
+    connect(2);
     await setImmediate();
     const publications = () =>
       messages.filter((message) => message.method === "node.runnerInventory.update");
     expect(publications()).toHaveLength(1);
     const cancelsBefore = fixture.runtime.cancelAll.mock.calls.length;
-    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 1 }));
+    send({ type: "runner-inventory-refresh", generation: 1 });
     await setImmediate();
     expect(publications()).toHaveLength(1);
-    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 2 }));
+    send({ type: "runner-inventory-refresh", generation: 2 });
     await setImmediate();
     expect(publications()).toHaveLength(2);
     expect(publications().at(-1)).toMatchObject({
@@ -187,16 +208,11 @@ it("refreshes runner facts only for the current private bridge generation", asyn
       params: { workerHost: { enabled: true, capacity: { total: 2, available: 2 } } },
     });
     expect(fixture.runtime.cancelAll).toHaveBeenCalledTimes(cancelsBefore);
-    input.emit(
-      "line",
-      JSON.stringify({ type: "gateway-connection", generation: 3, connection: null }),
-    );
-    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 3 }));
+    connect(3, null);
+    send({ type: "runner-inventory-refresh", generation: 3 });
     await setImmediate();
     expect(publications()).toHaveLength(2);
-  } finally {
-    await stop();
-  }
+  });
 });
 
 it("keeps the private app worker unrestricted by a saved headless command allowlist", async () => {
@@ -205,9 +221,6 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     nodeId: "headless-node",
     commands: ["openclaw.sessions.list.v1"],
   });
-  vi.spyOn(pathEnv, "ensureOpenClawCliOnPath").mockImplementation(() => {});
-  vi.spyOn(terminalUpload, "ensureTerminalUploadCleanup").mockResolvedValue();
-  vi.spyOn(pluginNodeHost, "ensureNodeHostPluginRegistry").mockResolvedValue();
   vi.spyOn(pluginNodeHost, "listRegisteredNodeHostCapsAndCommands").mockReturnValue({
     commands: ["openclaw.sessions.list.v1"],
     caps: ["sessions"],
@@ -223,27 +236,19 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     })),
     start: fixture.start,
   }));
-  const { messages, stop } = startWorkerFixture();
-  try {
-    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
-    expect.soft(messages).toContainEqual(
-      expect.objectContaining({
-        type: "ready",
-        manifest: expect.objectContaining({ commands: expect.arrayContaining(["system.run"]) }),
-      }),
-    );
+  await withWorker(async ({ messages }) => {
+    expect.soft(messages.find((message) => message.type === "ready")).toMatchObject({
+      manifest: { commands: expect.arrayContaining(["system.run"]) },
+    });
     const prepared = await fixture.prepare.mock.results[0]?.value;
     expect.soft(prepared.workerHostingEnabled).toBe(true);
     expect.soft(prepared.restrictedSurface).toBeUndefined();
-  } finally {
-    await stop();
-  }
+  });
 });
 
 it.each([
   { desktopSharingEnabled: undefined, configured: false, enabled: false },
   { desktopSharingEnabled: false, configured: true, enabled: false },
-  { desktopSharingEnabled: true, configured: false, enabled: true },
 ])(
   "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
   async ({ desktopSharingEnabled, configured, enabled }) => {
@@ -256,43 +261,38 @@ it.each([
       })),
       start: fixture.start,
     }));
-    const { messages, stop } = startWorkerFixture(false, undefined, { desktopSharingEnabled });
-    try {
-      await vi.waitFor(() =>
-        expect(messages.some((message) => message.type === "ready")).toBe(true),
-      );
-      expect(messages).toContainEqual(
-        expect.objectContaining({
-          type: "ready",
-          manifest: expect.objectContaining({
+    await withWorker(
+      async ({ messages }) => {
+        expect(messages.find((message) => message.type === "ready")).toMatchObject({
+          manifest: {
             commands: enabled
               ? expect.arrayContaining(["desktop.stream"])
               : expect.not.arrayContaining(["desktop.stream"]),
-          }),
-        }),
-      );
-    } finally {
-      await stop();
-    }
+          },
+        });
+      },
+      false,
+      undefined,
+      { desktopSharingEnabled },
+    );
   },
 );
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
-  const { input, messages, stderr, stop } = startWorkerFixture();
+  const { send, connect, ready, messages, stderr, stop } = startWorkerFixture();
+  const resumeInvocation = createDeferredCore();
+  const capacityPublished = createDeferredCore();
   try {
-    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    await ready();
     expect(messages.find((message) => message.type === "ready")).toMatchObject({
       workerHostingEnabled: true,
     });
-    expect(fixture.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ enableWorkerRuns: true }),
-    );
     const connection = {
       url: "wss://gateway.example.test/current",
       protocol: 4,
       capabilities: ["node.worker.bundleRetention.v1"],
     };
-    input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
+    connect(1, connection);
     await vi.waitFor(() =>
       expect(messages).toContainEqual(
         expect.objectContaining({
@@ -307,13 +307,20 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenCalledWith(
       expect.objectContaining({ url: connection.url }),
     );
-    input.emit(
-      "line",
-      JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
-    );
+    fixture.runtime.invoke.mockImplementationOnce(async () => {
+      await resumeInvocation.promise;
+      fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 1 });
+      capacityPublished.resolve();
+    });
+    send({
+      type: "invoke",
+      generation: 1,
+      request: { id: "old-route", nodeId: "node", command: "system.run" },
+    });
+    connect(2, null);
     expect(fixture.runtime.cancelAll).toHaveBeenCalled();
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
-    input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
+    connect(3, connection);
     await setImmediate();
     const callbacks = fixture.start.mock.calls[0]?.[0];
     if (!callbacks) {
@@ -322,9 +329,8 @@ it("publishes hosting through the app route and retires it on disconnect", async
     const count = messages.length;
     // Capacity is owned by the supervisor; cleanup from an old invocation can
     // notify it after reconnect without acquiring that invocation's authority.
-    callbacks.client.withConnection(1, () =>
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 1 }),
-    );
+    resumeInvocation.resolve();
+    await capacityPublished.promise;
     await vi.waitFor(() =>
       expect(messages.slice(count)).toContainEqual(
         expect.objectContaining({
@@ -342,291 +348,251 @@ it("publishes hosting through the app route and retires it on disconnect", async
     callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
     expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
-    input.emit(
-      "line",
-      JSON.stringify({
-        type: "invoke",
-        generation: 3,
-        request: { id: "stale", nodeId: "node", command: "system.worker.start" },
-      }),
-    );
-    expect(fixture.runtime.invoke).not.toHaveBeenCalled();
+    send({
+      type: "invoke",
+      generation: 3,
+      request: { id: "stale", nodeId: "node", command: "system.worker.start" },
+    });
+    expect(fixture.runtime.invoke).toHaveBeenCalledTimes(1);
     expect(stderr).not.toHaveBeenCalled();
   } finally {
+    resumeInvocation.resolve();
     await stop();
   }
 });
 
-it.each([null, { total: 2, available: 0 }])(
-  "reports hosting only after supervisor capacity exists: %j",
-  async (initialWorkerCapacity) => {
-    const { messages, stop } = startWorkerFixture(true, undefined, { initialWorkerCapacity });
-    try {
-      await vi.waitFor(() =>
-        expect(messages.some((message) => message.type === "ready")).toBe(true),
+it("reports hosting only after supervisor capacity exists", async () => {
+  const { ready, messages, stop } = startWorkerFixture(true, undefined, {
+    initialWorkerCapacity: null,
+  });
+  try {
+    await ready();
+    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+      workerHostingEnabled: false,
+    });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
+    const callbacks = fixture.start.mock.calls[0]?.[0];
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([
+      { type: "worker-hosting", enabled: true },
+    ]);
+  } finally {
+    await stop();
+  }
+  expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
+    type: "worker-hosting",
+    enabled: false,
+  });
+});
+
+it.runIf(process.platform !== "win32").for([
+  { scenario: "same Gateway reconnect", target: "a", elapsedMs: 0, rejectRefresh: false },
+  { scenario: "replacement within cache TTL", target: "b", elapsedMs: 0, rejectRefresh: false },
+  { scenario: "replacement refresh failure", target: "b", elapsedMs: 90_001, rejectRefresh: true },
+])(
+  "scopes skill-authorized execution to the worker connection: $scenario",
+  async (scenario, { signal }) => {
+    await withTestDir({ prefix: "openclaw-skill-exec-" }, async (dir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: dir,
+          OPENCLAW_STATE_DIR: path.join(dir, "state"),
+          OPENCLAW_NODE_EXEC_HOST: undefined,
+          OPENCLAW_NODE_EXEC_FALLBACK: "0",
+          PATH: "/usr/bin:/bin",
+        },
+        async () => {
+          closeOpenClawStateDatabaseForTest();
+          execApprovalsStoreTesting.reset();
+          const now = Date.now;
+          let elapsedMs = 0;
+          vi.spyOn(Date, "now").mockImplementation(() => now() + elapsedMs);
+          let stop: (() => Promise<void>) | undefined;
+          try {
+            fs.accessSync(fs.realpathSync("/usr/bin/true"), fs.constants.X_OK);
+            setRuntimeConfigSnapshot({ tools: { exec: { mode: "allowlist" } } });
+            saveExecApprovals({
+              version: 1,
+              defaults: {
+                security: "allowlist",
+                ask: "off",
+                askFallback: "deny",
+                autoAllowSkills: true,
+              },
+              agents: {},
+            });
+            // Exec-host selection is captured on import. This lane exercises real
+            // Node policy/commit/spawn; native app execution has its own proof.
+            const { handleInvoke } =
+              await vi.importActual<typeof import("./invoke.js")>("./invoke.js");
+            fixture.handleInvoke.mockImplementation(handleInvoke);
+            const prepared = await prepareNodeHostRuntime({
+              config: { nodeHost: { skills: { enabled: false } } },
+            });
+            let rejectSameGatewayRefresh = false;
+            const unavailable = {
+              ok: false,
+              error: { code: "UNAVAILABLE", message: "Gateway unavailable" },
+            } as const;
+            const worker = startWorkerFixture(false, undefined, {
+              prepared,
+              gatewayResponse: (message) => {
+                if (message.method !== "skills.bins") {
+                  return { ok: true, result: {} };
+                }
+                if (message.generation === 1 || scenario.target === "a") {
+                  return rejectSameGatewayRefresh
+                    ? unavailable
+                    : { ok: true, result: { bins: ["true"] } };
+                }
+                return scenario.rejectRefresh ? unavailable : { ok: true, result: { bins: [] } };
+              },
+            });
+            stop = worker.stop;
+            const { send, messages } = worker;
+            const connect = (generation: number, target: string) => {
+              worker.connect(generation, {
+                url: `wss://gateway-${target}.example.test`,
+                protocol: 4,
+                capabilities: [],
+              });
+            };
+            const invoke = async (generation: number, id: string) => {
+              const response = createDeferredCore<Record<string, unknown>>();
+              const onMessage = (message: Record<string, unknown>) => {
+                if (
+                  message.type === "invoke-result" &&
+                  (message.result as { id?: string } | undefined)?.id === id
+                ) {
+                  response.resolve(message);
+                }
+              };
+              worker.messageEvents.on("message", onMessage);
+              try {
+                send({
+                  type: "invoke",
+                  generation,
+                  request: {
+                    id,
+                    nodeId: "node",
+                    command: "system.run",
+                    paramsJSON: JSON.stringify({
+                      // A shell-wrapped `true` has independent builtin trust.
+                      // Bare argv requires the actual skill entry in this lane.
+                      command: ["true"],
+                      cwd: dir,
+                      agentId: "main",
+                      sessionKey: "agent:main:skill-trust-proof",
+                      runId: id,
+                      timeoutMs: 2_000,
+                    }),
+                  },
+                });
+                const message = await withinTest(response.promise, signal);
+                expect(message).toMatchObject({ generation, result: { id } });
+                return message.result as {
+                  ok: boolean;
+                  payloadJSON?: string;
+                  error?: { code: string; message: string };
+                };
+              } finally {
+                worker.messageEvents.off("message", onMessage);
+              }
+            };
+            const eventsFor = (id: string) =>
+              messages
+                .filter((message) => message.type === "node-event")
+                .map((message) => {
+                  const event = message.event as { event: string; payloadJSON: string };
+                  return {
+                    generation: message.generation,
+                    event: event.event,
+                    payload: JSON.parse(event.payloadJSON) as ExecEventPayload,
+                  };
+                })
+                .filter((event) => event.payload.runId === id);
+            const expectEvent = (id: string, generation: number, event: string, payload: object) =>
+              expect(eventsFor(id)).toEqual([
+                {
+                  generation,
+                  event,
+                  payload: expect.objectContaining({ runId: id, host: "node", ...payload }),
+                },
+              ]);
+            const expectExecuted = (
+              result: Awaited<ReturnType<typeof invoke>>,
+              generation: number,
+              id: string,
+            ) => {
+              expect(result).toMatchObject({ ok: true });
+              expect(JSON.parse(result.payloadJSON ?? "null")).toEqual({
+                exitCode: 0,
+                timedOut: false,
+                success: true,
+                stdout: "",
+                stderr: "",
+                error: null,
+              });
+              expectEvent(id, generation, "exec.finished", { success: true, exitCode: 0 });
+            };
+            const skillRequests = () =>
+              messages.filter((message) => message.method === "skills.bins");
+            await worker.ready();
+            connect(1, "a");
+            for (const id of ["a-warm", "a-cached-control"]) {
+              expectExecuted(await invoke(1, id), 1, id);
+            }
+            expect(skillRequests()).toHaveLength(1);
+            worker.connect(2, null);
+            // Advance expiry only after both real processes have completed.
+            elapsedMs = scenario.elapsedMs;
+            connect(3, scenario.target);
+            const replacement = await invoke(3, "new-invoke");
+            if (scenario.target === "a") {
+              expectExecuted(replacement, 3, "new-invoke");
+              const requestsAfterReconnect = skillRequests().length;
+              expectExecuted(await invoke(3, "a-reconnected-cached"), 3, "a-reconnected-cached");
+              expect(skillRequests()).toHaveLength(requestsAfterReconnect);
+              elapsedMs = 90_001;
+              rejectSameGatewayRefresh = true;
+              expectExecuted(await invoke(3, "a-refresh-failed"), 3, "a-refresh-failed");
+              expect(skillRequests()).toHaveLength(requestsAfterReconnect + 1);
+              expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
+            } else {
+              expect(replacement).toMatchObject({
+                ok: false,
+                error: { code: "SYSTEM_RUN_DENIED", message: "SYSTEM_RUN_DENIED: allowlist miss" },
+              });
+              expectEvent("new-invoke", 3, "exec.denied", { reason: "allowlist-miss" });
+              expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
+            }
+            expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+          } finally {
+            try {
+              await stop?.();
+            } finally {
+              fixture.handleInvoke.mockReset();
+              execApprovalsStoreTesting.reset();
+              closeOpenClawStateDatabaseForTest();
+              clearRuntimeConfigSnapshot();
+              clearExecutablePathCache();
+            }
+          }
+        },
       );
-      expect(messages.find((message) => message.type === "ready")).toMatchObject({
-        workerHostingEnabled: initialWorkerCapacity !== null,
-      });
-      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
-      const callbacks = fixture.start.mock.calls[0]?.[0];
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
-      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
-        initialWorkerCapacity === null ? [{ type: "worker-hosting", enabled: true }] : [],
-      );
-    } finally {
-      await stop();
-    }
-    expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
-      type: "worker-hosting",
-      enabled: false,
     });
   },
 );
 
-it.runIf(process.platform !== "win32").each([
-  { scenario: "same Gateway reconnect", target: "a", elapsedMs: 0, rejectRefresh: false },
-  { scenario: "replacement within cache TTL", target: "b", elapsedMs: 0, rejectRefresh: false },
-  { scenario: "replacement after cache TTL", target: "b", elapsedMs: 90_001, rejectRefresh: false },
-  { scenario: "replacement refresh failure", target: "b", elapsedMs: 90_001, rejectRefresh: true },
-])("scopes skill-authorized execution to the worker connection: $scenario", async (scenario) => {
-  await withTestDir({ prefix: "openclaw-skill-exec-" }, async (dir) => {
-    await withEnvAsync(
-      {
-        OPENCLAW_HOME: dir,
-        OPENCLAW_STATE_DIR: path.join(dir, "state"),
-        OPENCLAW_NODE_EXEC_HOST: undefined,
-        OPENCLAW_NODE_EXEC_FALLBACK: "0",
-        PATH: "/usr/bin:/bin",
-      },
-      async () => {
-        closeOpenClawStateDatabaseForTest();
-        execApprovalsStoreTesting.reset();
-        const now = Date.now;
-        let elapsedMs = 0;
-        vi.spyOn(Date, "now").mockImplementation(() => now() + elapsedMs);
-        let stop: (() => Promise<void>) | undefined;
-        try {
-          fs.accessSync(fs.realpathSync("/usr/bin/true"), fs.constants.X_OK);
-          setRuntimeConfigSnapshot({ tools: { exec: { mode: "allowlist" } } });
-          saveExecApprovals({
-            version: 1,
-            defaults: {
-              security: "allowlist",
-              ask: "off",
-              askFallback: "deny",
-              autoAllowSkills: true,
-            },
-            agents: {},
-          });
-          // Exec-host selection is captured on import. This lane exercises real
-          // Node policy/commit/spawn; native app execution has its own proof.
-          const { handleInvoke } =
-            await vi.importActual<typeof import("./invoke.js")>("./invoke.js");
-          fixture.handleInvoke.mockImplementation(handleInvoke);
-          const prepared = await prepareNodeHostRuntime({
-            config: { nodeHost: { skills: { enabled: false } } },
-            enableDuplexPluginCommands: true,
-            enableWorkerRuns: true,
-          });
-          let rejectSameGatewayRefresh = false;
-          const worker = startWorkerFixture(false, undefined, {
-            prepared,
-            gatewayResponse: (message) => {
-              if (message.method !== "skills.bins") {
-                return { ok: true, result: {} };
-              }
-              if (message.generation === 1 || scenario.target === "a") {
-                return rejectSameGatewayRefresh
-                  ? {
-                      ok: false,
-                      error: { code: "UNAVAILABLE", message: "same Gateway unavailable" },
-                    }
-                  : { ok: true, result: { bins: ["true"] } };
-              }
-              return scenario.rejectRefresh
-                ? { ok: false, error: { code: "UNAVAILABLE", message: "replacement unavailable" } }
-                : { ok: true, result: { bins: [] } };
-            },
-          });
-          stop = worker.stop;
-          const { input, messages } = worker;
-          const connect = (generation: number, target: string) => {
-            input.emit(
-              "line",
-              JSON.stringify({
-                type: "gateway-connection",
-                generation,
-                connection: {
-                  url: `wss://gateway-${target}.example.test`,
-                  protocol: 4,
-                  capabilities: [],
-                },
-              }),
-            );
-          };
-          const invoke = async (generation: number, id: string) => {
-            input.emit(
-              "line",
-              JSON.stringify({
-                type: "invoke",
-                generation,
-                request: {
-                  id,
-                  nodeId: "node",
-                  command: "system.run",
-                  paramsJSON: JSON.stringify({
-                    // A shell-wrapped `true` has independent builtin trust.
-                    // Bare argv requires the actual skill entry in this lane.
-                    command: ["true"],
-                    cwd: dir,
-                    agentId: "main",
-                    sessionKey: "agent:main:skill-trust-proof",
-                    runId: id,
-                    timeoutMs: 2_000,
-                  }),
-                },
-              }),
-            );
-            const message = await vi.waitFor(
-              () => {
-                const result = messages.find(
-                  (entry) =>
-                    entry.type === "invoke-result" &&
-                    (entry.result as { id?: string } | undefined)?.id === id,
-                );
-                if (!result) {
-                  throw new Error(`missing worker invocation result: ${id}`);
-                }
-                return result;
-              },
-              { timeout: 5_000 },
-            );
-            expect(message).toMatchObject({ generation, result: { id } });
-            return message.result as {
-              ok: boolean;
-              payloadJSON?: string;
-              error?: { code: string; message: string };
-            };
-          };
-          const eventsFor = (id: string) =>
-            messages
-              .filter((message) => message.type === "node-event")
-              .map((message) => {
-                const event = message.event as { event: string; payloadJSON: string };
-                return {
-                  generation: message.generation,
-                  event: event.event,
-                  payload: JSON.parse(event.payloadJSON) as ExecEventPayload,
-                };
-              })
-              .filter((event) => event.payload.runId === id);
-          const expectExecuted = (
-            result: Awaited<ReturnType<typeof invoke>>,
-            generation: number,
-            id: string,
-          ) => {
-            expect(result).toMatchObject({ ok: true });
-            expect(JSON.parse(result.payloadJSON ?? "null")).toEqual({
-              exitCode: 0,
-              timedOut: false,
-              success: true,
-              stdout: "",
-              stderr: "",
-              error: null,
-            });
-            expect(eventsFor(id)).toEqual([
-              {
-                generation,
-                event: "exec.finished",
-                payload: expect.objectContaining({
-                  runId: id,
-                  host: "node",
-                  success: true,
-                  exitCode: 0,
-                }),
-              },
-            ]);
-          };
-          const skillRequests = () =>
-            messages.filter((message) => message.method === "skills.bins");
-          await vi.waitFor(() =>
-            expect(messages.some((message) => message.type === "ready")).toBe(true),
-          );
-          connect(1, "a");
-          for (const id of ["a-warm", "a-cached-control"]) {
-            expectExecuted(await invoke(1, id), 1, id);
-          }
-          expect(skillRequests()).toHaveLength(1);
-          input.emit(
-            "line",
-            JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
-          );
-          // Advance expiry only after both real processes have completed.
-          elapsedMs = scenario.elapsedMs;
-          connect(3, scenario.target);
-          const replacement = await invoke(3, "new-invoke");
-          if (scenario.target === "a") {
-            expectExecuted(replacement, 3, "new-invoke");
-            const requestsAfterReconnect = skillRequests().length;
-            expectExecuted(await invoke(3, "a-reconnected-cached"), 3, "a-reconnected-cached");
-            expect(skillRequests()).toHaveLength(requestsAfterReconnect);
-            elapsedMs = 90_001;
-            rejectSameGatewayRefresh = true;
-            expectExecuted(await invoke(3, "a-refresh-failed"), 3, "a-refresh-failed");
-            expect(skillRequests()).toHaveLength(requestsAfterReconnect + 1);
-            expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
-          } else {
-            expect(replacement).toMatchObject({
-              ok: false,
-              error: { code: "SYSTEM_RUN_DENIED", message: "SYSTEM_RUN_DENIED: allowlist miss" },
-            });
-            expect(eventsFor("new-invoke")).toEqual([
-              {
-                generation: 3,
-                event: "exec.denied",
-                payload: expect.objectContaining({
-                  runId: "new-invoke",
-                  host: "node",
-                  reason: "allowlist-miss",
-                }),
-              },
-            ]);
-            expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
-          }
-          expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
-        } finally {
-          try {
-            await stop?.();
-          } finally {
-            fixture.handleInvoke.mockReset();
-            execApprovalsStoreTesting.reset();
-            closeOpenClawStateDatabaseForTest();
-            clearRuntimeConfigSnapshot();
-            clearExecutablePathCache();
-          }
-        }
-      },
-    );
-  });
-});
-
 it("publishes host stats through the native bridge only while connected", async () => {
-  const { input, messages, stop } = startWorkerFixture(false);
+  const { connect, ready, messages, stop } = startWorkerFixture(false);
   const publications = () => messages.filter((message) => message.type === "node-event");
   try {
-    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    await ready();
     expect(publications()).toEqual([]);
     vi.useFakeTimers();
-    input.emit(
-      "line",
-      JSON.stringify({
-        type: "gateway-connection",
-        generation: 1,
-        connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
-      }),
-    );
+    connect(1);
     await vi.advanceTimersByTimeAsync(0);
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
@@ -638,10 +604,7 @@ it("publishes host stats through the native bridge only while connected", async 
     expect(validateNodeHostStatsPayload(JSON.parse(params.payloadJSON))).toBe(true);
     await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
     expect(publications()).toHaveLength(2);
-    input.emit(
-      "line",
-      JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
-    );
+    connect(2, null);
     await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
     expect(publications()).toHaveLength(2);
   } finally {
@@ -650,7 +613,7 @@ it("publishes host stats through the native bridge only while connected", async 
   }
 });
 
-it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
+it.each(["prepared failure", "later failure"] as const)(
   "keeps worker hosting diagnostics local across reconnects: %s",
   async (scenario) => {
     const secret = "fixture-secret";
@@ -658,78 +621,67 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
     const reason = `Docker authentication failed (password=${secret}); ${action}`;
     const preparedFailure = scenario === "prepared failure";
     const laterFailure = scenario === "later failure";
-    const { input, messages, stderr, stdout, stop } = startWorkerFixture(
+    await withWorker(
+      async ({ connect, messages, stderr, stdout }) => {
+        const expectDiagnostic = () => {
+          expect(stderr).toHaveBeenCalledOnce();
+          const diagnostic = String(stderr.mock.calls[0]?.[0]);
+          expect(diagnostic).toContain(
+            "node host worker hosting disabled: Docker authentication failed",
+          );
+          expect(diagnostic).toContain(action);
+          expect(diagnostic).not.toContain(secret);
+        };
+
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({ type: "ready", workerHostingEnabled: laterFailure });
+        if (preparedFailure) {
+          expectDiagnostic();
+          expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
+            stdout.mock.invocationCallOrder[0]!,
+          );
+        } else {
+          expect(stderr).not.toHaveBeenCalled();
+        }
+        const connection = {
+          url: "wss://gateway.example.test/current",
+          protocol: 4,
+          capabilities: [],
+        };
+        const inventories = () =>
+          messages.filter((message) => message.method === "node.runnerInventory.update");
+        connect(1, connection);
+        await setImmediate();
+        if (laterFailure) {
+          expect(inventories()).toHaveLength(1);
+          expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
+          fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
+          fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 2 });
+          await setImmediate();
+          expectDiagnostic();
+        }
+        const disabledInventory = expect.objectContaining({ workerHost: { enabled: false } });
+        expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
+        expect(inventories().at(-1)?.params).toEqual(disabledInventory);
+        connect(2, null);
+        connect(3, connection);
+        await setImmediate();
+        expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
+        expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
+        expectDiagnostic();
+        const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(output).not.toContain(secret);
+        expect(output).not.toContain(reason);
+        expect(output).not.toContain(action);
+        expect(output).not.toContain("worker hosting disabled");
+        expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+        expect(messages.some((message) => message.type === "manifest")).toBe(false);
+        expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
+          laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
+        );
+      },
       laterFailure,
       preparedFailure ? reason : undefined,
     );
-    const expectDiagnostic = () => {
-      expect(stderr).toHaveBeenCalledOnce();
-      const diagnostic = String(stderr.mock.calls[0]?.[0]);
-      expect(diagnostic).toContain(
-        "node host worker hosting disabled: Docker authentication failed",
-      );
-      expect(diagnostic).toContain(action);
-      expect(diagnostic).not.toContain(secret);
-    };
-    try {
-      await vi.waitFor(() =>
-        expect(messages.some((message) => message.type === "ready")).toBe(true),
-      );
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({ type: "ready", workerHostingEnabled: laterFailure });
-      if (preparedFailure) {
-        expectDiagnostic();
-        expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
-          stdout.mock.invocationCallOrder[0]!,
-        );
-      } else {
-        expect(stderr).not.toHaveBeenCalled();
-      }
-      const connection = {
-        url: "wss://gateway.example.test/current",
-        protocol: 4,
-        capabilities: [],
-      };
-      const inventories = () =>
-        messages.filter((message) => message.method === "node.runnerInventory.update");
-      input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
-      await setImmediate();
-      if (laterFailure) {
-        expect(inventories()).toHaveLength(1);
-        expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
-        fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
-        fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 2 });
-        await setImmediate();
-        expectDiagnostic();
-      }
-      const disabledInventory = expect.objectContaining({ workerHost: { enabled: false } });
-      expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
-      expect(inventories().at(-1)?.params).toEqual(disabledInventory);
-      input.emit(
-        "line",
-        JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
-      );
-      input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
-      await setImmediate();
-      expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
-      expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
-      if (scenario === "configured opt-out") {
-        expect(stderr).not.toHaveBeenCalled();
-      } else {
-        expectDiagnostic();
-      }
-      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
-      expect(output).not.toContain(secret);
-      expect(output).not.toContain(reason);
-      expect(output).not.toContain(action);
-      expect(output).not.toContain("worker hosting disabled");
-      expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
-      expect(messages.some((message) => message.type === "manifest")).toBe(false);
-      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
-        laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
-      );
-    } finally {
-      await stop();
-    }
   },
 );

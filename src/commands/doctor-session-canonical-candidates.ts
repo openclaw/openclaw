@@ -7,7 +7,6 @@ import {
   type CanonicalSessionRepairFact,
 } from "../config/sessions/session-accessor.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "../config/sessions/store-entry.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -15,7 +14,6 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../gateway/session-store-key.js";
 import {
-  projectExistingAgentDatabaseTargets,
   resolveTargetSqlitePath,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
@@ -25,6 +23,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
 
 export type CanonicalSessionCandidate = {
@@ -56,17 +55,6 @@ type CanonicalSessionRepairGroup = {
   candidates: CanonicalSessionCandidateFact[];
   removedRows: number;
 };
-
-export function listCanonicalSessionStores(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): ExistingAgentDatabaseTarget[] {
-  return projectExistingAgentDatabaseTargets(
-    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
-    params.env,
-    params.cfg,
-  );
-}
 
 function collectCanonicalSessionCandidateFacts(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
@@ -180,10 +168,12 @@ export function resolveCanonicalSessionDestination(params: {
   };
 }
 
-function groupRepairCandidates(
-  candidates: readonly CanonicalSessionCandidateFact[],
+export function collectCanonicalSessionRepairGroups(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
+  stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
+  const candidates = collectCanonicalSessionCandidateFacts(params, stores);
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const byCanonicalKey = new Map<string, CanonicalSessionCandidateFact[]>();
   for (const candidate of candidates) {
     const sentinelOwner =
@@ -210,23 +200,16 @@ function groupRepairCandidates(
           candidate.inventoryFact.rawCompareRequired ||
           candidate.lineageRepairRequired ||
           candidate.sessionKey !== candidate.canonicalKey ||
-          candidate.sqlitePath !== destination.sqlitePath,
+          !isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath),
       );
     if (!repairRequired) {
       return [];
     }
     const canonicalRowSurvives = group.some(
       (candidate) =>
-        candidate.sqlitePath === destination.sqlitePath &&
+        isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath) &&
         candidate.sessionKey === candidate.canonicalKey,
     );
     return [{ candidates: group, removedRows: group.length - (canonicalRowSurvives ? 1 : 0) }];
   });
-}
-
-export function collectCanonicalSessionRepairGroups(
-  params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
-  stores: readonly ExistingAgentDatabaseTarget[],
-): CanonicalSessionRepairGroup[] {
-  return groupRepairCandidates(collectCanonicalSessionCandidateFacts(params, stores), params);
 }

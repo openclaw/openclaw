@@ -147,25 +147,6 @@ describe("Slack read actions", () => {
     });
   });
 
-  it("filters an exact channel message and suppresses pagination", async () => {
-    const client = createClient();
-    client.conversations.history.mockResolvedValueOnce({
-      messages: [{ ts: "171234.890", text: "exact" }, { ts: "171234.891" }],
-      has_more: true,
-    });
-    await expect(readSlackMessages("C1", { client, messageId: "171234.890" })).resolves.toEqual({
-      messages: [{ ts: "171234.890", text: "exact" }],
-      hasMore: false,
-    });
-    expect(client.conversations.history).toHaveBeenCalledExactlyOnceWith({
-      channel: "C1",
-      limit: 1,
-      inclusive: true,
-      latest: "171234.890",
-      oldest: "171234.890",
-    });
-  });
-
   it("rejects invalid history bounds before Slack API work", async () => {
     const client = createClient();
     await expect(

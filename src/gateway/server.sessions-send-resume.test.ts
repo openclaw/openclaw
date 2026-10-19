@@ -5,11 +5,12 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import { readSubagentRunAnnounceResult } from "../agents/subagents/announce/subagent-announce-output.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -19,14 +20,18 @@ import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-co
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
+  appendTranscriptMessage,
   listSessionPendingInputReceipts,
   listSessionPendingInputs,
 } from "../config/sessions/session-accessor.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   agentCommandMock,
@@ -67,7 +72,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   // Stop registry timers before the Gateway releases their database lifecycle.
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   await server.close();
 });
 
@@ -81,6 +86,15 @@ async function mockSubagentAnnounce() {
 }
 
 // Each case owns distinct durable identities while sharing the isolated Gateway.
+async function pauseRun(runId: string) {
+  await mutateSubagentRuns([runId], (rows) => {
+    const entry = structuredClone(expectDefined(rows.get(runId), "child to pause"));
+    expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+    return { value: undefined, postimages: new Map([[runId, entry]]) };
+  });
+  return expectDefined(subagentRuns.get(runId), "paused child");
+}
+
 async function arrangeAuthorityProof(name: string) {
   const root = tempDirs.make(`openclaw-resume-${name}-`);
   const parent = "agent:main:main";
@@ -103,6 +117,8 @@ async function arrangeAuthorityProof(name: string) {
   await registerSubagentRun({
     runId: previousRunId,
     childSessionKey: child,
+    childAgentId: "main",
+    sessionEntry: { sessionId },
     controllerSessionKey: parent,
     requesterSessionKey: parent,
     requesterDisplayKey: parent,
@@ -111,9 +127,7 @@ async function arrangeAuthorityProof(name: string) {
     expectsCompletionMessage: true,
     queued: true,
   });
-  const previous = expectDefined(subagentRuns.get(previousRunId), "paused child");
-  expect(markSubagentRunPausedAfterYield({ entry: previous })).toBe(true);
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  const previous = await pauseRun(previousRunId);
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
   // The provider can publish success only after real input custody is consumed.
   // Admission, task replacement, and recorder live-owner checks remain production code.
@@ -123,6 +137,7 @@ async function arrangeAuthorityProof(name: string) {
     await recorder.persistApproved();
     expect(recorder.hasPersisted()).toBe(true);
     const text = "Unauthorized child final effect.";
+    const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
     emitAgentEvent({
       runId: expectDefined(command.runId, "resume execution run id"),
       stream: "lifecycle",
@@ -130,10 +145,10 @@ async function arrangeAuthorityProof(name: string) {
         phase: "end",
         startedAt: Date.now() - 1,
         endedAt: Date.now(),
-        terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+        terminalReply,
       },
     });
-    return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
+    return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
   });
   const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
     const tool = createSessionsSendTool({
@@ -159,8 +174,13 @@ async function arrangeAuthorityProof(name: string) {
     );
   };
   const expectUnadopted = () => {
-    expect(subagentRuns.get(previousRunId)).toBe(previous);
-    expect(previous.pauseReason).toBe("sessions_yield");
+    expect(subagentRuns.get(previousRunId)).toMatchObject({
+      runId: previousRunId,
+      childSessionKey: child,
+      createdAt: previous.createdAt,
+      generation: previous.generation,
+      pauseReason: "sessions_yield",
+    });
     expect(subagentRuns.has(runId)).toBe(false);
   };
   return {
@@ -189,9 +209,18 @@ it.each([
   try {
     const proof = await arrangeAuthorityProof(scenario);
     if (scenario === "completion-disabled") {
-      const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
-      previous.expectsCompletionMessage = false;
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
+      await mutateSubagentRuns([proof.previousRunId], (rows) => ({
+        value: undefined,
+        postimages: new Map([
+          [
+            proof.previousRunId,
+            {
+              ...expectDefined(rows.get(proof.previousRunId), "paused child"),
+              expectsCompletionMessage: false,
+            },
+          ],
+        ]),
+      }));
     }
     const result = await proof.send(
       scenario === "unrelated-controller" ? proof.unrelated : proof.parent,
@@ -200,8 +229,10 @@ it.each([
     );
     expect(result.details).toMatchObject({ status: "error", error });
     proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
-    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
+    expect(await listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
+      [],
+    );
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
@@ -209,9 +240,29 @@ it.each([
   }
 });
 
-it("rejects parent authority revoked while durable input preparation awaits", async ({
-  signal,
-}) => {
+it.for([
+  {
+    name: "revoked-parent",
+    error: "agent tool caller authority is no longer active",
+    revokeParent: true,
+    abortSuccessor: false,
+    refuseFinish: false,
+  },
+  {
+    name: "aborted-successor",
+    error: "Gateway did not confirm the task resume",
+    revokeParent: false,
+    abortSuccessor: true,
+    refuseFinish: false,
+  },
+  {
+    name: "revoked-parent-after-stop",
+    error: "agent tool caller authority is no longer active",
+    revokeParent: true,
+    abortSuccessor: true,
+    refuseFinish: true,
+  },
+])("rejects $name while durable input preparation awaits", async (scenario, { signal }) => {
   const prepared = createDeferred();
   const release = createDeferred();
   const releasePreparation = () => release.resolve();
@@ -228,37 +279,69 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       return input;
     });
   const announce = await mockSubagentAnnounce();
+  let refusedFinish: ReturnType<typeof refusePendingInputCommit> | undefined;
   let sending: ReturnType<Awaited<ReturnType<typeof arrangeAuthorityProof>>["send"]> | undefined;
   try {
-    const proof = await arrangeAuthorityProof("revoked-parent");
+    const proof = await arrangeAuthorityProof(scenario.name);
     sending = proof.send(proof.parent, parentAuthority.signal);
     await prepared.promise;
     expect(preparation).toHaveBeenCalledTimes(1);
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
     });
     proof.expectUnadopted();
-    parentAuthority.abort();
+    if (scenario.refuseFinish) {
+      refusedFinish = refusePendingInputCommit({
+        operation: "finish",
+        message: "Synthetic pending input finish refusal",
+        sessionId: proof.scope.sessionId,
+        runId: proof.runId,
+      });
+    }
+    if (scenario.revokeParent) {
+      parentAuthority.abort();
+    }
+    if (scenario.abortSuccessor) {
+      const entry = expectDefined(
+        rpcSourceTesting.get(proof.runId),
+        "preparing successor abort controller",
+      );
+      entry.adapter.abortStopReason = "rpc";
+      expect(requestRpcSourceCancellation(entry)).toBe(true);
+    }
     release.resolve();
     const result = await sending;
     expect(result.details).toMatchObject({
       status: "error",
-      error: expect.stringContaining("agent tool caller authority is no longer active"),
+      error: expect.stringContaining(scenario.error),
     });
     proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
-      total: 1,
-      items: [{ runId: proof.runId, state: "cancelled" }],
-    });
-    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-      { runId: proof.runId, state: "pending", cancelled: true },
-    ]);
+    if (scenario.refuseFinish) {
+      const retry = await proof.send();
+      expect(retry.details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Pending input ownership ended"),
+      });
+      proof.expectUnadopted();
+      expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
+        [{ runId: proof.runId, state: "pending" }],
+      );
+    } else {
+      expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
+        total: 1,
+        items: [{ runId: proof.runId, state: "cancelled" }],
+      });
+      expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
+        [{ runId: proof.runId, state: "pending", cancelled: true }],
+      );
+    }
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
     release.resolve();
     await Promise.allSettled([sending]);
+    refusedFinish?.mockRestore();
     preparation.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releasePreparation);
@@ -309,7 +392,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     await adopted.promise;
     expect(subagentRuns.has(proof.previousRunId)).toBe(false);
     expect(subagentRuns.get(proof.runId)).toMatchObject({ taskRunId: proof.previousRunId });
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
     });
@@ -335,11 +418,11 @@ it("fences a cancelled successor after adoption before queued input consumption"
       expect.anything(),
     );
     // Custody remains unconsumed even though execution cleanup records interruption.
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "interrupted" }],
     });
-    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
+    expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
       { runId: proof.runId, state: "pending" },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
@@ -364,6 +447,8 @@ it.each(["explicit", "automatic"] as const)(
     const started = createDeferred();
     const announce = await mockSubagentAnnounce();
     testState.sessionStorePath = path.join(root, "sessions.json");
+    const text = `${"Completed child task detail. ".repeat(200)}Resumed child finished.`;
+    const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
     try {
       await writeSessionStore({
         entries: {
@@ -382,6 +467,8 @@ it.each(["explicit", "automatic"] as const)(
       await registerSubagentRun({
         runId: previousRunId,
         childSessionKey: child,
+        childAgentId: "main",
+        sessionEntry: { sessionId: `resume-${mode}-child` },
         controllerSessionKey: parent,
         requesterSessionKey: parent,
         requesterDisplayKey: parent,
@@ -390,9 +477,7 @@ it.each(["explicit", "automatic"] as const)(
         expectsCompletionMessage: true,
         queued: true,
       });
-      const previous = subagentRuns.get(previousRunId)!;
-      markSubagentRunPausedAfterYield({ entry: previous });
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+      await pauseRun(previousRunId);
       agentCommandMock.mockImplementation(async (opts) => {
         const command = opts as AgentCommandGatewayIngressOpts;
         const runId = expectDefined(command.runId, "resume execution run id");
@@ -402,7 +487,22 @@ it.each(["explicit", "automatic"] as const)(
         expect(recorder.hasPersisted()).toBe(true);
         started.resolve();
         await release.promise;
-        const text = "Resumed child finished.";
+        await appendTranscriptMessage(
+          {
+            agentId: "main",
+            sessionKey: child,
+            sessionId: `resume-${mode}-child`,
+            storePath: testState.sessionStorePath!,
+          },
+          {
+            message: {
+              role: "assistant",
+              content: text,
+              stopReason: "stop",
+              __openclaw: { runId },
+            },
+          },
+        );
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -410,10 +510,10 @@ it.each(["explicit", "automatic"] as const)(
             phase: "end",
             startedAt: Date.now() - 1,
             endedAt: Date.now(),
-            terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+            terminalReply,
           },
         });
-        return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
+        return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
       });
       const tool = createSessionsSendTool({
         agentSessionKey: parent,
@@ -466,9 +566,16 @@ it.each(["explicit", "automatic"] as const)(
         expect.objectContaining({
           requesterSessionKey: parent,
           childSessionKey: child,
-          roundOneReply: "Resumed child finished.",
+          terminalReply,
         }),
       );
+      const completed = expectDefined(
+        [...subagentRuns.values()].find((run) => run.childSessionKey === child),
+        "completed resumed child",
+      );
+      const prepared = await readSubagentRunAnnounceResult(completed);
+      expect(prepared.text).toBe(text);
+      expect(prepared.isCurrent()).toBe(true);
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();

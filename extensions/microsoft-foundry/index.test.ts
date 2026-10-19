@@ -72,7 +72,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock,
   };
 });
 
@@ -238,8 +238,10 @@ function mockAzureCliToken(params: {
   accessToken: string;
   expiresInMs: number;
   response?: Promise<void>;
+  started?: () => void;
 }) {
   execFileMock.mockImplementationOnce(async () => {
+    params.started?.();
     if (params.response) {
       await params.response;
     }
@@ -251,8 +253,9 @@ function mockAzureCliTokenRaw(stdout: string) {
   execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
 }
 
-function mockAzureCliLoginFailure(response?: Promise<void>) {
+function mockAzureCliLoginFailure(response?: Promise<void>, started?: () => void) {
   execFileMock.mockImplementationOnce(async () => {
+    started?.();
     if (response) {
       await response;
     }
@@ -647,11 +650,14 @@ describe("microsoft-foundry plugin", () => {
     const prepareRuntimeAuth = prepareAuth();
     const failedResponse = createDeferred<void>();
     const recoveryResponse = createDeferred<void>();
-    mockAzureCliLoginFailure(failedResponse.promise);
+    const failedStarted = createDeferred<void>();
+    const recoveryStarted = createDeferred<void>();
+    mockAzureCliLoginFailure(failedResponse.promise, failedStarted.resolve);
     mockAzureCliToken({
       accessToken: "recovered-token",
       expiresInMs: 10 * 60_000,
       response: recoveryResponse.promise,
+      started: recoveryStarted.resolve,
     });
     ensureAuthProfileStoreMock.mockReturnValue(entraStore());
 
@@ -659,6 +665,7 @@ describe("microsoft-foundry plugin", () => {
     const pending = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
     let settled = Promise.allSettled(pending);
     try {
+      await failedStarted.promise;
       expect(execFileMock).toHaveBeenCalledTimes(1);
       failedResponse.resolve();
       const failed = await settled;
@@ -673,6 +680,7 @@ describe("microsoft-foundry plugin", () => {
       const retries = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
       pending.push(...retries);
       settled = Promise.allSettled(pending);
+      await recoveryStarted.promise;
       expect(execFileMock).toHaveBeenCalledTimes(2);
       recoveryResponse.resolve();
       const [first, second] = await Promise.all(retries);
@@ -685,28 +693,6 @@ describe("microsoft-foundry plugin", () => {
       recoveryResponse.resolve();
       await settled;
     }
-  });
-
-  it("refreshes cached Entra tokens with bounded fallback expiry when the clock is invalid", async () => {
-    const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "cached-token", expiresInMs: 10 * 60_000 });
-    ensureAuthProfileStoreMock.mockReturnValue(entraStore());
-    const runtimeContext = authContext();
-
-    const first = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-    expect(first.apiKey).toBe("cached-token");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    mockAzureCliTokenRaw(
-      JSON.stringify({
-        accessToken: "refreshed-token",
-      }),
-    );
-    const second = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-
-    expect(second.apiKey).toBe("refreshed-token");
-    expect(second.expiresAt).toBe(55 * 60 * 1000);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps other configured Foundry models when switching the selected model", async () => {

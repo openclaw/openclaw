@@ -9,17 +9,28 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+Returning to a suspended tab or regaining network connectivity can recover a
+stale connection. These signals do not retry a connection that requires a page
+reload, corrected credentials, or a new pairing request. Follow the displayed
+recovery instructions; automatic document refresh remains available after an update.
+
+Agent names and avatars keep their last loaded values when an identity refresh
+fails. Reads for the same agent share one request across the sidebar and chat,
+including failures: subsequent reads back off from 500 ms to 5 seconds and honor
+longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
+can resume on the new connection.
+
 ## Busy initial connection
 
 If a WebSocket upgrade fails but the same-origin Gateway still answers its
-`/healthz` liveness probe, the sign-in screen shows **Gateway busy, retrying…**
+`/healthz` liveness check, the sign-in screen shows **Gateway busy, retrying…**
 with a countdown to the next automatic attempt. No click or credential change is
 needed when capacity becomes available. This can happen when many visitors share
 one venue IP and exhaust the [preauth connection budget](/gateway/security/rate-limiting#unauthenticated-websocket-connections).
 
-The probe sends no Gateway token and does not follow redirects. Unreachable or
+The check sends no Gateway token and does not follow redirects. Unreachable or
 unverified endpoints keep **Gateway unreachable** guidance; cross-origin Gateway
-connections are not probed. Authentication and pairing rejections retain their
+connections are not checked. Authentication and pairing rejections retain their
 specific recovery instructions.
 
 ## Warm reload
@@ -50,15 +61,49 @@ and account. Switching accounts cannot send or overwrite the previous account's
 input. Retiring offline access does not discard unsent drafts or queued work;
 that work remains under its original storage owner. Live state replaces cached
 roster data on connect, and chat resumes from its saved transcript cursor. The
-first chat request waits up to 300 ms for stored history before falling back to
-a live read. Agent switches and stale asynchronous reads retain their own
-identity checks. Agent pickers and the agent directory wait for a live roster;
+cached transcript opens at its latest messages without an initial scroll animation.
+It retains participant and completed-work timing information and the last task
+progress card for display while connecting; live Gateway results replace those
+cached facts in place. Cached progress does not authorize offline actions. The
+first chat request uses the saved cursor if the cached transcript is ready when
+the live message subscription finishes connecting. Otherwise, the live read and
+cache restoration run in parallel. Agent switches and stale asynchronous reads
+retain their own identity checks. When the cached conversation also has the exact
+pending-input page and session metadata, the Gateway confirms unchanged fields
+with receipts instead of sending them again. Changed or consumed inputs still
+refresh their display, and a missing cache or expired transcript cursor fetches
+complete state. These receipts do not grant access; the Gateway checks the current
+session and account before confirming any retained data.
+
+Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
+Unique display-name links use the same cached route resolution, including the
+`/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
+
+Exact conversation links also wait for the scoped cached roster before presenting
+their header. Dashboard layouts restore before the pane renders, and embedded
+HTML widgets keep one loading surface while their board metadata and document
+arrive. Widget requests still require the current Gateway connection.
+
+Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
+routing roster retains its first page; the sidebar separately keeps its visible
+rows, pinned destinations, and selected view for display while connecting. The
+Pages view saves and restores its dashboard catalog without waiting for the
+inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
-their bounded cache limits. Clearing site data removes local recovery data.
+up to 80 recent rows (plus rows from the same history entry) for a warm reload.
+The snapshot also retains the slash-command catalog and its revision. Warm
+startup reuses that list when the Gateway confirms it is unchanged; config,
+plugin, and skill changes refresh it through the existing metadata owner.
+Older history loads from the Gateway as you scroll up. Cache upgrades discard
+older, unbounded transcript records; a connected visit fills the new cache.
+The first upward scroll or **Show earlier** refills the Gateway's current history
+window before continuing to older pages. Automatic viewport filling does not
+trigger this refill. Overlapping cached rows are deduplicated.
+Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
 screen appears as usual.
 
@@ -84,8 +129,10 @@ Production builds prepare a generic offline shell and the critical Chat and New
 Session interface files, plus the signed-out fallback, through the service worker.
 Static asset preparation can use the browser’s existing same-origin proxy sign-in;
 only integrity-matched build bytes with cacheable responses are admitted. After preparation
-completes, a browser that explicitly reports itself offline can reload those
-routes from the current build cache. Interrupted preparation resumes on the
+completes, a failed navigation to a built-in app route can use the cached shell,
+including when the browser still reports itself online. Network navigation waits
+up to 10 seconds before falling back; HTTP authentication responses are not replaced.
+Interrupted preparation resumes on the
 existing startup/resume checks when the browser returns online, reusing verified
 downloads instead of starting over. Preparation is bounded so a stalled download
 cannot hold a UI update indefinitely. The existing warm-reload credential and
@@ -93,10 +140,24 @@ account checks still decide whether cached conversations may appear. No
 Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
-Online navigations still go directly to the network so reverse-proxy HTTP
-authentication dialogs work normally. If the browser reports itself online
-despite a broken connection, navigation keeps that network behavior. An open
-tab remains the most reliable way to keep working through intermittent service.
+Reloads reuse cached build-versioned fonts, themes, and the web manifest without
+contacting the Gateway. The service worker keeps the current complete build and
+one complete previous generation, so older open documents can still load their
+cached chunks. An incomplete replacement does not discard the last complete shell.
+After an update, open tabs reload automatically unless unsaved-work protection
+blocks recovery; then save or discard the protected work and use the **Reload**
+banner. Uploaded profile avatars use private browser caching only when the URL
+matches the image's content revision; unversioned URLs and external avatar
+fallbacks still revalidate.
+Content-addressed plugin interface assets stay in the private browser HTTP cache
+across grant renewal; requests reaching the Gateway still require current plugin
+authorization, and plugin data remains subject to per-call RPC authorization.
+
+Navigations try the network first. API, download, and standalone
+authentication paths do not receive the offline shell. Plugin catalog detail
+links under `/plugins/` remain network-dependent because that namespace also
+hosts plugin HTTP endpoints. An open tab remains the
+most reliable way to keep working through intermittent service.
 Unvisited views and uncached external resources may still need a connection.
 
 ## Gateway updates and suspended tabs
@@ -105,10 +166,32 @@ An open tab checks the active UI build when it returns to the foreground, comes 
 or is restored from browser history. If an update finished while the tab was suspended, it
 can recover without receiving the original update notification or opening a new tab.
 
-Automatic reloads wait for the page to be reachable and respect unsaved-work protection.
+Automatic build-recovery reloads spread their first page check over up to two seconds
+and reload at most once per target build every 30 seconds. Reloads wait for the page to be reachable
+and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+
+If a view or stylesheet download fails during a network interruption, the open
+page keeps checking reachability with a backoff capped at 15 seconds. Coming
+back online or returning to the tab wakes that check early. Once the document
+is reachable, a cold route retries its import without replacing the page. The
+previous page stays visible while the route is pending. A persistent import
+failure can still require a guarded reload because browsers can retain failed
+module downloads. Failed Vite CSS preloads also require guarded recovery to avoid
+opening a view without its styles. Optional font and theme stylesheet failures do not trigger
+document recovery. Unsaved-work protection still applies, and the manual
+**Reload** action remains available.
+
+During startup, slow app downloads keep the **Control UI is still loading**
+notice without interrupting the download. After the document finishes loading,
+the app gets another 12 seconds to render before recovery starts. If the
+Gateway is unreachable, startup recovery keeps probing with a backoff capped
+at 15 seconds. It allows up to three automatic recovery navigations; if fresh
+pages still cannot start, use **Try again** or the troubleshooting guide.
+Network failures and **Try again** preserve service-worker registrations and
+their offline caches.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its
@@ -125,7 +208,8 @@ an explicit browser reload or closing the browser tab discards them.
 ## Visualizations during a connection loss
 
 Already-rendered inline visualizations keep their iframe and local interaction
-state when the same Gateway connection temporarily drops. They do not need to
+state when the connection to the same Gateway and account temporarily drops,
+including wake recovery and **Retry now**. They do not need to
 download their contents again just to remain visible. On reconnect, the client
 revalidates the document; changed content or a changed account, Gateway, or
 authorization scope replaces the old view. Server-dependent widget actions
@@ -140,21 +224,77 @@ page reload does not persist a widget’s unsaved local interaction state.
 
 ## Connection loss and reconnect
 
+An open Control UI keeps its last accepted Gateway capabilities through a temporary
+disconnect. Navigation, plugin tabs, attachment limits, and the displayed Gateway
+version do not disappear simply because the socket closes. Pages remain interactive
+for reading, copying, filtering, and local drafting; actions that require a live
+Gateway remain unavailable. Some pages still reload their own data on reconnect,
+and unvisited views or external resources may need a connection.
+
+Retained capabilities describe the current client identity; they do not authorize
+requests. A new handshake replaces them. Replacing the client or credentials,
+stopping the connection, authentication or pairing rejection, and protocol/build
+rejection clear that presentation. Canvas capability URLs retain their separate
+live-connection lease and are not kept by this policy.
+
+Model Providers, Plugins, Devices, Skills, Profile, Channels, Cloud Workers,
+GitHub connection editors, and Session Storage keep loaded data
+and unsaved in-memory drafts through a temporary loss of the same Gateway
+connection. Editors stay open; actions that require the Gateway remain unavailable
+until it is connected. Reconnect refreshes the loaded data without
+discarding your edits. Switching identities or losing access still clears the
+affected settings. These drafts are not persisted by this behavior: reloading
+or closing the tab can discard them, including entered credentials.
+
+Plugin Settings panels, including the Memory overview and memory search, stay open
+through the same kind of reconnect. Search results, the typed query, and opened
+memory files remain visible; searching waits for the connection, and replies to
+requests sent before the drop are discarded. Reopening a file whose read was
+interrupted retries it. Changing the Settings agent, account, or access starts a
+fresh panel.
+
+Rejected model-default saves return the pickers to the saved configuration.
+**Retry** keeps the rejected change with the configuration write owner. Model
+edits that have not been sent still survive a temporary disconnect. After
+reconnecting, defaults remain unavailable until the current configuration loads;
+a failed read does not present the previous connection's defaults as current.
+
+Unsent configuration form edits resume autosave after reconnect only when a
+fresh read confirms that their base revision is unchanged. If a submission was
+in flight or the revision changed, autosave stays paused for explicit recovery.
+Raw configuration edits remain manual-save-only. Reconnect does not replay
+plugin installations, setup answers, or other arbitrary actions.
+
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible, and one connection status in its sidebar footer explains whether the Gateway is
-suspending, suspended, restarting, reconnecting, or finishing recovery. Planned transitions and
-automatic reconnect use a calm presentation; authentication and other failures that need your
-attention keep their explanation and recovery action. The same status appears in the macOS app's
-embedded dashboard. Connection status does not replace the Gateway name in the account menu.
+stays visible. The sidebar avatar has a green connection dot when healthy, amber during recovery
+or suspension, and red when disconnected or a refresh is required. The sidebar footer
+explains the interruption without moving the page and briefly shows **Connected** after recovery.
+With the sidebar collapsed, a flag beside the avatar appears for four seconds on status changes.
+Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
+controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
+On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
+shows the full footer row. Brief disconnects keep the existing two-second grace.
+
+The status includes the number of queued messages and **Retry** when an immediate connection
+attempt is available. Hover or focus for the redacted connection error. Settings keeps its save feedback
+visible alongside connection status. One persistent shell region announces connection changes,
+even while the mobile drawer is closed. Native embedded views keep their own connection
+chrome, including the status in the embedded Settings header. Connection status does not replace
+the Gateway name in the account menu.
 
 The client retries ordinary connection loss automatically with randomized backoff: the first
 retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
 Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
-20% additional spread. The connection watchdog allows two advertised heartbeat
-intervals of silence before reconnecting. An individual request timeout does not
-reset a socket that is still receiving traffic. Reconnecting does not replay
+20% additional spread. The Gateway's WebSocket ping/pong keepalive detects dead
+transports. Delayed application heartbeats on a busy Gateway do not by themselves
+reconnect an open tab. Returning to a suspended tab still recovers a connection
+after two advertised heartbeat intervals of silence. An individual request
+timeout does not reset the socket. Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
-uncertain outcomes. Gateway startup hints keep their separate bounded timing.
+uncertain outcomes. Gateway startup hints keep their separate bounded timing
+(100–2000 ms), with up to 20% additional spread across reconnecting tabs.
+If a dropped connection interrupts a Usage export, the export shows an error. Once
+the connection returns, choose **Export** again; exports are not replayed automatically.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
@@ -199,6 +339,8 @@ Opening a queued-message editor after the other pane releases its edit clears th
 edit-conflict notice.
 
 Editing an unsent queued message remains safe if the connection drops mid-edit.
+Confirming text with an input method keeps the queued-message editor open;
+press Enter again after composition finishes to save the edit.
 Open queued-message edits stay available when you switch conversations, even after
 visiting enough chats to replace older cached views. Finish or cancel the edit to
 release that retained conversation.
@@ -234,7 +376,8 @@ actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
 Opening a view for the first time can fail if its interface files cannot be downloaded.
-Check the connection, then use **Reload**. The same error can occur after an update;
+The UI waits for reachability and reloads automatically, subject to reload protection
+and the 30-second loop guard. You can also use **Reload**. The same error can occur after an update;
 it does not by itself mean a new version was installed. If unsaved work blocks the
 reload, follow the displayed save or cancel guidance, then try again.
 
@@ -252,10 +395,23 @@ one history notice offers **Retry**, which reloads the conversation and restores
 its live subscription, including approval updates. Permission and other terminal
 failures remain visible rather than being silently retried.
 
+After a Gateway restart, eligible accepted chat inputs resume on the server in
+order within each session, even while this browser is closed. Automatic recovery
+requires the original session and current operator access, and is limited to
+inputs accepted in the past 24 hours. Cancelled inputs never resume. Inputs that
+cannot resume stay visibly interrupted for review. The browser keeps the original
+submission ID when retrying, so reconnect cannot duplicate a recovered input.
+It does not resend interrupted inputs automatically: the server owns recovery order.
+If a saved input remains interrupted, copy it and send again to continue.
+
 When the Gateway confirms that it holds the same pending input, the Control UI clears the
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
-the review warning remains.
+the review warning remains. Confirmed server custody does not block later browser-queued
+chat sends, including when the accepted input is too old for automatic recovery.
+Local commands such as `/compact` and `/reset` in the same browser outbox still wait
+behind that input. An independent authorized reset from another client can cancel
+pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
 stopping the active turn. Once cancellation is confirmed, the removed prompt and
@@ -273,7 +429,7 @@ the **System · restart recovery** notice shows that outcome and asks you to sen
 message to continue. It does not mean the agent resumed. Messages forwarded from
 other sessions keep their own delivery status next to each message.
 
-Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Delivery checks also clear confirmed later messages when an earlier unconfirmed message still blocks the queue, so those delivered copies no longer raise sidebar or Inbox attention. This does not retry the uncertain message or send later queued messages out of order. Loading older history shows the saved message in its original position without adding a second copy.
 
 Retiring a delivered attachment does not discard the run's completion. If the browser misses
 that completion, a queue recovery read that confirms the same session and run have finished
@@ -307,7 +463,9 @@ instead report missing attachments. Independent tabs do not share newly authored
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
-resolve that turn with its **Retry** or **Check delivery** action first.
+resolve that turn with its **Retry** or **Check delivery** action first. While disconnected, a
+notice above the composer says the initial message is unresolved; the composer still accepts
+queued messages.
 If the initial message is waiting for recovery, its chat shows a loading placeholder
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.
@@ -355,10 +513,10 @@ Older browser state may have combined several destinations into one bucket. The 
 metadata version 4 (`openclaw.control.chatComposer.v4:`), migrating version 1, 2, and 3 records
 directly when their destination is still identifiable. It verifies the new metadata before
 removing an older source, retaining complete sources when storage or recovery capacity blocks
-migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Ambiguous records appear under
-**Saved messages need a destination** and remain unsent. Open the intended non-Incognito conversation with
-an empty composer and queue, expand the notice, and choose **Restore here for review**. Confirm
-the displayed conversation key and agent. Recovered queued messages stay paused: check for
+migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Saved
+input awaiting review appears as compact **Unsent** or **Draft** rows directly above the composer.
+Open the intended non-Incognito conversation with an empty composer and queue, choose **Restore**,
+and confirm the displayed conversation. **Delete** asks before removing a saved copy. Recovered queued messages stay paused: check for
 previous delivery before using **Retry**. Recovered attachment drafts return to the composer
 without sending. Reconnect, a replacement session, or enabling Incognito while confirmation is
 open cancels the transfer; confirm again in the intended conversation. Older attachment drafts
@@ -368,14 +526,18 @@ both automatic migration and explicit destination recovery. Credential-bound mes
 only under their original Gateway credential scope, including when an older bucket contains
 messages from several scopes. Moving a message into or out of recovery does not delete its bytes;
 cleanup follows verified delivery or discard and accounts for retained recovery messages too.
+When the original conversation's loaded history proves a saved queued submission was delivered,
+its recovery copy is removed automatically. Proof requires the exact submission ID on a durable
+user message in the same conversation and, when recorded, the same physical session. Matching
+text or a local display copy is not proof. Any draft or other unconfirmed input in the row stays
+available; recovery never sends a message automatically.
 If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
 available rather than overwriting newer input. Do not clear browser site data
 while you still have saved messages or attachment drafts to recover.
 
 If the browser closes its draft database connection, the next storage operation
-opens a fresh connection automatically. A recovery error without any loaded entries
-appears as **Saved messages could not be loaded**; it does not mean that messages
-have lost their destinations or that browser storage is full. Reload to retry if
+opens a fresh connection automatically. Recovery storage errors appear above the composer;
+they do not mean that messages have lost their destinations or that browser storage is full. Reload to retry if
 the error persists, keeping site data intact.
 
 First opens and reloads without usable warm state show a small animated OpenClaw mark while the Gateway resolves the initial
@@ -384,3 +546,12 @@ browser-stored credential. The login gate appears only after the initial connect
 Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
 pairing). Transient connection failures retry automatically; authentication failures explain
 what needs your input.
+
+## Reloading a session link
+
+Authenticated app documents carry the same presentation and capability config as
+`control-ui-config.json`, so the first render can use the configured assistant
+identity without waiting for the WebSocket. These documents use private, no-store
+caching. Public and unauthenticated documents carry no protected bootstrap data;
+the app starts its config request alongside connection startup. Reconnects and
+configuration-change events refresh the serving Gateway's config.

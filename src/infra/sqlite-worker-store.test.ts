@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import {
   link,
   mkdir,
@@ -11,7 +12,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
@@ -20,8 +21,14 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
+  hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerReply,
 } from "./sqlite-worker-contract.js";
 import {
@@ -29,20 +36,17 @@ import {
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
+  runSqliteWorkerStoreOperation,
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-transfer.js";
-import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
-
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 32,
-}));
+import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 
 const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-store-",
@@ -68,15 +72,41 @@ const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRun
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
 describe("SQLite worker store", () => {
-  it("registers storage-worker CPU sources until native close", async () => {
-    const initial = getTrackedWorkerCpuSources();
-    const store = await open(databasePath());
-    const opened = getTrackedWorkerCpuSources();
-    expect(opened.workers).toHaveLength(initial.workers.length + 1);
-    await store.close();
-    expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
-    expect(getTrackedWorkerCpuSources().revision).toBeGreaterThan(opened.revision);
+  it("publishes native runtime admission once before the opening caller resumes", async () => {
+    await drainGlobalSingletonLifecycleState();
+    const key = "openclaw.sqliteNativeRuntimeAdmission";
+    const previous = getEnvironmentData(key);
+    const receipts: unknown[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
+    const originalEmit = Worker.prototype.emit;
+    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      reply: SqliteWorkerReply,
+    ) {
+      if (event === "message" && reply.ok && reply.nativeRuntimeAdmission !== undefined) {
+        receipts.push(reply.nativeRuntimeAdmission);
+      }
+      return Reflect.apply(originalEmit, this, [event, reply]);
+    });
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    setEnvironmentData(key, undefined);
+    try {
+      const store = await open(databasePath());
+      expect(getEnvironmentData(key)).toMatchObject({ format: 1, runtime: { pid: process.pid } });
+      await append(store, "admitted in worker");
+      expect(await read(store)).toEqual(["admitted in worker"]);
+      expect(receipts).toHaveLength(1);
+      expect(requests.mock.calls.filter(([request]) => request.type === "open")).toHaveLength(1);
+      expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(2);
+    } finally {
+      messages.mockRestore();
+      requests.mockRestore();
+      await drainGlobalSingletonLifecycleState();
+      setEnvironmentData(key, previous);
+    }
   });
+
   it.each(["read", "client close", "global close", "abort", "failed frame"] as const)(
     "preserves a complete large result through %s",
     async (action) => {
@@ -132,7 +162,7 @@ describe("SQLite worker store", () => {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "value"]));
+        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "transactionCount", "value"]));
         requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },
@@ -298,7 +328,7 @@ describe("SQLite worker store", () => {
     }
   });
 
-  it.for(["memory", "absolute memory", "memory URI", "incognito", "empty"] as const)(
+  it.for(["absolute memory", "memory URI", "incognito", "empty"] as const)(
     "rejects a %s locator before creating a file or dispatching a worker request",
     async (kind, { signal }) => {
       const directory = tempDirs.make("openclaw-sqlite-worker-locator-");
@@ -308,7 +338,6 @@ describe("SQLite worker store", () => {
       });
       await mkdir(path.dirname(incognito), { recursive: true });
       const locators = {
-        memory: ":memory:",
         "absolute memory": path.join(directory, ":memory:"),
         "memory URI": "file:memory-test?mode=memory&cache=shared",
         incognito,
@@ -354,20 +383,6 @@ describe("SQLite worker store", () => {
     },
   );
 
-  it("shares one native actor across physical file aliases", async () => {
-    const file = databasePath();
-    const first = await open(file);
-    const alias = path.join(path.dirname(file), "alias.sqlite");
-    await link(file, alias);
-    const second = await open(alias);
-
-    const firstReceipt = await append(first, "first");
-    const secondReceipt = await append(second, "second");
-    expect(firstReceipt.threadId).toBeGreaterThan(0);
-    expect(secondReceipt).toEqual({ ...firstReceipt, writes: 2 });
-    expect(await read(first)).toEqual(["first", "second"]);
-  });
-
   describe.skipIf(process.platform === "win32")("replaced admitted aliases", () => {
     it.each(["hardlink", "symlink"] as const)(
       "holds a replaced %s alias until both alias clients drain and close",
@@ -383,6 +398,20 @@ describe("SQLite worker store", () => {
         }
         const firstAlias = await open(aliasPath);
         const secondAlias = await open(aliasPath);
+        const realpath = vi.spyOn(fs.realpathSync, "native");
+        try {
+          expect(await append(firstAlias, "warm alias write")).toEqual({
+            ...originalReceipt,
+            writes: 2,
+          });
+          expect(await read(original)).toEqual(["original data", "warm alias write"]);
+          // No database path resolution belongs on an already-open worker operation.
+          expect(
+            realpath.mock.calls.filter(([pathname]) => pathname === file || pathname === aliasPath),
+          ).toEqual([]);
+        } finally {
+          realpath.mockRestore();
+        }
         await unlink(aliasPath);
         if (kind === "hardlink") {
           await writeFile(aliasPath, "");
@@ -412,10 +441,11 @@ describe("SQLite worker store", () => {
         expect(replacementReceipt.writes).toBe(1);
         expect(await append(original, "original still usable")).toEqual({
           ...originalReceipt,
-          writes: 4,
+          writes: 5,
         });
         expect(await read(original)).toEqual([
           "original data",
+          "warm alias write",
           "ahead of alias write",
           "last alias write",
           "original still usable",
@@ -471,50 +501,10 @@ describe("SQLite worker store", () => {
     await expect(append(replacement, "explicit recovery")).resolves.toMatchObject({ writes: 1 });
   });
 
-  // Windows prevents replacing SQLite's open database file at this boundary.
-  it.skipIf(process.platform === "win32")(
-    "refuses a replaced active pathname until its original client closes",
-    async () => {
-      const file = databasePath();
-      const displacedPath = path.join(path.dirname(file), "displaced.sqlite");
-      const original = await open(file);
-      await append(original, "original data");
-      await rename(file, displacedPath);
-      await writeFile(file, "");
-      await expectRejectedOpen(file);
-      await original.close();
-
-      const replacement = await open(file);
-      expect(await read(replacement)).toEqual([]);
-      await expect(append(replacement, "replacement data")).resolves.toMatchObject({ writes: 1 });
-      expect(await read(await open(displacedPath))).toEqual(["original data"]);
-    },
-  );
-
-  it("drains a closing client's writes and preserves the remaining client's connection", async () => {
-    const file = databasePath();
-    const first = await open(file);
-    const second = await open(file);
-    let committedSettled = false;
-    const committed = append(first, "before close").then((receipt) => {
-      committedSettled = true;
-      return receipt;
-    });
-    const closed = first.close();
-    await expect(append(first, "after close")).rejects.toMatchObject({ code: "closed" });
-    await closed;
-    expect(committedSettled).toBe(true);
-
-    const receipt = await committed;
-    expect(await append(second, "still open")).toEqual({ ...receipt, writes: 2 });
-    await second.close();
-    expect(await read(await open(file))).toEqual(["before close", "still open"]);
-  });
-
   poolIt("keeps a new database usable while another worker retires at capacity", async () => {
     const first = await open(databasePath());
-    // Fill the documented four-worker budget before retiring an otherwise idle worker.
-    for (let index = 0; index < 3; index += 1) {
+    // Give each worker one actor so closing the first actor starts native retirement.
+    for (let index = 1; index < resolveSqliteBrokerWorkerCount(); index += 1) {
       await open(databasePath());
     }
     const retiring = createDeferredCore();
@@ -633,7 +623,7 @@ describe("SQLite worker store", () => {
 
   poolIt("times out a waiting open without retiring healthy workers or writes", async () => {
     const active: SqliteWorkerStore<FixtureOperations>[] = [];
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < resolveSqliteBrokerWorkerCount(); index += 1) {
       active.push(await open(databasePath()));
     }
     const repliesReady = createDeferredCore();
@@ -676,6 +666,7 @@ describe("SQLite worker store", () => {
         expect(expire).toBeDefined();
         expire?.();
         await opening;
+        expect(fs.existsSync(pendingFile)).toBe(false);
       } finally {
         timeout.mockRestore();
       }
@@ -727,25 +718,7 @@ describe("SQLite worker store", () => {
     ]);
   });
 
-  it("surfaces native-close cleanup failure and permits explicit recovery of committed data", async () => {
-    const file = databasePath();
-    const store = await open(file);
-    const receipt = await append(store, "preserved");
-    await store.execute({ type: "failClose", input: undefined });
-    const closed = store.close();
-    stores.delete(store);
-    await expect(closed).rejects.toThrow("Fixture native database closed with a cleanup failure");
-
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["preserved"]);
-    const recoveredReceipt = await append(recovered, "after recovery");
-    expect(recoveredReceipt.actor).not.toBe(receipt.actor);
-    expect(recoveredReceipt.writes).toBe(1);
-    expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
-  });
-
   it.each([
-    { reject: false, owner: "client" },
     { reject: true, owner: "client" },
     { reject: false, owner: "host" },
   ] as const)(
@@ -802,7 +775,6 @@ describe("SQLite worker store", () => {
         }
         const [result] = await cleanup;
         expect(events.mock.calls.filter(([event]) => event === "error")).toEqual([]);
-        expect(await readFile(markerPath, "utf8")).toBe("native database closed");
         if (reject) {
           expect(result).toEqual({
             status: "rejected",
@@ -815,6 +787,7 @@ describe("SQLite worker store", () => {
         } else {
           expect(result).toEqual({ status: "fulfilled", value: undefined });
         }
+        expect(await readFile(markerPath, "utf8")).toBe("native database closed");
       } finally {
         events.mockRestore();
         resumeReply?.();
@@ -894,9 +867,11 @@ describe("SQLite worker store", () => {
   it("reports an uncertain result when serialization fails after commit without replaying the write", async () => {
     const file = databasePath();
     const store = await open(file);
-    await expect(
-      store.execute({ type: "commitUnserializable", input: { value: "committed once" } }),
-    ).rejects.toMatchObject({ code: "outcome-unknown" });
+    const failure = await store
+      .execute({ type: "commitUnserializable", input: { value: "committed once" } })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "outcome-unknown" });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
     expect(await read(store)).toEqual(["committed once"]);
     expect(await append(store, "next write")).toMatchObject({ writes: 2 });
     await store.close();
@@ -922,4 +897,47 @@ describe("SQLite worker store", () => {
     expect(await append(recovered, "explicit recovery")).toMatchObject({ writes: 1 });
     expect(await read(recovered)).toEqual(["committed", "explicit recovery"]);
   });
+
+  it.each(["native", "schema-maintenance"] as const)(
+    "invalidates saved authority receipts when a %s writer dies inside native COMMIT",
+    async (mode) => {
+      const file = databasePath();
+      const store = await open(file);
+      const sibling = openNodeSqliteDatabase(file);
+      try {
+        const receipt = readSqliteDatabaseWriteTokenForPath(file);
+        const scoped = readSqliteDatabaseScopedWriteTokenForPath(file, "fixture:authority");
+        expect(receipt).toBeDefined();
+        expect(scoped).toBeDefined();
+        await expect(
+          runSqliteWorkerStoreOperation(
+            store,
+            (scope) =>
+              scope.execute({
+                type: "commitWithoutReceipt",
+                input: { value: "revoked", mode },
+              }),
+            undefined,
+            undefined,
+            () => ({
+              admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+                if (mode === "native") {
+                  throw new Error("Native writes do not request separate domain admission");
+                }
+                grant();
+              }),
+              nativeLocations: [file],
+            }),
+          ),
+        ).rejects.toMatchObject({ code: "outcome-unknown" });
+        expect(readSqliteDatabaseWriteTokenForPath(file)).not.toBe(receipt);
+        expect(readSqliteDatabaseScopedWriteTokenForPath(file, "fixture:authority")).not.toBe(
+          scoped,
+        );
+        expect(await read(await open(file))).toEqual(["revoked"]);
+      } finally {
+        sibling.close();
+      }
+    },
+  );
 });

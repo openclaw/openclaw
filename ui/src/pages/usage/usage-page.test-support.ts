@@ -1,29 +1,69 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { nothing } from "lit";
 import { expect, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
+import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { UsageDetailsController } from "./detail-controller.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { page as usageRoute } from "./route.ts";
-import type { UsageSessionEntry } from "./types.ts";
-import type { UsageRouteData } from "./usage-page.ts";
-import "./usage-page.ts";
+import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
+import { createUsagePage } from "./usage-page-state.ts";
+import { buildAggregatesFromSessions } from "./view.test-support.ts";
 
-export type TestUsagePage = HTMLElement & {
-  context: ApplicationContext;
-  routeData: UsageRouteData;
-  usageError: string | null;
-  usageSelectedSessions: string[];
-  details: UsageDetailsController;
-  providerUsageStalled: boolean;
-  providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
-  providerUsageUnavailable: boolean;
-  loadUsage: () => Promise<void>;
-  requestUpdate: () => void;
-  render: () => unknown;
-  readonly updateComplete: Promise<boolean>;
-};
+export type TestUsagePage = Awaited<ReturnType<typeof createPage>>;
+
+export async function createUsagePageFixture(
+  request: (...args: never[]) => unknown,
+  renderView = true,
+  configure?: (context: ReturnType<typeof contextWithClient>) => void,
+) {
+  const client = { request } as unknown as GatewayBrowserClient;
+  const context = contextWithClient(client);
+  configure?.(context);
+  const page = await createPage(client, renderView, context);
+  return { client, context, page };
+}
+
+export async function loadUsagePage(...args: Parameters<typeof createUsagePageFixture>) {
+  const fixture = await createUsagePageFixture(...args);
+  await preloadUsage(fixture.page);
+  return fixture;
+}
+
+export function usagePoints(timestamp: number, count: number, cost = 0) {
+  return Array.from({ length: count }, (_, index) => ({
+    timestamp: timestamp + index * 1_000,
+    input: 100,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 100,
+    cost,
+    cumulativeTokens: (index + 1) * 100,
+    cumulativeCost: (index + 1) * cost,
+  }));
+}
+
+export async function settleUsageTimers(page: TestUsagePage, milliseconds = 0) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await page.updateComplete;
+}
+
+export function usageCalls<T extends readonly unknown[]>(
+  request: { mock: { calls: T[] } },
+  method = "sessions.usage",
+) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+
+export function textOf(root: Pick<ParentNode, "querySelector">, selector: string) {
+  return root.querySelector(selector)?.textContent;
+}
 
 type UsagePublicationFixture = {
   agentId?: string;
@@ -36,7 +76,7 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
   publishUsage: (publication: UsagePublicationFixture) => void;
 } {
   const subscribe = () => () => undefined;
-  let snapshot = {
+  const { gateway, publish } = createApplicationGateway({
     client,
     phase: "connected",
     hello: null,
@@ -44,8 +84,7 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
-  } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  } as ApplicationGatewaySnapshot);
   const selectionState: ApplicationContext["agentSelection"]["state"] = {
     selectedId: null,
     scopeId: null,
@@ -53,12 +92,8 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
   const selectionListeners = new Set<
     Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]
   >();
-  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
-    snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
-  };
+  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
+    publish({ ...gateway.snapshot, ...patch });
   return {
     setGatewaySnapshot,
     publishUsage: ({
@@ -68,29 +103,28 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     }: UsagePublicationFixture) =>
       setGatewaySnapshot({
         usagePublications: {
-          ...snapshot.usagePublications,
+          ...gateway.snapshot.usagePublications,
           [agentId]: {
             usageUpdatedAt,
             committedAt: usageRefreshFailed
-              ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+              ? (gateway.snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
               : usageUpdatedAt,
             usageRefreshFailed: usageRefreshFailed || undefined,
           },
         },
       }),
     basePath: "",
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
+    gateway,
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
       ensureList: vi.fn(async () => null),
+      subscribe,
+    },
+    agentIdentity: {
+      get: () => null,
+      entries: () => [],
+      ensure: async () => undefined,
+      invalidate: () => undefined,
       subscribe,
     },
     agentSelection: {
@@ -115,14 +149,134 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
 export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
-  context: ApplicationContext = contextWithClient(client),
-): Promise<TestUsagePage> {
-  const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-  page.context = context;
-  if (!renderView) {
-    page.render = () => nothing;
-  }
-  document.body.append(page);
+  initialContext: ApplicationContext = contextWithClient(client),
+) {
+  let context = initialContext;
+  // Legacy test fixtures describe canonical rows; expose the same server projection
+  // as the real RPC so page tests exercise request ownership and presentation.
+  const originalRequest = client.request.bind(client);
+  client.request = (async (method, params, options) => {
+    const result = await originalRequest(method, params, options);
+    if (
+      method !== "sessions.usage" ||
+      !result ||
+      typeof result !== "object" ||
+      !("sessions" in result) ||
+      !("totals" in result)
+    ) {
+      return result;
+    }
+    const usage = result as SessionsUsageResult;
+    const requestParams = (params ?? {}) as Record<string, unknown>;
+    if (usage.overview || requestParams.key) {
+      return result;
+    }
+    const filters = params as UsageOverviewOptions | undefined;
+    const projected = buildUsageOverview({
+      rows: usage.sessions,
+      options: filters ?? {},
+      dayBucket:
+        requestParams.mode === "specific" && typeof requestParams.timeZone === "string"
+          ? { mode: "time-zone", timeZone: requestParams.timeZone }
+          : { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    const hasFilters = Boolean(
+      filters?.query ||
+      filters?.selectedDays?.length ||
+      filters?.selectedHours?.length ||
+      filters?.selectedSessions?.length,
+    );
+    return {
+      ...usage,
+      ...projected,
+      ...(!hasFilters ? { totals: usage.totals, aggregates: usage.aggregates } : {}),
+      ...(requestParams.projection === "overview"
+        ? {}
+        : {
+            sessions: usage.sessions.filter((session) =>
+              projected.sessions.some((row) => row.key === session.key),
+            ),
+          }),
+    };
+  }) as GatewayBrowserClient["request"];
+  const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
+  const container = document.createElement("div");
+  let model: ReturnType<typeof createUsagePage>;
+  let routeData: UsageRouteData | undefined;
+  let disposeView: () => void;
+  const mount = () => {
+    disposeView = mountSolid(
+      () => {
+        model = createUsagePage(context);
+        return content?.({
+          get state() {
+            return model.read();
+          },
+          get result() {
+            return model.result();
+          },
+        });
+      },
+      {
+        container,
+        wrapper: content ? createSolidApplicationContextProvider(context).wrapper : undefined,
+      },
+    ).unmount;
+  };
+  const page = {
+    element: container,
+    querySelector: container.querySelector.bind(container),
+    querySelectorAll: container.querySelectorAll.bind(container),
+    get textContent() {
+      return container.textContent;
+    },
+    get isConnected() {
+      return container.isConnected;
+    },
+    get context() {
+      return context;
+    },
+    set context(next: ApplicationContext) {
+      disposeView();
+      context = next;
+      mount();
+      if (routeData) {
+        model.setRouteData(routeData);
+      }
+    },
+    get routeData() {
+      return routeData;
+    },
+    set routeData(data: UsageRouteData | undefined) {
+      routeData = data;
+      model.setRouteData(data);
+    },
+    get usageResult() {
+      return model.result();
+    },
+    get usageLoading() {
+      return model.read().data.loading;
+    },
+    get usageSelectedSessions() {
+      return model.read().filters.selectedSessions;
+    },
+    read: () => model.read(),
+    refresh: async () => {
+      await model.read().callbacks.filters.onRefresh();
+    },
+    get updateComplete() {
+      return Promise.resolve().then(() => {
+        flush();
+        return true;
+      });
+    },
+    remove() {
+      disposeView();
+      container.remove();
+    },
+  };
+  document.body.append(container);
+  mount();
   await page.updateComplete;
   return page;
 }
@@ -148,13 +302,13 @@ export function createPendingUsageRouteData(
     },
     result: null,
     costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };
 }
 
 export function cleanupUsagePageTest(): void {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -179,17 +333,11 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
     staleFiles: status === "stale" ? 1 : 0,
   };
   const totals = {
+    ...createEmptyCostUsageTotals(),
     input: 100,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens: 100,
     totalCost: 1,
     inputCost: 1,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
   };
   return {
     result: {
@@ -199,13 +347,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
       sessions: [],
       totals,
       aggregates: {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
+        ...buildAggregatesFromSessions([]),
         costDaily: [],
       },
       cacheStatus,

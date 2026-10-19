@@ -46,9 +46,12 @@ export function createFirstStreamEventTimeoutError(context: FirstStreamEventTime
     formatOptionalField("api", context.api),
     formatOptionalField("model", context.model),
   ].join("");
-  return new Error(
-    `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
-      (context.hint ? ` ${context.hint}` : ""),
+  return Object.assign(
+    new Error(
+      `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
+        (context.hint ? ` ${context.hint}` : ""),
+    ),
+    { name: "FirstStreamEventTimeoutError" },
   );
 }
 
@@ -89,12 +92,6 @@ export function withFirstStreamEventTimeout<T>(
       const iterator = stream[Symbol.asyncIterator]();
       let timer: ReturnType<typeof setTimeout> | undefined;
       let completed = false;
-      const clear = () => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = undefined;
-        }
-      };
       try {
         const first = await new Promise<IteratorResult<T>>((resolve, reject) => {
           timer = setTimeout(() => {
@@ -105,22 +102,18 @@ export function withFirstStreamEventTimeout<T>(
           }, timeoutMs);
           timer.unref?.();
           iterator.next().then(resolve, reject);
-        }).finally(clear);
-        if (first.done) {
-          completed = true;
-          return;
-        }
-        yield first.value;
-        for (;;) {
-          const next = await iterator.next();
-          if (next.done) {
-            completed = true;
-            return;
+        }).finally(() => {
+          if (timer) {
+            clearTimeout(timer);
           }
+        });
+        let next = first;
+        while (!next.done) {
           yield next.value;
+          next = await iterator.next();
         }
+        completed = true;
       } finally {
-        clear();
         if (!completed) {
           void iterator.return?.().catch(() => undefined);
         }

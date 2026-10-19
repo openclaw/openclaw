@@ -8,13 +8,9 @@ let defaultAgentMaxConcurrent: number | undefined;
 
 function resolveDefaultAgentMaxConcurrent(): number {
   if (defaultAgentMaxConcurrent === undefined) {
-    // Prefer the quota-aware count on modern Node; retain the CPU-list fallback
-    // for runtimes where availableParallelism is absent.
-    const availableParallelism =
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
     defaultAgentMaxConcurrent = Math.max(
       MIN_AGENT_MAX_CONCURRENT,
-      availableParallelism * AGENT_RUNS_PER_CPU,
+      os.availableParallelism() * AGENT_RUNS_PER_CPU,
     );
   }
   return defaultAgentMaxConcurrent;
@@ -22,9 +18,7 @@ function resolveDefaultAgentMaxConcurrent(): number {
 
 /** Default maximum concurrent child-agent runs per immediate spawning/controller session. */
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
-/** Default maximum direct children a single agent run may spawn. */
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
-/** Default age before completed subagent state is archived. */
 export const DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES = 60;
 // Allow recursive delegation by default while bounding each spawn lineage.
 export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 5;

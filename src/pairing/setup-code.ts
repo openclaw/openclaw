@@ -203,10 +203,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
-  label?: "token" | "password" | "trusted-proxy";
-  error?: string;
-};
+type ResolveAuthLabelResult = { label: "token" | "password" | "trusted-proxy" } | { error: string };
 
 const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
 const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
@@ -291,16 +288,16 @@ function resolvePairingSetupAuthLabel(
     }
     return { label: mode };
   }
+  // Setup codes carry their own bounded bootstrap credential. Proxy-only
+  // ingress retains its label even when a password serves local direct callers.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
   if (token) {
     return { label: "token" };
   }
   if (password) {
     return { label: "password" };
-  }
-  // Setup codes carry their own bounded bootstrap credential. Proxy-only
-  // ingress does not need an unrelated shared secret to issue that handoff.
-  if (mode === "trusted-proxy") {
-    return { label: "trusted-proxy" };
   }
   if (mode === "none") {
     return {
@@ -497,7 +494,7 @@ export async function resolvePairingSetupFromConfig(
     hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
+  if ("error" in authLabel) {
     return { ok: false, error: authLabel.error };
   }
   const explicitPublicUrl = normalizeOptionalString(options.publicUrl);
@@ -530,10 +527,6 @@ export async function resolvePairingSetupFromConfig(
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
     return { ok: false, error: mobilePairingUrlError };
-  }
-
-  if (!authLabel.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
   const requestedBootstrapProfile =

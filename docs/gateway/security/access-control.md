@@ -60,7 +60,7 @@ Local CLI onboarding preserves an explicit `session.dmScope` and otherwise leave
 
 This is a messaging-context boundary, not a host-admin boundary. If users are mutually adversarial and share the same Gateway host/config, run separate gateways per trust boundary instead.
 
-If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
+If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one shared identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
 
 ## Context visibility vs trigger authorization
 

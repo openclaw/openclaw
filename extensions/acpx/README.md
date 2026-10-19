@@ -21,9 +21,14 @@ to regenerate wrappers written by an older plugin version.
 ## What it provides
 
 - ACP-backed agent runtime sessions.
+- Built-in ACPX harness targets, including `grok-build` for the Grok Build CLI.
 - Plugin-owned session and transport management.
 - MCP bridge helpers for OpenClaw tools and plugin tools.
 - Static runtime assets used by the ACP process bridge.
+
+If the Gateway restarts before a one-shot session receives its first prompt, ACPX
+reuses the initialized conversation when the agent supports loading or resuming
+sessions. Completed one-shot runs still start a fresh conversation.
 
 ## Native agents in the model picker
 
@@ -82,6 +87,10 @@ Use the ACP docs for harness-specific setup, permission modes, and model/runtime
 
 - https://docs.openclaw.ai/tools/acp-agents-setup
 - https://docs.openclaw.ai/tools/acp-agents
+
+`grok-build` is an agent target (`agentId: "grok-build"`), not the xAI model id
+`xai/grok-build-0.1`. The target launches the installed Grok Build CLI through
+`grok agent stdio`.
 
 ## Package
 

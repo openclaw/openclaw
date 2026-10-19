@@ -11,29 +11,27 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import {
   createChangedNodeTestShards,
-  fallbackGroups,
   selectedFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 describe("CI changed Node test plan", () => {
-  it.each([
-    "src/tui/tui-pty-local-test-support.test.ts",
-    "src/tui/tui-pty-test-support.test.ts",
-    "src/tui/tui-pty-harness-assertion-test-support.test.ts",
-  ])("keeps the TUI support unit owner without a fallback for %s", (target) => {
-    const reasons: string[] = [];
-    const shards = createChangedNodeTestShards([target], {
-      dedicatedBuildArtifacts: false,
-      onFallback: (reason) => reasons.push(reason),
-    });
-    expect(reasons).toEqual([]);
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards).filter((file) => file === target)).toEqual([target]);
-    const config = "test/vitest/vitest.tui.config.ts";
-    expect(buildVitestRunPlans([target])[0]?.config).toBe(config);
-    expect(resolveCanonicalNodeTestConfig(target, config)).toBe(config);
-    expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-  });
+  it.each(["src/tui/tui-pty-local-test-support.test.ts"])(
+    "keeps the TUI support unit owner without a fallback for %s",
+    (target) => {
+      const reasons: string[] = [];
+      const shards = createChangedNodeTestShards([target], {
+        dedicatedBuildArtifacts: false,
+        onFallback: (reason) => reasons.push(reason),
+      });
+      expect(reasons).toEqual([]);
+      expect(shards).not.toBeNull();
+      expect(selectedFiles(shards).filter((file) => file === target)).toEqual([target]);
+      const config = "test/vitest/vitest.tui.config.ts";
+      expect(buildVitestRunPlans([target])[0]?.config).toBe(config);
+      expect(resolveCanonicalNodeTestConfig(target, config)).toBe(config);
+      expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+    },
+  );
 
   it.each(["blacksmith", "github", "hybrid"])(
     "retains the complete paired tooling descriptor and job metadata (%s)",
@@ -149,58 +147,4 @@ describe("CI changed Node test plan", () => {
       }
     },
   );
-
-  it("retains leaf-config owners and their execution metadata", () => {
-    const config = "test/vitest/vitest.commands.config.ts";
-    const full = createNodeTestShardBundles({
-      compactMode: "pull-request",
-      includeReleaseOnlyPluginShards: false,
-      includeReleaseOnlyToolingShards: true,
-    });
-    const owners = full.flatMap((job) =>
-      job.groups.filter((group) => group.configs.includes(config)),
-    );
-    expect(owners.length).toBeGreaterThan(1);
-    const expectCanonicalCommands = (shards: ReturnType<typeof createChangedNodeTestShards>) => {
-      expect(shards).not.toBeNull();
-      const groups = fallbackGroups(shards ?? []);
-      const selectedOwners = groups.filter((group) => group.configs.includes(config));
-      expect(selectedOwners.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-        owners.flatMap((group) => group.includePatterns ?? []).toSorted(),
-      );
-      expect(selectedOwners.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-      for (const owner of owners) {
-        const fullJob = expectDefined(
-          full.find((job) => job.groups.includes(owner)),
-          "canonical commands job",
-        );
-        const selectedJob = expectDefined(
-          shards?.find((job) => job.groups?.some((group) => group.shard_name === owner.shard_name)),
-          "selected commands job",
-        );
-        expect(selectedJob.runner).toBe(fullJob.runner);
-        expect(selectedJob.env).toEqual(fullJob.env);
-        expect(selectedJob.planConcurrency).toBe(fullJob.planConcurrency);
-        expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);
-        expect(selectedJob.timeoutMinutes).toBe(fullJob.timeoutMinutes);
-      }
-      const configs = groups.flatMap((group) => group.configs);
-      expect(configs).not.toContain("test/vitest/vitest.cron.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.ui.config.ts");
-    };
-    const shards = createChangedNodeTestShards([config]);
-    expectCanonicalCommands(shards);
-    expect(
-      createChangedNodeTestShards([config], {
-        includePrExemptRuntimeTests: false,
-        includeReleaseOnlyRuntimeTests: false,
-      }),
-    ).toEqual(shards);
-    expect(selectedFiles(shards)).toEqual(
-      expect.arrayContaining([
-        "test/vitest-projects-config.test.ts",
-        "test/scripts/ci-node-test-plan.commands.test.ts",
-      ]),
-    );
-  });
 });

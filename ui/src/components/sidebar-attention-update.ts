@@ -1,23 +1,25 @@
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
   resolveUpdateAttentionDismissal,
-  type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
+import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 
-type SidebarUpdateContext = Pick<ApplicationContext, "gateway" | "overlays">;
-
-export type SidebarUpdateAttentionState = {
-  actionable: boolean;
-  busy: boolean;
-  canUpdate: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  present: boolean;
-};
+/** The selected channel owns notification eligibility, not stale target metadata. */
+export function isReleaseUpdateAvailable(
+  updateAvailable: UpdateAvailable | null | undefined,
+  updateSchedule: UpdateScheduleState | null | undefined,
+): boolean {
+  const channel = updateSchedule?.channel ?? updateAvailable?.channel;
+  return (
+    (channel === "stable" || channel === "beta") &&
+    isUpdateActionable(updateAvailable, updateSchedule, false)
+  );
+}
 
 export function isUpdateRunAttentionVisible(
   run: UpdateRunRecord | null,
@@ -34,13 +36,14 @@ export function isUpdateRunAttentionVisible(
 }
 
 export function resolveSidebarUpdateAttention(
-  context: SidebarUpdateContext,
-): SidebarUpdateAttentionState {
+  context: Pick<ApplicationContext, "gateway" | "overlays">,
+): Extract<SidebarInboxEntry, { type: "update" }> | null {
   const snapshot = context.overlays.snapshot;
   const campaign = snapshot.updateSchedule?.campaign;
   const run = snapshot.updateRun;
   const runVisible = isUpdateRunAttentionVisible(run, snapshot.updateRunAcknowledged);
-  const statusBanner = run ? null : snapshot.updateStatusBanner;
+  const statusBanner =
+    snapshot.updateStatusCheckBanner ?? (run ? null : snapshot.updateStatusBanner);
   const busy =
     snapshot.updateRunning ||
     snapshot.updateReconciliationPending ||
@@ -53,13 +56,18 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
-  const actionable = isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy);
-  const present = Boolean(
-    runVisible ||
-    snapshot.updateReconciliationPending ||
-    statusBanner ||
-    (campaignPendingHydration ? snapshot.updateRunning : actionable),
-  );
+  const actionable =
+    busy || isReleaseUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
+  if (
+    !(
+      runVisible ||
+      snapshot.updateReconciliationPending ||
+      statusBanner ||
+      (campaignPendingHydration ? snapshot.updateRunning : actionable)
+    )
+  ) {
+    return null;
+  }
   const dismissal =
     runVisible && run?.status !== "running"
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
@@ -70,11 +78,10 @@ export function resolveSidebarUpdateAttention(
         });
   const forced = busy || isUpdateAttentionForced(statusBanner?.tone);
   return {
-    actionable,
-    busy,
-    canUpdate,
-    dismissal,
-    forced,
-    present,
+    type: "update",
+    category: "system",
+    dismissal: canUpdate && !forced ? dismissal : null,
+    requiresAction: forced || (canUpdate && actionable),
+    severity: snapshot.updateStatusBanner?.tone === "danger" ? "error" : "warning",
   };
 }

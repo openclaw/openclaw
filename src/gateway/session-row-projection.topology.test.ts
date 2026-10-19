@@ -2,7 +2,6 @@ import { symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -13,16 +12,17 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { applyOpenClawDatabaseVerificationResults } from "../state/openclaw-database-verify.impl.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -34,16 +34,170 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import {
-  createLifecycleEventBroadcastHandler,
-  createTranscriptUpdateBroadcastHandler,
-} from "./server-session-events.js";
+import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { seedRow, waitForRead } from "./session-row-projection.read-fixture.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.for(["publication", "source", "dispose"] as const)(
+  "fences cold store admission across a delayed worker reply: %s",
+  async (change, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      let held = false;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume, lane) =>
+          readDatabases(
+            targets,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  async readStoreProjection(input) {
+                    const result = await owner.readStoreProjection(input);
+                    if (!held) {
+                      held = true;
+                      entered.resolve();
+                      await release.promise;
+                    }
+                    return result;
+                  },
+                })),
+              ),
+            lane,
+          ),
+      );
+      const scope = { agentId: "late", sessionKey: "agent:late:admission" };
+      replaceSessionEntrySync(scope, { sessionId: "admission", updatedAt: 1, label: "Original" });
+      const reading = projection.prepareMembership();
+      const settled = Promise.allSettled([reading]);
+      try {
+        await waitForRead(
+          entered.promise,
+          reading,
+          signal,
+          "Cold admission bypassed the worker read",
+        );
+        const query = { agentId: scope.agentId, key: scope.sessionKey };
+        expect(projection.capture(query)).toBeUndefined();
+        if (change === "publication") {
+          replaceSessionEntrySync(scope, {
+            sessionId: "admission",
+            updatedAt: 2,
+            label: "Current",
+          });
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: "agent:late:created-during-admission" },
+            { sessionId: "created-during-admission", updatedAt: 2 },
+          );
+        } else if (change === "source") {
+          const pathname = resolveOpenClawAgentSqlitePath({ ...scope, env: state.env });
+          const replacement = `${pathname}.replacement`;
+          await copyFile(pathname, replacement);
+          await rename(replacement, pathname);
+        } else {
+          projection.dispose();
+        }
+        release.resolve();
+        if (change === "source") {
+          await expect(reading).rejects.toThrow(/identity changed/);
+          expect(projection.capture(query)).toBeUndefined();
+        } else {
+          await reading;
+          if (change === "publication") {
+            await projection.ensureMaterialized();
+            expect(projection.snapshot(query).row?.label).toBe("Current");
+            expect(
+              projection.capture({ agentId: "late", key: "agent:late:created-during-admission" }),
+            ).toBeDefined();
+          } else {
+            expect(projection.capture(query)).toBeUndefined();
+          }
+        }
+      } finally {
+        release.resolve();
+        await settled;
+        projection.dispose();
+      }
+    });
+  },
+);
+
+it("reconciles a resident reset while a topology store snapshot awaits its worker", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:topology-reset",
+      storePath: database.path,
+    };
+    const entry = { sessionId: "topology-reset", updatedAt: 1, label: "Retained" };
+    replaceSessionEntrySync(scope, entry);
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const readDatabases = history.withSessionHistoryWorkerDatabases;
+    let held = false;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          async (owners) => {
+            if (!held) {
+              held = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return consume(owners);
+          },
+          lane,
+        ),
+    );
+    sessionChanges.emit({ all: true, scope: "stores" });
+    const pending = projection.prepareMembership();
+    const settled = Promise.allSettled([pending]);
+    try {
+      await waitForRead(entered.promise, pending, signal, "Topology bypassed its store worker");
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      const captured = projection.capture(query);
+      emitSessionIdentityMutation({
+        kind: "reset",
+        agentId: scope.agentId,
+        databaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
+        previous: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
+        current: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
+      });
+      expect(projection.capture(query)?.entry).toBeUndefined();
+      expect(projection.isCurrent(captured!)).toBe(false);
+      release.resolve();
+      await pending;
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row).toMatchObject({
+        sessionId: entry.sessionId,
+        label: entry.label,
+      });
+    } finally {
+      release.resolve();
+      await settled;
+      projection.dispose();
+    }
+  });
+});
 
 function holdTopologyRead() {
   const entered = createDeferredCore();
@@ -86,7 +240,6 @@ it("publishes an initially unseen retired-agent event from its default store", a
       await createLifecycleEventBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       })({ agentId: query.agentId, sessionKey: query.key, reason: "reactivated" });
       expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
@@ -94,7 +247,11 @@ it("publishes an initially unseen retired-agent event from its default store", a
       ]);
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
-        expect.objectContaining({ sessionKey: query.key, reason: "reactivated" }),
+        expect.objectContaining({
+          sessionKey: query.key,
+          reason: "updated",
+          session: expect.objectContaining({ sessionId: "retired-original" }),
+        }),
         new Set(["subscriber"]),
         expect.anything(),
       );
@@ -137,7 +294,6 @@ it("admits a committed update without host SQL while a marker awaits prepared me
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
       sessionMessageSubscribers: { get: () => new Set<string>() },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
     const marker = handler({
@@ -149,10 +305,7 @@ it("admits a committed update without host SQL while a marker awaits prepared me
     const settled = Promise.allSettled(tasks);
     try {
       // Bind waits to the test signal so a stall still releases held topology work below.
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, marker, "Marker membership did not prepare"),
-        signal,
-      );
+      await waitForRead(entered.promise, marker, signal, "Marker membership did not prepare");
       expect(projection.needsMembershipPreparation()).toBe(false);
       sessionChanges.emit({ all: true, scope: "catalog" });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
@@ -179,9 +332,19 @@ it("admits a committed update without host SQL while a marker awaits prepared me
       }
       release.resolve();
       await Promise.all(tasks);
+      expect(broadcastToConnIds.mock.calls).toHaveLength(2);
       expect(
-        broadcastToConnIds.mock.calls.filter(([name]) => name === "session.message"),
-      ).toHaveLength(2);
+        broadcastToConnIds.mock.calls
+          .filter(([name]) => name === "session.message")
+          .map(([, payload]) => payload.sessionKey),
+      ).toEqual(["agent:main:known"]);
+      const markerNotice = broadcastToConnIds.mock.calls.find(
+        ([name, payload]) =>
+          name === "sessions.changed" && payload.sessionKey === "agent:late:marker",
+      );
+      expect(markerNotice?.[1]).toMatchObject({ sessionId: "marker", phase: "message" });
+      expect(markerNotice?.[1]).not.toHaveProperty("message");
+      expect(markerNotice?.[3]).toMatchObject({ prepareSessionProjection: expect.any(Function) });
     } finally {
       release.resolve();
       await Promise.allSettled(tasks);
@@ -191,43 +354,19 @@ it("admits a committed update without host SQL while a marker awaits prepared me
   });
 });
 
-it.for(
-  (["lifecycle", "marker"] as const).flatMap((kind) =>
-    (
-      [
-        "unchanged",
-        "replace",
-        "same-id-reset",
-        "delete",
-        "physical-store",
-        "dispose",
-        "unrelated-store",
-        "new-store-registration",
-        "alias-reset",
-      ] as const
-    ).map((change) => ({ kind, change })),
-  ),
-)(
-  "keeps an unknown $kind event with its original generation across $change",
+it.for([
+  { kind: "lifecycle", change: "same-id-reset" },
+  { kind: "lifecycle", change: "delete" },
+  { kind: "lifecycle", change: "dispose" },
+  { kind: "marker", change: "same-id-reset" },
+  { kind: "marker", change: "dispose" },
+  { kind: "marker", change: "alias-reset" },
+] as const)(
+  "refreshes current facts without retargeting unknown $kind payloads across $change",
   async ({ kind, change }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
-      const unrelated =
-        change === "unrelated-store"
-          ? {
-              agentId: "main",
-              sessionKey: "agent:main:unrelated",
-              storePath: path.join(state.root, "unrelated.sqlite"),
-            }
-          : undefined;
-      if (unrelated) {
-        replaceSessionEntrySync(unrelated, {
-          sessionId: "event-original",
-          lifecycleRevision: "unrelated-original",
-          updatedAt: 1,
-        });
-      }
       const projection = await createSessionRowProjection({
         cfg,
         getConfig: () => cfg,
@@ -239,7 +378,12 @@ it.for(
       setRuntimeConfigSnapshot(cfg);
       const query = { agentId: "main", key: "agent:main:deferred-event" };
       const scope = { agentId: query.agentId, sessionKey: query.key, storePath };
-      const entry = { sessionId: "event-original", lifecycleRevision: "original", updatedAt: 1 };
+      const entry = {
+        sessionId: "event-original",
+        lifecycleRevision: "original",
+        updatedAt: 1,
+        label: "Current row",
+      };
       replaceSessionEntrySync(scope, entry);
       let alias: string | undefined;
       if (change === "alias-reset") {
@@ -262,7 +406,6 @@ it.for(
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
         sessionMessageSubscribers: { get: () => new Set<string>() },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       };
       const pending =
@@ -270,7 +413,13 @@ it.for(
           ? createLifecycleEventBroadcastHandler(params)({
               sessionKey: query.key,
               agentId: query.agentId,
-              reason: "reactivated",
+              reason: "swarm-note",
+              swarmGroupId: "old-swarm",
+              kind: "log",
+              text: "Original private note",
+              label: "Old event label",
+              displayName: "Old event display",
+              parentSessionKey: "agent:main:old-parent",
             })
           : createTranscriptUpdateBroadcastHandler(params)({
               sessionFile: formatSqliteSessionFileMarker({ ...scope, sessionId: entry.sessionId }),
@@ -279,20 +428,19 @@ it.for(
             });
       const settled = Promise.allSettled([pending]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Event did not await original topology",
-          ),
+        await waitForRead(
+          entered.promise,
+          pending,
           signal,
+          "Event did not await original topology",
         );
-        if (change === "replace" || change === "same-id-reset") {
+        if (change === "same-id-reset") {
           const next = {
             ...entry,
-            sessionId: change === "replace" ? "event-replacement" : entry.sessionId,
+            sessionId: entry.sessionId,
             lifecycleRevision: "replacement",
             updatedAt: 2,
+            label: "Replacement row",
           };
           replaceSessionEntrySync(scope, next);
           expect(loadSessionEntry(scope)).toMatchObject(next);
@@ -304,27 +452,8 @@ it.for(
             target: { canonicalKey: query.key, storeKeys: [query.key] },
           });
           expect(loadSessionEntry(scope)).toBeUndefined();
-        } else if (change === "physical-store") {
-          const target = resolveSqliteTargetFromSessionStorePath(storePath, {
-            agentId: query.agentId,
-          });
-          await closeOpenClawAgentDatabaseByPathAsync(target.path, target.agentId);
-          await rename(target.path, `${target.path}.original`);
-          await copyFile(`${target.path}.original`, target.path);
         } else if (change === "dispose") {
           projection.dispose();
-        } else if (change === "new-store-registration") {
-          openOpenClawAgentDatabase({
-            agentId: query.agentId,
-            path: path.join(state.root, "newly-registered.sqlite"),
-            env: state.env,
-          });
-        } else if (unrelated) {
-          replaceSessionEntrySync(unrelated, {
-            sessionId: entry.sessionId,
-            lifecycleRevision: "unrelated-reset",
-            updatedAt: 2,
-          });
         } else if (change === "alias-reset") {
           expect(alias).toBeDefined();
           replaceSessionEntrySync(
@@ -333,20 +462,36 @@ it.for(
               ...entry,
               lifecycleRevision: "alias-reset",
               updatedAt: 2,
+              label: "Replacement row",
             },
           );
         }
         release.resolve();
-        const result = await settled;
-        if (change === "unchanged" || change === "new-store-registration" || unrelated) {
-          expect(result).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-          expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe(
-            kind === "lifecycle" ? "sessions.changed" : "session.message",
-          );
-          expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ sessionKey: query.key });
-        } else {
+        if (change === "dispose" || change === "delete") {
+          await settled;
           expect(broadcastToConnIds).not.toHaveBeenCalled();
+        } else {
+          await pending;
+          expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+            "sessions.changed",
+            expect.objectContaining({
+              sessionKey: query.key,
+              sessionId: "event-original",
+              label: "Replacement row",
+              session: expect.objectContaining({
+                lifecycleRevision: change === "alias-reset" ? "alias-reset" : "replacement",
+              }),
+              ...(kind === "lifecycle" ? { reason: "updated" } : { phase: "message" }),
+            }),
+            new Set(["subscriber"]),
+            expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
+          );
+          const payload = broadcastToConnIds.mock.calls[0]?.[1];
+          expect(payload).not.toHaveProperty("message");
+          expect(JSON.stringify(payload)).not.toContain('"swarmGroupId":');
+          expect(payload).not.toHaveProperty("text");
+          expect(payload.displayName).not.toBe("Old event display");
+          expect(payload.parentSessionKey).not.toBe("agent:main:old-parent");
         }
       } finally {
         release.resolve();
@@ -357,47 +502,41 @@ it.for(
   },
 );
 
-it.for(["identity scopes", "dispose", "source"] as const)(
+it.for(["dispose", "source", "owner close"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
   async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      let cfg: OpenClawConfig = {
+      const cfg: OpenClawConfig = {
         agents: { entries: { main: { identity: { name: "Original" } } } },
       };
       const query = { agentId: "main", key: "agent:main:topology" };
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key },
-        { sessionId: "topology", updatedAt: 1 },
-      );
+      seedRow(query, { sessionId: "topology", updatedAt: 1 });
       const releaseForeground = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({
         cfg,
         getConfig: () => cfg,
         modelCatalog: [],
       });
+      const verifiedDatabase =
+        change === "owner close" ? openOpenClawStateDatabase({ env: state.env }) : undefined;
       const { entered, release } = holdTopologyRead();
       const captured = projection.capture(query);
       sessionChanges.emit({ all: true, scope: "stores" });
       const pending = projection.prepareMembership();
       const settled = Promise.allSettled([pending]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Topology snapshot did not reach its owner",
-          ),
+        await waitForRead(
+          entered.promise,
+          pending,
           signal,
+          "Topology snapshot did not reach its owner",
         );
         expect(projection.capture(query)).toBe(captured);
-        if (change === "identity scopes") {
-          cfg = {
-            ...cfg,
-            gateway: { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } },
-          };
-          sessionChanges.emit({ all: true, scope: "config" });
-        } else if (change === "dispose") {
+        if (change === "dispose") {
           projection.dispose();
+        } else if (change === "owner close") {
+          await closeOpenClawStateDatabaseByPathAsync(verifiedDatabase!.path);
+          expect(verifiedDatabase!.db.isOpen).toBe(false);
         } else {
           const database = openOpenClawStateDatabase({ env: state.env });
           await closeOpenClawStateDatabaseByPathAsync(database.path);
@@ -407,29 +546,31 @@ it.for(["identity scopes", "dispose", "source"] as const)(
           openOpenClawStateDatabase({ env: state.env });
         }
         release.resolve();
-        if (change === "source") {
+        if (change === "source" || change === "owner close") {
           expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
-          await expect(projection.prepareMembership()).rejects.toThrow();
-          const successor = await createSessionRowProjection({ cfg, modelCatalog: [] });
-          try {
-            await successor.prepareMembership();
-            expect(successor.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
-              "topology",
-            ]);
-          } finally {
-            successor.dispose();
-          }
-        } else {
-          expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          if (change === "identity scopes") {
-            expect(projection.state.cfg).toBe(cfg);
-            expect(projection.selectEntries().map((row) => row.entry.sessionId)).toEqual([
+          if (change === "owner close") {
+            await expect(projection.prepareMembership()).resolves.toBeUndefined();
+            await projection.prepareSelection();
+            expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
               "topology",
             ]);
           } else {
-            expect(projection.capture(query)).toBeUndefined();
-            expect(projection.selectEntries()).toEqual([]);
+            await expect(projection.prepareMembership()).rejects.toThrow();
+            const successor = await createSessionRowProjection({ cfg, modelCatalog: [] });
+            try {
+              await successor.prepareMembership();
+              await successor.prepareSelection();
+              expect(successor.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
+                "topology",
+              ]);
+            } finally {
+              successor.dispose();
+            }
           }
+        } else {
+          expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
+          expect(projection.capture(query)).toBeUndefined();
+          expect(projection.selectEntries()).toEqual([]);
         }
       } finally {
         release.resolve();
@@ -479,13 +620,11 @@ it.for(["chat.startup", "sessions.resolve"] as const)(
       );
       const settled = Promise.allSettled([pending]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Request did not await topology readiness",
-          ),
+        await waitForRead(
+          entered.promise,
+          pending,
           signal,
+          "Request did not await topology readiness",
         );
         active = false;
         release.resolve();
@@ -501,69 +640,10 @@ it.for(["chat.startup", "sessions.resolve"] as const)(
   },
 );
 
-it("starts a new topology read after healthy integrity confirmation without reviving its old reply", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const query = { agentId: "main", key: "agent:main:verified-topology" };
-    replaceSessionEntrySync(
-      { agentId: query.agentId, sessionKey: query.key },
-      {
-        sessionId: "verified-topology",
-        updatedAt: 1,
-      },
-    );
-    const releaseForeground = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const database = openOpenClawStateDatabase({ env: state.env });
-    const { entered, release } = holdTopologyRead();
-    sessionChanges.emit({ all: true, scope: "stores" });
-    const pending = projection.prepareMembership();
-    const settled = Promise.allSettled([pending]);
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Topology snapshot did not reach its owner",
-        ),
-        signal,
-      );
-      await applyOpenClawDatabaseVerificationResults({
-        env: state.env,
-        targets: [
-          {
-            kind: "state",
-            label: "OpenClaw state database",
-            path: database.path,
-            check: "quick",
-          },
-        ],
-        results: [
-          { path: database.path, ok: false, error: "stale terminal result", terminal: true },
-        ],
-      });
-      expect(database.db.isOpen).toBe(false);
-      release.resolve();
-      expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
-      await expect(projection.prepareMembership()).resolves.toBeUndefined();
-      expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
-        "verified-topology",
-      ]);
-    } finally {
-      release.resolve();
-      await settled;
-      projection.dispose();
-      releaseForeground();
-    }
-  });
-});
-
 it("retains physical sentinels and stable store precedence after a primary update", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { scope: "global" as const },
     };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -578,12 +658,13 @@ it("retains physical sentinels and stable store precedence after a primary updat
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
-      expect(projection.selectEntries().filter(ready).length).toBe(2);
+      projection.describe({ agentId: "main", key: "global", storePath: primary });
       expect(
         projection.snapshot({ agentId: "main", key: "global", storePath: secondary }).row
           ?.sessionId,
       ).toBe("secondary");
       const selected = projection.describe({ agentId: "main", key: "global" })!;
+      expect(projection.selectEntries().filter(ready).length).toBe(2);
       expect(
         projection
           .findBySessionId({

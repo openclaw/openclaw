@@ -1,10 +1,24 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveTypeCheckTool } from "../../scripts/lib/local-check-runtime.mts";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 
 const require = createRequire(import.meta.url);
+const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
+const nativeExecutable = process.platform === "win32" ? "tsc.exe" : "tsc";
+
+function resolvePlatformPackageDir() {
+  // The platform binary belongs to the native compiler's optional dependencies.
+  const nativeRequire = createRequire(require.resolve("typescript/package.json"));
+  return path.dirname(nativeRequire.resolve(`${platformPackage}/package.json`));
+}
+
+/** The installed binary, for fixtures that intercept compiler launches themselves. */
+export function resolveInstalledNativeCompiler() {
+  return path.join(resolvePlatformPackageDir(), "lib", nativeExecutable);
+}
 
 /** Availability only; integration assertions still verify the actual kernel scope. */
 export function hasSemanticTestBackend(): boolean {
@@ -25,12 +39,21 @@ export function hasSemanticTestBackend(): boolean {
   }
 }
 
-/** Native receipts and default libraries must belong to the fixture's own install. */
-export function materializeNativeCompiler(rootDir: string) {
+/**
+ * Native receipts and default libraries must belong to the fixture's own install.
+ * Fixtures that only launch the compiler can omit its JavaScript API (`dist/`,
+ * `vendor/`); toolchain identity and fixture-resolved API imports need it.
+ */
+export function materializeNativeCompiler(rootDir: string, { javaScriptApi = true } = {}) {
   const root = fs.realpathSync.native(rootDir);
-  const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
-  // The platform binary belongs to the native compiler's optional dependencies.
-  const nativeRequire = createRequire(require.resolve("typescript/package.json"));
+  const installedExecutable = resolveInstalledNativeCompiler();
+  const fixtureExecutable = path.join(
+    root,
+    "node_modules",
+    platformPackage,
+    "lib",
+    nativeExecutable,
+  );
   const modules = path.join(root, "node_modules");
   fs.mkdirSync(modules, { recursive: true });
   if (fs.realpathSync.native(modules) !== modules) {
@@ -44,40 +67,89 @@ export function materializeNativeCompiler(rootDir: string) {
       fs.unlinkSync(target);
     }
   }
-  for (const name of ["typescript", platformPackage]) {
-    const owner = name === platformPackage ? nativeRequire : require;
-    const source = path.dirname(owner.resolve(`${name}/package.json`));
+  for (const [name, source] of [
+    ["typescript", path.dirname(require.resolve("typescript/package.json"))],
+    [platformPackage, resolvePlatformPackageDir()],
+  ] as const) {
+    const omitted =
+      name === "typescript" && !javaScriptApi
+        ? [path.join(source, "dist"), path.join(source, "vendor")]
+        : [];
     const destination = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    copyTreeCloseOnExec(source, destination, { dereference: true });
+    copyTreeCloseOnExec(source, destination, {
+      dereference: true,
+      filter: (file) => file !== installedExecutable && !omitted.includes(file),
+    });
   }
+  copyExecutableOutOfProcess(installedExecutable, fixtureExecutable);
   const bin = path.join(root, "node_modules/.bin/tsgo");
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.symlinkSync("../typescript/bin/tsc", bin, "file");
   if (process.platform === "win32") {
     fs.writeFileSync(`${bin}.cmd`, '@node "%~dp0..\\typescript\\bin\\tsc" %*\r\n');
   }
-  return path.join(
-    root,
-    "node_modules",
-    platformPackage,
-    "lib",
-    process.platform === "win32" ? "tsc.exe" : "tsc",
+  return fixtureExecutable;
+}
+
+// Only this child opens the executable writable; sibling test forks cannot inherit its descriptor.
+function copyExecutableOutOfProcess(source: string, destination: string) {
+  execFileSync(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    'import { copyFileSync, constants } from "node:fs"; copyFileSync(process.argv[1], process.argv[2], constants.COPYFILE_FICLONE);',
+    source,
+    destination,
+  ]);
+}
+
+/** run-tsgo type checks with tsrs; give the fixture its own tsrs launcher and platform binary. */
+export function materializeTypeChecker(rootDir: string) {
+  if (resolveTypeCheckTool() !== "tsrs") {
+    return; // tsgo hosts already type check with materializeNativeCompiler's install.
+  }
+  const root = fs.realpathSync.native(rootDir);
+  const source = path.dirname(require.resolve("tsrs/package.json"));
+  const getExePath: { default: () => string } = require(path.join(source, "lib/getExePath.js"));
+  const installedExecutable = getExePath.default();
+  const platformSource = path.dirname(installedExecutable);
+  const platformName: string = JSON.parse(
+    fs.readFileSync(path.join(platformSource, "package.json"), "utf8"),
+  ).name;
+  for (const [name, from] of [
+    ["tsrs", source],
+    [platformName, platformSource],
+  ] as const) {
+    const destination = path.join(root, "node_modules", name);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    copyTreeCloseOnExec(from, destination, {
+      dereference: true,
+      filter: (file) => file !== installedExecutable,
+    });
+  }
+  copyExecutableOutOfProcess(
+    installedExecutable,
+    path.join(root, "node_modules", platformName, path.basename(installedExecutable)),
   );
 }
 
-/** Intercept a fixture compiler process without changing the production resolver. */
+/**
+ * Intercept fixture compiler processes without changing the production resolver.
+ * Covers both native packages: tsgo (`typescript`) emits declarations, tsrs type checks.
+ */
 export function overrideNativeFixtureExecutable(root: string, executable: string) {
-  const nativeRoot = path.join(root, "node_modules/typescript");
-  fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
-  if (!fs.existsSync(path.join(nativeRoot, "package.json"))) {
-    fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
-  }
   const launcher = process.platform === "win32" ? `${executable}.cmd` : executable;
-  fs.writeFileSync(
-    path.join(nativeRoot, "lib/getExePath.js"),
-    `export default function getExePath() { return ${JSON.stringify(launcher)}; }\n`,
-  );
+  for (const name of ["typescript", "tsrs"]) {
+    const nativeRoot = path.join(root, "node_modules", name);
+    fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
+    if (!fs.existsSync(path.join(nativeRoot, "package.json"))) {
+      fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
+    }
+    fs.writeFileSync(
+      path.join(nativeRoot, "lib/getExePath.js"),
+      `export default function getExePath() { return ${JSON.stringify(launcher)}; }\n`,
+    );
+  }
 }
 
 export function resolveNativeFixtureShortPath(directory: string) {

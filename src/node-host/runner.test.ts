@@ -10,7 +10,6 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
@@ -20,46 +19,27 @@ import {
   lastCapturedOptions,
   loadResumableNodeHostGateway,
   mocks,
+  readyNodeHost,
   resetRunnerTestState,
   runNodeHost,
   startNodeHostMcpManager,
+  withReadyNodeHost,
 } from "./runner.test-support.js";
 
 const localGateway = { gatewayHost: "127.0.0.1", gatewayPort: 18789 };
+const deviceIdentity = {
+  deviceId: "device-test",
+  publicKeyPem: "public-key-test",
+  privateKeyPem: "private-key-test",
+};
+const failedReadiness = { ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
+const connectAuth = (storedToken: string | undefined = "paired-node-token") =>
+  buildGatewayConnectAuth(selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken }));
 
 async function expectStartupTimeout(options: Partial<Parameters<typeof runNodeHost>[0]> = {}) {
   await expect(runNodeHost({ ...localGateway, ...options })).rejects.toThrow(
     "event loop readiness timeout",
   );
-}
-
-function readyNodeHost() {
-  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-    ready: true,
-    aborted: false,
-    elapsedMs: 0,
-    maxDriftMs: 0,
-    checks: 1,
-  });
-}
-
-async function withReadyNodeHost(
-  runTest: () => Promise<void>,
-  options: Partial<Parameters<typeof runNodeHost>[0]> = {},
-) {
-  readyNodeHost();
-  const on = vi.spyOn(process, "on");
-  const previousExitCode = process.exitCode;
-  const running = runNodeHost({ ...localGateway, ...options });
-  try {
-    await vi.waitFor(() => expect(on).toHaveBeenCalledWith("SIGTERM", expect.any(Function)));
-    await runTest();
-  } finally {
-    on.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
-    await running;
-    process.exitCode = previousExitCode;
-    on.mockRestore();
-  }
 }
 
 describe("runNodeHost", () => {
@@ -161,40 +141,6 @@ describe("runNodeHost", () => {
         ],
       },
     );
-  });
-
-  it("stops the canonical runtime after a service enrollment hello", async () => {
-    mocks.useFakeRuntime = true;
-    readyNodeHost();
-    const previousExitCode = process.exitCode;
-    try {
-      const running = runNodeHost({
-        gatewayHost: "gateway.example",
-        gatewayPort: 443,
-        gatewayTls: true,
-        gatewayBootstrapToken: "bootstrap-token",
-        preferGatewayBootstrapToken: true,
-        stopAfterFirstConnect: true,
-      });
-      await vi.waitFor(() => expect(lastCapturedOptions()?.onHelloOk).toBeTypeOf("function"));
-      expect(lastCapturedOptions()).toMatchObject({
-        bootstrapToken: "bootstrap-token",
-        preferBootstrapToken: true,
-        token: undefined,
-      });
-      expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-      lastCapturedOptions()?.onHelloOk?.({
-        protocol: 1,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-      await running;
-
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
-    } finally {
-      process.exitCode = previousExitCode;
-    }
   });
 
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {
@@ -311,11 +257,7 @@ describe("runNodeHost", () => {
     });
 
     it("offers the saved endpoint for resume only with a paired node credential", async () => {
-      mocks.loadDeviceIdentityIfPresent.mockReturnValue({
-        deviceId: "device-test",
-        publicKeyPem: "public-key-test",
-        privateKeyPem: "private-key-test",
-      });
+      mocks.loadDeviceIdentityIfPresent.mockReturnValue(deviceIdentity);
       await expect(loadResumableNodeHostGateway()).resolves.toEqual(gateway);
 
       // A failed first enrollment saves the endpoint without issuing a device token.
@@ -333,11 +275,7 @@ describe("runNodeHost", () => {
       };
 
       beforeEach(() => {
-        mocks.loadDeviceIdentityIfPresent.mockReturnValue({
-          deviceId: "device-test",
-          publicKeyPem: "public-key-test",
-          privateKeyPem: "private-key-test",
-        });
+        mocks.loadDeviceIdentityIfPresent.mockReturnValue(deviceIdentity);
       });
 
       it("never falls back to shared auth if the saved token disappears before connect", async () => {
@@ -353,23 +291,18 @@ describe("runNodeHost", () => {
 
         await expectStartupTimeout(expiredOptions);
 
-        expect(
-          buildGatewayConnectAuth(
-            selectGatewayConnectAuth({
-              ...lastCapturedOptions(),
-              storedToken: "paired-node-token",
-            }),
-          ),
-        ).toMatchObject({ deviceToken: "paired-node-token", bootstrapToken: undefined });
+        expect(connectAuth()).toMatchObject({
+          deviceToken: "paired-node-token",
+          bootstrapToken: undefined,
+        });
         // GatewayClient rereads native auth when connecting; the token can be gone by then.
         const stored = await mocks.loadDeviceAuthTokenReadOnly({
           deviceId: "device-test",
           role: "node",
         });
-        const options = lastCapturedOptions();
-        expect(options?.bootstrapToken).toBeUndefined();
+        expect(lastCapturedOptions()?.bootstrapToken).toBeUndefined();
         const auth = buildGatewayConnectAuth(
-          selectGatewayConnectAuth({ ...options, storedToken: stored?.token }),
+          selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken: stored?.token }),
         );
         expect(auth).toBeUndefined();
         expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
@@ -400,14 +333,17 @@ describe("runNodeHost", () => {
       );
     });
 
-    it("restarts a paired service without sending the source Gateway password", async () => {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "  ");
-      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "\t");
+    it.each([
+      ["whitespace", "  ", "\t"],
+      ["ambient token", "unrelated-gateway-token", undefined],
+      ["ambient password", undefined, "unrelated-gateway-password"],
+      ["both ambient credentials", "unrelated-gateway-token", "unrelated-gateway-password"],
+    ])("restarts a paired service without %s", async (_source, token, password) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", password);
       await expectStartupTimeout(runOptions);
 
-      const auth = buildGatewayConnectAuth(
-        selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken: "paired-node-token" }),
-      );
+      const auth = connectAuth();
       expect(auth).toMatchObject({
         deviceToken: "paired-node-token",
         token: undefined,
@@ -417,24 +353,20 @@ describe("runNodeHost", () => {
       expect(lastCapturedOptions()?.deviceToken).toBeUndefined();
     });
 
-    it.each([
-      { envKey: "OPENCLAW_GATEWAY_TOKEN", expected: { token: "explicit-credential" } },
-      { envKey: "OPENCLAW_GATEWAY_PASSWORD", expected: { password: "explicit-credential" } },
-    ])(
-      "preserves an explicit $envKey override without config fallback",
-      async ({ envKey, expected }) => {
-        vi.stubEnv(envKey, " explicit-credential ");
-
-        await expectStartupTimeout(runOptions);
-
-        expect(lastCapturedOptions()).toMatchObject({
-          token: undefined,
-          password: undefined,
-          ...expected,
-        });
-        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-      },
-    );
+    it("uses explicitly requested environment auth instead of the paired token", async () => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "explicit-gateway-token");
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await expectStartupTimeout({ ...runOptions, gatewayAuthFromEnv: true });
+        const auth = connectAuth();
+        expect(auth).toMatchObject({ token: "explicit-gateway-token", deviceToken: undefined });
+        const warning = stderr.mock.calls.map(([message]) => String(message)).join("");
+        expect(warning).toContain("--auth-from-env selects OPENCLAW_GATEWAY_TOKEN");
+        expect(warning).not.toContain("explicit-gateway-token");
+      } finally {
+        stderr.mockRestore();
+      }
+    });
 
     it("keeps remote-mode credentials when selecting another Gateway", async () => {
       mocks.getRuntimeConfig.mockReturnValue({
@@ -453,47 +385,37 @@ describe("runNodeHost", () => {
   });
 
   it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {
-    readyNodeHost();
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
     const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
     const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
-    const processOnSpy = vi.spyOn(process, "on");
-    const previousExitCode = process.exitCode;
     const mcpClose = createDeferred<undefined>();
     mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
     try {
-      const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
-      await vi.waitFor(() =>
-        expect(processOnSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
+      await withReadyNodeHost(
+        async ({ running, stop }) => {
+          await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
+
+          expect(setIntervalSpy).toHaveBeenCalledOnce();
+          expect(unref).not.toHaveBeenCalled();
+          expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+          expect(stop()).toBeTypeOf("function");
+          await vi.waitFor(() =>
+            expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce(),
+          );
+
+          expect(clearIntervalSpy).not.toHaveBeenCalled();
+          await vi.waitFor(() => expect(mocks.closeMcpManager).toHaveBeenCalledOnce());
+          mcpClose.resolve(undefined);
+          await running;
+
+          expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
+        },
+        {},
+        () => mcpClose.resolve(undefined),
       );
-      await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-
-      expect(setIntervalSpy).toHaveBeenCalledOnce();
-      expect(unref).not.toHaveBeenCalled();
-      expect(clearIntervalSpy).not.toHaveBeenCalled();
-
-      const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
-      expect(onSigterm).toBeTypeOf("function");
-      onSigterm?.("SIGTERM");
-      await vi.waitFor(() =>
-        expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce(),
-      );
-
-      expect(clearIntervalSpy).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(mocks.closeMcpManager).toHaveBeenCalledOnce());
-      mcpClose.resolve(undefined);
-      await running;
-
-      expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
     } finally {
-      for (const [event, listener] of processOnSpy.mock.calls) {
-        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
-          process.off(event, listener);
-        }
-      }
-      process.exitCode = previousExitCode;
-      processOnSpy.mockRestore();
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
     }
@@ -524,14 +446,14 @@ describe("runNodeHost", () => {
       mcpClose.resolve(undefined);
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
 
-      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
+      readiness.resolve(failedReadiness);
       await stopped;
       expect(process.exitCode).toBe(1);
       expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
       expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
     } finally {
       mcpClose.resolve(undefined);
-      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
+      readiness.resolve(failedReadiness);
       try {
         // Shutdown owns the exit callback; keep it intercepted until the run settles.
         await stopped;

@@ -12,6 +12,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "./chat-flow.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
   await captureUiProof(suite, page, "session-progress-hovercard", fileName);
@@ -276,6 +277,7 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true);
+        await selectAllSidebarSessions(page);
 
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });
@@ -293,7 +295,7 @@ suite.define(() => {
           .poll(() => card.locator(".session-hovercard__plan-step").textContent())
           .toBe("Package");
         expect(await card.locator(".session-hovercard__plan-count").textContent()).toBe("1/3");
-        await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(1);
+        await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
         const prRow = card.locator(".session-hovercard__pr-row").first();
         const prTitle = prRow.locator(".session-hovercard__pr-title");
         const fullPrTitle =
@@ -301,13 +303,13 @@ suite.define(() => {
         await expect.poll(() => prTitle.textContent()).toBe(fullPrTitle);
         expect(await prTitle.getAttribute("title")).toBeNull();
         expect(await prRow.getAttribute("aria-label")).toContain(fullPrTitle);
-        expect(await card.locator(".session-hovercard__more").textContent()).toBe("+2 more");
+        expect(await card.locator(".session-hovercard__pr-count").textContent()).toBe("3");
         expect(
           await prTitle.evaluate((node) => ({
-            clipped: node.scrollWidth > node.clientWidth,
-            overflow: getComputedStyle(node).textOverflow,
+            clamp: getComputedStyle(node).webkitLineClamp,
+            whiteSpace: getComputedStyle(node).whiteSpace,
           })),
-        ).toEqual({ clipped: true, overflow: "ellipsis" });
+        ).toEqual({ clamp: "2", whiteSpace: "normal" });
         // The row is an anchor: a dropped text-decoration reset is invisible to jsdom.
         await expect
           .poll(() => prRow.evaluate((node) => getComputedStyle(node).textDecorationLine))
@@ -381,7 +383,9 @@ suite.define(() => {
         expect(
           await pullRequest.locator(".session-hovercard__pr-state-icon").getAttribute("title"),
         ).toBe("Open · CI checks passing");
-        expect(await pullRequest.locator(".session-hovercard__pr-number").count()).toBe(0);
+        expect(await pullRequest.locator(".session-hovercard__pr-number").textContent()).toBe(
+          "openclaw/openclaw#417",
+        );
         expect(await pullRequest.locator(".session-hovercard__pr-author").count()).toBe(0);
         expect(await pullRequest.locator(".session-hovercard__files").count()).toBe(0);
         expect(await pullRequest.locator(".session-hovercard__additions").textContent()).toBe(

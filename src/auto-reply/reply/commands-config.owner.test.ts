@@ -37,6 +37,46 @@ import { handleConfigCommand } from "./commands-config.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
+type IngressFixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
+type OAuthIdentity = ReturnType<typeof operatorMcpOAuthIdentity>;
+
+async function adminParams(command: string, { cfg, admins, context, state }: IngressFixture) {
+  return buildCommandTestParams(command, cfg, await context(admins[0]!.identity.senderId), {
+    workspaceDir: state.workspaceDir,
+  });
+}
+
+const oauthTokens = (identity: OAuthIdentity) => ({
+  access_token: identity.principal,
+  token_type: "Bearer",
+});
+async function expectOAuthState(identity: OAuthIdentity, cleared: boolean) {
+  const store = await readMcpOAuthStore(identity.storeKey);
+  expect(cleared ? store : store.tokens).toEqual(
+    cleared ? { credentialState: "cleared" } : oauthTokens(identity),
+  );
+  expect(await readMcpOAuthPendingAuthorization(`${identity.principal}-callback`)).toBe(
+    cleared ? undefined : identity.storeKey,
+  );
+}
+
+function blockCommand<T>(start: (pause: () => Promise<void>) => Promise<T>) {
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const pending = start(async () => {
+    entered.resolve();
+    await finish.promise;
+  }).then(
+    (result) => ({ result, error: undefined }),
+    (error: unknown) => ({ result: undefined, error }),
+  );
+  return {
+    pending,
+    finish: finish.resolve,
+    waiting: Promise.race([entered.promise.then(() => true), pending.then(() => false)]),
+  };
+}
+
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
   onTestFinished(() => {
@@ -121,43 +161,23 @@ it.each(
   "preserves live owner authority through $command persistence (revoke=$revoke)",
   async ({ command, handler, persistedValue, expected, success, revocation, revoke }) => {
     await withAdminIngress(
-      async ({ cfg, admins, context, state }) => {
+      async (fixture) => {
+        const { cfg, admins, state } = fixture;
         cfg.commands = { ...cfg.commands, text: true, config: true, mcp: true };
         cfg.logging = { level: "info" };
         cfg.mcp = { servers: { fixture: { command: "original-mcp" } } };
         await state.writeConfig(cfg);
         const original = await readFile(state.configPath, "utf8");
         const admin = admins[0]!;
-        const params = buildCommandTestParams(
-          command,
-          cfg,
-          await context(admin.identity.senderId),
-          {
-            workspaceDir: state.workspaceDir,
-          },
-        );
+        const params = await adminParams(command, fixture);
         expect(params.command.senderIsOwner).toBe(true);
 
-        const preparing = createDeferredCore();
-        const finishPreparation = createDeferredCore();
-        setRuntimeConfigSnapshotRefreshHandler({
-          preflight: async () => {
-            preparing.resolve();
-            await finishPreparation.promise;
-          },
-          refresh: () => false,
+        const blocked = blockCommand((preflight) => {
+          setRuntimeConfigSnapshotRefreshHandler({ preflight, refresh: () => false });
+          return handler(params, true);
         });
-        const pending = handler(params, true).then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({ result: undefined, error }),
-        );
         try {
-          expect(
-            await Promise.race([
-              preparing.promise.then(() => "preparing"),
-              pending.then(() => "finished"),
-            ]),
-          ).toBe("preparing");
+          expect(await blocked.waiting).toBe(true);
           expect(await readFile(state.configPath, "utf8")).toBe(original);
           if (revoke) {
             if (revocation === "role") {
@@ -171,8 +191,8 @@ it.each(
               }
             }
           }
-          finishPreparation.resolve();
-          const outcome = await pending;
+          blocked.finish();
+          const outcome = await blocked.pending;
           const persisted = await readFile(state.configPath, "utf8");
           if (revoke) {
             expect(persisted).toBe(original);
@@ -185,8 +205,8 @@ it.each(
             expect(outcome.result?.reply?.text).toContain(success);
           }
         } finally {
-          finishPreparation.resolve();
-          await pending;
+          blocked.finish();
+          await blocked.pending;
           setRuntimeConfigSnapshotRefreshHandler(null);
         }
       },
@@ -196,7 +216,8 @@ it.each(
 );
 
 it("finishes accepted MCP removal and OAuth cleanup after the original admin is revoked", async () => {
-  await withAdminIngress(async ({ cfg, admins, context, state }) => {
+  await withAdminIngress(async (fixture) => {
+    const { cfg, admins, state } = fixture;
     const serverUrl = "https://mcp.example.test/rpc";
     cfg.commands = { ...cfg.commands, text: true, mcp: true };
     cfg.mcp = {
@@ -224,66 +245,42 @@ it("finishes accepted MCP removal and OAuth cleanup after the original admin is 
         const options = { storeKey: identity.storeKey, lease, context: storeContext };
         await mutateMcpOAuthStore(options, {
           kind: "tokens",
-          tokens: { access_token: identity.principal, token_type: "Bearer" },
+          tokens: oauthTokens(identity),
           tokenExpiresAt: undefined,
         });
         await writeMcpOAuthPendingAuthorization(options, `${identity.principal}-callback`);
       });
     }
-    const params = buildCommandTestParams(
-      "/mcp unset fixture",
-      cfg,
-      await context(admin.identity.senderId),
-      { workspaceDir: state.workspaceDir },
-    );
-    const cleaningUp = createDeferredCore();
-    const finishCleanup = createDeferredCore();
+    const params = await adminParams("/mcp unset fixture", fixture);
     const clearMcpOAuthServer = mcpOAuth.clearMcpOAuthServer;
-    const cleanup = vi
-      .spyOn(mcpOAuth, "clearMcpOAuthServer")
-      .mockImplementation(async (identity) => {
-        cleaningUp.resolve();
-        await finishCleanup.promise;
+    const cleanup = vi.spyOn(mcpOAuth, "clearMcpOAuthServer");
+    const blocked = blockCommand((pause) => {
+      cleanup.mockImplementation(async (identity) => {
+        await pause();
         await clearMcpOAuthServer(identity);
       });
-    const pending = handleMcpCommand(params, true).then(
-      (result) => ({ result, error: undefined }),
-      (error: unknown) => ({ result: undefined, error }),
-    );
+      return handleMcpCommand(params, true);
+    });
     try {
-      expect(
-        await Promise.race([
-          cleaningUp.promise.then(() => "cleanup"),
-          pending.then(() => "finished"),
-        ]),
-      ).toBe("cleanup");
+      expect(await blocked.waiting).toBe(true);
       const committed = await readFile(state.configPath, "utf8");
       expect((JSON.parse(committed) as OpenClawConfig).mcp?.servers?.fixture).toBeUndefined();
       for (const identity of identities) {
-        expect((await readMcpOAuthStore(identity.storeKey)).tokens).toEqual({
-          access_token: identity.principal,
-          token_type: "Bearer",
-        });
-        expect(await readMcpOAuthPendingAuthorization(`${identity.principal}-callback`)).toBe(
-          identity.storeKey,
-        );
+        await expectOAuthState(identity, false);
       }
       setUserProfileRole(admin.profile.id, "member");
-      finishCleanup.resolve();
+      blocked.finish();
 
-      const outcome = await pending;
+      const outcome = await blocked.pending;
       expect(outcome.error).toBeUndefined();
       expect(outcome.result?.reply?.text).toContain('MCP server "fixture" removed');
       expect(await readFile(state.configPath, "utf8")).toBe(committed);
       for (const identity of identities) {
-        expect(await readMcpOAuthStore(identity.storeKey)).toEqual({ credentialState: "cleared" });
-        expect(
-          await readMcpOAuthPendingAuthorization(`${identity.principal}-callback`),
-        ).toBeUndefined();
+        await expectOAuthState(identity, true);
       }
     } finally {
-      finishCleanup.resolve();
-      await pending;
+      blocked.finish();
+      await blocked.pending;
       cleanup.mockRestore();
     }
   });

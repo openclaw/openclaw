@@ -23,6 +23,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
+import type { DeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readMigrationArtifactIdentity,
@@ -38,11 +39,13 @@ import {
   canonicalMigrationFilePath,
   assertSafeSessionSqliteMigrationDirectory,
   type SessionSqliteMigrationMove,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readTranscriptFingerprint,
   type ReadOnlySqliteValidationSnapshot,
+  readOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
@@ -54,6 +57,7 @@ import {
 export type LegacySessionRecord = {
   entry: SessionEntry;
   sessionKey: string;
+  preserveCurrentSession?: boolean;
   transcriptPath?: string;
   transcriptDependencies: string[];
   recovery?: { complete: boolean; repaired: boolean; events: number; sqliteEvents?: number };
@@ -80,6 +84,7 @@ export function collectHistoricalArchiveSources(params: {
   const result: HistoricalArchiveSources = new Map();
   const inventory = collectRecoveryInventory(params);
   const claims = new Map<string, RecoveryArtifactReference[][]>();
+  const completedArchives = new Map<SessionSqliteMigrationTargetManifest, Set<string>>();
   for (const refs of inventory.references.values()) {
     if (refs.some((ref) => !ref.trusted || ref.consumedByRestore)) {
       continue;
@@ -123,18 +128,26 @@ export function collectHistoricalArchiveSources(params: {
         identity.size,
         identity.sha256,
       ]);
-      claims.set(key, [...(claims.get(key) ?? []), refs]);
+      const group = claims.get(key) ?? [];
+      group.push(refs);
+      claims.set(key, group);
     }
     if (refs.some((ref) => ref.move.artifact?.disposal.state !== "retained")) {
       continue;
     }
     // An acknowledged import stays acknowledged after explicit user deletion. Never resurrect it.
     if (
-      refs.some(
-        ({ target, move }) =>
-          move.artifact?.reason === HISTORICAL_IMPORT_REASON &&
-          target.completedMoves.some((completed) => completed.archivePath === move.archivePath),
-      )
+      refs.some(({ target, move }) => {
+        if (move.artifact?.reason !== HISTORICAL_IMPORT_REASON) {
+          return false;
+        }
+        let paths = completedArchives.get(target);
+        if (!paths) {
+          paths = new Set(target.completedMoves.map((completed) => completed.archivePath));
+          completedArchives.set(target, paths);
+        }
+        return paths.has(move.archivePath);
+      })
     ) {
       continue;
     }
@@ -157,7 +170,7 @@ export function collectHistoricalArchiveSources(params: {
 }
 
 /** Archived registries supply lineage only; never replay their entries over live SQLite state. */
-export function readArchivedSessionOwnership(
+function readArchivedSessionOwnership(
   target: SessionStoreTarget,
   stores: readonly SessionSqliteMigrationMove[],
   issues: DoctorSessionSqliteIssue[],
@@ -204,7 +217,7 @@ export function readArchivedSessionOwnership(
   return verified ? records : undefined;
 }
 
-export async function discoverLegacyHistoricalTranscripts(params: {
+async function discoverLegacyHistoricalTranscripts(params: {
   target: { agentId: string; storePath: string };
   records: readonly LegacySessionRecord[];
   ownershipRecords?: readonly LegacySessionRecord[];
@@ -522,4 +535,62 @@ export function listUnreferencedJsonlFiles(
     .map((entry) => path.join(sessionsDir, entry))
     .filter((filePath) => !referenced.has(canonicalFilePath(filePath)))
     .toSorted((a, b) => a.localeCompare(b));
+}
+
+/** Complete indexless discovery before import, keeping current ownership authoritative. */
+export async function appendLegacyHistoricalTranscripts(params: {
+  target: SessionStoreTarget;
+  allRecords: LegacySessionRecord[];
+  retainedImport?: DeferredPluginSessionImport;
+  sourceConflicts: ReadonlyMap<string, string>;
+  issues: DoctorSessionSqliteIssue[];
+  historicalArchives?: HistoricalArchiveSources;
+  referencedPaths?: ReadonlySet<string>;
+}): Promise<void> {
+  const { allRecords, retainedImport, sourceConflicts, issues } = params;
+  const archiveSources = params.historicalArchives?.get(
+    canonicalMigrationFilePath(params.target.storePath),
+  );
+  const ownershipRecords = readArchivedSessionOwnership(
+    params.target,
+    retainedImport ? [] : (archiveSources?.stores ?? []),
+    issues,
+  );
+  const snapshot = readOnlySqliteValidationSnapshot(params.target);
+  if (snapshot.ok && ownershipRecords) {
+    const discovered = await discoverLegacyHistoricalTranscripts({
+      target: params.target,
+      records: allRecords,
+      ownershipRecords,
+      referencedPaths: params.referencedPaths,
+      archiveSources: !retainedImport ? archiveSources?.transcripts : [],
+      verifiedSourcePaths: retainedImport
+        ? new Set(
+            retainedImport.sources
+              .filter((source) => !sourceConflicts.has(source.path))
+              .map((source) => source.path),
+          )
+        : undefined,
+      snapshot: snapshot.snapshot,
+      issues,
+    });
+    for (const historical of discovered) {
+      const registered = allRecords.find(
+        (record) =>
+          record.sessionKey === historical.sessionKey &&
+          record.entry.sessionId === historical.entry.sessionId &&
+          (!record.transcriptPath || !fs.existsSync(record.transcriptPath)),
+      );
+      if (registered) {
+        // Resolve a missing legacy filename here, never in runtime session path resolution.
+        registered.transcriptPath = historical.transcriptPath;
+        registered.transcriptDependencies.push(...historical.transcriptDependencies);
+        registered.historical = historical.historical;
+      } else {
+        allRecords.push(historical);
+      }
+    }
+  } else if (!snapshot.ok) {
+    issues.push({ code: "sqlite_read_failed", message: String(snapshot.error) });
+  }
 }

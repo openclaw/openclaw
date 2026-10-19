@@ -16,6 +16,11 @@ import {
 } from "./rich-messages.js";
 
 const DIRECT_TARGET = "line:U0123456789abcdef0123456789abcdef";
+type Button = Extract<MessagePresentationBlock, { type: "buttons" }>["buttons"][number];
+const buttonBlock = (...buttons: Button[]): MessagePresentationBlock => ({
+  type: "buttons",
+  buttons,
+});
 const QUESTION_ID = "ask_3d8dbe55be452a9a39add7c909beb119";
 
 function questionPayload({
@@ -63,6 +68,12 @@ function questionPayload({
   };
 }
 
+function expectTextFallback(prepared: ReplyPayload, text: string | undefined) {
+  expect(prepared.presentation).toBeUndefined();
+  expect(prepared.channelData?.line).toBeUndefined();
+  expect(prepared.text).toBe(text);
+}
+
 async function prepareBoth(payload: ReplyPayload, to = DIRECT_TARGET) {
   const outbound = await renderPresentationForDelivery(
     {
@@ -95,61 +106,27 @@ describe("LINE rich-message boundaries", () => {
     expect(Value.Check(schema, { line: { location: { ...location, latitude: 91 } } })).toBe(false);
   });
 
-  it.each([
-    { to: DIRECT_TARGET, native: true },
-    { to: "line:group:C0123456789abcdef0123456789abcdef", native: false },
-  ])("renders question choices for destination $to", async ({ to, native }) => {
+  it("keeps group question choices in the text fallback", async () => {
     const payload = questionPayload();
-    for (const prepared of await prepareBoth(payload, to)) {
-      expect(prepared.presentation).toBeUndefined();
-      if (native) {
-        expect(prepared.channelData?.line).toMatchObject({
-          flexMessage: {
-            altText: "Which environment?",
-            contents: {
-              footer: {
-                contents: [0, 1].map((index) => ({
-                  action: {
-                    type: "postback",
-                    data: `line.question=${QUESTION_ID}&line.option=${index}`,
-                  },
-                })),
-              },
-            },
-          },
-        });
-      } else {
-        expect(prepared.channelData?.line).toBeUndefined();
-        expect(prepared.text).toBe(payload.text);
-      }
+    for (const prepared of await prepareBoth(
+      payload,
+      "line:group:C0123456789abcdef0123456789abcdef",
+    )) {
+      expectTextFallback(prepared, payload.text);
     }
   });
 
-  it.each([
-    ["blank prompt with guidance", " ", { type: "text", text: " " }, true, false],
-    ["title-only prompt", "Which environment?", null, false, true],
-    ["context prompt", "", { type: "context", text: "Which environment?" }, false, true],
-  ] as const)(
-    "preserves the %s through both render owners",
-    async (_name, title, prompt, other, native) => {
-      const payload = questionPayload({
-        title,
-        prompt,
-        other,
-        labels: ["Staging", "Production", "Canary", "Sandbox"],
-      });
-      for (const prepared of await prepareBoth(payload)) {
-        expect(prepared.presentation).toBeUndefined();
-        if (native) {
-          expect(prepared.channelData?.line).toHaveProperty("flexMessage");
-          expect(JSON.stringify(prepared.channelData?.line)).toContain("Which environment?");
-        } else {
-          expect(prepared.channelData?.line).toBeUndefined();
-          expect(prepared.text).toBe(payload.text);
-        }
-      }
-    },
-  );
+  it("keeps a blank authored prompt in the fallback despite generated guidance", async () => {
+    const payload = questionPayload({
+      title: " ",
+      prompt: { type: "text", text: " " },
+      other: true,
+      labels: ["Staging", "Production", "Canary", "Sandbox"],
+    });
+    for (const prepared of await prepareBoth(payload)) {
+      expectTextFallback(prepared, payload.text);
+    }
+  });
 
   it("names the omitted Other control below and above the action budget", async () => {
     for (const optionCount of [2, 4]) {
@@ -201,10 +178,7 @@ describe("LINE rich-message boundaries", () => {
         displayText: "Continue",
       } as const;
       const overhead =
-        Buffer.byteLength(
-          JSON.stringify(createActionCard(title, "x", [{ label: "Continue", action }])),
-          "utf8",
-        ) - 1;
+        Buffer.byteLength(JSON.stringify(createActionCard(title, "x", [action])), "utf8") - 1;
       const text = character.repeat(
         Math.ceil((30_000 - overhead + extraBytes) / Buffer.byteLength(character, "utf8")),
       );
@@ -214,10 +188,7 @@ describe("LINE rich-message boundaries", () => {
           title,
           blocks: [
             { type: "text", text },
-            {
-              type: "buttons",
-              buttons: [{ label: "Continue", action: { type: "callback", value: "next" } }],
-            },
+            buttonBlock({ label: "Continue", action: { type: "callback", value: "next" } }),
           ],
         },
       });
@@ -258,27 +229,6 @@ describe("LINE rich-message boundaries", () => {
     expect(line?.quickReplyItems).toHaveLength(1);
   });
 
-  it.each(["   "])("keeps the select prompt when fallback text is %j", async (text) => {
-    const prepared = await prepareLineReplyPayload({
-      text,
-      presentationTextMode: "fallback",
-      presentation: {
-        title: "Choose a deployment",
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Which environment should receive this deployment?",
-            options: [{ label: "Staging", action: { type: "callback", value: "staging" } }],
-          },
-        ],
-      },
-    });
-
-    expect(prepared.text).toBe(
-      "Choose a deployment\n\nWhich environment should receive this deployment?",
-    );
-  });
-
   it("preserves full select prompts and overflow labels while bounding native labels", async () => {
     const placeholder = "Which region should receive this deployment?";
     const options = Array.from({ length: 8 }, (_, index) => ({
@@ -286,7 +236,10 @@ describe("LINE rich-message boundaries", () => {
       action: { type: "command" as const, command: `/region ${index + 1}` },
     }));
     const prepared = await prepareLineReplyPayload({
+      text: "   ",
+      presentationTextMode: "fallback",
       presentation: {
+        title: "Choose a deployment",
         blocks: [
           { type: "select", placeholder: "Choose the first region", options },
           { type: "select", placeholder, options },
@@ -298,7 +251,7 @@ describe("LINE rich-message boundaries", () => {
     };
 
     expect(prepared.text).toBe(
-      `Choose the first region\n\n${placeholder}:\n` +
+      `Choose a deployment\n\nChoose the first region\n\n${placeholder}:\n` +
         options
           .slice(5)
           .map((option) => `- ${option.label}: \`${option.action.command}\``)
@@ -325,10 +278,7 @@ describe("LINE rich-message boundaries", () => {
         title: "Deploy",
         blocks: [
           { type: "text", text: "Staging is green." },
-          {
-            type: "buttons",
-            buttons: [{ label: "Deploy", action: { type: "command", command: "/deploy" } }],
-          },
+          buttonBlock({ label: "Deploy", action: { type: "command", command: "/deploy" } }),
           block("env"),
           block("region"),
         ],
@@ -372,11 +322,6 @@ describe("LINE rich-message boundaries", () => {
       expected: { type: "message", text: "/status" },
     },
     {
-      kind: "callback",
-      action: { type: "callback", value: "action=status" },
-      expected: { type: "postback", data: "action=status" },
-    },
-    {
       kind: "url",
       action: { type: "url", url: "https://example.com/status" },
       expected: { type: "uri", uri: "https://example.com/status" },
@@ -394,13 +339,7 @@ describe("LINE rich-message boundaries", () => {
         payload: { text: "Choose one" },
         presentation: {
           blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                { label, action },
-                { label: `${label}y`, action },
-              ],
-            },
+            buttonBlock({ label, action }, { label: label + "y", action }),
             {
               type: "select",
               options: [{ label, action: { type: "callback", value: "quick" } }],

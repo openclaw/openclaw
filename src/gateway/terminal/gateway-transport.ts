@@ -2,9 +2,7 @@ import type {
   GatewayBroadcastToConnIdsFn,
   GatewayBufferedAmountFn,
 } from "../server-broadcast-types.js";
-
-export const TERMINAL_EVENT_DATA = "terminal.data" as const;
-export const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
+import { TERMINAL_EVENT_DATA } from "./session-types.js";
 
 /** Adapts terminal ownership to targeted gateway delivery and pressure state. */
 export function createTerminalSessionTransport(

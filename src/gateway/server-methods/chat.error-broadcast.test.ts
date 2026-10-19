@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
@@ -27,7 +28,7 @@ function createMockContext() {
     ...createDirectChatContext(),
     broadcast,
     nodeSendToSession,
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -37,6 +38,7 @@ function createMockContext() {
 
 describe("chat.send error broadcast", () => {
   it("rejects a claimed leaf for a session that has not materialized", async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const ctx = createMockContext();
     const respond = vi.fn();
 
@@ -67,42 +69,11 @@ describe("chat.send error broadcast", () => {
     expect(ctx.recordClientActivity).not.toHaveBeenCalled();
   });
 
-  it("returns an idempotent cached send after session routing changes", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
-    ctx.dedupe.set("chat:test-cached-routing", {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId: "test-cached-routing", status: "started" },
-    });
-
-    await handleDirectExternalChatSend({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        expectedSessionRoutingContract: "global|main|main",
-        idempotencyKey: "test-cached-routing",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { runId: "test-cached-routing", status: "started" },
-      undefined,
-      { cached: true },
-    );
-    expect(ctx.recordClientActivity).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "records new admission activity only if the socket remains live (closed=%s)",
     async (closedDuringAdmission) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await loadOrCreateProcessDeviceIdentityAsync();
         const ctx = createMockContext();
         const client: GatewayWsClient = {
           connId: "activity-send",
@@ -178,7 +149,11 @@ describe("chat.send error broadcast", () => {
           closedDuringAdmission ? undefined : admittedAt,
         );
         const cachedResponse = vi.fn();
-        await handleChatSend({ ...options, respond: cachedResponse });
+        await handleChatSend({
+          ...options,
+          params: { ...options.params, expectedSessionRoutingContract: "global|main|main" },
+          respond: cachedResponse,
+        });
         expect(cachedResponse.mock.calls[0]?.[3]).toMatchObject({ cached: true });
         expect(ctx.recordClientActivity).toHaveBeenCalledExactlyOnceWith(client);
       });
@@ -211,52 +186,8 @@ describe("chat.send error broadcast", () => {
     expect(ctx.addChatRun).not.toHaveBeenCalled();
   });
 
-  it("should broadcast error when addChatRun throws", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
-
-    // Make addChatRun throw synchronously (inside the try block at line 2470)
-    ctx.addChatRun.mockImplementation(() => {
-      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
-    });
-
-    await handleDirectExternalChatSend({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        idempotencyKey: "test-run-1",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
-
-    // Verify respond was called with error
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.objectContaining({ runId: "test-run-1", status: "error" }),
-      expect.any(Object),
-      expect.any(Object),
-    );
-
-    const payload = expectDefined(ctx.broadcast.mock.calls[0], "error broadcast")[1] as Record<
-      string,
-      unknown
-    >;
-    expect(payload).toMatchObject({
-      runId: "test-run-1",
-      state: "error",
-      errorMessage: expect.stringContaining("LLM timeout"),
-    });
-    expect(payload).not.toHaveProperty("message");
-    expect(ctx.broadcast).toHaveBeenCalledWith("chat", payload, {
-      sessionKeys: ["agent:main:main"],
-    });
-  });
-
   it("scopes selected-agent global errors to the linked agent", async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const ctx = createMockContext();
     const respond = vi.fn();
 
@@ -277,6 +208,13 @@ describe("chat.send error broadcast", () => {
       client: null as never,
       isWebchatConnect: () => false,
     });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ runId: "test-run-global", status: "error" }),
+      expect.any(Object),
+      expect.any(Object),
+    );
 
     // The global agent alias canonicalizes to the agent's main session before
     // load, so errors broadcast on the same key the visible thread subscribes

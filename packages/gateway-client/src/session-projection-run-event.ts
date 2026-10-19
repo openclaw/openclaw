@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readNonemptyString } from "@openclaw/normalization-core/string-coerce";
 import { mergeChatStreamMessage } from "./chat-stream-message.js";
-import { readSessionProjectionString as readNonemptyString } from "./session-projection-message-identity.js";
 import {
   reduceSessionProjection,
   type SessionProjectionEvent,
@@ -12,6 +12,7 @@ import {
 export type SessionProjectionGatewayRunEvent = {
   state?: unknown;
   yielded?: unknown;
+  suppressErrorNotice?: unknown;
   seq?: unknown;
   deltaText?: unknown;
   replace?: unknown;
@@ -68,6 +69,7 @@ export function reduceSessionProjectionRunEvent(
                   : stopReason === "error"
                     ? "error"
                     : "completed",
+          ...(event.suppressErrorNotice === true ? { suppressErrorNotice: true } : {}),
           ...(stopReason === null ? {} : { stopReason }),
           ...(errorKind === null ? {} : { errorKind }),
           ...(typeof event.errorMessage === "string" ? { errorMessage: event.errorMessage } : {}),

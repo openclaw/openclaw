@@ -1,7 +1,7 @@
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
@@ -89,7 +89,6 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   return lines;
 }
 
-/** Inspect one plugin or all plugins using either snapshot-only or runtime-loaded registry data. */
 export async function runPluginsInspectCommand(
   id: string | undefined,
   opts: PluginInspectOptions,
@@ -102,9 +101,13 @@ export async function runPluginsInspectCommand(
     formatPluginCompatibilityNotice,
   } = await import("../plugins/status.js");
   const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
-  const cfg = tracePluginLifecyclePhase("config read", () => getRuntimeConfig(), {
-    command: "inspect",
-  });
+  const cfg = await tracePluginLifecyclePhaseAsync(
+    "config read",
+    captureRuntimeConfigAsyncReader(),
+    {
+      command: "inspect",
+    },
+  );
   const { workspaceDir } = resolvePluginControlPlaneWorkspace({ config: cfg });
   const metadataSnapshot = tracePluginLifecyclePhase(
     "plugin metadata load",

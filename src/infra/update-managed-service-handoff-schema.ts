@@ -7,7 +7,7 @@ const nativeProcessIdentityShape = {
   pid: z.number().int().positive(),
   startIdentity: text.max(128),
 };
-const processIdentitySchema = z
+export const processIdentitySchema = z
   .strictObject({
     ...nativeProcessIdentityShape,
     // Older strict readers must not mistake an argv digest for a dead process.
@@ -53,6 +53,7 @@ const cancellableUpdateAction = z.strictObject({
 });
 const updateAction = cancellableUpdateAction.extend({
   mutationProtocol: cancellationProtocol.optional(),
+  custody: z.enum(["reserved", "bound"]).optional(),
 });
 const actionSchema = z.discriminatedUnion("kind", [
   updateAction,

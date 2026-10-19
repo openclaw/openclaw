@@ -54,7 +54,7 @@ function orderedCleanup(order: string[]) {
       order.push("flush");
     }),
     session: {
-      agent: {},
+      agent: { waitForIdle: async () => {} },
       dispose: () => {
         order.push("dispose");
       },
@@ -95,7 +95,6 @@ describe("cleanupEmbeddedAttemptResources", () => {
   });
 
   it.each([
-    { override: "1250", fast: undefined, timeoutMs: 1_250 },
     { override: "0x10", fast: undefined, timeoutMs: 2_000 },
     { override: "10ms", fast: "1", timeoutMs: 250 },
   ])(

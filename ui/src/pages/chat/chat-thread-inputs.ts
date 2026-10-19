@@ -13,6 +13,7 @@ import {
   queuedSendThreadMessage,
 } from "./chat-thread-items.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 
 type InputBlock = {
@@ -77,7 +78,6 @@ export function placeChatInputs(
     const inputItems = buildPendingInputItems(
       [input],
       undefined,
-      orderedQueue,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
       props.messageRecovery,
@@ -89,8 +89,9 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // The active run owns this floor even when a fresh client has no local send.
-      if (currentRunId && input.runId === currentRunId) {
+      // On an empty transcript, the first accepted input owns the startup floor
+      // even before execution identity arrives. Later inputs remain ceilings.
+      if (currentRunId ? input.runId === currentRunId : history.length === 0 && !activeInputKey) {
         activeInputKey = first.key;
       }
       continue;
@@ -181,6 +182,22 @@ export function placeChatInputs(
           );
         })
       : -1;
+    // A steer may be projected before setup promotes its original input into
+    // history. Its explicit target keeps that pending original before the steer,
+    // without comparing browser/Gateway clocks or moving canonical messages.
+    const steerIndex = block.runId
+      ? items.findIndex((item) => {
+          if (item.kind !== "message") {
+            return false;
+          }
+          const identity = readSessionMessageIdentity(item.message);
+          return (
+            identity?.role === "user" &&
+            !identity.isImported &&
+            persistedSteerTargetRunId(item.message) === block.runId
+          );
+        })
+      : -1;
     const successorIndex = block.beforeKey
       ? items.findIndex((item) => item.key === block.beforeKey)
       : -1;
@@ -189,6 +206,7 @@ export function placeChatInputs(
       : Math.min(
           insertionCeiling,
           outputIndex < 0 ? items.length : outputIndex,
+          steerIndex < 0 ? items.length : steerIndex,
           successorIndex < 0 ? items.length : successorIndex,
         );
     items.splice(index, 0, ...block.items);

@@ -39,7 +39,7 @@ export function deliveryToJson(delivery: CronDelivery): Record<string, unknown> 
 }
 
 /** Restores JSON null overrides as present-but-undefined runtime properties. */
-export function deliveryFromJson(value: unknown): CronDelivery | undefined {
+function deliveryFromJson(value: unknown): CronDelivery | undefined {
   if (!isRecord(value) || !hasCanonicalCronDeliveryMode(value)) {
     return undefined;
   }
@@ -55,4 +55,9 @@ export function deliveryFromJson(value: unknown): CronDelivery | undefined {
       ),
     ),
   } as CronDelivery;
+}
+
+export function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, unknown> {
+  const delivery = deliveryFromJson(jobJson.delivery);
+  return delivery ? { ...jobJson, delivery } : jobJson;
 }

@@ -8,6 +8,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { searchSkillsFromClawHub } from "../skills/lifecycle/clawhub.js";
+import { captureEnv } from "../test-utils/env.js";
 import { runPluginsSearchCommand } from "./plugins-search-command.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
@@ -17,33 +18,16 @@ type FixtureServer = {
 };
 const servers: FixtureServer[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const previousClawHubUrl = process.env.OPENCLAW_CLAWHUB_URL;
-const previousClawHubConfigPath = process.env.CLAWHUB_CONFIG_PATH;
-const previousClawHubToken = process.env.CLAWHUB_TOKEN;
-const previousClawHubAuthToken = process.env.CLAWHUB_AUTH_TOKEN;
+const previousEnv = captureEnv([
+  "OPENCLAW_CLAWHUB_URL",
+  "CLAWHUB_CONFIG_PATH",
+  "CLAWHUB_TOKEN",
+  "CLAWHUB_AUTH_TOKEN",
+]);
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(stopServer));
-  if (previousClawHubUrl === undefined) {
-    delete process.env.OPENCLAW_CLAWHUB_URL;
-  } else {
-    process.env.OPENCLAW_CLAWHUB_URL = previousClawHubUrl;
-  }
-  if (previousClawHubConfigPath === undefined) {
-    delete process.env.CLAWHUB_CONFIG_PATH;
-  } else {
-    process.env.CLAWHUB_CONFIG_PATH = previousClawHubConfigPath;
-  }
-  if (previousClawHubToken === undefined) {
-    delete process.env.CLAWHUB_TOKEN;
-  } else {
-    process.env.CLAWHUB_TOKEN = previousClawHubToken;
-  }
-  if (previousClawHubAuthToken === undefined) {
-    delete process.env.CLAWHUB_AUTH_TOKEN;
-  } else {
-    process.env.CLAWHUB_AUTH_TOKEN = previousClawHubAuthToken;
-  }
+  previousEnv.restore();
 });
 
 async function stopServer({ child, closed }: FixtureServer) {
@@ -148,7 +132,7 @@ describe("openclaw plugins search ClawHub E2E", () => {
       terminalOutput.split("\n").filter((line) => line.startsWith("@acme/calendar  ")),
     ).toHaveLength(1);
     expect(terminalOutput).toContain("bundle-plugin | official | v3.0.0");
-    expect(terminalOutput).toContain("Install: openclaw plugins install clawhub:@acme/calendar");
+    expect(terminalOutput).toContain("Install: openclaw plugins install @acme/calendar");
     expect(terminalOutput).not.toContain("calendar-skill");
 
     const json = createRuntime();

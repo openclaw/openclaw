@@ -1,11 +1,16 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  resolveDaemonRuntimePinStorePath,
+  withDaemonRuntimePinStore,
+} from "../daemon/runtime-pin-store.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -18,6 +23,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
@@ -26,7 +32,6 @@ import {
   readUpdateDatabaseGenerationsIsolated,
 } from "./update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import { restoreUpdateDatabaseBackup } from "./update-database-restore.js";
 import {
   createUpdateRun,
@@ -36,22 +41,18 @@ import {
 } from "./update-run-ledger.js";
 import { finishUpdateRun } from "./update-run-write.js";
 
-async function createRestoreFixture(
-  state: OpenClawTestState,
-  linked: boolean | "existing" = false,
-) {
+async function createRestoreFixture(state: OpenClawTestState, linked = false) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
   expect(process.env.HOME).toBe(state.home);
   const shared = openOpenClawStateDatabase({ env: state.env });
   let agentDirectory = state.agentDir();
-  const canonicalAgent =
-    linked === "existing"
-      ? openOpenClawAgentDatabase({
-          agentId: "main",
-          path: path.join(agentDirectory, "openclaw-agent.sqlite"),
-          env: state.env,
-        })
-      : undefined;
+  const canonicalAgent = linked
+    ? openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(agentDirectory, "openclaw-agent.sqlite"),
+        env: state.env,
+      })
+    : undefined;
   if (linked) {
     await fs.mkdir(agentDirectory, { recursive: true });
     const alias = state.path("linked-agent");
@@ -113,15 +114,105 @@ async function createRestoreFixture(
 
 type RestoreFixture = Awaited<ReturnType<typeof createRestoreFixture>>;
 
-function withFixture(
-  run: (fixture: RestoreFixture) => Promise<void>,
-  linked: boolean | "existing" = false,
-) {
+function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = false) {
   return withOpenClawTestState(
     { layout: "split", prefix: "update-database-restore-", scenario: "minimal" },
     async (state) => run(await createRestoreFixture(state, linked)),
   );
 }
+
+it("captures and restores exact local daemon intent with its independent schema", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "update-daemon-restore-", scenario: "minimal" },
+    async (state) => {
+      const raw = '{ "version": 999, "broken": ';
+      const key = "daemon-runtime-pin:malformed-intent";
+      withDaemonRuntimePinStore(state.env, true, (db) => {
+        db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(key, raw, 123);
+      });
+      const fixture = await createRestoreFixture(state);
+      try {
+        const pathname = resolveDaemonRuntimePinStorePath(state.env);
+        expect(fixture.backup.databaseOwners).not.toContainEqual(
+          expect.objectContaining({ path: pathname }),
+        );
+        expect(fixture.backup.databases).toContainEqual(
+          expect.objectContaining({ path: pathname, userVersion: 1 }),
+        );
+        withDaemonRuntimePinStore(state.env, true, (db) => {
+          db.prepare("UPDATE daemon_runtime_pins SET value_json = ?, updated_at_ms = ?").run(
+            '{"version":1}',
+            456,
+          );
+        });
+        await fixture.restore();
+        withDaemonRuntimePinStore(state.env, false, (db) => {
+          expect(db.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([
+            { state_key: key, value_json: raw, updated_at_ms: 123 },
+          ]);
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+});
+
+it.each(["present", "absent"] as const)(
+  "restores the %s local credential store after a failed candidate",
+  async (initial) => {
+    await withOpenClawTestState(
+      { layout: "split", prefix: "update-client-restore-", scenario: "minimal" },
+      async (state) => {
+        const pathname = state.statePath("client", "credentials.sqlite");
+        const writeToken = async (token: string) => {
+          await fs.mkdir(path.dirname(pathname), { recursive: true, mode: 0o700 });
+          using db = new DatabaseSync(pathname);
+          if (db.prepare("PRAGMA user_version").get()?.user_version === 0) {
+            db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
+            db.exec("PRAGMA user_version = 1");
+          }
+          db.prepare(
+            "INSERT OR REPLACE INTO native_exec_socket_credentials VALUES ('current', ?, ?, ?)",
+          ).run("/synthetic/native.sock", token, 123);
+        };
+        if (initial === "present") {
+          await writeToken("synthetic-before-update");
+        }
+        const fixture = await createRestoreFixture(state);
+        try {
+          expect(fixture.backup.databaseOwners).not.toContainEqual(
+            expect.objectContaining({ path: pathname }),
+          );
+          if (initial === "present") {
+            expect(fixture.backup.databases).toContainEqual(
+              expect.objectContaining({ path: pathname, userVersion: 1 }),
+            );
+          } else {
+            expect(fixture.backup.missingPaths).toContain(pathname);
+          }
+          await writeToken("synthetic-candidate-write");
+          await fixture.restore();
+          if (initial === "present") {
+            using restored = new DatabaseSync(pathname, { readOnly: true });
+            expect(restored.prepare("SELECT * FROM native_exec_socket_credentials").all()).toEqual([
+              {
+                socket_key: "current",
+                socket_path: "/synthetic/native.sock",
+                socket_token: "synthetic-before-update",
+                updated_at_ms: 123,
+              },
+            ]);
+          } else {
+            await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        } finally {
+          await fixture.close();
+        }
+      },
+    );
+  },
+);
 
 async function unchangedFiles(fixture: RestoreFixture) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(fixture.state.stateDir);
@@ -165,121 +256,125 @@ async function unchangedFiles(fixture: RestoreFixture) {
   };
 }
 
-it.each([false, true, "existing"] as const)(
-  "retires cached and worker owners without rewinding update history (linked=%s)",
-  async (linked) => {
-    await withFixture(async (fixture) => {
-      const originalBackupEntries = (await fs.readdir(fixture.backup.directory)).toSorted();
-      const originalSnapshots = await Promise.all(
-        fixture.backup.databases.map(async ({ snapshotPath }) => ({
-          snapshotPath,
-          bytes: await fs.readFile(snapshotPath),
-        })),
-      );
-      const options = { env: fixture.state.env };
-      const lateDetail = "Candidate migration failed after the database snapshot.";
-      recordUpdateRunStep(
-        fixture.run.runId,
-        {
-          step: "database migration",
-          status: "failed",
-          detail: lateDetail,
-          reason: "doctor-failed",
-        },
-        options,
-      );
-      const newerRun = createUpdateRun({ trigger: "cli" }, options);
-      finishUpdateRun(newerRun.runId, { status: "failed", reason: "later-failure" }, options);
-      const rawOrigin = '{ "futureReceipt": { "z": 2, "a": [1, true] } }\n';
-      fixture.shared.db
-        .prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?")
-        .run(rawOrigin, fixture.run.runId);
-      fixture.shared.db
-        .prepare("DELETE FROM update_runs WHERE run_id = ?")
-        .run(fixture.removedRun.runId);
-      const currentHistory = fixture.shared.db
-        .prepare("SELECT rowid,* FROM update_runs ORDER BY run_id")
-        .all();
-      expect(currentHistory).toHaveLength(2);
-      await recordBackupRunOutcome({
-        env: fixture.state.env,
-        archivePath: fixture.state.path("candidate-only-backup"),
-        kind: "sqlite-snapshot",
-        status: "ok",
-      });
-      expect(fixture.shared.db.isOpen).toBe(true);
-      expect(fixture.agent.db.isOpen).toBe(true);
-      const displaced = await fixture.restore();
-      expect(fixture.shared.db.isOpen).toBe(false);
-      expect(fixture.agent.db.isOpen).toBe(false);
-      if (fixture.canonicalAgent) {
-        expect(fixture.canonicalAgent.db.isOpen).toBe(false);
-      }
-      expect(displaced).toEqual(
-        expect.arrayContaining(
-          fixture.backup.databases.map(
-            ({ path: pathname }) => `${pathname}.migrated-${fixture.run.runId}`,
-          ),
-        ),
-      );
-      expect((await fs.readdir(fixture.backup.directory)).toSorted()).toEqual(
-        originalBackupEntries,
-      );
-      for (const { snapshotPath, bytes } of originalSnapshots) {
-        expect(await fs.readFile(snapshotPath)).toEqual(bytes);
-      }
-      const restoredShared = openOpenClawStateDatabase({ env: fixture.state.env });
-      expect(
-        restoredShared.db.prepare("SELECT rowid,* FROM update_runs ORDER BY run_id").all(),
-      ).toEqual(currentHistory);
-      expect(getUpdateRun(fixture.run.runId, options)).toMatchObject({
-        phase: "staging",
+it("restores aliased databases through timestamp drift without rewinding update history", async () => {
+  await withFixture(async (fixture) => {
+    const originalBackupEntries = (await fs.readdir(fixture.backup.directory)).toSorted();
+    const originalSnapshots = await Promise.all(
+      fixture.backup.databases.map(async ({ snapshotPath }) => ({
+        snapshotPath,
+        bytes: await fs.readFile(snapshotPath),
+      })),
+    );
+    const options = { env: fixture.state.env };
+    const lateDetail = "Candidate migration failed after the database snapshot.";
+    recordUpdateRunStep(
+      fixture.run.runId,
+      {
+        step: "database migration",
+        status: "failed",
+        detail: lateDetail,
         reason: "doctor-failed",
-        steps: expect.arrayContaining([
-          expect.objectContaining({ status: "failed", detail: lateDetail }),
-        ]),
-      });
-      const restoredAgent = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: fixture.agent.path,
-        env: fixture.state.env,
-      });
-      for (const owner of [restoredShared, restoredAgent]) {
-        expect(owner.db.prepare("SELECT rowid FROM restore_witness").get()).toEqual({
-          rowid: owner === restoredShared ? 71 : 8191,
-        });
-        expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(owner.db.prepare("SELECT value FROM restore_witness").all()).toEqual([
-          { value: "baseline" },
-        ]);
-        expect(
-          owner.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'candidate_only'").get(),
-        ).toBeUndefined();
-        const migrated = new DatabaseSync(`${owner.path}.migrated-${fixture.run.runId}`, {
-          readOnly: true,
-        });
-        try {
-          expect(migrated.prepare("SELECT value FROM restore_witness").all()).toEqual([
-            { value: "candidate" },
-          ]);
-        } finally {
-          migrated.close();
-        }
+      },
+      options,
+    );
+    const newerRun = createUpdateRun({ trigger: "cli" }, options);
+    finishUpdateRun(newerRun.runId, { status: "failed", reason: "later-failure" }, options);
+    const rawOrigin = '{ "futureReceipt": { "z": 2, "a": [1, true] } }\n';
+    fixture.shared.db
+      .prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?")
+      .run(rawOrigin, fixture.run.runId);
+    fixture.shared.db
+      .prepare("DELETE FROM update_runs WHERE run_id = ?")
+      .run(fixture.removedRun.runId);
+    const currentHistory = fixture.shared.db
+      .prepare("SELECT rowid,* FROM update_runs ORDER BY run_id")
+      .all();
+    expect(currentHistory).toHaveLength(2);
+    await recordBackupRunOutcome({
+      env: fixture.state.env,
+      archivePath: fixture.state.path("candidate-only-backup"),
+      kind: "sqlite-snapshot",
+      status: "ok",
+    });
+    expect(fixture.shared.db.isOpen).toBe(true);
+    expect(fixture.agent.db.isOpen).toBe(true);
+    let timestampChanged = false;
+    const displaced = await fixture.restore(() => {
+      if (
+        !timestampChanged &&
+        fsSync.existsSync(fixture.agent.path) &&
+        fsSync.existsSync(`${fixture.agent.path}.migrated-${fixture.run.runId}`)
+      ) {
+        // Settle metadata after the final guard hashes the restored bytes.
+        const stat = fsSync.statSync(fixture.agent.path);
+        fsSync.utimesSync(fixture.agent.path, stat.atime, new Date(stat.mtimeMs + 1_000));
+        timestampChanged = true;
       }
-      expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([]);
-      const restoredArchivePath = fixture.state.path("restored-owner-backup");
-      await recordBackupRunOutcome({
-        env: fixture.state.env,
-        archivePath: restoredArchivePath,
-        kind: "sqlite-snapshot",
-        status: "ok",
+    });
+    expect(timestampChanged).toBe(true);
+    expect(fixture.shared.db.isOpen).toBe(false);
+    expect(fixture.agent.db.isOpen).toBe(false);
+    if (fixture.canonicalAgent) {
+      expect(fixture.canonicalAgent.db.isOpen).toBe(false);
+    }
+    expect(displaced).toEqual(
+      expect.arrayContaining(
+        fixture.backup.databases.map(
+          ({ path: pathname }) => `${pathname}.migrated-${fixture.run.runId}`,
+        ),
+      ),
+    );
+    expect((await fs.readdir(fixture.backup.directory)).toSorted()).toEqual(originalBackupEntries);
+    for (const { snapshotPath, bytes } of originalSnapshots) {
+      expect(await fs.readFile(snapshotPath)).toEqual(bytes);
+    }
+    const restoredShared = openOpenClawStateDatabase({ env: fixture.state.env });
+    expect(
+      restoredShared.db.prepare("SELECT rowid,* FROM update_runs ORDER BY run_id").all(),
+    ).toEqual(currentHistory);
+    expect(getUpdateRun(fixture.run.runId, options)).toMatchObject({
+      phase: "staging",
+      reason: "doctor-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({ status: "failed", detail: lateDetail }),
+      ]),
+    });
+    const restoredAgent = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: fixture.agent.path,
+      env: fixture.state.env,
+    });
+    for (const owner of [restoredShared, restoredAgent]) {
+      expect(owner.db.prepare("SELECT rowid FROM restore_witness").get()).toEqual({
+        rowid: owner === restoredShared ? 71 : 8191,
       });
-      expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([
-        { archive_path: restoredArchivePath },
+      expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(owner.db.prepare("SELECT value FROM restore_witness").all()).toEqual([
+        { value: "baseline" },
       ]);
-    }, linked);
-  },
-);
+      expect(
+        owner.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'candidate_only'").get(),
+      ).toBeUndefined();
+      using migrated = new DatabaseSync(`${owner.path}.migrated-${fixture.run.runId}`, {
+        readOnly: true,
+      });
+      expect(migrated.prepare("SELECT value FROM restore_witness").all()).toEqual([
+        { value: "candidate" },
+      ]);
+    }
+    expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([]);
+    const restoredArchivePath = fixture.state.path("restored-owner-backup");
+    await recordBackupRunOutcome({
+      env: fixture.state.env,
+      archivePath: restoredArchivePath,
+      kind: "sqlite-snapshot",
+      status: "ok",
+    });
+    expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([
+      { archive_path: restoredArchivePath },
+    ]);
+  }, true);
+});
 
 it.each([
   { failureAt: 1, cleanupFails: false },
@@ -473,19 +568,15 @@ it.each(["collision", "after-rename", "final-publication"] as const)(
             name.startsWith(".sqlite-publish-prepared-"),
           );
           expect(prepared).toHaveLength(1);
-          const database = new DatabaseSync(path.join(parent, prepared[0]!, "database.sqlite"), {
+          using database = new DatabaseSync(path.join(parent, prepared[0]!, "database.sqlite"), {
             readOnly: true,
           });
-          try {
-            expect(database.prepare("SELECT value FROM restore_witness").get()).toEqual({
-              value: "baseline",
-            });
-            expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
-              integrity_check: "ok",
-            });
-          } finally {
-            database.close();
-          }
+          expect(database.prepare("SELECT value FROM restore_witness").get()).toEqual({
+            value: "baseline",
+          });
+          expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
         }
       }
     });
@@ -493,9 +584,7 @@ it.each(["collision", "after-rename", "final-publication"] as const)(
 );
 
 it.each([
-  "settled",
   "checkpoint",
-  "foreign",
   "checkpoint-foreign",
   "checkpoint-reverted",
   "checkpoint-identical",
@@ -503,7 +592,6 @@ it.each([
   "restores WAL databases only while their captured generation is current (%s)",
   async (transition) => {
     await withFixture(async (fixture) => {
-      const checkpoint = transition.startsWith("checkpoint");
       const foreignWrite = transition.endsWith("foreign");
       const revertedWrite = transition.endsWith("reverted");
       for (const owner of [fixture.shared, fixture.agent]) {
@@ -514,64 +602,52 @@ it.each([
         ...fixture.backup.missingPaths,
       ];
       await fixture.close();
+      const agentPath = fixture.agent.path;
+      const familyPaths = [agentPath, `${agentPath}-wal`, `${agentPath}-shm`];
       let expectedGenerations;
-      if (checkpoint) {
-        const pathname = fixture.agent.path;
-        const familyPaths = [pathname, `${pathname}-wal`, `${pathname}-shm`];
-        const writer = new DatabaseSync(pathname);
-        let family: Buffer[];
-        try {
-          writer.exec("PRAGMA wal_autocheckpoint=0; CREATE TABLE checkpoint_witness(value TEXT);");
-          expectedGenerations = await readUpdateDatabaseGenerationsIsolated(paths, {
-            env: fixture.state.env,
-          });
-          if (revertedWrite) {
-            writer.exec(
-              "UPDATE restore_witness SET value='foreign'; UPDATE restore_witness SET value='candidate';",
-            );
-          }
-          family = await Promise.all(familyPaths.map((file) => fs.readFile(file)));
-        } finally {
-          writer.close();
+      let family: Buffer[];
+      {
+        using writer = new DatabaseSync(agentPath);
+        writer.exec("PRAGMA wal_autocheckpoint=0; CREATE TABLE checkpoint_witness(value TEXT);");
+        expectedGenerations = await readUpdateDatabaseGenerationsIsolated(paths, {
+          env: fixture.state.env,
+        });
+        if (revertedWrite) {
+          writer.exec(
+            "UPDATE restore_witness SET value='foreign'; UPDATE restore_witness SET value='candidate';",
+          );
         }
-        const committed = await fs.readFile(pathname);
-        // Retain the committed family after writer settlement, as a stopped
-        // Gateway can leave it. Exclusive removal uses a private WAL index.
-        for (const [index, file] of familyPaths.entries()) {
-          await fs.writeFile(file, family[index]!);
-        }
-        expect(family[1]!.length).toBeGreaterThan(32);
-        const exclusion = new DatabaseSync(pathname);
-        try {
-          exclusion.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;");
-          if (transition === "checkpoint-identical") {
-            // An exact reversal with unchanged retained write evidence leaves
-            // no later data to lose. Admitting rollback is intentional.
-            exclusion.exec(
-              "UPDATE restore_witness SET value='foreign'; UPDATE restore_witness SET value='candidate';",
-            );
-          }
-          expect(exclusion.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
-            busy: 0,
-          });
-        } finally {
-          exclusion.close();
-        }
-        expect(await fs.readFile(pathname)).toEqual(committed);
-        expect(await fs.readFile(`${pathname}-shm`)).toEqual(family[2]);
-      } else {
-        expectedGenerations = readUpdateDatabaseGenerations(paths);
+        family = await Promise.all(familyPaths.map((file) => fs.readFile(file)));
       }
+      const committed = await fs.readFile(agentPath);
+      // Retain the committed family after writer settlement, as a stopped
+      // Gateway can leave it. Exclusive removal uses a private WAL index.
+      for (const [index, file] of familyPaths.entries()) {
+        await fs.writeFile(file, family[index]!);
+      }
+      expect(family[1]!.length).toBeGreaterThan(32);
+      {
+        using exclusion = new DatabaseSync(agentPath);
+        exclusion.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;");
+        if (transition === "checkpoint-identical") {
+          // An exact reversal with unchanged retained write evidence leaves
+          // no later data to lose. Admitting rollback is intentional.
+          exclusion.exec(
+            "UPDATE restore_witness SET value='foreign'; UPDATE restore_witness SET value='candidate';",
+          );
+        }
+        expect(exclusion.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+          busy: 0,
+        });
+      }
+      expect(await fs.readFile(agentPath)).toEqual(committed);
+      expect(await fs.readFile(`${agentPath}-shm`)).toEqual(family[2]);
       for (const { path: pathname } of fixture.backup.databases) {
         await expect(fs.lstat(`${pathname}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
       }
       if (foreignWrite) {
-        const foreign = new DatabaseSync(fixture.agent.path);
-        try {
-          foreign.exec("UPDATE restore_witness SET value = 'foreign'");
-        } finally {
-          foreign.close();
-        }
+        using foreign = new DatabaseSync(fixture.agent.path);
+        foreign.exec("UPDATE restore_witness SET value = 'foreign'");
       }
       const assertUnchanged = await unchangedFiles(fixture);
       const displaced = await restoreUpdateDatabaseBackup({
@@ -589,21 +665,17 @@ it.each([
         expect(displaced).not.toBeNull();
       }
       for (const { path: pathname } of fixture.backup.databases) {
-        const restored = new DatabaseSync(pathname, { readOnly: true });
-        try {
-          expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
-            {
-              value:
-                foreignWrite || revertedWrite
-                  ? foreignWrite && pathname === fixture.agent.path
-                    ? "foreign"
-                    : "candidate"
-                  : "baseline",
-            },
-          ]);
-        } finally {
-          restored.close();
-        }
+        using restored = new DatabaseSync(pathname, { readOnly: true });
+        expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
+          {
+            value:
+              foreignWrite || revertedWrite
+                ? foreignWrite && pathname === fixture.agent.path
+                  ? "foreign"
+                  : "candidate"
+                : "baseline",
+          },
+        ]);
       }
     });
   },
@@ -640,19 +712,15 @@ it("rechecks authority after awaited snapshot verification before moving files",
 it("refuses replacement while a competing native SQLite reader owns exclusion", async () => {
   await withFixture(async (fixture) => {
     await fixture.close();
-    const native = new DatabaseSync(fixture.agent.path, { readOnly: true });
-    try {
-      native.exec("BEGIN");
-      native.prepare("SELECT value FROM restore_witness").all();
-      const assertUnchanged = await unchangedFiles(fixture);
-      await expect(fixture.restore()).rejects.toThrow("another SQLite connection is active");
-      await assertUnchanged();
-      expect(native.prepare("SELECT value FROM restore_witness").all()).toEqual([
-        { value: "candidate" },
-      ]);
-    } finally {
-      native.close();
-    }
+    using native = new DatabaseSync(fixture.agent.path, { readOnly: true });
+    native.exec("BEGIN");
+    native.prepare("SELECT value FROM restore_witness").all();
+    const assertUnchanged = await unchangedFiles(fixture);
+    await expect(fixture.restore()).rejects.toThrow("another SQLite connection is active");
+    await assertUnchanged();
+    expect(native.prepare("SELECT value FROM restore_witness").all()).toEqual([
+      { value: "candidate" },
+    ]);
   });
 });
 

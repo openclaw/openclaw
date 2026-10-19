@@ -9,6 +9,12 @@ const entrypoints = {
   seed: "scripts/podman/setup.sh",
   sync: "scripts/run-openclaw-podman.sh",
 } as const;
+const localOrigins = ["http://127.0.0.1:43123", "http://localhost:43123"];
+const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+const publicOrigin = "https://public.example";
+function configJson(controlUi: Record<string, unknown>, extraGateway = {}) {
+  return json({ label: "keep", gateway: { publicOrigin, controlUi, ...extraGateway }, tail: [1] });
+}
 
 function runPodman(operation: keyof typeof entrypoints, input: string, python = true) {
   const root = tempDirs.make("openclaw-podman-origins-");
@@ -33,19 +39,8 @@ function runPodman(operation: keyof typeof entrypoints, input: string, python = 
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.resolve(relative), target);
   }
-  for (const name of [
-    "awk",
-    "cat",
-    "chmod",
-    "dirname",
-    "install",
-    "mkdir",
-    "mktemp",
-    "mv",
-    "rm",
-    "tr",
-    ...(python ? ["python3"] : []),
-  ]) {
+  const tools = "awk cat chmod dirname install mkdir mktemp mv rm tr".split(" ");
+  for (const name of [...tools, ...(python ? ["python3"] : [])]) {
     const executable = ["/usr/bin", "/bin"].map((dir) => path.join(dir, name)).find(fs.existsSync);
     if (!executable) {
       throw new Error(`Missing shell fixture tool: ${name}`);
@@ -93,54 +88,25 @@ esac`,
 
 describe.each(["seed", "sync"] as const)("Podman %s Control UI origins", (operation) => {
   it("preserves config bytes and the distinct localhost and duplicate policies", () => {
-    const input = JSON.stringify({
-      label: "keep",
-      gateway: {
-        publicOrigin: "https://public.example",
-        controlUi: {
-          allowedOrigins: [
-            " http://localhost:9999 ",
-            " https://remote.example ",
-            "https://remote.example",
-            "http://127.0.0.1:43123",
-            " ",
-            null,
-            7,
-          ],
-          enabled: true,
-        },
-      },
-      tail: [1],
+    const input = configJson({
+      allowedOrigins: [
+        " http://localhost:9999 ",
+        " https://remote.example ",
+        "https://remote.example",
+        "http://127.0.0.1:43123",
+        " ",
+        null,
+        7,
+      ],
+      enabled: true,
     });
     const fixture = runPodman(operation, input);
     const expectedOrigins =
       operation === "seed"
-        ? [
-            "https://remote.example",
-            "https://remote.example",
-            "http://127.0.0.1:43123",
-            "http://localhost:43123",
-          ]
-        : [
-            "http://localhost:9999",
-            "https://remote.example",
-            "http://127.0.0.1:43123",
-            "http://localhost:43123",
-          ];
+        ? ["https://remote.example", "https://remote.example", ...localOrigins]
+        : ["http://localhost:9999", "https://remote.example", ...localOrigins];
     expect(fixture.output).toBe(
-      `${JSON.stringify(
-        {
-          label: "keep",
-          gateway: {
-            publicOrigin: "https://public.example",
-            controlUi: { allowedOrigins: expectedOrigins, enabled: true },
-            mode: "local",
-          },
-          tail: [1],
-        },
-        null,
-        2,
-      )}\n`,
+      configJson({ allowedOrigins: expectedOrigins, enabled: true }, { mode: "local" }),
     );
     expect(fixture.mode).toBe(0o600);
     expect(fixture.result.stderr).toBe("");
@@ -148,71 +114,43 @@ describe.each(["seed", "sync"] as const)("Podman %s Control UI origins", (operat
   });
 
   it.each([
-    ["inherits a public origin", "https://public.example", undefined, {}],
-    [
-      "ignores an empty public origin",
-      " ",
-      undefined,
-      { allowedOrigins: ["http://127.0.0.1:43123", "http://localhost:43123"] },
-    ],
-    [
-      "honors explicit empty origins",
-      "https://public.example",
-      [],
-      { allowedOrigins: ["http://127.0.0.1:43123", "http://localhost:43123"] },
-    ],
-  ])("%s", (_label, publicOrigin, allowedOrigins, expectedControlUi) => {
+    ["inherits a public origin", publicOrigin, undefined, {}],
+    ["ignores an empty public origin", " ", undefined, { allowedOrigins: localOrigins }],
+    ["honors explicit empty origins", publicOrigin, [], { allowedOrigins: localOrigins }],
+  ])("%s", (_label, origin, allowedOrigins, expectedControlUi) => {
     const fixture = runPodman(
       operation,
-      JSON.stringify({
-        gateway: { publicOrigin, controlUi: { allowedOrigins } },
-      }),
+      json({ gateway: { publicOrigin: origin, controlUi: { allowedOrigins } } }),
     );
     expect(fixture.output).toBe(
-      `${JSON.stringify(
-        {
-          gateway: { publicOrigin, controlUi: expectedControlUi, mode: "local" },
-        },
-        null,
-        2,
-      )}\n`,
+      json({ gateway: { publicOrigin: origin, controlUi: expectedControlUi, mode: "local" } }),
     );
     expect(fixture.result.stderr).toBe("");
   });
 
   it.each([
-    ["[]", "expected top-level object"],
-    ['{"gateway":[]}', "expected gateway object"],
-    ['{"gateway":{"controlUi":[]}}', "expected gateway.controlUi object"],
-  ])("leaves invalid config %s unchanged and preserves CLI fallback", (input, error) => {
-    const fixture = runPodman(operation, input);
+    ["[]", "expected top-level object", true],
+    ['{"gateway":[]}', "expected gateway object", true],
+    ['{"gateway":{"controlUi":[]}}', "expected gateway.controlUi object", true],
+    ["{", "malformed", true],
+    ["{}", "no-python", false],
+  ] as const)("preserves config on %s failure (%s)", (input, error, python) => {
+    const fixture = runPodman(operation, input, python);
     expect(fixture.output).toBe(input);
     expect(fixture.mode).toBe(0o640);
-    expect(fixture.result.stderr).toBe(`${fixture.configPath}: ${error}\n`);
-    expect(fixture.calls.includes("config set gateway.controlUi.allowedOrigins")).toBe(
-      operation === "sync",
-    );
-  });
-
-  it("preserves malformed-JSON diagnostics and the existing file", () => {
-    const fixture = runPodman(operation, "{");
-    expect(fixture.output).toBe("{");
-    expect(fixture.mode).toBe(0o640);
-    expect(fixture.result.stderr).toBe(
-      `Warning: unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}: existing config is not strict JSON (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)). Leaving file unchanged.\n`,
-    );
-    expect(fixture.calls.includes("config set gateway.controlUi.allowedOrigins")).toBe(
-      operation === "sync",
-    );
-  });
-
-  it("warns without changing config or invoking CLI fallback when Python is absent", () => {
-    const fixture = runPodman(operation, "{}", false);
-    expect(fixture.output).toBe("{}");
-    expect(fixture.mode).toBe(0o640);
-    expect(fixture.result.stderr).toBe(
-      `Warning: python3 not found; unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}.\n`,
-    );
-    expect(fixture.calls).not.toContain("config set");
+    const diagnostic =
+      error === "malformed"
+        ? `Warning: unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}: existing config is not strict JSON (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)). Leaving file unchanged.\n`
+        : error === "no-python"
+          ? `Warning: python3 not found; unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}.\n`
+          : `${fixture.configPath}: ${error}\n`;
+    expect(fixture.result.stderr).toBe(diagnostic);
+    if (python) {
+      expect(fixture.calls.includes("config set gateway.controlUi.allowedOrigins")).toBe(
+        operation === "sync",
+      );
+    } else {
+      expect(fixture.calls).not.toContain("config set");
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { TEAMS_MEETING_SELECTORS } from "./teams-meetings-selectors.js";
-import { teamsMeetingStatusCallSource } from "./teams-meetings-status-call-source.js";
-import { teamsMeetingStatusPreludeSource } from "./teams-meetings-status-prejoin-source.js";
+import { teamsMeetingStatusCall } from "./teams-meetings-status-call-source.js";
+import { teamsMeetingStatusPrelude } from "./teams-meetings-status-prejoin-source.js";
 import { normalizeTeamsMeetingUrlForReuse } from "./teams-meetings-urls.js";
 
 function pageIdentityFunctionSource(): string {
@@ -31,7 +31,7 @@ function pageIdentityFunctionSource(): string {
               ? JSON.parse(atob(coordinates))
               : undefined;
             if (decoded && typeof decoded === "object") lightMeeting = decoded;
-          } catch {}
+          } catch { /* Invalid external coordinates do not identify a meeting. */ }
         }
         const match = parsed.pathname.match(/^\\/meet\\/([^/]+)\\/?$/i) || launcherMatch ||
           (typeof lightMeeting?.meetingCode === "string"
@@ -48,7 +48,7 @@ function pageIdentityFunctionSource(): string {
           ? "teams-consumer:" + code.toLowerCase() + ":p:" + encodeURIComponent(passcode || "")
           : undefined;
       }
-    } catch {}
+    } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
   };`;
 }
@@ -78,13 +78,10 @@ function teamsMeetingToggleStateFunctionSource(): string {
   }`;
 }
 
-export const {
-  audioCapture: teamsMeetingAudioCaptureScript,
-  status: teamsMeetingStatusScript,
-  transcript: teamsMeetingTranscriptScript,
-  leave: teamsMeetingLeaveScript,
-} = MeetingPlatformAdapter.createPageScripts({
+export const teamsMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
   platform: {
+    audioOutputElementIdPrefix: "openclaw-teams-audio-output-",
+    manualActionReasonPrefix: "teams",
     displayName: "Teams",
     globals: {
       audioOutputs: "__openclawTeamsAudioOutputs",
@@ -97,8 +94,8 @@ export const {
   pageIdentitySource: pageIdentityFunctionSource,
   selectors: TEAMS_MEETING_SELECTORS,
   toggleStateFunction: teamsMeetingToggleStateFunctionSource,
-  statusPreludeSource: teamsMeetingStatusPreludeSource,
-  statusCallSource: teamsMeetingStatusCallSource,
+  statusPrelude: teamsMeetingStatusPrelude,
+  statusCall: teamsMeetingStatusCall,
   leave: {
     controlSource: `const first = (list) => {
     for (const selector of list) {

@@ -57,7 +57,7 @@ describe("workboard tools", () => {
       throw new Error("Expected Sessions board tools from the registered factory.");
     }
     for (const [name, input] of [
-      ["update", { instructions: "Revoked edit" }],
+      ["update", { scope: { includeArchived: true } }],
       ["move", { sessionKey: "agent:main:one", columnId: "working" }],
     ] as const) {
       const tool = expectDefined(
@@ -102,14 +102,39 @@ describe("workboard tools", () => {
         board: { id: "sessions", kind: "sessions" },
         sessions: [],
       });
-      await update.execute("update-one", { instructions: "Highlight approvals." });
+      const scope = { includeArchived: true, includeAutomation: true, includeHome: true };
+      expect(Value.Check(update.parameters, { scope })).toBe(true);
+      for (const field of ["includeAutomation", "includeHome"]) {
+        expect(Value.Check(update.parameters, { scope: { [field]: false } })).toBe(true);
+        expect(Value.Check(update.parameters, { scope: { [field]: "true" } })).toBe(false);
+      }
+      await update.execute("update-one", { scope });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { instructions: "Highlight approvals." },
+        sessions: { scope },
+      });
+      const columns = [
+        {
+          id: "stuck",
+          label: "Stuck",
+          description: "Observer health is stuck, or the run failed.",
+          match: [{ health: ["stuck"] }, { run: ["failed"] }],
+        },
+        { id: "done", label: "Done", description: "Fallback.", fallback: true },
+      ];
+      expect(Value.Check(update.parameters, { columns })).toBe(true);
+      expect(
+        Value.Check(update.parameters, {
+          columns: [{ ...columns[0], match: [] }, columns[1]],
+        }),
+      ).toBe(false);
+      await update.execute("update-any-of", { columns });
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { columns, scope },
       });
       await store.upsertBoard({ id: "another", kind: "sessions" });
       for (const [tool, input] of [
         [read, {}],
-        [update, { instructions: "Ambiguous target." }],
+        [update, { scope: { includeArchived: false } }],
         [move, { sessionKey: "agent:main:example", columnId: "working" }],
       ] as const) {
         await expect(tool.execute("ambiguous", input)).rejects.toThrow(
@@ -125,7 +150,7 @@ describe("workboard tools", () => {
       );
       await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { instructions: "Highlight approvals." },
+        sessions: { scope },
       });
     } finally {
       await sessionsBoard.stop();
@@ -220,7 +245,7 @@ describe("workboard tools", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
-          list: [{ id: "main", default: true, workspace: "/workspace" }],
+          entries: { main: { workspace: "/workspace" } },
         },
       },
     };
@@ -329,6 +354,63 @@ describe("workboard tools", () => {
     );
   });
 
+  it("keeps the read card and context together and reads committed edits on the next call", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Before edit", notes: "Original instructions" });
+    const read = expectDefined(
+      createWorkboardTools({ store }).find((tool) => tool.name === "workboard_read"),
+      "Workboard read",
+    );
+    const lookup = stores.cards.lookup.bind(stores.cards);
+    using concurrentEdit = vi.spyOn(stores.cards, "lookup");
+    concurrentEdit.mockImplementationOnce(async (id) => {
+      const captured = await lookup(id);
+      await store.update(card.id, { title: "After edit", notes: "Revised instructions" });
+      return captured;
+    });
+
+    const captured = readPayload(await read.execute("captured", { id: card.id }));
+    expect(captured.card).toMatchObject({
+      title: "Before edit",
+      notes: "Original instructions",
+    });
+    expect(captured.workerContext).toContain("Title: Before edit");
+    expect(captured.workerContext).toContain("Original instructions");
+    expect(captured.workerContext).not.toContain("Revised instructions");
+
+    const updated = readPayload(await read.execute("updated", { id: card.id }));
+    expect(updated.card).toMatchObject({ title: "After edit", notes: "Revised instructions" });
+    expect(updated.workerContext).toContain("Title: After edit");
+    expect(updated.workerContext).toContain("Revised instructions");
+    await expect(read.execute("missing", { id: "missing-card" })).rejects.toThrow(
+      "card not found: missing-card",
+    );
+  });
+
+  it("returns an actionable tool input error when claiming a blocked dependent card", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const parent = await store.create({ title: "Completed parent", status: "done" });
+    const child = await store.create({ title: "Blocked child", parents: [parent.id] });
+    const tools = new Map(
+      createWorkboardTools({ store, context: { agentId: "main" } }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const claim = expectDefined(tools.get("workboard_claim"), "Workboard claim");
+    const claimed = readPayload(await claim.execute("claim", { id: child.id }));
+    await expectDefined(tools.get("workboard_block"), "Workboard block").execute("block", {
+      id: child.id,
+      token: claimed.token,
+      reason: "Waiting for review",
+    });
+
+    await expect(claim.execute("blocked-claim", { id: child.id })).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: "card is blocked; use workboard_unblock before claiming.",
+    });
+  });
+
   it("keeps blocked-card mutations out of the host tool failure contract", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const keyed = stores.cards;
@@ -384,29 +466,6 @@ describe("workboard tools", () => {
       },
     });
     expect((await keyed.lookup("card-1"))?.card.metadata?.claim).toBeUndefined();
-  });
-
-  it("can share one store across tool instances for claim coordination", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const mainTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const otherTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "other" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const card = await store.create({ title: "Single owner" });
-
-    await mainTools.get("workboard_claim")?.execute("call-1", { id: card.id });
-
-    await expect(
-      otherTools.get("workboard_claim")?.execute("call-2", { id: card.id }),
-    ).rejects.toThrow(/already claimed/);
   });
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {

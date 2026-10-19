@@ -100,7 +100,7 @@ describe("resolveInstallableChannelPlugin", () => {
     const result = await resolveInstallableChannelPlugin({
       cfg: {
         agents: {
-          list: [{ id: "alpha" }, { id: "beta" }],
+          entries: { alpha: {}, beta: {} },
         },
       },
       runtime: {} as never,
@@ -115,7 +115,6 @@ describe("resolveInstallableChannelPlugin", () => {
       plugin: registeredPlugin,
       configChanged: false,
       pluginInstalled: false,
-      supportsRequestedCapability: true,
     });
     expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
@@ -131,7 +130,7 @@ describe("resolveInstallableChannelPlugin", () => {
       resolveInstallableChannelPlugin({
         cfg: {
           agents: {
-            list: [{ id: "alpha" }, { id: "beta" }],
+            entries: { alpha: {}, beta: {} },
           },
         },
         runtime: {} as never,
@@ -271,7 +270,6 @@ describe("resolveInstallableChannelPlugin", () => {
     ).resolves.toEqual({ cleared: true, loggedOut: true });
     expect(result.configChanged).toBe(false);
     expect(result.pluginInstalled).toBe(false);
-    expect(result.supportsRequestedCapability).toBe(true);
   });
 
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
@@ -295,7 +293,6 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.plugin).toBe(installedPlugin);
     expect(result.pluginInstalled).toBe(false);
-    expect(result.supportsRequestedCapability).toBe(false);
     expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
   });
 
@@ -323,7 +320,6 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.plugin).toBe(scopedPlugin);
     expect(result.pluginInstalled).toBe(false);
-    expect(result.supportsRequestedCapability).toBe(false);
     expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
   });
 
@@ -402,7 +398,6 @@ describe("resolveInstallableChannelPlugin", () => {
         catalogEntry: { ...entry, pluginId },
         configChanged: installed,
         pluginInstalled: installed,
-        supportsRequestedCapability: installed ? true : undefined,
       });
       expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledTimes(1);
       expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(

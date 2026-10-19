@@ -6,9 +6,13 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const loopback = vi.hoisted(() => ({ baseUrl: "" }));
 const requests = vi.hoisted(() => [] as Array<{ method: string; path: string; body: string }>);
@@ -41,6 +45,8 @@ const FOLDED_SPACE = "spaces/aaqa1bc2def";
 const SESSION_KEY = `agent:main:googlechat:group:${FOLDED_SPACE}`;
 
 let server: Server;
+
+afterEach(clearRuntimeConfigSnapshot);
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -85,7 +91,7 @@ describe("session-derived Google Chat delivery", () => {
   it("delivers to the canonical mixed-case space recorded by the session", async () => {
     await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
       const config: OpenClawConfig = {
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
         channels: {
           googlechat: {
             accounts: {
@@ -97,6 +103,7 @@ describe("session-derived Google Chat delivery", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(config);
 
       // The session recorded its canonical destination on the inbound turn.
       await upsertSessionEntry({

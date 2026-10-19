@@ -20,15 +20,12 @@ extension VoiceWakeOverlayController {
             isFirstPresent: isFirst,
             target: target,
             onFirstPresent: {
-                self.logger.log(
-                    level: .info,
-                    "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
                 // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
                 actions?.didPresent()
             },
             onAlreadyVisible: { window in
                 self.updateWindowFrame(animate: true)
-                window.orderFrontRegardless()
+                AppActivation.shared.orderFrontRegardless(window: window)
             })
     }
 
@@ -54,8 +51,7 @@ extension VoiceWakeOverlayController {
 
     func bringNativeWindowToFront() {
         guard self.model.isVisible, let window = self.window else { return }
-        window.level = Self.preferredWindowLevel
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window, level: Self.preferredWindowLevel)
     }
 
     func targetFrame() -> NSRect {
@@ -94,9 +90,7 @@ extension VoiceWakeOverlayController {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            if let target {
-                window.animator().setFrame(target, display: true)
-            }
+            window.animator().setFrame(target, display: true)
             window.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in
@@ -131,7 +125,7 @@ extension VoiceWakeOverlayController {
         return max(self.minHeight, min(total, self.maxHeight))
     }
 
-    func dismissTargetFrame(for frame: NSRect, reason: DismissReason, outcome: SendOutcome) -> NSRect? {
+    func dismissTargetFrame(for frame: NSRect, reason: DismissReason, outcome: SendOutcome) -> NSRect {
         switch (reason, outcome) {
         case (.empty, _):
             let scale: CGFloat = 0.95

@@ -2,7 +2,6 @@ import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-r
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
-  asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -30,19 +29,10 @@ export function readRealtimeErrorDetail(error: unknown): string {
 
 export function resolveOpenAIProviderConfigRecord(
   config: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> {
   const providers = asOptionalRecord(config.providers);
-  return (
-    asOptionalRecord(providers?.openai) ??
-    asOptionalRecord(config.openai) ??
-    asOptionalRecord(config)
-  );
+  return asOptionalRecord(providers?.openai) ?? asOptionalRecord(config.openai) ?? config;
 }
-
-type OpenAIRealtimeClientSecretResult = {
-  value: string;
-  expiresAt?: number;
-};
 
 type OpenAIRealtimeClientSecretRequest = {
   authToken: string;
@@ -51,34 +41,38 @@ type OpenAIRealtimeClientSecretRequest = {
   authRejectedMessage?: string;
 };
 
+export function resolveOpenAIRealtimeRequestHeaders(
+  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  baseUrl: string,
+  defaultHeaders: Record<string, string> = {},
+  transport: "http" | "websocket" = "http",
+): Record<string, string> {
+  return (
+    resolveProviderRequestHeaders({
+      provider: "openai",
+      baseUrl,
+      capability: "audio",
+      transport,
+      defaultHeaders,
+    }) ?? defaultHeaders
+  );
+}
+
 export async function createOpenAIRealtimeClientSecret(
   params: OpenAIRealtimeClientSecretRequest,
-  {
-    createProviderHttpError,
-    readProviderJsonResponse,
-    resolveProviderRequestHeaders,
-    fetchWithSsrFGuard,
-  }: OpenAIRealtimeHost,
+  runtime: OpenAIRealtimeHost,
   label = "OpenAI Realtime",
-): Promise<OpenAIRealtimeClientSecretResult> {
+) {
+  const { createProviderHttpError, readProviderJsonResponse, fetchWithSsrFGuard } = runtime;
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
       method: "POST",
-      headers: resolveProviderRequestHeaders({
-        provider: "openai",
-        baseUrl: url,
-        capability: "audio",
-        transport: "http",
-        defaultHeaders: {
-          Authorization: `Bearer ${params.authToken}`,
-          "Content-Type": "application/json",
-        },
-      }) ?? {
+      headers: resolveOpenAIRealtimeRequestHeaders(runtime, url, {
         Authorization: `Bearer ${params.authToken}`,
         "Content-Type": "application/json",
-      },
+      }),
       body: JSON.stringify({ session: params.session }),
     },
     policy: OPENAI_REALTIME_SSRF_POLICY,
@@ -101,10 +95,10 @@ export async function createOpenAIRealtimeClientSecret(
   } finally {
     await release();
   }
-  const record = asOptionalObjectRecord(payload);
+  const record = asOptionalRecord(payload);
   const nestedSecret = record?.client_secret;
   const clientSecret =
-    normalizeOptionalString(asOptionalRecord(payload)?.value) ??
+    normalizeOptionalString(record?.value) ??
     normalizeOptionalString(asOptionalRecord(nestedSecret)?.value);
   if (!clientSecret) {
     throw new Error(`${label} client secret response did not include a value`);

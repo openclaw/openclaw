@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { webhook } from "@line/bot-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sendJsonWithoutCharset as sendLineWebhookJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSingleWebhookTarget } from "openclaw/plugin-sdk/webhook-ingress";
@@ -13,14 +14,13 @@ import {
 import type { createLineBot } from "./bot.js";
 import { validateLineSignature } from "./signature.js";
 
-const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 async function readLineWebhookRequestBody(
   req: IncomingMessage,
-  maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
-  timeoutMs = LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+  maxBytes: number,
+  timeoutMs: number,
 ): Promise<string> {
   return await readRequestBodyWithLimit(req, {
     maxBytes,
@@ -29,8 +29,6 @@ async function readLineWebhookRequestBody(
     destroyOnLimit: false,
   });
 }
-
-type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
 /**
  * Answer a body-limit failure through the connection owner.
@@ -65,23 +63,11 @@ type LineWebhookTarget = {
   bot: Pick<ReturnType<typeof createLineBot>, "handleWebhook">;
 };
 
-function sendLineWebhookJson(
-  res: ServerResponse,
-  statusCode: number,
-  body: { error: string } | { status: "ok" },
-): void {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
-}
-
 export function createLineNodeWebhookHandler(params: {
   getTargets: () => readonly LineWebhookTarget[];
   runtime: RuntimeEnv;
-  readBody?: ReadBodyFn;
-  maxBodyBytes?: number;
+  readBody?: typeof readLineWebhookRequestBody;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
 
   return async (req: IncomingMessage, res: ServerResponse) => {
@@ -126,7 +112,7 @@ export function createLineNodeWebhookHandler(params: {
 
       const rawBody = await readBody(
         req,
-        Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
+        LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
         LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
       );
 
@@ -153,7 +139,6 @@ export function createLineNodeWebhookHandler(params: {
       }
 
       if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
         // Only the admission owner can distinguish queued events from ignored standby deliveries.
         if ((await match.target.bot.handleWebhook(body)) === "durable") {
           res.setHeader("x-openclaw-delivery-accepted", "durable");

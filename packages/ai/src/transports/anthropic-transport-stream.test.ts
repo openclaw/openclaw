@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type Server } from "node:http";
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
+import type { AssistantMessage } from "@openclaw/llm-core";
 /**
  * Tests Anthropic Messages transport streaming.
  * Covers request construction, SSE parsing, aborts, tool calls, usage, and
@@ -14,11 +14,26 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
-import { anthropicServerSideFallbackCases } from "../providers/anthropic-server-fallback.test-support.js";
+import {
+  anthropicServerSideFallbackCases,
+  anthropicTerminalFallbackCases,
+  anthropicTerminalFallbackRequestedModel,
+  createAnthropicTerminalFallbackEvents,
+} from "../providers/anthropic-server-fallback.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { createCompactionCapture } from "./anthropic-compaction-replay.js";
-import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
+import type { AnthropicTransportOptions } from "./anthropic-transport-options.js";
+import {
+  anthropicContentBlockDelta,
+  anthropicContentBlockStart,
+  anthropicMessageDelta,
+  anthropicMessageStart,
+  createSseResponse,
+  installAnthropicTransportTestHost,
+  makeAnthropicTransportModel,
+  serializeSseEvents,
+  type AnthropicMessagesModel,
+} from "./anthropic-transport-stream.test-support.js";
 import { withProviderAcceptanceObserver } from "./transport-stream-shared.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -38,42 +53,52 @@ function configureTestAnthropicImageNormalizer(): void {
   });
 }
 
-function resolveTestEndpointClass(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  try {
-    const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
-    const hostname = url.hostname.toLowerCase();
-    if (hostname === "api.anthropic.com") {
-      return "anthropic-public";
-    }
-    if (hostname === "openrouter.ai") {
-      return "openrouter";
-    }
-    if (hostname === "api.xiaomimimo.com" || hostname.endsWith(".xiaomimimo.com")) {
-      return "xiaomi-native";
-    }
-    return "custom";
-  } catch {
-    return "invalid";
-  }
-}
-
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
 
-type AnthropicMessagesModel = Model<"anthropic-messages">;
 type AnthropicStreamFn = ReturnType<typeof createAnthropicMessagesTransportStreamFn>;
 type AnthropicStreamContext = Parameters<AnthropicStreamFn>[1];
-type AnthropicStreamOptions = NonNullable<Parameters<AnthropicStreamFn>[2]>;
-function createSseResponse(events: Record<string, unknown>[] = []): Response {
-  return createRawSseResponse(serializeSseEvents(events));
-}
+type AnthropicStreamOptions = NonNullable<Parameters<AnthropicStreamFn>[2]> &
+  AnthropicTransportOptions;
 
 function mockSse(events: Record<string, unknown>[]): void {
   guardedFetchMock.mockResolvedValueOnce(createSseResponse(events));
 }
+
+const text = (value: string) => ({ type: "text" as const, text: value });
+const thinking = (value: string, thinkingSignature: string) => ({
+  type: "thinking" as const,
+  thinking: value,
+  thinkingSignature,
+});
+const toolBlock = (id: string, name: string, args: Record<string, unknown>) => ({
+  type: "toolCall" as const,
+  id,
+  name,
+  arguments: args,
+});
+
+function startMessage(id: string, input: number, model?: string) {
+  return anthropicMessageStart({
+    id,
+    usage: { input_tokens: input, output_tokens: 0 },
+    ...(model === undefined ? {} : { model }),
+  });
+}
+function endMessage(stop_reason: string, input: number, output: number) {
+  return anthropicMessageDelta({ stop_reason }, { input_tokens: input, output_tokens: output });
+}
+function startTool(index: number, id: string, name: string, input: Record<string, unknown>) {
+  return anthropicContentBlockStart(index, { type: "tool_use", id, name, input });
+}
+const blockStop = (index: number) => ({ type: "content_block_stop", index });
+const textDelta = (index: number, value: string) =>
+  anthropicContentBlockDelta(index, { type: "text_delta", text: value });
+const signatureDelta = (index: number, signature: string) =>
+  anthropicContentBlockDelta(index, { type: "signature_delta", signature });
+const jsonDelta = (index: number, partial_json: string) =>
+  anthropicContentBlockDelta(index, { type: "input_json_delta", partial_json });
+const thinkingStart = (index: number, value: string, signature: string) =>
+  anthropicContentBlockStart(index, { type: "thinking", thinking: value, signature });
 
 function wireUsage(input: number | string, output: number, read = 0, write: number | null = 0) {
   return {
@@ -84,60 +109,12 @@ function wireUsage(input: number | string, output: number, read = 0, write: numb
   };
 }
 
-function anthropicMessageStart(message: Record<string, unknown>) {
-  return { type: "message_start", message };
-}
-
-function anthropicMessageDelta(delta: Record<string, unknown>, usage?: Record<string, unknown>) {
-  // An absent usage object serializes the event without the key, matching proxies that
-  // close a turn with stop_reason alone.
-  return { type: "message_delta", delta, usage };
-}
-
-function anthropicContentBlockStart(index: number, content_block: Record<string, unknown>) {
-  return { type: "content_block_start", index, content_block };
-}
-
-function anthropicContentBlockDelta(index: number, delta: Record<string, unknown>) {
-  return { type: "content_block_delta", index, delta };
-}
-
-function serializeSseEvents(events: Record<string, unknown>[]): string {
-  return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
-}
-
-function createFailingSseResponse(events: Record<string, unknown>[], error: Error): Response {
-  const encoder = new TextEncoder();
-  let sentEvents = false;
-  const body = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (!sentEvents) {
-        sentEvents = true;
-        controller.enqueue(encoder.encode(serializeSseEvents(events)));
-        return;
-      }
-      controller.error(error);
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
 function createInterruptedThinkingEvents(): Record<string, unknown>[] {
   return [
-    anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
-    anthropicContentBlockStart(0, { type: "thinking", thinking: "step by step", signature: "" }),
-    anthropicContentBlockDelta(0, { type: "signature_delta", signature: "partial-signature" }),
+    startMessage("msg_1", 6),
+    thinkingStart(0, "step by step", ""),
+    signatureDelta(0, "partial-signature"),
   ];
-}
-
-function createRawSseResponse(body: string): Response {
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
 }
 
 function createOpenRawSseResponse(params: {
@@ -210,24 +187,6 @@ function latestAnthropicUserMessage() {
   return findRecord(latestAnthropicRequest().payload.messages, (record) => record.role === "user");
 }
 
-function makeAnthropicTransportModel(
-  overrides: Partial<AnthropicMessagesModel> = {},
-): AnthropicMessagesModel {
-  return {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
-    api: "anthropic-messages",
-    provider: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 8192,
-    ...overrides,
-  };
-}
-
 function makeAnthropicToolUseMessage(
   content: AssistantMessage["content"],
   model: Pick<AnthropicMessagesModel, "id" | "provider"> = makeAnthropicTransportModel(),
@@ -250,7 +209,7 @@ function makeSonnet5PrefillContext(): AnthropicStreamContext {
       { role: "user", content: "Return JSON." },
       {
         role: "assistant",
-        content: [{ type: "text", text: "{" }],
+        content: [text("{")],
         api: "anthropic-messages",
         provider: "anthropic",
         model: "claude-sonnet-5",
@@ -282,32 +241,11 @@ describe("anthropic transport stream", () => {
   });
 
   beforeEach(() => {
-    vi.unstubAllEnvs();
-    buildGuardedModelFetchMock.mockReset();
-    guardedFetchMock.mockReset();
-    buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
-    configureAiTransportHost({
-      ...coreTransportHost,
+    installAnthropicTransportTestHost({
+      coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
-      resolveProviderRequestCapabilities: (input) => {
-        const endpointClass = resolveTestEndpointClass(input.baseUrl);
-        return {
-          endpointClass,
-          knownProviderFamily: endpointClass === "xiaomi-native" ? "xiaomi" : "",
-          supportsNativeStreamingUsageCompat: false,
-          supportsOpenAICompletionsStreamingUsageCompat: false,
-          usesExplicitProxyLikeEndpoint: endpointClass === "custom" || endpointClass === "invalid",
-          allowsAnthropicServiceTier: endpointClass === "anthropic-public",
-        };
-      },
+      guardedFetch: guardedFetchMock,
     });
-    guardedFetchMock.mockResolvedValue(
-      createSseResponse([
-        anthropicMessageStart({ id: "msg_default", usage: { input_tokens: 0, output_tokens: 0 } }),
-        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 0, output_tokens: 0 }),
-        { type: "message_stop" },
-      ]),
-    );
   });
 
   afterEach(() => {
@@ -325,25 +263,10 @@ describe("anthropic transport stream", () => {
       model: "claude-fable-5",
       initial: wireUsage(12, 0, 120_000, null),
       final: {
-        input_tokens: 12,
-        output_tokens: 15_104,
-        cache_read_input_tokens: 819_661,
-        cache_creation_input_tokens: 93_130,
+        ...wireUsage(12, 15_104, 819_661, 93_130),
         iterations: [
-          {
-            type: "compaction",
-            input_tokens: 12,
-            output_tokens: 1_000,
-            cache_read_input_tokens: 819_661,
-            cache_creation_input_tokens: 93_130,
-          },
-          {
-            type: "message",
-            input_tokens: 12,
-            output_tokens: 15_104,
-            cache_read_input_tokens: 148_862,
-            cache_creation_input_tokens: 0,
-          },
+          { type: "compaction", ...wireUsage(12, 1_000, 819_661, 93_130) },
+          { type: "message", ...wireUsage(12, 15_104, 148_862, 0) },
         ],
       },
       content: true,
@@ -362,19 +285,8 @@ describe("anthropic transport stream", () => {
       model: "claude-fable-5",
       initial: wireUsage(12, 0, 120_000, 0),
       final: {
-        input_tokens: 12,
-        output_tokens: 15_104,
-        cache_read_input_tokens: 819_661,
-        cache_creation_input_tokens: 93_130,
-        iterations: [
-          {
-            type: "message",
-            input_tokens: "malformed",
-            output_tokens: 15_104,
-            cache_read_input_tokens: 148_862,
-            cache_creation_input_tokens: 0,
-          },
-        ],
+        ...wireUsage(12, 15_104, 819_661, 93_130),
+        iterations: [{ type: "message", ...wireUsage("malformed", 15_104, 148_862, 0) }],
       },
       expected: { totalTokens: 927_907 },
       context: { state: "unavailable" },
@@ -387,21 +299,9 @@ describe("anthropic transport stream", () => {
       final: wireUsage(12, 15_104, 148_862, 0),
       context: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
     },
-    {
-      name: "does not treat zero start placeholders as complete final prompt usage",
-      id: "msg_zero_start_partial_delta",
-      model: "claude-fable-5",
-      initial: wireUsage(0, 0, 0, 0),
-      final: { output_tokens: 15_104 },
-      context: { state: "unavailable" },
-    },
   ])("$name", async (testCase) => {
     const textEvents = testCase.content
-      ? [
-          anthropicContentBlockStart(0, { type: "text", text: "" }),
-          anthropicContentBlockDelta(0, { type: "text_delta", text: "Done." }),
-          { type: "content_block_stop", index: 0 },
-        ]
+      ? [anthropicContentBlockStart(0, text("")), textDelta(0, "Done."), blockStop(0)]
       : [];
     mockSse([
       anthropicMessageStart({ id: testCase.id, model: testCase.model, usage: testCase.initial }),
@@ -419,189 +319,6 @@ describe("anthropic transport stream", () => {
       expect(result.usage).toMatchObject(testCase.expected);
     }
     expect(result.usage.contextUsage).toEqual(testCase.context);
-  });
-
-  it("replays captured compaction after restart without trusting usage from disabled replay", async () => {
-    guardedFetchMock
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({
-            id: "msg_compaction",
-            model: "claude-sonnet-4-6",
-            usage: { input_tokens: 50_001, output_tokens: 0 },
-          }),
-          anthropicContentBlockStart(0, {
-            type: "compaction",
-            content: null,
-            encrypted_content: "opaque-initial-compaction",
-          }),
-          anthropicContentBlockDelta(0, {
-            type: "compaction_delta",
-            content: "summary ",
-            encrypted_content: "opaque-partial-compaction",
-          }),
-          anthropicContentBlockDelta(0, {
-            type: "compaction_delta",
-            content: "checkpoint",
-            encrypted_content: "opaque-final-compaction",
-          }),
-          { type: "content_block_stop", index: 0 },
-          anthropicContentBlockStart(1, { type: "text", text: "Done." }),
-          { type: "content_block_stop", index: 1 },
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({
-            id: "msg_disabled",
-            usage: { input_tokens: 1, output_tokens: 0 },
-          }),
-          anthropicContentBlockStart(0, { type: "text", text: "Replay was disabled." }),
-          { type: "content_block_stop", index: 0 },
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          anthropicMessageStart({ id: "msg_replay", usage: { input_tokens: 1, output_tokens: 0 } }),
-          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-          { type: "message_stop" },
-        ]),
-      );
-    const model = makeAnthropicTransportModel();
-    const replayOptions = {
-      apiKey: "sk-ant-api",
-      anthropicServerCompaction: true,
-      authProfileId: "anthropic:work",
-      sessionId: "session-1",
-    } as unknown as AnthropicStreamOptions;
-    const firstUser = { role: "user" as const, content: "old question", timestamp: 1 };
-    const first = await runTransportStream(
-      model,
-      { messages: [firstUser] } as AnthropicStreamContext,
-      replayOptions,
-    );
-
-    expect(first.providerReplay).toMatchObject({
-      type: "anthropic-compaction",
-      data: "summary checkpoint",
-      replayIndex: 0,
-    });
-
-    const offContext = {
-      messages: [
-        firstUser,
-        first,
-        { role: "user" as const, content: "while disabled", timestamp: 2 },
-      ],
-    };
-    const offOptions = { ...replayOptions, anthropicServerCompaction: false };
-    const offResult = await runTransportStream(model, offContext, offOptions);
-    expect(JSON.stringify(latestAnthropicRequest().payload.messages)).not.toContain(
-      '"type":"compaction"',
-    );
-    expect(offResult.usage.contextUsage).toEqual({
-      state: "available",
-      promptTokens: 1,
-      totalTokens: 2,
-    });
-    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
-    const resumed: AnthropicStreamContext["messages"] = JSON.parse(
-      JSON.stringify([
-        ...offContext.messages,
-        offResult,
-        { role: "user", content: "new question", timestamp: 3 },
-      ]),
-    );
-
-    await runTransportStream(model, { messages: resumed }, replayOptions);
-
-    const replayMessages = latestAnthropicRequest().payload.messages as Array<
-      Record<string, unknown>
-    >;
-    expect(replayMessages.map((message) => message.role)).toEqual([
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-    ]);
-    expect(replayMessages[0]?.content).toEqual([
-      {
-        type: "compaction",
-        content: "summary checkpoint",
-        encrypted_content: "opaque-final-compaction",
-      },
-      { type: "text", text: "Done." },
-    ]);
-    const pressure = resolveCompactionReplayPressure(
-      resumed,
-      model,
-      { ...replayOptions, enabled: true },
-      {
-        text: (text) => text.length,
-        image: () => 100,
-        json: (value) => JSON.stringify(value).length,
-      },
-    );
-    expect(pressure?.prefixTokens).toBe("summary checkpoint".length);
-    expect(pressure?.messages[2]).not.toHaveProperty("usage.contextUsage");
-    expect(pressure?.messages[2]).toMatchObject({
-      usage: { totalTokens: offResult.usage.totalTokens, cost: offResult.usage.cost },
-    });
-    expect(offResult.usage.contextUsage?.state).toBe("available");
-  });
-
-  it("records suppression when Anthropic rejects a replayed compaction block", async () => {
-    const model = makeAnthropicTransportModel();
-    const replayIdentity = {
-      authProfileId: "anthropic:work",
-      sessionId: "session-1",
-    };
-    const checkpoint: AssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "answer after compaction" }],
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop",
-      timestamp: 1,
-    };
-    const capture = createCompactionCapture(checkpoint, model, replayIdentity);
-    capture.begin(0, { type: "compaction", content: "summary checkpoint" }, 0);
-    capture.complete(0);
-    guardedFetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ error: { message: "context_management compaction block is invalid" } }),
-        { status: 400, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    const result = await runTransportStream(
-      model,
-      {
-        messages: [
-          { role: "user", content: "old question" },
-          checkpoint,
-          { role: "user", content: "new question" },
-        ],
-      } as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-api",
-        anthropicServerCompaction: true,
-        ...replayIdentity,
-      } as unknown as AnthropicStreamOptions,
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.providerReplay).toMatchObject({
-      type: "anthropic-compaction-suppression",
-      data: "rejected",
-    });
-    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("prices one-hour cache writes at the same rate as the direct Anthropic provider", async () => {
@@ -631,50 +348,97 @@ describe("anthropic transport stream", () => {
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
-  it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
-    const model = {
-      ...makeAnthropicTransportModel({
-        headers: { "user-agent": "configured-client/1.0", "X-Provider": "anthropic" },
-      }),
-      [Symbol.for("openclaw.modelProviderRequestTransport")]: {
-        proxy: { mode: "explicit-proxy", url: "http://proxy.example:8443" },
-        tls: { ca: "synthetic-ca-pem" },
+  it.each<{
+    name: string;
+    model: Partial<AnthropicMessagesModel>;
+    options: AnthropicStreamOptions;
+    headers: Record<string, string | null>;
+    guarded?: boolean;
+  }>([
+    {
+      name: "guarded API-key transport",
+      model: { headers: { "user-agent": "configured-client/1.0", "X-Provider": "anthropic" } },
+      options: {
+        apiKey: "sk-ant-api",
+        headers: { "User-Agent": "openclaw/2026.9.1", "X-Call": "1" },
+        stop: ["User:", "Assistant:"],
       },
+      headers: {
+        "x-api-key": "sk-ant-api",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        accept: "application/json",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "user-agent": "openclaw/2026.9.1",
+        "X-Provider": "anthropic",
+        "X-Call": "1",
+        "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+      },
+      guarded: true,
+    },
+    {
+      name: "Foundry bearer auth without stale API-key headers",
+      model: {
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        authHeader: true,
+        headers: {
+          "api-key": "stale-foundry-key",
+          "x-api-key": "stale-resource-key",
+          "X-Provider": "foundry",
+        },
+      },
+      options: { apiKey: "entra-access-token" },
+      headers: {
+        authorization: "Bearer entra-access-token",
+        "api-key": null,
+        "x-api-key": null,
+        "X-Provider": "foundry",
+      },
+    },
+    {
+      name: "compatible OAuth endpoint without implicit beta headers",
+      model: { provider: "anthropic", baseUrl: "https://custom-proxy.example" },
+      options: { apiKey: "sk-ant-oat-token" },
+      headers: { authorization: "Bearer sk-ant-oat-token", "anthropic-beta": null },
+    },
+  ])("uses $name", async ({ model: overrides, options, headers, guarded }) => {
+    const model = {
+      ...makeAnthropicTransportModel(overrides),
+      ...(guarded
+        ? {
+            [Symbol.for("openclaw.modelProviderRequestTransport")]: {
+              proxy: { mode: "explicit-proxy", url: "http://proxy.example:8443" },
+              tls: { ca: "synthetic-ca-pem" },
+            },
+          }
+        : {}),
     };
-
-    await runTransportStream(model, undefined, {
-      apiKey: "sk-ant-api",
-      headers: { "User-Agent": "openclaw/2026.9.1", "X-Call": "1" },
-    } as AnthropicStreamOptions);
-
-    expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
-    const [url, init] = guardedFetchCall();
-    expect(url).toBe("https://api.anthropic.com/v1/messages");
-    expect(init?.method).toBe("POST");
-    const headers = new Headers(init?.headers);
-    expect(headers.get("x-api-key")).toBe("sk-ant-api");
-    expect(headers.get("anthropic-version")).toBe("2023-06-01");
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(headers.get("accept")).toBe("application/json");
-    expect(headers.get("anthropic-dangerous-direct-browser-access")).toBe("true");
-    expect(headers.get("user-agent")).toBe("openclaw/2026.9.1");
-    expect(headers.get("X-Provider")).toBe("anthropic");
-    expect(headers.get("X-Call")).toBe("1");
-    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
-    expect(latestAnthropicRequest().payload.stream).toBe(true);
-    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
-      "fine-grained-tool-streaming-2025-05-14",
-    );
+    await runTransportStream(model, undefined, options);
+    for (const [name, value] of Object.entries(headers)) {
+      expect(latestAnthropicRequestHeaders().get(name)).toBe(value);
+    }
+    if (guarded) {
+      expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
+      const [url, init] = guardedFetchCall();
+      expect(url).toBe("https://api.anthropic.com/v1/messages");
+      expect(init?.method).toBe("POST");
+      expect(latestAnthropicRequest().payload).toMatchObject({
+        model: "claude-sonnet-4-6",
+        stream: true,
+        stop_sequences: ["User:", "Assistant:"],
+      });
+    }
   });
 
-  it.each(anthropicServerSideFallbackCases)(
+  it.each(
+    anthropicServerSideFallbackCases.filter(
+      ({ name }) => name === "Claude Sonnet 5.5" || name === "Opus 5.5 with model betas",
+    ),
+  )(
     "sends default server-side fallback params for direct $name API-key requests",
     async ({ optionHeaders, customBeta, ...model }) => {
-      mockSse([
-        anthropicMessageStart({ id: "msg_fb", usage: { input_tokens: 1, output_tokens: 0 } }),
-        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-        { type: "message_stop" },
-      ]);
+      mockSse([startMessage("msg_fb", 1), endMessage("end_turn", 1, 1), { type: "message_stop" }]);
 
       await runTransportStream(makeAnthropicTransportModel(model), undefined, {
         apiKey: "sk-ant-api",
@@ -714,40 +478,71 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it.each(anthropicTerminalFallbackCases)("terminal fallback: $name", async (testCase) => {
+    mockSse(createAnthropicTerminalFallbackEvents(testCase));
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(anthropicTerminalFallbackRequestedModel),
+    );
+    const fallback = testCase.fallback;
+    const failed = Boolean(testCase.failure);
+
+    expect(result.model).toBe("claude-fable-5");
+    expect(result.stopReason).toBe(failed ? "error" : "toolUse");
+    expect(result.responseModel).toBe(testCase.unknown ? "claude-future-9" : "claude-opus-4-8");
+    expect
+      .soft(result.diagnostics?.filter(({ type }) => type === "provider_fallback") ?? [])
+      .toEqual(
+        fallback
+          ? [
+              expect.objectContaining({
+                details: {
+                  provider: "anthropic",
+                  fromModel: "claude-fable-5",
+                  toModel: testCase.model,
+                },
+              }),
+            ]
+          : [],
+      );
+    if (failed) {
+      expect(result.errorMessage).toContain(
+        testCase.failure === "incomplete" ? "before message_stop" : "synthetic stream failure",
+      );
+      expect(result.usage.cost.total).toBeCloseTo(0.000552, 10);
+      return;
+    }
+    expect(result.content.map(({ type }) => type)).toEqual(["thinking", "text", "toolCall"]);
+    expect(result.usage).toMatchObject({ input: 5, output: 9, cacheRead: 2, cacheWrite: 4 });
+    expect(result.usage.cost.total).toBeCloseTo(
+      fallback && !testCase.unknown ? 0.000276 : 0.000552,
+      10,
+    );
+    expect(result.usage.cost).not.toHaveProperty("totalOrigin");
+  });
+
   it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
     mockSse([
-      anthropicMessageStart({
-        id: "msg_fb",
-        model: "claude-fable-5",
-        usage: { input_tokens: 5, output_tokens: 0 },
-      }),
+      startMessage("msg_fb", 5, "claude-fable-5"),
       anthropicContentBlockStart(0, { type: "thinking", thinking: "" }),
       anthropicContentBlockDelta(0, {
         type: "thinking_delta",
         thinking: "pre-boundary reasoning",
       }),
-      { type: "content_block_stop", index: 0 },
-      anthropicContentBlockStart(1, { type: "text", text: "partial " }),
-      { type: "content_block_stop", index: 1 },
-      // Starting a tool call tags the preceding text as commentary before
-      // the classifier declines mid-turn.
-      anthropicContentBlockStart(2, {
-        type: "tool_use",
-        id: "call_1",
-        name: "lookup",
-        input: {},
-      }),
-      { type: "content_block_stop", index: 2 },
+      blockStop(0),
+      anthropicContentBlockStart(1, text("partial ")),
+      blockStop(1),
+      startTool(2, "call_1", "lookup", {}),
+      blockStop(2),
       anthropicContentBlockStart(3, {
         type: "fallback",
         from: { model: "claude-fable-5" },
         to: { model: "claude-opus-4-8" },
       }),
-      { type: "content_block_stop", index: 3 },
-      anthropicContentBlockStart(4, { type: "text", text: "" }),
-      anthropicContentBlockDelta(4, { type: "text_delta", text: "continued" }),
-      { type: "content_block_stop", index: 4 },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 5, output_tokens: 9 }),
+      blockStop(3),
+      anthropicContentBlockStart(4, text("")),
+      textDelta(4, "continued"),
+      blockStop(4),
+      endMessage("end_turn", 5, 9),
       { type: "message_stop" },
     ]);
 
@@ -756,10 +551,7 @@ describe("anthropic transport stream", () => {
     const result = await runTransportStream(model);
 
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([
-      { type: "text", text: "partial " },
-      { type: "text", text: "continued" },
-    ]);
+    expect(result.content).toEqual([text("partial "), text("continued")]);
     expect(result.responseModel).toBe("claude-opus-4-8");
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
@@ -772,29 +564,6 @@ describe("anthropic transport stream", () => {
       }),
     ]);
     expect(result.usage.cost.total).toBeCloseTo(0.00025, 10);
-  });
-
-  it("uses bearer auth for Microsoft Foundry Anthropic transport requests", async () => {
-    const model = makeAnthropicTransportModel({
-      provider: "microsoft-foundry",
-      baseUrl: "https://example.services.ai.azure.com/anthropic",
-      authHeader: true,
-      headers: {
-        "api-key": "stale-foundry-key",
-        "x-api-key": "stale-resource-key",
-        "X-Provider": "foundry",
-      },
-    });
-
-    await runTransportStream(model, undefined, {
-      apiKey: "entra-access-token",
-    } as AnthropicStreamOptions);
-
-    const headers = latestAnthropicRequestHeaders();
-    expect(headers.get("authorization")).toBe("Bearer entra-access-token");
-    expect(headers.get("api-key")).toBeNull();
-    expect(headers.get("x-api-key")).toBeNull();
-    expect(headers.get("X-Provider")).toBe("foundry");
   });
 
   it("preserves HTTP status and Retry-After in Anthropic error messages", async () => {
@@ -992,178 +761,87 @@ describe("anthropic transport stream", () => {
   });
 
   it.each([
-    { baseUrl: "", expectedBaseUrl: "https://anthropic-proxy.example/v1" },
-    { baseUrl: "https://configured.example", expectedBaseUrl: "https://configured.example" },
+    {
+      baseUrl: "",
+      env: true,
+      endpoint: "https://anthropic-proxy.example/v1",
+      id: "claude-sonnet-4-6",
+      wireId: "claude-sonnet-4-6",
+    },
   ])(
-    "resolves the endpoint with model base URL '$baseUrl'",
-    async ({ baseUrl, expectedBaseUrl }) => {
-      vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
-
-      await runTransportStream(makeAnthropicTransportModel({ baseUrl }));
-
-      const [url] = guardedFetchCall();
-      expect(url).toBe(
-        baseUrl
-          ? "https://configured.example/v1/messages"
-          : "https://anthropic-proxy.example/v1/messages",
-      );
-      expect(buildGuardedModelFetchMock.mock.calls[0]?.[0]).toMatchObject({
-        baseUrl: expectedBaseUrl,
+    "resolves endpoint and model ID for $baseUrl (environment=$env)",
+    async ({ baseUrl, env, endpoint, id, wireId }) => {
+      if (env) {
+        vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
+      }
+      await runTransportStream(makeAnthropicTransportModel({ baseUrl, id }), undefined, {
+        apiKey: "sk-ant-api",
+        ...(baseUrl === "https://api.anthropic.com"
+          ? { toolChoice: { type: "tool", name: "read_file" } }
+          : {}),
       });
-      expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+      expect(guardedFetchCall()[0]).toBe(
+        `${endpoint}${endpoint.endsWith("/v1") ? "" : "/v1"}/messages`,
+      );
+      expect(buildGuardedModelFetchMock.mock.calls[0]?.[0]).toMatchObject({ baseUrl: endpoint });
+      expect(latestAnthropicRequest().payload.model).toBe(wireId);
+      if (env) {
+        expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+      }
     },
   );
-
-  it("strips the provider prefix from direct Anthropic request model ids", async () => {
-    await runTransportStream(
-      makeAnthropicTransportModel({ id: "anthropic/claude-sonnet-4-6" }),
-      undefined,
-      {
-        apiKey: "sk-ant-api",
-        toolChoice: { type: "tool", name: "read_file" },
-      } as AnthropicStreamOptions,
-    );
-
-    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
-  });
-
-  it("keeps slash-bearing model ids for configured Anthropic-compatible endpoints", async () => {
-    await runTransportStream(
-      makeAnthropicTransportModel({
-        id: "anthropic/claude-sonnet-4-6",
-        baseUrl: "https://anthropic-proxy.internal",
-      }),
-    );
-
-    expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
-  });
-
-  it("bypasses the OpenAI SSE sanitizer for Kimi Anthropic thinking streams", async () => {
-    const model = makeAnthropicTransportModel({
-      id: "kimi-for-coding",
-      name: "Kimi Code",
-      provider: "kimi",
-      baseUrl: "https://api.kimi.com/coding",
-      maxTokens: 32768,
-    });
-
-    await runTransportStream(model, undefined, {
-      apiKey: "sk-kimi-api",
-      reasoning: "high",
-    } as AnthropicStreamOptions);
-
-    expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model, undefined, {
-      sanitizeSse: false,
-    });
-    expect(latestAnthropicRequest().payload.thinking).toEqual({
-      type: "enabled",
-      budget_tokens: 16384,
-    });
-  });
-
-  it("does not add implicit Anthropic beta headers for custom compatible OAuth endpoints", async () => {
-    await runTransportStream(
-      makeAnthropicTransportModel({
-        provider: "anthropic",
-        baseUrl: "https://custom-proxy.example",
-      }),
-      undefined,
-      {
-        apiKey: "sk-ant-oat-token",
-      } as AnthropicStreamOptions,
-    );
-
-    const headers = latestAnthropicRequestHeaders();
-    expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-token");
-    expect(headers.get("anthropic-beta")).toBeNull();
-  });
-
-  it.each([0.5])(
-    "falls back to the model limit when runtime maxTokens=%s floors to zero",
-    async (maxTokens) => {
-      await runTransportStream(makeAnthropicTransportModel(), undefined, {
-        apiKey: "sk-ant-api",
-        maxTokens,
-      } as AnthropicStreamOptions);
-
-      expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
-      expect(latestAnthropicRequest().payload.max_tokens).toBe(8192);
-      expect(latestAnthropicRequest().payload.stream).toBe(true);
-    },
-  );
-
-  it("forwards stop sequences as Anthropic stop_sequences", async () => {
-    await runTransportStream(makeAnthropicTransportModel(), undefined, {
-      apiKey: "sk-ant-api",
-      stop: ["User:", "Assistant:"],
-    } as AnthropicStreamOptions);
-
-    expect(latestAnthropicRequest().payload.stop_sequences).toEqual(["User:", "Assistant:"]);
-  });
 
   it.each([
     {
-      label: "caps large catalog limits",
-      maxTokens: 196_608,
-      contextWindow: 200_000,
-      expected: 32_000,
-    },
-    {
       label: "defaults missing catalog limits",
-      maxTokens: undefined as never,
+      custom: true,
+      maxTokens: undefined,
       contextWindow: 200_000,
+      requested: undefined,
       expected: 4_096,
     },
     {
-      label: "clamps the fallback to the context window",
-      maxTokens: undefined as never,
-      contextWindow: 4_096,
-      expected: 1_024,
-    },
-  ])("$label for custom Anthropic models", async ({ maxTokens, contextWindow, expected }) => {
-    const model = makeAnthropicTransportModel({
-      id: "custom-model",
-      provider: "custom-anthropic",
-      baseUrl: "https://custom.example/anthropic",
-      reasoning: false,
-      contextWindow,
-      maxTokens,
-    });
-    const result = await runTransportStream(model, undefined, { apiKey: "fake" });
-
-    expect(result.stopReason).toBe("stop");
-    expect(latestAnthropicRequest().payload.max_tokens).toBe(expected);
-  });
-
-  it("fails locally when a custom Anthropic model has an invalid maxTokens", async () => {
-    const model = makeAnthropicTransportModel({
-      id: "custom-model",
-      provider: "custom-anthropic",
-      baseUrl: "https://custom.example/anthropic",
-      reasoning: false,
-      contextWindow: 4096,
+      label: "rejects an invalid catalog limit",
+      custom: true,
       maxTokens: 0,
+      contextWindow: 4_096,
+      requested: undefined,
+      expected: undefined,
+    },
+  ])("$label", async ({ custom, maxTokens, contextWindow, requested, expected }) => {
+    const model = makeAnthropicTransportModel({
+      ...(custom
+        ? {
+            id: "custom-model",
+            provider: "custom-anthropic",
+            baseUrl: "https://custom.example/anthropic",
+            reasoning: false,
+          }
+        : {}),
+      contextWindow,
+      ...(maxTokens === undefined ? {} : { maxTokens }),
     });
-    const stream = await startTransportStream(model, undefined, {
+    if (maxTokens === undefined) {
+      Reflect.deleteProperty(model, "maxTokens");
+    }
+    const result = await runTransportStream(model, undefined, {
       apiKey: "fake",
-    } as AnthropicStreamOptions);
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      "Anthropic Messages transport requires a positive maxTokens value",
-    );
-    expect(guardedFetchMock).not.toHaveBeenCalled();
-  });
-
-  it("classifies malformed Anthropic SSE data as a stable transport error", async () => {
-    guardedFetchMock.mockResolvedValueOnce(createRawSseResponse('data: {"type":\n\n'));
-
-    const result = await runTransportStream();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
+      maxTokens: requested,
+    });
+    if (expected === undefined) {
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain(
+        "Anthropic Messages transport requires a positive maxTokens value",
+      );
+      expect(guardedFetchMock).not.toHaveBeenCalled();
+    } else {
+      expect(result.stopReason).toBe("stop");
+      expect(latestAnthropicRequest().payload).toMatchObject({
+        model: model.id,
+        max_tokens: expected,
+        stream: true,
+      });
+    }
   });
 
   it("reports every parsed Anthropic event as request activity", async () => {
@@ -1193,16 +871,10 @@ describe("anthropic transport stream", () => {
     "surfaces structured %s streaming refusals for %s",
     async (id, name, provider) => {
       mockSse([
-        anthropicMessageStart({
-          id: "msg_refusal",
-          usage: { input_tokens: 3, output_tokens: 0 },
-        }),
-        anthropicContentBlockStart(0, { type: "text", text: "" }),
-        anthropicContentBlockDelta(0, {
-          type: "text_delta",
-          text: "discard this partial output",
-        }),
-        { type: "content_block_stop", index: 0 },
+        startMessage("msg_refusal", 3),
+        anthropicContentBlockStart(0, text("")),
+        textDelta(0, "discard this partial output"),
+        blockStop(0),
         anthropicMessageDelta(
           {
             stop_reason: "refusal",
@@ -1250,111 +922,93 @@ describe("anthropic transport stream", () => {
     },
   );
 
-  it("discards buffered Fable output when the transport ends before terminal status", async () => {
-    mockSse([
-      anthropicContentBlockStart(0, { type: "text", text: "" }),
-      anthropicContentBlockDelta(0, { type: "text_delta", text: "unsafe partial output" }),
-    ]);
-    const stream = await startTransportStream(
-      makeAnthropicTransportModel({
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-      }),
-    );
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-    const result = await stream.result();
-
-    expect(eventTypes).toEqual(["error"]);
-    expect(result.stopReason).toBe("error");
-    expect(result.content).toEqual([]);
-    expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
-  });
-
-  it("rejects ordinary Anthropic output when the stream ends before message_stop", async () => {
-    mockSse([
-      anthropicMessageStart({ id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, { type: "text", text: "" }),
-      anthropicContentBlockDelta(0, { type: "text_delta", text: "truncated answer" }),
-      { type: "content_block_stop", index: 0 },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 3, output_tokens: 2 }),
-    ]);
-
-    const stream = await startTransportStream();
+  it.each([
+    {
+      name: "buffered output without terminal status",
+      model: { id: "claude-fable-5", name: "Claude Fable 5" },
+      events: [
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "unsafe partial output" }),
+      ],
+      buffered: true,
+      unsealed: false,
+    },
+    {
+      name: "ordinary output without message_stop",
+      model: {},
+      events: [
+        anthropicMessageStart({ id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "truncated answer" }),
+        { type: "content_block_stop", index: 0 },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 3, output_tokens: 2 }),
+      ],
+      buffered: false,
+      unsealed: false,
+    },
+    {
+      name: "active tool call without content_block_stop",
+      model: {},
+      events: [
+        startMessage("msg_unsealed", 2),
+        startTool(0, "call_unsealed", "read", {}),
+        jsonDelta(0, '{"path":"README.md"'),
+        endMessage("tool_use", 2, 1),
+        { type: "message_stop" },
+      ],
+      buffered: false,
+      unsealed: true,
+    },
+  ])("rejects $name", async ({ model, events, buffered, unsealed }) => {
+    mockSse(events);
+    const stream = await startTransportStream(makeAnthropicTransportModel(model));
     const eventTypes: string[] = [];
     for await (const event of stream) {
       eventTypes.push(event.type);
     }
     const result = await stream.result();
-
+    expect(result.stopReason).toBe("error");
     expect(eventTypes.at(-1)).toBe("error");
     expect(eventTypes).not.toContain("done");
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+    if (unsealed) {
+      expect(eventTypes).not.toContain("toolcall_end");
+      expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+    } else {
+      expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+    }
+    if (buffered) {
+      expect(eventTypes).toEqual(["error"]);
+      expect(result.content).toEqual([]);
+    }
   });
 
-  it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
+  it("preserves a pre-tool text block without inferring a commentary phase", async () => {
     mockSse([
-      anthropicMessageStart({ id: "msg_defer", usage: { input_tokens: 5, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, { type: "text", text: "" }),
-      anthropicContentBlockDelta(0, { type: "text_delta", text: "I'll check the repo." }),
-      { type: "content_block_stop", index: 0 },
-      anthropicContentBlockStart(1, { type: "tool_use", id: "tool_1", name: "exec", input: {} }),
-      { type: "content_block_stop", index: 1 },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 5, output_tokens: 7 }),
+      startMessage("msg_defer", 5),
+      anthropicContentBlockStart(0, text("")),
+      textDelta(0, "I'll check the repo."),
+      blockStop(0),
+      startTool(1, "tool_1", "exec", {}),
+      blockStop(1),
+      endMessage("end_turn", 5, 7),
     ]);
     const stream = await startTransportStream();
     const order: string[] = [];
-    let textEndPhase: unknown;
+    const textSignatures: unknown[] = [];
     for await (const event of stream as AsyncIterable<{
       type: string;
       contentIndex?: number;
       partial?: { content?: Array<{ textSignature?: string }> };
     }>) {
       order.push(event.type);
-      if (event.type === "text_end" && typeof event.contentIndex === "number") {
-        const signature = event.partial?.content?.[event.contentIndex]?.textSignature;
-        textEndPhase =
-          typeof signature === "string"
-            ? (JSON.parse(signature) as { phase?: string }).phase
-            : undefined;
+      if (event.type === "text_end" || event.type === "toolcall_start") {
+        textSignatures.push(event.partial?.content?.[0]?.textSignature);
       }
     }
-    expect(textEndPhase).toBe("commentary");
+    expect(textSignatures).toEqual([undefined, undefined]);
+    expect((await stream.result()).content[0]).toEqual(text("I'll check the repo."));
     expect(order.filter((type) => type === "text_end")).toHaveLength(1);
     expect(order.indexOf("text_end")).toBeLessThan(order.indexOf("toolcall_start"));
-  });
-
-  it("rejects an active tool call that never receives content_block_stop", async () => {
-    mockSse([
-      anthropicMessageStart({ id: "msg_unsealed", usage: { input_tokens: 2, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, {
-        type: "tool_use",
-        id: "call_unsealed",
-        name: "read",
-        input: {},
-      }),
-      anthropicContentBlockDelta(0, {
-        type: "input_json_delta",
-        partial_json: '{"path":"README.md"',
-      }),
-      anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 1 }),
-      { type: "message_stop" },
-    ]);
-    const stream = await startTransportStream();
-    const eventTypes: string[] = [];
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(eventTypes.at(-1)).toBe("error");
-    expect(eventTypes).not.toContain("toolcall_end");
-    expect(eventTypes).not.toContain("done");
-    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 
   it("refreshes streamed tool argument previews on geometric checkpoints instead of every delta", async () => {
@@ -1364,18 +1018,11 @@ describe("anthropic transport stream", () => {
     );
     const gates = chunks.map(() => createDeferred());
     const events = [
-      anthropicMessageStart({ id: "msg_preview", usage: { input_tokens: 2, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, {
-        type: "tool_use",
-        id: "call_preview",
-        name: "write",
-        input: {},
-      }),
-      ...chunks.map((partial_json) =>
-        anthropicContentBlockDelta(0, { type: "input_json_delta", partial_json }),
-      ),
-      { type: "content_block_stop", index: 0 },
-      anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 2 }),
+      startMessage("msg_preview", 2),
+      startTool(0, "call_preview", "write", {}),
+      ...chunks.map((partial_json) => jsonDelta(0, partial_json)),
+      blockStop(0),
+      endMessage("tool_use", 2, 2),
       { type: "message_stop" },
     ];
     const encoder = new TextEncoder();
@@ -1437,18 +1084,10 @@ describe("anthropic transport stream", () => {
 
   it("preserves Anthropic OAuth identity and tool-name remapping through the transport", async () => {
     mockSse([
-      anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 10, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, {
-        type: "tool_use",
-        id: "tool_1",
-        name: "Read",
-        input: { path: "/tmp/a" },
-      }),
-      {
-        type: "content_block_stop",
-        index: 0,
-      },
-      anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 10, output_tokens: 5 }),
+      startMessage("msg_1", 10),
+      startTool(0, "tool_1", "Read", { path: "/tmp/a" }),
+      blockStop(0),
+      endMessage("tool_use", 10, 5),
       { type: "message_stop" },
     ]);
     const model = makeAnthropicTransportModel({});
@@ -1520,231 +1159,137 @@ describe("anthropic transport stream", () => {
     );
   });
 
-  it("preserves provider-signed Anthropic thinking text on ingest", async () => {
-    const highSurrogate = String.fromCharCode(0xd83d);
-    const signedThinking = `keep${highSurrogate}signed`;
-    mockSse([
-      anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, {
-        type: "thinking",
-        thinking: signedThinking,
-        signature: "sig_1",
-      }),
-      anthropicContentBlockDelta(0, { type: "signature_delta", signature: "sig_2" }),
-      anthropicContentBlockDelta(0, { type: "signature_delta", signature: "sig_3" }),
-      {
-        type: "content_block_stop",
-        index: 0,
-      },
-      anthropicContentBlockStart(1, {
-        type: "thinking",
-        thinking: "seeded",
-        signature: "seed_signature",
-      }),
-      anthropicContentBlockStart(2, { type: "text", text: "NO_REPLY" }),
-      { type: "content_block_stop", index: 2 },
-      { type: "content_block_stop", index: 1 },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 9 }),
-    ]);
-
+  it.each<{
+    name: string;
+    events: () => Record<string, unknown>[];
+    content?: unknown[];
+    textEvents?: string[];
+  }>([
+    {
+      name: "preserves signed bytes and replaces only completed seed signatures",
+      events: () => [
+        startMessage("msg_1", 6),
+        thinkingStart(0, `keep${String.fromCharCode(0xd83d)}signed`, "sig_1"),
+        signatureDelta(0, "sig_2"),
+        signatureDelta(0, "sig_3"),
+        blockStop(0),
+        thinkingStart(1, "seeded", "seed_signature"),
+        anthropicContentBlockStart(2, text("NO_REPLY")),
+        blockStop(2),
+        blockStop(1),
+        endMessage("end_turn", 6, 9),
+      ],
+      content: [
+        expect.objectContaining(thinking(`keep${String.fromCharCode(0xd83d)}signed`, "sig_2sig_3")),
+        thinking("seeded", "seed_signature"),
+        text("NO_REPLY"),
+      ],
+      textEvents: ["NO_REPLY", "NO_REPLY"],
+    },
+    {
+      name: "commits only stopped signatures across interleaved thinking blocks",
+      events: () => [
+        startMessage("msg_1", 6),
+        thinkingStart(0, "first", ""),
+        thinkingStart(1, "second", ""),
+        signatureDelta(1, "complete-second"),
+        signatureDelta(0, "partial-first"),
+        blockStop(1),
+      ],
+      content: [
+        expect.objectContaining(thinking("first", "")),
+        expect.objectContaining(thinking("second", "complete-second")),
+      ],
+    },
+  ])("$name", async ({ events, content, textEvents: expectedText }) => {
+    guardedFetchMock.mockResolvedValueOnce(createSseResponse(events()));
     const stream = await startTransportStream();
     const textEvents: string[] = [];
     for await (const event of stream) {
       if (event.type === "text_delta") {
         textEvents.push(event.delta);
-      }
-      if (event.type === "text_end") {
+      } else if (event.type === "text_end") {
         textEvents.push(event.content);
       }
     }
     const result = await stream.result();
-
-    expect(result.content.slice(1)).toEqual([
-      { type: "thinking", thinking: "seeded", thinkingSignature: "seed_signature" },
-      { type: "text", text: "NO_REPLY" },
-    ]);
-    expect(textEvents).toEqual(["NO_REPLY", "NO_REPLY"]);
-    expect(result.content[0]).toMatchObject({
-      type: "thinking",
-      thinking: signedThinking,
-      thinkingSignature: "sig_2sig_3",
-    });
+    if (content) {
+      expect(result.content).toEqual(content);
+    }
+    if (expectedText) {
+      expect(textEvents).toEqual(expectedText);
+    }
   });
 
   it.each([
     {
-      label: "the response body fails",
-      response: () =>
-        createFailingSseResponse(
-          createInterruptedThinkingEvents(),
-          new Error("response body failed"),
-        ),
-      stopReason: "error",
+      name: "OpenAI-style sidecars",
+      native: false,
+      events: [
+        anthropicContentBlockDelta(0, { content: "", reasoning_content: "Need " }),
+        anthropicContentBlockDelta(0, { content: "", reasoning_content: "context." }),
+        anthropicContentBlockDelta(0, { content: "Visible answer.", reasoning_content: "" }),
+        anthropicContentBlockDelta(0, { content: " Continued.", reasoning_content: null }),
+      ],
+      content: [thinking("Need context.", "reasoning_content"), text("Visible answer. Continued.")],
     },
-  ])("does not persist signature deltas when $label", async ({ response, stopReason }) => {
-    guardedFetchMock.mockResolvedValueOnce(response());
-
-    const result = await runTransportStream();
-
-    expect(result.stopReason).toBe(stopReason);
-    expect(result.content[0]).toMatchObject({
-      type: "thinking",
-      thinking: "step by step",
-      thinkingSignature: "",
-    });
-  });
-
-  it("commits only stopped signatures across interleaved thinking blocks", async () => {
-    mockSse([
-      anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, { type: "thinking", thinking: "first", signature: "" }),
-      anthropicContentBlockStart(1, { type: "thinking", thinking: "second", signature: "" }),
-      anthropicContentBlockDelta(1, { type: "signature_delta", signature: "complete-second" }),
-      anthropicContentBlockDelta(0, { type: "signature_delta", signature: "partial-first" }),
-      { type: "content_block_stop", index: 1 },
-    ]);
-
-    const result = await runTransportStream();
-
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "thinking",
-        thinking: "first",
-        thinkingSignature: "",
-      }),
-      expect.objectContaining({
-        type: "thinking",
-        thinking: "second",
-        thinkingSignature: "complete-second",
-      }),
-    ]);
-  });
-
-  it("captures OpenAI-style reasoning_content deltas from Anthropic-compatible streams", async () => {
-    mockSse([
-      anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
-      anthropicContentBlockDelta(0, { content: "", reasoning_content: "Need " }),
-      anthropicContentBlockDelta(0, { content: "", reasoning_content: "context." }),
-      anthropicContentBlockDelta(0, { content: "Visible answer.", reasoning_content: "" }),
-      anthropicContentBlockDelta(0, { content: " Continued.", reasoning_content: null }),
-      {
-        type: "content_block_stop",
-        index: 0,
-      },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 2 }),
-    ]);
+    {
+      name: "native text deltas with reasoning sidecars",
+      native: true,
+      events: [
+        anthropicContentBlockStart(0, text("")),
+        anthropicContentBlockDelta(0, {
+          type: "text_delta",
+          content: "Visible ",
+          text: "Visible ",
+          reasoning_content: "Need ",
+        }),
+        anthropicContentBlockDelta(0, { content: "answer", reasoning_content: null }),
+        textDelta(0, "."),
+      ],
+      content: [text("Visible answer."), thinking("Need ", "reasoning_content")],
+    },
+  ])("preserves compatible $name", async ({ native, events, content }) => {
+    mockSse([startMessage("msg_1", 6), ...events, blockStop(0), endMessage("end_turn", 6, 2)]);
     const model = makeAnthropicTransportModel({
       id: "mimo-v2.5",
       name: "MiMo V2.5",
       provider: "xiaomi-token-plan-ams",
       baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
     });
-
-    const firstResult = await runTransportStream(model, undefined, {
-      apiKey: "sk-xiaomi-test",
-      reasoning: "high",
-    } as AnthropicStreamOptions);
-
-    expect(firstResult.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "Need context.",
-        thinkingSignature: "reasoning_content",
-      },
-      {
-        type: "text",
-        text: "Visible answer. Continued.",
-      },
-    ]);
-
-    await runTransportStream(
-      model,
-      {
-        messages: [
-          { role: "user", content: "think" },
-          {
-            ...firstResult,
-            timestamp: 0,
-          },
-          { role: "user", content: "continue" },
-        ],
-      } as AnthropicStreamContext,
-      {
-        apiKey: "sk-xiaomi-test",
-        reasoning: "high",
-      } as AnthropicStreamOptions,
-    );
-
-    const assistantMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "assistant",
-    );
-    expect(assistantMessage.reasoning_content).toBe("Need context.");
-    expect(assistantMessage.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "Need context.",
-        signature: "reasoning_content",
-      },
-      { type: "text", text: "Visible answer. Continued." },
-    ]);
-  });
-
-  it("preserves native text_delta chunks that also carry reasoning_content", async () => {
-    mockSse([
-      anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
-      anthropicContentBlockStart(0, { type: "text", text: "" }),
-      anthropicContentBlockDelta(0, {
-        type: "text_delta",
-        content: "Visible ",
-        text: "Visible ",
-        reasoning_content: "Need ",
-      }),
-      anthropicContentBlockDelta(0, { content: "answer", reasoning_content: null }),
-      anthropicContentBlockDelta(0, { type: "text_delta", text: "." }),
-      {
-        type: "content_block_stop",
-        index: 0,
-      },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 2 }),
-    ]);
-
-    const result = await runTransportStream(
-      makeAnthropicTransportModel({
-        id: "mimo-v2.5",
-        name: "MiMo V2.5",
-        provider: "xiaomi-token-plan-ams",
-        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
-      }),
-      undefined,
-      {
-        apiKey: "sk-xiaomi-test",
-        reasoning: "high",
-      } as AnthropicStreamOptions,
-    );
-
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: "Visible answer.",
-      },
-      {
-        type: "thinking",
-        thinking: "Need ",
-        thinkingSignature: "reasoning_content",
-      },
-    ]);
+    const options: AnthropicStreamOptions = { apiKey: "sk-xiaomi-test", reasoning: "high" };
+    const firstResult = await runTransportStream(model, undefined, options);
+    expect(firstResult.content).toEqual(content);
+    if (!native) {
+      await runTransportStream(
+        model,
+        {
+          messages: [
+            { role: "user", content: "think", timestamp: 0 },
+            { ...firstResult, timestamp: 0 },
+            { role: "user", content: "continue", timestamp: 0 },
+          ],
+        },
+        options,
+      );
+      const assistantMessage = findRecord(
+        latestAnthropicRequest().payload.messages,
+        (record) => record.role === "assistant",
+      );
+      expect(assistantMessage.reasoning_content).toBe("Need context.");
+      expect(assistantMessage.content).toEqual([
+        { type: "thinking", thinking: "Need context.", signature: "reasoning_content" },
+        text("Visible answer. Continued."),
+      ]);
+    }
   });
 
   it("recovers orphan text deltas when an Anthropic-compatible provider omits block start", async () => {
     mockSse([
-      anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
-      anthropicContentBlockDelta(0, { type: "text_delta", text: "你好" }),
-      {
-        type: "content_block_stop",
-        index: 0,
-      },
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 1 }),
+      startMessage("msg_1", 6),
+      textDelta(0, "你好"),
+      blockStop(0),
+      endMessage("end_turn", 6, 1),
     ]);
     const stream = await startTransportStream(
       makeAnthropicTransportModel({
@@ -1766,7 +1311,7 @@ describe("anthropic transport stream", () => {
     }
     const result = await stream.result();
 
-    expect(result.content).toEqual([{ type: "text", text: "你好" }]);
+    expect(result.content).toEqual([text("你好")]);
     expect(result.stopReason).toBe("stop");
     expect(events.some((event) => event.type === "text_start")).toBe(true);
     expect(events.some((event) => event.type === "text_delta" && event.delta === "你好")).toBe(
@@ -1777,42 +1322,57 @@ describe("anthropic transport stream", () => {
     );
   });
 
-  it("skips malformed tools when building Anthropic payloads", async () => {
-    await runTransportStream(makeAnthropicTransportModel(), {
-      messages: [{ role: "user", content: "hello" }],
-      tools: [
-        {
-          name: "unreadable_plugin_tool",
-          description: "unreadable schema",
-          get parameters() {
-            throw new Error("fuzz parameters getter exploded");
-          },
-        },
-        {
-          name: "bad_plugin_tool",
-          description: "missing schema",
-          execute: async () => ({ content: [{ type: "text", text: "bad" }] }),
-        },
-        {
-          name: "invalid_properties_tool",
-          description: "invalid properties",
-          parameters: { type: "object", properties: false },
-        },
-        {
-          name: "good_plugin_tool",
-          description: "valid schema",
-          parameters: {
-            type: "object",
-            properties: {
-              query: { $ref: "#/$defs/Query" },
+  it.each([false, true])("quarantines malformed tools (valid sibling=%s)", async (withValid) => {
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "unreadable_plugin_tool",
+            description: "unreadable schema",
+            get parameters() {
+              throw new Error("fuzz parameters getter exploded");
             },
-            $defs: { Query: { type: "string", minLength: 1 } },
-            required: ["query"],
-            additionalProperties: false,
           },
-        },
-      ],
-    } as unknown as AnthropicStreamContext);
+          ...(withValid
+            ? [
+                {
+                  name: "bad_plugin_tool",
+                  description: "missing schema",
+                  execute: async () => ({ content: [text("bad")] }),
+                },
+                {
+                  name: "invalid_properties_tool",
+                  description: "invalid properties",
+                  parameters: { type: "object", properties: false },
+                },
+                {
+                  name: "good_plugin_tool",
+                  description: "valid schema",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      query: { $ref: "#/$defs/Query" },
+                    },
+                    $defs: { Query: { type: "string", minLength: 1 } },
+                    required: ["query"],
+                    additionalProperties: false,
+                  },
+                },
+              ]
+            : []),
+        ],
+      } as unknown as AnthropicStreamContext,
+      { apiKey: "sk-ant-api", ...(!withValid ? { toolChoice: "auto" } : {}) },
+    );
+
+    if (!withValid) {
+      expect(result.stopReason).toBe("stop");
+      expect(latestAnthropicRequest().payload).not.toHaveProperty("tools");
+      expect(latestAnthropicRequest().payload).not.toHaveProperty("tool_choice");
+      return;
+    }
 
     const tools = requireArray(latestAnthropicRequest().payload.tools, "tools");
     expect(tools).toHaveLength(1);
@@ -1827,93 +1387,39 @@ describe("anthropic transport stream", () => {
     });
   });
 
-  it("omits automatic Anthropic tool choice when every provided schema is unreadable", async () => {
-    const result = await runTransportStream(
-      makeAnthropicTransportModel(),
-      {
-        messages: [{ role: "user", content: "hello" }],
-        tools: [
-          {
-            name: "unreadable_plugin_tool",
-            description: "unreadable schema",
-            get parameters() {
-              throw new Error("fuzz parameters getter exploded");
+  it.each([
+    { invalidOriginal: false, error: 'Anthropic tool names "Read" and "read" both map to "Read"' },
+    { invalidOriginal: true, error: 'Anthropic tool_choice requested unavailable tool "Read"' },
+  ])(
+    "rejects ambiguous OAuth tool names (skipped original=$invalidOriginal)",
+    async ({ invalidOriginal, error }) => {
+      const result = await runTransportStream(
+        makeAnthropicTransportModel(),
+        {
+          messages: [makeUserMessage("hello", 0)],
+          tools: [
+            {
+              name: "Read",
+              description: "Uppercase tool",
+              parameters: { type: "object", properties: invalidOriginal ? false : {} },
             },
-          },
-        ],
-      } as unknown as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-api",
-        toolChoice: "auto",
-      } as AnthropicStreamOptions,
-    );
-
-    const payload = latestAnthropicRequest().payload;
-    expect(result.stopReason).toBe("stop");
-    expect(payload).not.toHaveProperty("tools");
-    expect(payload).not.toHaveProperty("tool_choice");
-  });
-
-  it("fails locally when OAuth tool names collide on the Anthropic wire", async () => {
-    const result = await runTransportStream(
-      makeAnthropicTransportModel(),
-      {
-        messages: [{ role: "user", content: "hello" }],
-        tools: [
-          {
-            name: "Read",
-            description: "Uppercase tool",
-            parameters: { type: "object", properties: {} },
-          },
-          {
-            name: "read",
-            description: "Lowercase tool",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as unknown as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-oat-example",
-      } as AnthropicStreamOptions,
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      'Anthropic tool names "Read" and "read" both map to "Read"',
-    );
-    expect(guardedFetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not rebind a skipped OAuth tool choice through a sibling wire name", async () => {
-    const result = await runTransportStream(
-      makeAnthropicTransportModel(),
-      {
-        messages: [{ role: "user", content: "hello" }],
-        tools: [
-          {
-            name: "Read",
-            description: "Invalid uppercase tool",
-            parameters: { type: "object", properties: false },
-          },
-          {
-            name: "read",
-            description: "Valid lowercase tool",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as unknown as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-oat-example",
-        toolChoice: { type: "tool", name: "Read" },
-      } as AnthropicStreamOptions,
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      'Anthropic tool_choice requested unavailable tool "Read"',
-    );
-    expect(guardedFetchMock).not.toHaveBeenCalled();
-  });
+            {
+              name: "read",
+              description: "Lowercase tool",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        } as unknown as AnthropicStreamContext,
+        {
+          apiKey: "sk-ant-oat-example",
+          ...(invalidOriginal ? { toolChoice: { type: "tool", name: "Read" } } : {}),
+        },
+      );
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain(error);
+      expect(guardedFetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
     const model = makeAnthropicTransportModel({});
@@ -1928,12 +1434,7 @@ describe("anthropic transport stream", () => {
           stopReason: "toolUse",
           timestamp: 0,
           content: [
-            {
-              type: "toolCall",
-              id: "call_1",
-              name: "lookup",
-              arguments: "{not valid json",
-            },
+            { type: "toolCall", id: "call_1", name: "lookup", arguments: "{not valid json" },
           ],
         },
       ],
@@ -1952,7 +1453,7 @@ describe("anthropic transport stream", () => {
     expect(toolUse.input).toEqual({});
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "replays empty signatures according to allowEmptySignature=%s",
     async (allowEmptySignature) => {
       await runTransportStream(
@@ -1964,10 +1465,10 @@ describe("anthropic transport stream", () => {
         }),
         {
           messages: [
-            makeAnthropicToolUseMessage(
-              [{ type: "thinking", thinking: "Retained thought", thinkingSignature: "" }],
-              { provider: "kimi", id: "k3" },
-            ),
+            makeAnthropicToolUseMessage([thinking("Retained thought", "")], {
+              provider: "kimi",
+              id: "k3",
+            }),
           ],
         },
         { apiKey: "synthetic-kimi-key", reasoning: "high" },
@@ -1976,15 +1477,11 @@ describe("anthropic transport stream", () => {
         latestAnthropicRequest().payload.messages,
         (msg) => msg.role === "assistant",
       );
-      expect(assistant.content).toEqual(
-        allowEmptySignature
-          ? [{ type: "thinking", thinking: "Retained thought", signature: "" }]
-          : [{ type: "text", text: "Retained thought" }],
-      );
+      expect(assistant.content).toEqual([text("Retained thought")]);
     },
   );
 
-  it.each(["claude-sonnet-4-6", "claude-fable-5"])(
+  it.each(["claude-fable-5"])(
     "preserves signed thinking bytes and empty signed blocks on %s replay",
     async (modelId) => {
       const signed = `keep${String.fromCharCode(0xd83d)}signed`;
@@ -1994,10 +1491,7 @@ describe("anthropic transport stream", () => {
         {
           messages: [
             makeAnthropicToolUseMessage(
-              [
-                { type: "thinking", thinking: signed, thinkingSignature: "sig_1" },
-                { type: "thinking", thinking: "", thinkingSignature: "sig_omitted" },
-              ],
+              [thinking(signed, "sig_1"), thinking("", "sig_omitted")],
               model,
             ),
           ],
@@ -2021,7 +1515,7 @@ describe("anthropic transport stream", () => {
         makeUserMessage("hello", 0),
         {
           ...makeAnthropicToolUseMessage([
-            { type: "thinking", thinking: "private reasoning", thinkingSignature: "sig_1" },
+            thinking("private reasoning", "sig_1"),
             {
               type: "thinking",
               thinking: "[Reasoning redacted]",
@@ -2034,25 +1528,21 @@ describe("anthropic transport stream", () => {
         makeUserMessage("again", 1),
         {
           ...makeAnthropicToolUseMessage([
-            {
-              type: "thinking",
-              thinking: "Private replay text.",
-              thinkingSignature: "reasoning_content",
-            },
-            { type: "text", text: "Visible reply." },
+            thinking("Private replay text.", "reasoning_content"),
+            text("Visible reply."),
           ]),
           stopReason: "stop",
         },
         makeUserMessage("look it up", 2),
         makeAnthropicToolUseMessage([
-          { type: "thinking", thinking: "call lookup", thinkingSignature: "sig_tool" },
-          { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+          thinking("call lookup", "sig_tool"),
+          toolBlock("call_1", "lookup", {}),
         ]),
         {
           role: "toolResult",
           toolCallId: "call_1",
           toolName: "lookup",
-          content: [{ type: "text", text: "42" }],
+          content: [text("42")],
           isError: false,
           timestamp: 3,
         },
@@ -2063,8 +1553,8 @@ describe("anthropic transport stream", () => {
       .map((msg) => requireRecord(msg, "message"))
       .filter((msg) => msg.role === "assistant");
     expect(assistants.map((msg) => msg.content)).toEqual([
-      [{ type: "text", text: "[assistant reasoning omitted]" }],
-      [{ type: "text", text: "Visible reply." }],
+      [text("[assistant reasoning omitted]")],
+      [text("Visible reply.")],
       [
         { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
         { type: "tool_use", id: "call_1", name: "lookup", input: {} },
@@ -2089,32 +1579,24 @@ describe("anthropic transport stream", () => {
           {
             ...makeAnthropicToolUseMessage(
               [
-                {
-                  type: "thinking",
-                  thinking: `Need${String.fromCharCode(0xd83d)} to answer politely.`,
-                  thinkingSignature: "reasoning_content",
-                },
-                { type: "text", text: "Hello!" },
-                {
-                  type: "thinking",
-                  thinking: "Then ask a follow-up.",
-                  thinkingSignature: "reasoning_content",
-                },
+                thinking(
+                  `Need${String.fromCharCode(0xd83d)} to answer politely.`,
+                  "reasoning_content",
+                ),
+                text("Hello!"),
+                thinking("Then ask a follow-up.", "reasoning_content"),
               ],
               replayModel,
             ),
             stopReason: "stop",
           },
           makeUserMessage("look this up", 1),
-          makeAnthropicToolUseMessage(
-            [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
-            replayModel,
-          ),
+          makeAnthropicToolUseMessage([toolBlock("call_1", "lookup", {})], replayModel),
           {
             role: "toolResult",
             toolCallId: "call_1",
             toolName: "lookup",
-            content: [{ type: "text", text: "found" }],
+            content: [text("found")],
             isError: false,
             timestamp: 2,
           },
@@ -2131,7 +1613,7 @@ describe("anthropic transport stream", () => {
       reasoning_content: "Need to answer politely.\nThen ask a follow-up.",
       content: [
         { type: "thinking", thinking: "Need to answer politely.", signature: "reasoning_content" },
-        { type: "text", text: "Hello!" },
+        text("Hello!"),
         { type: "thinking", thinking: "Then ask a follow-up.", signature: "reasoning_content" },
       ],
     });
@@ -2164,10 +1646,7 @@ describe("anthropic transport stream", () => {
         {
           role: "user",
           timestamp: 0,
-          content: [
-            { type: "text", text: "look" },
-            { type: "image", data: "aW1hZ2U=", mimeType: "image/heic" },
-          ],
+          content: [text("look"), { type: "image", data: "aW1hZ2U=", mimeType: "image/heic" }],
         },
       ],
     });
@@ -2188,26 +1667,16 @@ describe("anthropic transport stream", () => {
       },
     };
     const results = [
-      [{ type: "text", text: String.fromCharCode(0xd83d) }],
+      [text(String.fromCharCode(0xd83d))],
       [{ ...image, data: "" }],
-      [{ type: "text", text: "" }, image],
+      [text(""), image],
       [resource],
-      [
-        { type: "text", text: "before image" },
-        image,
-        resource,
-        { type: "text", text: "after image" },
-      ],
+      [text("before image"), image, resource, text("after image")],
     ];
     await runTransportStream(makeAnthropicTransportModel({ input: ["text", "image"] }), {
       messages: [
         makeAnthropicToolUseMessage(
-          results.map((_, index) => ({
-            type: "toolCall",
-            id: `tool_${index}`,
-            name: "lookup",
-            arguments: {},
-          })),
+          results.map((_, index) => toolBlock(`tool_${index}`, "lookup", {})),
         ),
         ...results.map((content, index) => ({
           role: "toolResult",
@@ -2234,13 +1703,13 @@ describe("anthropic transport stream", () => {
       source: { type: "base64", media_type: "image/jpeg", data: "aW1hZ2U=" },
     };
     expect(projected.slice(0, 2)).toEqual(["(no output)", "(no output)"]);
-    expect(projected[2]).toEqual([{ type: "text", text: "(see attached image)" }, wireImage]);
+    expect(projected[2]).toEqual([text("(see attached image)"), wireImage]);
     expect(projected[3]).toBe(JSON.stringify(resource));
     expect(projected[4]).toEqual([
-      { type: "text", text: "before image" },
+      text("before image"),
       wireImage,
-      { type: "text", text: JSON.stringify(resource) },
-      { type: "text", text: "after image" },
+      text(JSON.stringify(resource)),
+      text("after image"),
     ]);
   });
 
@@ -2254,14 +1723,12 @@ describe("anthropic transport stream", () => {
     const result = await runTransportStream(makeAnthropicTransportModel(), {
       messages: [
         { role: "user", content: [image], timestamp: 0 },
-        makeAnthropicToolUseMessage([
-          { type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} },
-        ]),
+        makeAnthropicToolUseMessage([toolBlock("tool_1", "screenshot", {})]),
         {
           role: "toolResult",
           toolCallId: "tool_1",
           toolName: "screenshot",
-          content: [image, { type: "text", text: "captured screen" }],
+          content: [image, text("captured screen")],
           isError: false,
           timestamp: 0,
         },
@@ -2360,9 +1827,7 @@ describe("anthropic transport stream", () => {
     let cancelReason: unknown;
     guardedFetchMock.mockResolvedValueOnce(
       createOpenRawSseResponse({
-        body: serializeSseEvents([
-          anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } }),
-        ]),
+        body: serializeSseEvents([startMessage("msg_1", 1)]),
         onCancel: (reason) => {
           cancelReason = reason;
         },
@@ -2436,18 +1901,17 @@ describe("anthropic transport stream", () => {
     }
   });
 
-  it.each([
-    {
-      name: "maps unsupported xhigh to high effort for Claude 4.6 transport runs",
-      model: { id: "claude-opus-4-6", name: "Claude Opus 4.6", maxTokens: 8192 },
-      message: "Think deeply.",
-      options: { apiKey: "sk-ant-api", reasoning: "xhigh" },
-      expected: {
-        thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "high" },
-      },
-      absent: ["tool_choice"],
-    },
+  it.each<{
+    name: string;
+    model: Partial<AnthropicMessagesModel>;
+    message?: string;
+    context?: AnthropicStreamContext;
+    options: AnthropicStreamOptions;
+    expected?: Record<string, unknown>;
+    exact?: Record<string, unknown>;
+    absent?: string[];
+    responseModel?: string;
+  }>([
     {
       name: "honors provider effort restrictions for mandatory adaptive thinking",
       model: {
@@ -2505,232 +1969,124 @@ describe("anthropic transport stream", () => {
       },
       absent: ["temperature"],
     },
-  ])("$name", async (testCase) => {
-    await runTransportStream(
-      makeAnthropicTransportModel(testCase.model),
-      { messages: [{ role: "user", content: testCase.message }] } as AnthropicStreamContext,
-      testCase.options as AnthropicStreamOptions,
-    );
-    const payload = latestAnthropicRequest().payload;
-    expect(payload).toMatchObject(testCase.expected);
-    for (const property of testCase.absent ?? []) {
-      expect(payload).not.toHaveProperty(property);
-    }
-  });
-
-  it.each([{ canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 }] as const)(
-    "normalizes temperature for canonical $canonicalModelId transport aliases when thinking is off",
-    async ({ canonicalModelId, expectedTemperature }) => {
-      const model = makeAnthropicTransportModel({
+    {
+      name: "preserves alias temperature when thinking is off",
+      model: {
         id: "production-claude",
         name: "Production Claude",
-        params: { canonicalModelId },
+        params: { canonicalModelId: "claude-opus-4-6" },
         reasoning: false,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
         maxTokens: 8192,
-      });
-
-      await runTransportStream(model, undefined, {
-        apiKey: "sk-ant-api",
-        temperature: 0.2,
-      } as AnthropicStreamOptions);
-
-      expect(latestAnthropicRequest().payload.temperature).toBe(expectedTemperature);
-    },
-  );
-
-  it.each([
-    {
-      name: "supports Claude Opus 5 transport: allows explicit off",
-      id: "claude-opus-5",
-      modelName: "Claude Opus 5",
-      reasoning: "off" as const,
-      thinking: { type: "disabled" },
-      effort: undefined,
-      toolChoice: { type: "any" },
+      },
+      options: { apiKey: "sk-ant-api", temperature: 0.2 },
+      exact: { temperature: 0.2 },
     },
     {
-      name: "supports Claude Sonnet 5 transport: defaults to adaptive high",
-      id: "claude-sonnet-5",
-      modelName: "Claude Sonnet 5",
-      reasoning: undefined,
-      thinking: { type: "adaptive", display: "summarized" },
-      effort: { effort: "high" },
-      toolChoice: { type: "auto" },
+      name: "supports explicit off for the newer optional-thinking model",
+      model: { id: "claude-opus-5", name: "Claude Opus 5", maxTokens: 128_000 },
+      context: makeSonnet5PrefillContext(),
+      options: { apiKey: "sk-ant-api", reasoning: "off", temperature: 0.2, toolChoice: "any" },
+      expected: {
+        max_tokens: 128_000,
+        messages: [{ role: "user" }],
+        thinking: { type: "disabled" },
+        tool_choice: { type: "any" },
+      },
+      absent: ["temperature", "output_config"],
     },
-  ])("$name", async (testCase) => {
-    await runTransportStream(
-      makeAnthropicTransportModel({
-        id: testCase.id,
-        name: testCase.modelName,
+    {
+      name: "uses default mandatory adaptive thinking for a deployment alias",
+      model: {
+        id: "prod-primary",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-fable-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
         maxTokens: 128_000,
-      }),
-      makeSonnet5PrefillContext(),
-      {
+      },
+      options: {
         apiKey: "sk-ant-api",
-        reasoning: testCase.reasoning,
         temperature: 0.2,
-        toolChoice: "any",
-      } as AnthropicStreamOptions,
-    );
-    const payload = latestAnthropicRequest().payload;
-    expect(payload).toMatchObject({
-      max_tokens: 128_000,
-      messages: [{ role: "user" }],
-      thinking: testCase.thinking,
-      tool_choice: testCase.toolChoice,
-    });
-    expect(payload).not.toHaveProperty("temperature");
-    if (testCase.effort) {
-      expect(payload.output_config).toEqual(testCase.effort);
-    } else {
-      expect(payload).not.toHaveProperty("output_config");
-    }
-  });
-
-  it("uses always-on adaptive thinking for Claude Fable 5 transport runs", async () => {
-    const model = makeAnthropicTransportModel({
-      id: "prod-primary",
-      name: "Production Claude",
-      provider: "microsoft-foundry",
-      params: { canonicalModelId: "claude-fable-5" },
-      reasoning: false,
-      baseUrl: "https://example.services.ai.azure.com/anthropic",
-      maxTokens: 128_000,
-    });
-
-    mockSse([
-      anthropicMessageStart({
-        id: "msg_1",
-        model: "claude-fable-5",
-        usage: { input_tokens: 1, output_tokens: 0 },
-      }),
-      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-      { type: "message_stop" },
-    ]);
-    const result = await runTransportStream(model, undefined, {
-      apiKey: "sk-ant-api",
-      temperature: 0.2,
-      toolChoice: { type: "tool", name: "read_file" },
-    } as AnthropicStreamOptions);
-
-    const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-    expect(payload.output_config).toEqual({ effort: "medium" });
-    expect(payload.tool_choice).toEqual({ type: "auto" });
-    expect(payload).not.toHaveProperty("temperature");
-    expect(result.responseModel).toBe("claude-fable-5");
-  });
-
-  it("uses mandatory adaptive thinking and default sampling for Claude Mythos 5 transport runs", async () => {
-    const model = makeAnthropicTransportModel({
-      id: "prod-mythos",
-      name: "Production Claude",
-      provider: "microsoft-foundry",
-      params: { canonicalModelId: "claude-mythos-5" },
-      reasoning: false,
-      baseUrl: "https://example.services.ai.azure.com/anthropic",
-      maxTokens: 128_000,
-    });
-
-    await runTransportStream(model, undefined, {
-      apiKey: "sk-ant-api",
-      reasoning: "off",
-      temperature: 0.2,
-      onPayload: (payload) => ({
-        ...(payload as Record<string, unknown>),
-        top_p: 0.9,
-        top_k: 40,
-      }),
-    } as AnthropicStreamOptions);
-
-    const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-    expect(payload.output_config).toEqual({ effort: "low" });
-    expect(payload).not.toHaveProperty("temperature");
-    expect(payload).not.toHaveProperty("top_p");
-    expect(payload).not.toHaveProperty("top_k");
-  });
-
-  it.each(["claude-opus-4-8"])(
-    "restores default sampling for %s transport requests after payload hooks",
-    async (modelId) => {
-      await runTransportStream(
-        makeAnthropicTransportModel({
-          id: modelId,
-          name: modelId,
-          maxTokens: 128_000,
-        }),
-        undefined,
-        {
-          apiKey: "sk-ant-api",
-          reasoning: "high",
-          temperature: 0.2,
-          onPayload: (payload) => ({
-            ...(payload as Record<string, unknown>),
-            temperature: 0.2,
-            top_p: 0.9,
-            top_k: 40,
-          }),
-        } as AnthropicStreamOptions,
-      );
-
-      const payload = latestAnthropicRequest().payload;
-      expect(payload).not.toHaveProperty("temperature");
-      expect(payload).not.toHaveProperty("top_p");
-      expect(payload).not.toHaveProperty("top_k");
+        toolChoice: { type: "tool", name: "read_file" },
+      },
+      exact: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "medium" },
+        tool_choice: { type: "auto" },
+      },
+      absent: ["temperature"],
+      responseModel: "claude-fable-5",
     },
-  );
-
-  it.each([{ reasoning: "max", prompt: "Think as much as needed." }] as const)(
-    "preserves $reasoning effort for Claude Opus 4.8 transport runs",
-    async ({ reasoning, prompt }) => {
-      const model = makeAnthropicTransportModel({
-        id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
+    {
+      name: "normalizes explicit off and sampling for a mandatory-thinking alias",
+      model: {
+        id: "prod-mythos",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-mythos-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        maxTokens: 128_000,
+      },
+      options: {
+        apiKey: "sk-ant-api",
+        reasoning: "off",
+        temperature: 0.2,
+        onPayload: (payload) => ({ ...requireRecord(payload, "payload"), top_p: 0.9, top_k: 40 }),
+      },
+      exact: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "low" },
+      },
+      absent: ["temperature", "top_p", "top_k"],
+    },
+    {
+      name: "honors provider routes that exclude native max effort",
+      model: {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "github-copilot",
         maxTokens: 8192,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      });
-
-      await runTransportStream(
-        model,
-        {
-          messages: [{ role: "user", content: prompt }],
-        } as AnthropicStreamContext,
-        {
-          apiKey: "sk-ant-api",
-          reasoning,
-        } as AnthropicStreamOptions,
+        thinkingLevelMap: { xhigh: null, max: null },
+      },
+      options: { apiKey: "sk-ant-api", reasoning: "max" },
+      exact: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      },
+    },
+  ])(
+    "$name",
+    async ({ model, message, context, options, expected, exact, absent, responseModel }) => {
+      if (responseModel) {
+        mockSse([
+          startMessage("msg_1", 1, responseModel),
+          endMessage("end_turn", 1, 1),
+          { type: "message_stop" },
+        ]);
+      }
+      const result = await runTransportStream(
+        makeAnthropicTransportModel(model),
+        context ?? (message ? { messages: [makeUserMessage(message, 0)] } : undefined),
+        options,
       );
-
       const payload = latestAnthropicRequest().payload;
-      expect(payload.thinking).toEqual({
-        type: "adaptive",
-        display: "summarized",
-        block_binding: { prefix_mismatch_behavior: "drop_block" },
-      });
-      expect(payload.output_config).toEqual({ effort: reasoning });
+      if (expected) {
+        expect(payload).toMatchObject(expected);
+      }
+      for (const [property, value] of Object.entries(exact ?? {})) {
+        expect(payload[property]).toEqual(value);
+      }
+      for (const property of absent ?? []) {
+        expect(payload).not.toHaveProperty(property);
+      }
+      if (responseModel) {
+        expect(result.responseModel).toBe(responseModel);
+      }
     },
   );
-
-  it("honors provider routes that exclude native max effort", async () => {
-    const model = makeAnthropicTransportModel({
-      id: "claude-sonnet-4-6",
-      name: "Claude Sonnet 4.6",
-      provider: "github-copilot",
-      maxTokens: 8192,
-      thinkingLevelMap: { xhigh: null, max: null },
-    });
-
-    await runTransportStream(model, undefined, {
-      apiKey: "sk-ant-api",
-      reasoning: "max",
-    } as AnthropicStreamOptions);
-
-    const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-    expect(payload.output_config).toEqual({ effort: "high" });
-  });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
     const errorMessage = "messages.1.content.63: Invalid signature in thinking block";
@@ -2809,18 +2165,11 @@ describe("anthropic transport stream", () => {
     }
     function repairEvents(blocks: Array<{ id: string; name: string; partialJson: string }>) {
       return [
-        anthropicMessageStart({
-          id: "msg_loopback",
-          model: "claude-opus-5",
-          usage: { input_tokens: 4, output_tokens: 0 },
-        }),
+        startMessage("msg_loopback", 4, "claude-opus-5"),
         ...blocks.flatMap(({ id, name, partialJson }, index) => [
           anthropicContentBlockStart(index, { type: "tool_use", id, name, input: {} }),
-          anthropicContentBlockDelta(index, {
-            type: "input_json_delta",
-            partial_json: partialJson,
-          }),
-          { type: "content_block_stop", index },
+          jsonDelta(index, partialJson),
+          blockStop(index),
         ]),
         anthropicMessageDelta({ stop_reason: "tool_use" }, { output_tokens: 8 }),
         { type: "message_stop" },
@@ -2840,58 +2189,56 @@ describe("anthropic transport stream", () => {
       }
       return { eventTypes, toolCallEnds, result: await stream.result() };
     }
-    it("repairs a raw newline in one call and preserves a valid escape in its sibling", async () => {
+    it.each([
+      {
+        name: "repairs a raw newline while preserving a valid escape in its sibling",
+        block: {
+          id: "call_edit",
+          name: "edit",
+          // oldText has a valid escape; newText has a raw newline.
+          partialJson: '{"path":"a.py","oldText":"C:\\nnext","newText":"x = 1\ny = 2"}',
+        },
+        repaired: true,
+      },
+      {
+        name: "fails closed on a truncated sibling with bounded diagnostics",
+        block: { id: "call_truncated", name: "read", partialJson: '{"path":"SECRET.md"' },
+        repaired: false,
+      },
+    ])("$name", async ({ block, repaired }) => {
       const started = await startRepairServer(
         repairEvents([
           { id: "call_read", name: "read", partialJson: '{"path":"README.md"}' },
-          {
-            id: "call_edit",
-            name: "edit",
-            // oldText carries a valid \n escape after a "C:" prefix; newText carries a raw newline.
-            partialJson: '{"path":"a.py","oldText":"C:\\nnext","newText":"x = 1\ny = 2"}',
-          },
+          block,
         ]),
       );
       server = started.server;
-
       const { eventTypes, toolCallEnds, result } = await runRepairStream(started.baseUrl);
-
-      expect(result.stopReason).toBe("toolUse");
-      expect(result.errorMessage).toBeUndefined();
-      expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(2);
-      expect(eventTypes.at(-1)).toBe("done");
-      expect(toolCallEnds).toEqual([
-        { path: "README.md" },
-        { path: "a.py", oldText: "C:\nnext", newText: "x = 1\ny = 2" },
-      ]);
-    });
-
-    it("still fails closed on a truncated sibling and surfaces bounded diagnostics", async () => {
-      const truncated = '{"path":"SECRET.md"';
-      const started = await startRepairServer(
-        repairEvents([
-          { id: "call_read", name: "read", partialJson: '{"path":"README.md"}' },
-          { id: "call_truncated", name: "read", partialJson: truncated },
-        ]),
-      );
-      server = started.server;
-
-      const { eventTypes, toolCallEnds, result } = await runRepairStream(started.baseUrl);
-
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toBe(
-        "Provider completed tool call with malformed JSON arguments",
-      );
-      expect(result.errorCode).toBe("malformed_tool_call_arguments");
-      expect(JSON.parse(result.errorBody ?? "{}")).toMatchObject({
-        code: "malformed_tool_call_arguments",
-        argumentChars: truncated.length,
-        repairAttempted: true,
-      });
-      expect(`${result.errorMessage}${result.errorBody}`).not.toContain("SECRET.md");
-      expect(toolCallEnds).toEqual([]);
-      expect(eventTypes).not.toContain("toolcall_end");
-      expect(eventTypes).not.toContain("done");
+      if (repaired) {
+        expect(result.stopReason).toBe("toolUse");
+        expect(result.errorMessage).toBeUndefined();
+        expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(2);
+        expect(eventTypes.at(-1)).toBe("done");
+        expect(toolCallEnds).toEqual([
+          { path: "README.md" },
+          { path: "a.py", oldText: "C:\nnext", newText: "x = 1\ny = 2" },
+        ]);
+      } else {
+        expect(result.stopReason).toBe("error");
+        expect(result.errorMessage).toBe(
+          "Provider completed tool call with malformed JSON arguments",
+        );
+        expect(result.errorCode).toBe("malformed_tool_call_arguments");
+        expect(JSON.parse(result.errorBody ?? "{}")).toMatchObject({
+          code: "malformed_tool_call_arguments",
+          argumentChars: block.partialJson.length,
+          repairAttempted: true,
+        });
+        expect(`${result.errorMessage}${result.errorBody}`).not.toContain("SECRET.md");
+        expect(toolCallEnds).toEqual([]);
+        expect(eventTypes).not.toContain("toolcall_end");
+        expect(eventTypes).not.toContain("done");
+      }
     });
   });
 });

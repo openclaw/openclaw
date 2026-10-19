@@ -97,10 +97,8 @@ export function collectBrowserSecurityAuditFindings(ctx: OpenClawPluginSecurityA
     if (!profile || profile.cdpIsLoopback) {
       continue;
     }
-    let url: URL;
-    try {
-      url = new URL(profile.cdpUrl);
-    } catch {
+    const url = URL.parse(profile.cdpUrl);
+    if (!url) {
       continue;
     }
     const redactedCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;

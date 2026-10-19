@@ -3,26 +3,24 @@ import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { ENVIRONMENT_FIELD_LABELS } from "./schema.labels.environment.js";
+import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
+import { MESSAGE_FIELD_LABELS } from "./schema.labels.messages.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
+import { DATABASE_FIELD_LABELS } from "./zod-schema.database.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 import { NODE_HOST_FIELD_LABELS } from "./zod-schema.node-host.js";
 import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
-  worktreeRoot: "Worktree Root",
-  worktreeAcceleration: "Worktree Acceleration",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
-  env: "Environment",
-  "env.shellEnv": "Shell Environment Import",
-  "env.shellEnv.enabled": "Shell Environment Import Enabled",
-  "env.shellEnv.timeoutMs": "Shell Environment Import Timeout (ms)",
-  "env.vars": "Environment Variable Overrides",
+  ...ENVIRONMENT_FIELD_LABELS,
   secrets: "Secrets",
   "secrets.egressProxy": "Secret Egress Proxy",
   "secrets.egressProxy.enabled": "Secret Egress Proxy Enabled",
@@ -110,6 +108,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.contextLimits.postCompactionMaxChars": "Agent Post-compaction Max Chars",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...DATABASE_FIELD_LABELS,
   ...STORAGE_FIELD_LABELS,
   ...DESKTOP_FIELD_LABELS,
   ...GATEWAY_FIELD_LABELS,
@@ -118,16 +117,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.deny": "Tool Denylist",
   "tools.web": "Web Tools",
   "tools.exec": "Exec Tool",
-  "tools.github": "GitHub CLI Identity and Git Author",
-  "tools.github.profileId": "GitHub Profile Version",
-  "tools.github.kind": "GitHub Credential Kind",
-  "tools.github.gitAuthor.name": "Git Author Name",
-  "tools.github.gitAuthor.email": "Git Author Email",
-  "agents.entries.*.tools.github": "Agent GitHub CLI Identity Override",
-  "agents.entries.*.tools.github.profileId": "Agent GitHub Profile Version",
-  "agents.entries.*.tools.github.kind": "Agent GitHub Credential Kind",
-  "agents.entries.*.tools.github.gitAuthor.name": "Agent Git Author Name",
-  "agents.entries.*.tools.github.gitAuthor.email": "Agent Git Author Email",
+  ...GITHUB_TOOL_FIELD_LABELS,
   "tools.media.image.enabled": "Enable Image Understanding",
   "tools.media.image.preferredModel": "Preferred Image Understanding Model",
   "tools.media.image.maxBytes": "Image Understanding Max Bytes",
@@ -171,6 +161,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.loopDetection.enabled": "Tool-loop Detection",
   "tools.fs.workspaceOnly": "Workspace-only FS tools",
   "tools.sessions.visibility": "Session Tools Visibility",
+  "tools.sessions.allowThreadTargets": "Allow Thread Send Targets",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
   "tools.exec.notifyOnExitEmptySuccess": "Exec Notify On Empty Success",
   "tools.exec.approvalRunningNoticeMs": "Exec Approval Running Notice (ms)",
@@ -184,9 +175,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.reviewer.fastMode": "Exec Reviewer Fast Mode",
   "tools.exec.reviewer.timeoutMs": "Exec Reviewer Timeout (ms)",
   "tools.exec.node": "Exec Node Binding",
-  "tools.agentToAgent": "Agent-to-Agent Tool Access",
-  "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
-  "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
   "tools.updatePlan": "Enable Structured Plan Tool",
   "tools.toolSearch": "Tool Search",
   "tools.toolSearch.enabled": "Enable Tool Search",
@@ -333,6 +321,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
   "skills.load.watch": "Watch Skills",
   "skills.workshop.autonomous.mode": "Skill Workshop Autonomous Mode",
+  "skills.workshop.autonomous.channelNotices": "Skill Workshop Channel Notices",
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
@@ -669,29 +658,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   "talk.consultThinkingLevel": "Talk Consult Thinking Level",
   "talk.consultFastMode": "Talk Consult Fast Mode",
-  messages: "Messages",
-  "messages.visibleReplies": "Visible Replies",
-  "messages.responsePrefix": "Outbound Response Prefix",
-  "messages.usageTemplate": "Usage Footer Template",
-  "messages.responseUsage": "Default Usage Footer Mode",
-  "messages.groupChat": "Group Chat Rules",
-  "messages.groupChat.mentionPatterns": "Group Mention Patterns",
-  "messages.groupChat.historyLimit": "Group History Limit",
-  "messages.groupChat.unmentionedInbound": "Group Unmentioned Inbound",
-  "messages.groupChat.visibleReplies": "Group Visible Replies",
-  "messages.queue": "Inbound Queue",
-  "messages.queue.mode": "Queue Mode",
-  "messages.queue.byChannel": "Queue Mode by Channel",
-  "messages.queue.debounceMsByChannel": "Queue Fallback Debounce by Channel (ms)",
-  "messages.queue.cap": "Queue Capacity",
-  "messages.queue.drop": "Queue Drop Strategy",
-  "messages.inbound": "Inbound Debounce",
-  "messages.ackReaction": "Ack Reaction Emoji",
-  "messages.ackReactionScope": "Ack Reaction Scope",
-  "messages.statusReactions": "Status Reactions",
-  "messages.statusReactions.enabled": "Enable Status Reactions",
-  "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",
-  "messages.inbound.byChannel": "Inbound Debounce by Channel (ms)",
+  ...MESSAGE_FIELD_LABELS,
   tts: "Text-to-Speech",
   "tts.persona": "TTS Persona",
   "tts.personas": "TTS Personas",

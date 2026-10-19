@@ -2,16 +2,16 @@
 import { describe, expect, it } from "vitest";
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
-function collectDiagnostics() {
-  const diagnostics: PluginDiagnostic[] = [];
+function createChannelRegistry(pluginId = "demo-plugin", source = "/tmp/demo/index.ts") {
+  const builder = createTestPluginRegistry();
+  const record = createPluginRecord({ id: pluginId, source });
+  builder.registry.plugins.push(record);
   return {
-    diagnostics,
-    pushDiagnostic: (diag: PluginDiagnostic) => {
-      diagnostics.push(diag);
-    },
+    registry: builder.registry,
+    api: builder.createApi(record, { config: {}, registrationMode: "full" }),
   };
 }
 
@@ -34,21 +34,19 @@ function createChannelPlugin(overrides?: Partial<ChannelPlugin>): ChannelPlugin 
   };
 }
 
-describe("normalizeRegisteredChannelPlugin", () => {
+describe("registered channel metadata", () => {
   it("fills bundled channel metadata from the canonical core baseline", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+    const { registry, api } = createChannelRegistry();
 
-    const normalized = normalizeRegisteredChannelPlugin({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
+    api.registerChannel({
       plugin: createChannelPlugin({
         id: "telegram",
         meta: {
           id: "telegram",
         } as never,
       }),
-      pushDiagnostic,
     });
+    const normalized = registry.channels[0]?.plugin;
 
     const telegram = getChatChannelMeta("telegram");
     expect({
@@ -62,7 +60,7 @@ describe("normalizeRegisteredChannelPlugin", () => {
       docsPath: telegram.docsPath,
       blurb: telegram.blurb,
     });
-    expect(diagnostics).toEqual([
+    expect(registry.diagnostics).toEqual([
       {
         level: "warn",
         pluginId: "demo-plugin",
@@ -74,19 +72,17 @@ describe("normalizeRegisteredChannelPlugin", () => {
   });
 
   it("falls back to the channel id for external channels with incomplete metadata", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+    const { registry, api } = createChannelRegistry();
 
-    const normalized = normalizeRegisteredChannelPlugin({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
+    api.registerChannel({
       plugin: createChannelPlugin({
         id: "external-chat",
         meta: {
           id: "external-chat",
         } as never,
       }),
-      pushDiagnostic,
     });
+    const normalized = registry.channels[0]?.plugin;
 
     expect(normalized?.id).toBe("external-chat");
     expect(normalized?.meta).toEqual({
@@ -96,7 +92,7 @@ describe("normalizeRegisteredChannelPlugin", () => {
       docsPath: "/channels/external-chat",
       blurb: "",
     });
-    expect(diagnostics).toEqual([
+    expect(registry.diagnostics).toEqual([
       {
         level: "warn",
         pluginId: "demo-plugin",
@@ -108,11 +104,12 @@ describe("normalizeRegisteredChannelPlugin", () => {
   });
 
   it("fills official external channel aliases omitted by the runtime plugin", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+    const { registry, api } = createChannelRegistry(
+      "openclaw-weixin",
+      "/tmp/openclaw-weixin/index.ts",
+    );
 
-    const normalized = normalizeRegisteredChannelPlugin({
-      pluginId: "openclaw-weixin",
-      source: "/tmp/openclaw-weixin/index.ts",
+    api.registerChannel({
       plugin: createChannelPlugin({
         id: "openclaw-weixin",
         meta: {
@@ -123,19 +120,17 @@ describe("normalizeRegisteredChannelPlugin", () => {
           blurb: "Weixin channel",
         },
       }),
-      pushDiagnostic,
     });
+    const normalized = registry.channels[0]?.plugin;
 
     expect(normalized?.meta.aliases).toEqual(["weixin", "wechat", "微信"]);
-    expect(diagnostics).toEqual([]);
+    expect(registry.diagnostics).toEqual([]);
   });
 
   it("warns and repairs mismatched meta ids", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+    const { registry, api } = createChannelRegistry();
 
-    const normalized = normalizeRegisteredChannelPlugin({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
+    api.registerChannel({
       plugin: createChannelPlugin({
         id: "demo",
         meta: {
@@ -146,12 +141,12 @@ describe("normalizeRegisteredChannelPlugin", () => {
           blurb: "demo channel",
         },
       }),
-      pushDiagnostic,
     });
+    const normalized = registry.channels[0]?.plugin;
 
     expect(normalized?.id).toBe("demo");
     expect(normalized?.meta.id).toBe("demo");
-    expect(diagnostics).toEqual([
+    expect(registry.diagnostics).toEqual([
       {
         level: "warn",
         pluginId: "demo-plugin",
@@ -162,20 +157,18 @@ describe("normalizeRegisteredChannelPlugin", () => {
   });
 
   it("rejects runtime channel registrations without required config helpers", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+    const { registry, api } = createChannelRegistry();
 
-    const normalized = normalizeRegisteredChannelPlugin({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
+    api.registerChannel({
       plugin: createChannelPlugin({
         id: "broken-channel",
         config: undefined as never,
       }),
-      pushDiagnostic,
     });
 
-    expect(normalized).toBeNull();
-    expect(diagnostics).toEqual([
+    expect(registry.channels).toEqual([]);
+    expect(registry.channelSetups).toEqual([]);
+    expect(registry.diagnostics).toEqual([
       {
         level: "error",
         pluginId: "demo-plugin",

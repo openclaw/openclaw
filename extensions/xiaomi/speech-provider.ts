@@ -1,13 +1,14 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
+import {
+  createSpeechDirectiveParser,
+  resolveSpeechProviderApiKey,
+} from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
@@ -37,15 +38,6 @@ const XIAOMI_TTS_FORMATS = ["mp3", "wav"] as const;
 
 type XiaomiTtsFormat = (typeof XIAOMI_TTS_FORMATS)[number];
 
-type XiaomiTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  format: XiaomiTtsFormat;
-  style?: string;
-};
-
 function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
   return (baseUrl?.trim() || DEFAULT_XIAOMI_TTS_BASE_URL).replace(/\/+$/, "");
 }
@@ -59,16 +51,10 @@ function resolveXiaomiTtsConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const providers = asOptionalRecord(rawConfig.providers);
-  return (
-    asOptionalRecord(providers?.xiaomi) ??
-    asOptionalRecord(providers?.mimo) ??
-    asOptionalRecord(rawConfig.xiaomi)
-  );
+  return asOptionalRecord(providers?.xiaomi) ?? asOptionalRecord(providers?.mimo);
 }
 
-function normalizeXiaomiTtsProviderConfig(
-  rawConfig: Record<string, unknown>,
-): XiaomiTtsProviderConfig {
+function normalizeXiaomiTtsProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveXiaomiTtsConfigRecord(rawConfig);
   const options = readXiaomiTtsOptions(raw);
   return {
@@ -91,8 +77,8 @@ function normalizeXiaomiTtsProviderConfig(
   };
 }
 
-function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
-  const providerConfig = normalizeXiaomiTtsProviderConfig({ xiaomi: config });
+function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig) {
+  const providerConfig = normalizeXiaomiTtsProviderConfig({ providers: { xiaomi: config } });
   const resolvedKey = resolveSpeechProviderApiKey(
     providerConfig.apiKey,
     process.env.XIAOMI_API_KEY,
@@ -116,49 +102,23 @@ function readXiaomiTtsOptions(options: SpeechProviderOverrides | undefined) {
   };
 }
 
-function parseDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
-): SpeechDirectiveTokenParseResult {
-  switch (ctx.key) {
-    case "voice":
-    case "voiceid":
-    case "voice_id":
-    case "mimo_voice":
-    case "xiaomi_voice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { voice: ctx.value } };
-    case "model":
-    case "mimo_model":
-    case "xiaomi_model":
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { model: ctx.value } };
-    case "style":
-    case "mimo_style":
-    case "xiaomi_style":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { style: ctx.value } };
-    case "format":
-    case "responseformat":
-    case "response_format": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const format = normalizeXiaomiTtsFormat(ctx.value);
-      if (!format) {
-        return { handled: true, warnings: [`invalid Xiaomi TTS format "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { format } };
-    }
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  voice: ["allowVoice", ["voice", "voiceid", "voice_id", "mimo_voice", "xiaomi_voice"]],
+  model: ["allowModelId", ["model", "mimo_model", "xiaomi_model"]],
+  style: ["allowVoiceSettings", ["style", "mimo_style", "xiaomi_style"]],
+  format: [
+    "allowVoiceSettings",
+    ["format", "responseformat", "response_format"],
+    {
+      parse: (ctx) => {
+        const format = normalizeXiaomiTtsFormat(ctx.value);
+        return format
+          ? { handled: true, overrides: { format } }
+          : { handled: true, warnings: [`invalid Xiaomi TTS format "${ctx.value}"`] };
+      },
+    },
+  ],
+});
 
 async function xiaomiTTS(params: {
   text: string;
@@ -232,6 +192,8 @@ async function xiaomiTTS(params: {
 }
 
 export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey);
   return {
     id: "xiaomi",
     label: "Xiaomi MiMo",
@@ -243,8 +205,9 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeXiaomiTtsProviderConfig(rawConfig),
     parseDirectiveToken,
     listVoices: async () => XIAOMI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const config = resolveXiaomiTtsProviderConfig(req.providerConfig);
       const overrides = readXiaomiTtsOptions(req.providerOverrides);

@@ -17,11 +17,45 @@ import {
   withSessionToolsFixture,
 } from "./local-request-context.session-tools.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import * as sessionRowProjection from "./session-row-projection.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
 const REQUESTER = "agent:main:dashboard:notify-parent";
 const TARGET = "agent:main:dashboard:notify-child";
 const FOREIGN = "agent:main:dashboard:notify-foreign";
+
+async function withSlowProjectionStartup(run: () => Promise<void>) {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const createProjection = sessionRowProjection.createSessionRowProjection;
+  const prepare = vi
+    .spyOn(sessionRowProjection, "createSessionRowProjection")
+    .mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await resume.promise;
+      return createProjection(...args);
+    });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const pending = run();
+  void pending.catch(() => {});
+  try {
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      pending,
+      "Notification settled before projection startup",
+    );
+    // Slow fixture initialization must not spend the real router's 10-second request budget.
+    await vi.advanceTimersByTimeAsync(10_001);
+    vi.useRealTimers();
+    resume.resolve();
+    await pending;
+  } finally {
+    vi.useRealTimers();
+    resume.resolve();
+    await pending.catch(() => {});
+    prepare.mockRestore();
+  }
+}
 
 async function withNotification(
   scope: "operator.sessions.write" | "operator.write",
@@ -128,34 +162,38 @@ async function withNotification(
 describe("session notification authority", () => {
   afterEach(drainSessionToolsFixture);
 
-  it.each(["operator.sessions.write", "operator.write"] as const)(
-    "queues an owned-child notification for %s through the real tool and router",
-    async (scope) => {
-      await withNotification(scope, async ({ notify, revoke }) => {
-        await expect(notify()).resolves.toMatchObject({
-          details: {
-            status: "queued",
-            sessionKey: TARGET,
-            notificationId: expect.any(String),
-            durability: "process",
-            runStarted: false,
-          },
-        });
-        revoke();
-        expect(drainSystemEvents(TARGET)).toEqual([
-          expect.stringContaining("Inspect the prepared change."),
-        ]);
-        expect(drainSystemEvents(REQUESTER)).toEqual([]);
-      });
+  it.each([
+    ["operator.sessions.write", TARGET, true],
+    ["operator.write", TARGET, true],
+    ["operator.sessions.write", FOREIGN, false],
+  ] as const)(
+    "authorizes %s notification to %s (allowed: %s)",
+    async (scope, sessionKey, allowed) => {
+      await withSlowProjectionStartup(() =>
+        withNotification(scope, async ({ notify, revoke }) => {
+          if (!allowed) {
+            await expect(notify(sessionKey)).rejects.toThrow(/own session|not allowed/);
+            expect(drainSystemEvents(sessionKey)).toEqual([]);
+            return;
+          }
+          await expect(notify(sessionKey)).resolves.toMatchObject({
+            details: {
+              status: "queued",
+              sessionKey: TARGET,
+              notificationId: expect.any(String),
+              durability: "process",
+              runStarted: false,
+            },
+          });
+          revoke();
+          expect(drainSystemEvents(TARGET)).toEqual([
+            expect.stringContaining("Inspect the prepared change."),
+          ]);
+          expect(drainSystemEvents(REQUESTER)).toEqual([]);
+        }),
+      );
     },
   );
-
-  it("denies a visible child now owned by another person", async () => {
-    await withNotification("operator.sessions.write", async ({ notify }) => {
-      await expect(notify(FOREIGN)).rejects.toThrow(/own session|not allowed/);
-      expect(drainSystemEvents(FOREIGN)).toEqual([]);
-    });
-  });
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
     "cannot queue when %s during notification authorization",

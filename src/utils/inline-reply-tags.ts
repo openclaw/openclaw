@@ -1,4 +1,9 @@
-export type InlineReplyTag = {
+import {
+  skipHorizontalWhitespace,
+  skipWhitespace,
+} from "../../packages/tool-call-repair/src/grammar.js";
+
+type InlineReplyTag = {
   start: number;
   end: number;
   id?: string;
@@ -9,22 +14,6 @@ const REPLY_HEAD = /\[\[\s*(reply_to_current|reply_to\s*:)/iy;
 
 function isWhitespace(character: string): boolean {
   return /\s/u.test(character);
-}
-
-function skipWhitespace(text: string, start: number): number {
-  let cursor = start;
-  while (cursor < text.length && isWhitespace(text.charAt(cursor))) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function skipHorizontalWhitespace(text: string, start: number): number {
-  let cursor = start;
-  while (text.charAt(cursor) === " " || text.charAt(cursor) === "\t") {
-    cursor += 1;
-  }
-  return cursor;
 }
 
 /** Reads increasing marker offsets without rescanning nested candidates' shared suffixes. */

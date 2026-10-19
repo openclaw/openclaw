@@ -9,6 +9,7 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
+  ChannelThreadBindingsSchema,
   ProviderCommandsSchema,
   refineChannelDmPolicy,
   TtsConfigSchema,
@@ -45,14 +46,6 @@ const DiscordIdSchema = z
 
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
-
-const DiscordDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: DiscordIdListSchema.optional(),
-  })
-  .strict();
 
 const DiscordPresenceEventsSchema = z
   .object({
@@ -111,20 +104,16 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
 );
 
-const DiscordVoiceAutoJoinSchema = z
-  .object({
-    guildId: z.string().min(1),
-    channelId: z.string().min(1),
-    whenOccupied: z.boolean().optional(),
-  })
-  .strict();
-
 const DiscordVoiceAllowedChannelSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
   })
   .strict();
+
+const DiscordVoiceAutoJoinSchema = DiscordVoiceAllowedChannelSchema.extend({
+  whenOccupied: z.boolean().optional(),
+});
 
 const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
 const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
@@ -195,10 +184,15 @@ const DiscordVoiceSchema = z
   .strict()
   .optional();
 
-const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+const { accountShape, rootPolicyShape, groupDmShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   allowFrom: DiscordIdListSchema.optional(),
   streaming: ChannelPreviewStreamingConfigSchema.optional(),
+});
+
+const DiscordDmSchema = z.strictObject({
+  ...groupDmShape,
+  groupChannels: DiscordIdListSchema.optional(),
 });
 
 const DiscordAccountSchemaBase = z
@@ -270,16 +264,7 @@ const DiscordAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     intents: z
       .object({
         messageContent: z.boolean().optional(),

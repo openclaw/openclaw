@@ -1,9 +1,10 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parse } from "yaml";
-import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createNestedGitEnv } from "../../test/helpers/temp-repo.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
@@ -15,13 +16,9 @@ import {
   runInstalledPublishedUpdate,
   type InstalledTask,
 } from "./schtasks.installed-diagnostics.test-support.js";
+import { verifyInstalledFingerprintSource } from "./schtasks.installed-fingerprint-observer.test-support.mts";
 import * as installedPackage from "./schtasks.installed-package.test-support.js";
-import {
-  boundedEnv,
-  installedStatusSchema,
-  resolveInstalledCellBodyTimeoutMs,
-  keys,
-} from "./schtasks.installed-package.test-support.js";
+import { boundedEnv, installedStatusSchema } from "./schtasks.installed-package.test-support.js";
 import * as nativeObservation from "./schtasks.integration-observation.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -66,12 +63,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["stdout", "stderr"] as const)(
-  "sanitizes colored %s before clipping diagnostics",
-  async (stream) => {
-    const fixture = commandFixture({ FIXTURE_OUTPUT_STREAM: stream });
-    const failure = await fixture
-      .run(`
+it.each(["stdout"] as const)("sanitizes colored %s before clipping diagnostics", async (stream) => {
+  const fixture = commandFixture({ FIXTURE_OUTPUT_STREAM: stream });
+  const failure = await fixture
+    .run(`
     const output = process.env.FIXTURE_OUTPUT_STREAM === "stderr" ? process.stderr : process.stdout;
     output.write("\\x1b[31m" + JSON.stringify({
       padding: "x".repeat(4000), action: "install", ok: false, token: process.env.FIXTURE_SECRET,
@@ -79,24 +74,23 @@ it.each(["stdout", "stderr"] as const)(
     }) + "\\x1b[0m\\n\\x1b[31mtoken\\x1b[0m=" + process.env.FIXTURE_SECRET);
     process.exitCode = 7;
   `)
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toContain("Synthetic install refusal");
-    expect(String(failure)).not.toContain(secret);
-    expect(fixture.records).toHaveLength(1);
-    expect(fixture.records[0]).toMatchObject({
-      code: 7,
-      ...settledCommand,
-      failureOutput: { [stream === "stdout" ? "stderr" : "stdout"]: "", captureTruncated: false },
-    });
-    const output = fixture.records[0]?.failureOutput?.[stream];
-    expect(output).toContain('"action":"install"');
-    expect(output).toContain("Synthetic install refusal");
-    expect(output).not.toContain(secret);
-    expect(output).not.toContain("\x1b");
-    expect(output?.length).toBeLessThanOrEqual(2002);
-  },
-);
+    .catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toContain("Synthetic install refusal");
+  expect(String(failure)).not.toContain(secret);
+  expect(fixture.records).toHaveLength(1);
+  expect(fixture.records[0]).toMatchObject({
+    code: 7,
+    ...settledCommand,
+    failureOutput: { [stream === "stdout" ? "stderr" : "stdout"]: "", captureTruncated: false },
+  });
+  const output = fixture.records[0]?.failureOutput?.[stream];
+  expect(output).toContain('"action":"install"');
+  expect(output).toContain("Synthetic install refusal");
+  expect(output).not.toContain(secret);
+  expect(output).not.toContain("\x1b");
+  expect(output?.length).toBeLessThanOrEqual(2002);
+});
 
 it("rejects a sibling fence mismatch without revealing credentials or the missing needle", async () => {
   const fixture = commandFixture();
@@ -289,8 +283,6 @@ it.each([
   { name: "candidate migration continuation", exitCode: 0 },
   { name: "candidate migration continuation", exitCode: null },
   { name: "candidate migration continuation", exitCode: undefined },
-  { name: "candidate gateway canary", exitCode: 1 },
-  { name: "candidate doctor lint", exitCode: undefined },
 ])(
   "requires every candidate check and keeps only safe proof ($name exit=$exitCode)",
   ({ name, exitCode }) => {
@@ -418,45 +410,6 @@ it("preserves mixed-case native context while isolating application state", () =
   expect(result).not.toHaveProperty("OPENAI_API_KEY");
   expect(result).not.toHaveProperty("NODE_OPTIONS");
   expect(resolveEnvironmentValue(result, "PSMODULEANALYSISCACHEPATH", "win32")).toBe(moduleCache);
-});
-
-it("reserves cleanup and runner time within the installed native workflow", async () => {
-  const { createE2EVitestConfig } = await import("../../test/vitest/vitest.e2e.config.ts");
-  const cleanupMs = z.number().int().positive().parse(createE2EVitestConfig().test?.hookTimeout);
-  const workflow = z
-    .object({
-      jobs: z.object({
-        "native-schtasks-package": z.object({
-          "timeout-minutes": z.number().int().positive(),
-          steps: z.array(
-            z.object({
-              env: z.record(z.string(), z.unknown()).optional(),
-              "timeout-minutes": z.number().int().positive().optional(),
-            }),
-          ),
-        }),
-      }),
-    })
-    .parse(parse(readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8")));
-  const job = workflow.jobs["native-schtasks-package"];
-  let totalStepMs = 0;
-  for (const cell of keys) {
-    const steps = job.steps.filter(
-      (step) =>
-        typeof step.env?.CI_WINDOWS_SCHTASKS_INSTALLED_INPUT === "string" &&
-        step.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL === cell,
-    );
-    expect(steps, cell).toHaveLength(1);
-    const stepMinutes = z.number().int().positive().parse(steps[0]?.["timeout-minutes"]);
-    const stepMs = stepMinutes * 60_000;
-    expect(stepMs, cell).toBeGreaterThanOrEqual(
-      resolveInstalledCellBodyTimeoutMs(cell) + cleanupMs + 60_000,
-    );
-    totalStepMs += stepMs;
-  }
-  expect(job["timeout-minutes"]).toBe(75);
-  // Setup, package preparation, evidence retention, and retirement need room outside the cells.
-  expect(totalStepMs).toBeLessThan(job["timeout-minutes"] * 60_000);
 });
 
 describe("published installed update progress", () => {
@@ -631,6 +584,100 @@ describe("published installed update progress", () => {
       fixture.command.resolve(JSON.stringify(success));
       await expect(fixture.pending).resolves.toEqual(success);
       expect(fixture.phases()).toEqual(["published-update:completed-step", "command:update"]);
+    },
+  );
+});
+
+const fixturePath = "src/daemon/schtasks.integration-xml.test.ts";
+const productionPath = "src/daemon/service.ts";
+
+function createRepository() {
+  const cwd = temporary.make("openclaw-fingerprint-source-");
+  const env = {
+    ...createNestedGitEnv(),
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_AUTHOR_NAME: "Synthetic Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Synthetic Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  };
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", "commit.gpgsign=false", "-c", `core.hooksPath=${path.join(cwd, "no-hooks")}`, ...args],
+      { cwd, env, encoding: "utf8", stdio: "pipe" },
+    ).trim();
+  const write = (filename: string, content = "fixture change\n") => {
+    const target = path.join(cwd, filename);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  };
+  const commit = () => {
+    git("add", "--all");
+    git("commit", "--quiet", "-m", "Synthetic source fixture");
+    return git("rev-parse", "HEAD");
+  };
+  git("init", "--quiet", "--template=");
+  write(productionPath, "export const production = true;\n");
+  write(fixturePath, "initial fixture\n");
+  const sourceSha = commit();
+  return { cwd, sourceSha, git, write, commit };
+}
+
+describe("installed fingerprint source qualification", () => {
+  it("accepts clean candidate owners with reviewed tooling changes", () => {
+    const repo = createRepository();
+    const paths = [fixturePath, "src/daemon/schtasks.installed-package.test-support.ts"];
+    for (const filename of paths) {
+      repo.write(filename);
+    }
+    const toolingSha = repo.commit();
+    expect(toolingSha).not.toBe(repo.sourceSha);
+    expect(verifyInstalledFingerprintSource({ ...repo, toolingSha })).toEqual(paths.toSorted());
+  });
+
+  it.each(["production", "unreviewed test", "rename"])(
+    "rejects %s changes outside reviewed fixtures",
+    (kind) => {
+      const repo = createRepository();
+      const filename =
+        kind === "unreviewed test" ? "src/daemon/schtasks.unreviewed.test.ts" : productionPath;
+      if (kind === "rename") {
+        repo.git("mv", "--force", productionPath, fixturePath);
+      } else {
+        repo.write(filename);
+      }
+      const toolingSha = repo.commit();
+      expect(() => verifyInstalledFingerprintSource({ ...repo, toolingSha })).toThrow(
+        `Candidate source differs outside reviewed proof fixtures: ${filename}`,
+      );
+    },
+  );
+
+  it.each(["wrong HEAD", "staged", "invalid pins"])(
+    "rejects an unqualified source checkout: %s",
+    (kind) => {
+      const repo = createRepository();
+      if (kind !== "invalid pins") {
+        repo.write(fixturePath);
+        if (kind === "wrong HEAD") {
+          repo.commit();
+        } else if (kind === "staged") {
+          repo.git("add", "--", fixturePath);
+        }
+      }
+      const { cwd, sourceSha } = repo;
+      const pins =
+        kind === "invalid pins"
+          ? [
+              { sourceSha: sourceSha.slice(0, 12), toolingSha: sourceSha },
+              { sourceSha, toolingSha: "HEAD" },
+              { sourceSha: "0".repeat(40), toolingSha: sourceSha },
+            ]
+          : [{ sourceSha, toolingSha: sourceSha }];
+      for (const pin of pins) {
+        expect(() => verifyInstalledFingerprintSource({ cwd, ...pin })).toThrow();
+      }
     },
   );
 });

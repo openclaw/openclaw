@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -9,6 +9,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: vi.fn(),
 }));
 
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.useRealTimers();
   vi.resetAllMocks();
@@ -27,13 +28,12 @@ function createObserverRuntime() {
 it.each(["read-error", "cancelled"] as const)(
   "settles the recovery observer and unsubscribes after %s",
   async (outcome) => {
-    vi.useFakeTimers();
     const scope = { storePath: "/fixture/sessions.json", sessionKey: "agent:main:main" };
     const initial = {
       sessionId: "fixture-session",
       updatedAt: 1,
       abortedLastRun: true,
-      status: "running" as const,
+      status: "interrupted" as const,
     };
     const read = vi.mocked(loadSessionEntry).mockReturnValue(initial);
     const runtime = createObserverRuntime();
@@ -80,7 +80,6 @@ it.each(["read-error", "cancelled"] as const)(
 it.each([false, true])(
   "waits for both physical stores sharing a session key (reverse=%s)",
   async (reverse) => {
-    vi.useFakeTimers();
     const scopes = ["ops", " ops "].map((directory) => ({
       storePath: `/fixture/agents/${directory}/sessions/sessions.json`,
       sessionKey: "agent:ops:main",
@@ -88,7 +87,12 @@ it.each([false, true])(
     const entries = new Map<string, SessionEntry>(
       scopes.map((scope, index) => [
         scope.storePath,
-        { sessionId: `session-${index}`, updatedAt: 1, status: "running", abortedLastRun: true },
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1,
+          status: "interrupted",
+          abortedLastRun: true,
+        },
       ]),
     );
     const read = vi.mocked(loadSessionEntry).mockImplementation((scope) => {

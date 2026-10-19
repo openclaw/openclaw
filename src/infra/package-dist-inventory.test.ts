@@ -1,516 +1,313 @@
-// Covers package dist inventory collection and validation.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  isLegacyPluginDependencyInstallStagePath,
+  isLegacyPluginDependencyInstallStagePath as isInstallStage,
   LOCAL_BUILD_METADATA_DIST_PATHS,
   writePackageDistInventory,
   writePackageDistInventoryForPublish,
 } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
-import { withTestDir } from "../test-helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   collectPackageDistContentInventory,
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 
-async function writeFiles(packageRoot: string, paths: readonly string[], content = "export {};\n") {
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+let packageRoot: string;
+const at = (relative: string) => path.join(packageRoot, relative);
+beforeEach(() => {
+  packageRoot = dirs.make("openclaw-dist-inventory-");
+});
+afterEach(() => __setFsSafeTestHooksForTest());
+async function writeFiles(paths: readonly string[], content = "export {};\n") {
   for (const relativePath of paths) {
-    const filePath = path.join(packageRoot, relativePath);
+    const filePath = at(relativePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, "utf8");
   }
 }
 
-describe("package dist inventory", () => {
-  it("retains binary digests, byte counts, modes, and allowed package hardlinks", async () => {
-    await withTestDir({ prefix: "openclaw-dist-content-inventory-" }, async (packageRoot) => {
-      const distDir = path.join(packageRoot, "dist");
-      const binaryPath = path.join(distDir, "binary.js");
-      const binary = Buffer.alloc(128 * 1024 + 7, 0xa5);
-      binary[0] = 0;
-      binary[binary.length - 1] = 0xff;
-      await fs.mkdir(distDir);
-      await fs.writeFile(binaryPath, binary);
-      await fs.chmod(binaryPath, 0o751);
-      await fs.link(binaryPath, path.join(distDir, "linked.js"));
-      await fs.writeFile(path.join(distDir, "empty.js"), "", { mode: 0o600 });
-      const binaryEntry = {
-        sha256: createHash("sha256").update(binary).digest("hex"),
-        size: binary.byteLength,
-        mode: process.platform === "win32" ? (await fs.stat(binaryPath)).mode & 0o777 : 0o751,
-      };
-      await expect(collectPackageDistContentInventory(packageRoot)).resolves.toEqual([
-        { path: "dist/binary.js", ...binaryEntry },
-        {
-          path: "dist/empty.js",
-          sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          size: 0,
-          mode:
-            process.platform === "win32"
-              ? (await fs.stat(path.join(distDir, "empty.js"))).mode & 0o777
-              : 0o600,
-        },
-        { path: "dist/linked.js", ...binaryEntry },
-      ]);
-    });
-  });
+const writeJson = (file: string, data: unknown) => writeFiles([file], JSON.stringify(data));
+const missing = (file: string) =>
+  expect(fs.access(at(file))).rejects.toMatchObject({ code: "ENOENT" });
+const collect = () => collectPackageDistInventory(packageRoot);
+const publish = () => writePackageDistInventoryForPublish(packageRoot);
+const inventory = () => writePackageDistInventory(packageRoot);
+const content = (files?: string[]) => collectPackageDistContentInventory(packageRoot, files);
+const expectInventory = (result: Promise<string[]>, ...files: string[]) =>
+  expect(result).resolves.toEqual([...files, "dist/postinstall-content-inventory.json"]);
+const currentInventory = ["dist/current.js", "dist/postinstall-content-inventory.json"] as const;
 
-  it("rejects symlinks in a supplied content inventory", async () => {
-    await withTestDir({ prefix: "openclaw-dist-content-link-" }, async (packageRoot) => {
-      await fs.mkdir(path.join(packageRoot, "dist"));
-      await fs.writeFile(path.join(packageRoot, "outside.js"), "outside");
-      await fs.symlink("../outside.js", path.join(packageRoot, "dist", "entry.js"));
-      await expect(
-        collectPackageDistContentInventory(packageRoot, ["dist/entry.js"]),
-      ).rejects.toMatchObject({ code: "symlink" });
-    });
-  });
-
-  it("hashes the complete file when it outgrows the admitted small-file buffer", async () => {
-    await withTestDir({ prefix: "openclaw-dist-content-growth-" }, async (packageRoot) => {
-      const filePath = path.join(packageRoot, "dist", "growing.js");
-      const grown = Buffer.alloc(128 * 1024 + 7, 0x71);
-      await fs.mkdir(path.dirname(filePath));
-      await fs.writeFile(filePath, "small");
-      let replaced = false;
-      __setFsSafeTestHooksForTest({
-        beforeRootReadFinalFence: async (openedPath) => {
-          if (!replaced && path.basename(openedPath) === "growing.js") {
-            replaced = true;
-            await fs.writeFile(filePath, grown);
-          }
-        },
-      });
-      try {
-        await expect(collectPackageDistContentInventory(packageRoot)).resolves.toEqual([
-          expect.objectContaining({
-            path: "dist/growing.js",
-            sha256: createHash("sha256").update(grown).digest("hex"),
-            size: grown.byteLength,
-          }),
-        ]);
-        expect(replaced).toBe(true);
-      } finally {
-        __setFsSafeTestHooksForTest();
-      }
-    });
-  });
-
-  it("tracks missing and stale dist files", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-" }, async (packageRoot) => {
-      const currentFile = path.join(packageRoot, "dist", "current-BR6xv1a1.js");
-      await fs.mkdir(path.dirname(currentFile), { recursive: true });
-      await fs.writeFile(currentFile, "export {};\n", "utf8");
-
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/current-BR6xv1a1.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-      await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
-        "dist/current-BR6xv1a1.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-
-      await fs.rm(currentFile);
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "stale-CJUAgRQR.js"),
-        "export {};\n",
-        "utf8",
-      );
-
-      await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/postinstall-content-inventory.json",
-        "dist/stale-CJUAgRQR.js",
-      ]);
-    });
-  });
-
-  it("keeps lifecycle state outside the closed dist inventory", async () => {
-    await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
-      const currentFile = path.join(packageRoot, "dist", "current.js");
-      await fs.mkdir(path.dirname(currentFile), { recursive: true });
-      await fs.writeFile(currentFile, "export {};\n", "utf8");
-
-      await expect(writePackageDistInventoryForPublish(packageRoot)).resolves.toEqual([
-        "dist/current.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-      await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/current.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-      await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toEqual([
-        "dist/current.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-      await expect(
-        fs.readFile(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
-      ).resolves.toBe("pending\n");
-    });
-  });
-
-  it("keeps npm-omitted dist artifacts out of the inventory", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-pack-" }, async (packageRoot) => {
-      await writeFiles(packageRoot, [
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
-        "dist/extensions/qa-channel/cli.js",
-        "dist/extensions/qa-lab/cli.js",
-        "dist/plugin-sdk/qa-lab.js",
-        "dist/plugin-sdk/qa-channel.js",
-        "dist/plugin-sdk/qa-channel-protocol.js",
-        "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
-        "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
-        "dist/plugin-sdk/provider-entry.d.ts",
-        "dist/qa-runtime-B9LDtssJ.js",
-      ]);
-      await writeFiles(packageRoot, LOCAL_BUILD_METADATA_DIST_PATHS, "{}\n");
-      await writeFiles(packageRoot, ["dist/feature.runtime.js.map"], "{}");
-
-      await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
-        "dist/plugin-sdk/provider-entry.d.ts",
-        "dist/postinstall-content-inventory.json",
-      ]);
-    });
-  });
-
-  it.each([
-    { exclusion: "!dist/OpenClaw.app/**", app: "dist/OpenClaw.app" },
-    { exclusion: "!dist/**/*.app/**", app: "dist/.stage/OpenClaw.app" },
-    { exclusion: "!dist/OpenClaw.app", app: "dist/OpenClaw.app" },
-    { exclusion: "!dist/**/*.app", app: "dist/.stage/OpenClaw.app" },
-  ])(
-    "honors package files exclusions ($exclusion) when writing the dist inventory",
-    async ({ exclusion, app }) => {
-      await withTestDir(
-        { prefix: "openclaw-dist-inventory-package-files-" },
-        async (packageRoot) => {
-          const omittedAppBundle = path.join(packageRoot, app);
-          await fs.mkdir(omittedAppBundle, { recursive: true });
-          await fs.writeFile(
-            path.join(packageRoot, "package.json"),
-            JSON.stringify({
-              files: [
-                "dist/",
-                exclusion,
-                "!dist/plugin-sdk/plugin-test-runtime.js",
-                "!dist/plugin-sdk/plugin-test-runtime.d.ts",
-                "!dist/plugin-sdk/src/test-utils/**",
-                "!dist/plugin-sdk/qa-channel.*",
-                "!dist/qa-runtime-*.js",
-                "!dist/**/*.map",
-              ],
-            }),
-            "utf8",
-          );
-          await writeFiles(packageRoot, [
-            "dist/plugin-sdk/runtime.js",
-            "dist/plugin-sdk/plugin-test-runtime.js",
-            "dist/plugin-sdk/plugin-test-runtime.d.ts",
-            "dist/plugin-sdk/src/test-utils/helpers.d.ts",
-            "dist/plugin-sdk/qa-channel.js",
-            "dist/qa-runtime-AbC123.js",
-          ]);
-          await writeFiles(
-            packageRoot,
-            ["dist/runtime.js.map", "dist/plugin-sdk/runtime.js.map"],
-            "{}",
-          );
-          await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
-
-          await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-            "dist/plugin-sdk/runtime.js",
-            "dist/postinstall-content-inventory.json",
-          ]);
-        },
-      );
+it("retains binary digests, byte counts, modes, and allowed package hardlinks", async () => {
+  const distDir = at("dist");
+  const binaryPath = path.join(distDir, "binary.js");
+  const binary = Buffer.alloc(128 * 1024 + 7, 0xa5);
+  binary[0] = 0;
+  binary[binary.length - 1] = 0xff;
+  await fs.mkdir(distDir);
+  await fs.writeFile(binaryPath, binary);
+  await fs.chmod(binaryPath, 0o751);
+  await fs.link(binaryPath, path.join(distDir, "linked.js"));
+  await fs.writeFile(path.join(distDir, "empty.js"), "", { mode: 0o600 });
+  const binaryEntry = {
+    sha256: createHash("sha256").update(binary).digest("hex"),
+    size: binary.byteLength,
+    mode: process.platform === "win32" ? (await fs.stat(binaryPath)).mode & 0o777 : 0o751,
+  };
+  await expect(content()).resolves.toEqual([
+    { path: "dist/binary.js", ...binaryEntry },
+    {
+      path: "dist/empty.js",
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      size: 0,
+      mode:
+        process.platform === "win32"
+          ? (await fs.stat(path.join(distDir, "empty.js"))).mode & 0o777
+          : 0o600,
     },
-  );
+    { path: "dist/linked.js", ...binaryEntry },
+  ]);
+});
 
-  it("omits interrupted Control UI build siblings through the root package files list", async () => {
-    const { files } = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
-    await withTestDir({ prefix: "openclaw-dist-inventory-ui-staging-" }, async (packageRoot) => {
-      await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ files }), "utf8");
-      await writeFiles(packageRoot, [
-        "dist/control-ui/index.html",
-        "dist/control-ui.build-123-AbCdEf/assets/index.js",
-        "dist/control-ui.build-123-AbCdEf.retired/index.html",
-      ]);
-
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/control-ui/index.html",
-        "dist/postinstall-content-inventory.json",
-      ]);
-    });
-  });
-
-  it("omits packaged extension node_modules while keeping extension runtime files", async () => {
-    await withTestDir(
-      { prefix: "openclaw-dist-inventory-extension-node-modules-" },
-      async (packageRoot) => {
-        await writeFiles(packageRoot, ["dist/extensions/demo/runtime-api.js"]);
-        await writeFiles(
-          packageRoot,
-          [
-            "dist/extensions/node_modules/openclaw/package.json",
-            "dist/extensions/demo/node_modules/left-pad/package.json",
-          ],
-          "{}",
-        );
-
-        await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-          "dist/extensions/demo/runtime-api.js",
-          "dist/postinstall-content-inventory.json",
-        ]);
-      },
-    );
-  });
-
-  it.each(["index.js", ""])("omits externalized plugin entry %j", async (entry) => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-externalized-" }, async (packageRoot) => {
-      const externalizedPackageJson = path.join(
-        packageRoot,
-        "extensions/external-chat/package.json",
-      );
-      const bundledPackageJson = path.join(packageRoot, "extensions/bundled-chat/package.json");
-      const rootPackageJson = path.join(packageRoot, "package.json");
-      await writeFiles(packageRoot, [
-        path.join("dist/extensions/external-chat", entry),
-        "dist/extensions/bundled-chat/index.js",
-      ]);
-      await fs.mkdir(path.dirname(externalizedPackageJson), { recursive: true });
-      await fs.mkdir(path.dirname(bundledPackageJson), { recursive: true });
-      await fs.writeFile(
-        rootPackageJson,
-        JSON.stringify({
-          files: ["dist/", "!dist/extensions/external-chat/**"],
-        }),
-        "utf8",
-      );
-      await fs.writeFile(
-        externalizedPackageJson,
-        JSON.stringify({
-          name: "@openclaw/external-chat",
-          openclaw: {
-            release: {
-              publishToClawHub: true,
-              publishToNpm: true,
-            },
-          },
-        }),
-        "utf8",
-      );
-      await fs.writeFile(
-        bundledPackageJson,
-        JSON.stringify({
-          name: "@openclaw/bundled-chat",
-          openclaw: {},
-        }),
-        "utf8",
-      );
-
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/extensions/bundled-chat/index.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-    });
-  });
-
-  it("keeps publishable core-package runtime plugin dist trees in the inventory", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-core-runtime-" }, async (packageRoot) => {
-      const corePackageJson = path.join(packageRoot, "extensions/core-chat/package.json");
-      await writeFiles(packageRoot, ["dist/extensions/core-chat/index.js"]);
-      await fs.mkdir(path.dirname(corePackageJson), { recursive: true });
-      await fs.writeFile(
-        corePackageJson,
-        JSON.stringify({
-          name: "@openclaw/core-chat",
-          openclaw: {
-            release: {
-              publishToClawHub: true,
-              publishToNpm: true,
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/extensions/core-chat/index.js",
-        "dist/postinstall-content-inventory.json",
-      ]);
-    });
-  });
-
-  it("matches install-stage paths case-insensitively across path segments", () => {
-    expect(
-      isLegacyPluginDependencyInstallStagePath(
-        "dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/package.json",
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyPluginDependencyInstallStagePath(
-        "dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123/node_modules/playwright-core/package.json",
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyPluginDependencyInstallStagePath(
-        "Dist/Extensions/browser/.OpenClaw-Install-Stage/package.json",
-      ),
-    ).toBe(true);
-    expect(
-      isLegacyPluginDependencyInstallStagePath(
-        "dist/extensions/browser/.openclaw-runtime-deps-copy-AbC123/package.json",
-      ),
-    ).toBe(false);
-    expect(
-      isLegacyPluginDependencyInstallStagePath("dist/extensions/.openclaw-install-stage"),
-    ).toBe(false);
-  });
-
-  it.each(["directory", "file", "symlink"] as const)(
-    "rejects install-stage %s debris before changing published inventory artifacts",
-    async (kind) => {
-      await withTestDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
-        const stagePath = path.join(
-          packageRoot,
-          "dist/extensions/browser/.openclaw-install-stage-AbC123",
-        );
-        await fs.mkdir(path.dirname(stagePath), { recursive: true });
-        if (kind === "directory") {
-          await fs.mkdir(stagePath);
-          await fs.writeFile(path.join(stagePath, "package.json"), "{}");
-        } else if (kind === "file") {
-          await fs.writeFile(stagePath, "debris");
-        } else {
-          await fs.symlink(
-            packageRoot,
-            stagePath,
-            process.platform === "win32" ? "junction" : "dir",
-          );
-        }
-        const artifacts = [
-          "dist/postinstall-inventory.json",
-          "dist/postinstall-content-inventory.json",
-          PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
-        ];
-        for (const artifact of artifacts) {
-          await fs.writeFile(path.join(packageRoot, artifact), "previous publication\n");
-        }
-        await expect(writePackageDistInventoryForPublish(packageRoot)).rejects.toThrow(
-          /unexpected legacy plugin dependency staging debris/u,
-        );
-        for (const artifact of artifacts) {
-          await expect(fs.readFile(path.join(packageRoot, artifact), "utf8")).resolves.toBe(
-            "previous publication\n",
-          );
-        }
-      });
-    },
-  );
-
-  it.each(["ENOENT", "ENOTDIR", "EACCES"])(
-    "preserves %s scan failure handling before publication",
-    async (code) => {
-      await withTestDir(
-        { prefix: "openclaw-dist-inventory-scan-failure-" },
-        async (packageRoot) => {
-          const failure = Object.assign(new Error("inventory scan failed"), { code });
-          const scan = vi.spyOn(fs, "readdir").mockRejectedValueOnce(failure);
-          try {
-            if (code === "ENOENT") {
-              await expect(writePackageDistInventoryForPublish(packageRoot)).resolves.toEqual([
-                "dist/postinstall-content-inventory.json",
-              ]);
-            } else {
-              await expect(writePackageDistInventoryForPublish(packageRoot)).rejects.toBe(failure);
-              await expect(fs.access(path.join(packageRoot, "dist"))).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-              await expect(
-                fs.access(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)),
-              ).rejects.toMatchObject({ code: "ENOENT" });
-            }
-          } finally {
-            scan.mockRestore();
-          }
-        },
-      );
-    },
-  );
-
-  it("rejects mixed-case install-stage debris on case-sensitive builders", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-stage-case-" }, async (packageRoot) => {
-      await writeFiles(
-        packageRoot,
-        ["Dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123/package.json"],
-        "{}",
-      );
-
-      await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-        /unexpected legacy plugin dependency staging debris/u,
-      );
-    });
-  });
-
-  it("only treats plugin-root install stages as dependency staging debris", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-stage-depth-" }, async (packageRoot) => {
-      const files = [
-        "dist/extensions/.openclaw-install-stage/index.js",
-        "dist/extensions/browser/assets/.openclaw-install-stage/index.js",
-      ];
-      for (const file of files) {
-        await fs.mkdir(path.dirname(path.join(packageRoot, file)), { recursive: true });
-        await fs.writeFile(path.join(packageRoot, file), "export {};\n");
-      }
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        ...files,
-        "dist/postinstall-content-inventory.json",
-      ]);
-    });
-  });
-
-  it("leaves symlinked plugin roots to the package path guard", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-linked-plugin-" }, async (packageRoot) => {
-      const target = path.join(packageRoot, "outside");
+it.each(["content", "inventory", "publication"] as const)(
+  "rejects symlinked entries at the %s boundary",
+  async (boundary) => {
+    const publishing = boundary === "publication";
+    const entry = publishing ? "dist/extensions/browser" : "dist/entry.js";
+    const target = at("outside");
+    await fs.mkdir(path.dirname(at(entry)), { recursive: true });
+    if (publishing) {
       await fs.mkdir(path.join(target, ".openclaw-install-stage"), { recursive: true });
-      await fs.mkdir(path.join(packageRoot, "dist/extensions"), { recursive: true });
-      await fs.symlink(
-        target,
-        path.join(packageRoot, "dist/extensions/browser"),
-        process.platform === "win32" ? "junction" : "dir",
+    } else {
+      await fs.writeFile(target, "outside");
+    }
+    await fs.symlink(
+      publishing ? target : "../outside",
+      at(entry),
+      publishing && process.platform === "win32" ? "junction" : publishing ? "dir" : "file",
+    );
+    if (boundary === "content") {
+      await expect(content([entry])).rejects.toMatchObject({ code: "symlink" });
+    } else {
+      await expect(publishing ? publish() : collect()).rejects.toThrow(
+        `Unsafe package dist path: ${entry}`,
       );
-      await expect(writePackageDistInventoryForPublish(packageRoot)).rejects.toThrow(
-        "Unsafe package dist path: dist/extensions/browser",
-      );
-      await expect(
-        fs.access(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
+    }
+    if (publishing) {
+      await missing(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+    }
+  },
+);
 
-  it("returns null when the inventory is missing", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-missing-" }, async (packageRoot) => {
-      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toBeNull();
-    });
+it("hashes the complete file when it outgrows the admitted small-file buffer", async () => {
+  const filePath = at("dist/growing.js");
+  const grown = Buffer.alloc(128 * 1024 + 7, 0x71);
+  await writeFiles(["dist/growing.js"], "small");
+  let replaced = false;
+  __setFsSafeTestHooksForTest({
+    beforeRootReadFinalFence: async (openedPath) => {
+      if (!replaced && path.basename(openedPath) === "growing.js") {
+        replaced = true;
+        await fs.writeFile(filePath, grown);
+      }
+    },
   });
+  await expect(content()).resolves.toEqual([
+    expect.objectContaining({
+      path: "dist/growing.js",
+      sha256: createHash("sha256").update(grown).digest("hex"),
+      size: grown.byteLength,
+    }),
+  ]);
+  expect(replaced).toBe(true);
+});
 
-  it("rejects symlinked dist entries", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-symlink-" }, async (packageRoot) => {
-      const distDir = path.join(packageRoot, "dist");
-      await fs.mkdir(distDir, { recursive: true });
-      await fs.writeFile(path.join(packageRoot, "escape.js"), "export {};\n", "utf8");
-      await fs.symlink(path.join(packageRoot, "escape.js"), path.join(distDir, "entry.js"));
+it("tracks missing and stale files while keeping lifecycle state outside the inventory", async () => {
+  const currentFile = at(currentInventory[0]);
+  await writeFiles([currentInventory[0]]);
 
-      await expect(collectPackageDistInventory(packageRoot)).rejects.toThrow(
-        "Unsafe package dist path: dist/entry.js",
-      );
+  await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toBeNull();
+  await expect(publish()).resolves.toEqual(currentInventory);
+  await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual(
+    currentInventory,
+  );
+  await expect(collect()).resolves.toEqual(currentInventory);
+  await expect(fs.readFile(at(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8")).resolves.toBe(
+    "pending\n",
+  );
+  await fs.rm(currentFile);
+  await writeFiles(["dist/stale.js"]);
+
+  await expect(collect()).resolves.toEqual([
+    "dist/postinstall-content-inventory.json",
+    "dist/stale.js",
+  ]);
+});
+
+it("omits build and dependency artifacts while retaining packaged runtime files", async () => {
+  await writeFiles([
+    "dist/extensions/qa-channel/runtime-api.js",
+    "dist/extensions/qa-lab/runtime-api.js",
+    "dist/extensions/qa-channel/cli.js",
+    "dist/extensions/qa-lab/cli.js",
+    "dist/plugin-sdk/qa-lab.js",
+    "dist/plugin-sdk/qa-channel.js",
+    "dist/plugin-sdk/qa-channel-protocol.js",
+    "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+    "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
+    "dist/plugin-sdk/provider-entry.d.ts",
+    "dist/qa-runtime-B9LDtssJ.js",
+    "dist/extensions/demo/runtime-api.js",
+    "dist/extensions/node_modules/openclaw/package.json",
+    "dist/extensions/demo/node_modules/left-pad/package.json",
+  ]);
+  await writeFiles(LOCAL_BUILD_METADATA_DIST_PATHS, "{}\n");
+  await writeFiles(["dist/feature.runtime.js.map"], "{}");
+  await expect(inventory()).resolves.toStrictEqual([
+    "dist/extensions/demo/runtime-api.js",
+    "dist/plugin-sdk/provider-entry.d.ts",
+    "dist/postinstall-content-inventory.json",
+  ]);
+});
+
+it.each([
+  { exclusion: "!dist/OpenClaw.app/**", app: "dist/OpenClaw.app" },
+  { exclusion: "!dist/**/*.app/**", app: "dist/.stage/OpenClaw.app" },
+  { exclusion: "!dist/OpenClaw.app", app: "dist/OpenClaw.app" },
+  { exclusion: "!dist/**/*.app", app: "dist/.stage/OpenClaw.app" },
+])(
+  "honors package files exclusions ($exclusion) when writing the dist inventory",
+  async ({ exclusion, app }) => {
+    const omittedAppBundle = at(app);
+    await fs.mkdir(omittedAppBundle, { recursive: true });
+    await writeJson("package.json", {
+      files: [
+        "dist/",
+        exclusion,
+        "!dist/plugin-sdk/plugin-test-runtime.js",
+        "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+        "!dist/plugin-sdk/src/test-utils/**",
+        "!dist/plugin-sdk/qa-channel.*",
+        "!dist/qa-runtime-*.js",
+        "!dist/**/*.map",
+      ],
     });
-  });
+    await writeFiles([
+      "dist/plugin-sdk/runtime.js",
+      "dist/plugin-sdk/plugin-test-runtime.js",
+      "dist/plugin-sdk/plugin-test-runtime.d.ts",
+      "dist/plugin-sdk/src/test-utils/helpers.d.ts",
+      "dist/plugin-sdk/qa-channel.js",
+      "dist/qa-runtime-AbC123.js",
+    ]);
+    await writeFiles(["dist/runtime.js.map", "dist/plugin-sdk/runtime.js.map"], "{}");
+    await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
+
+    await expectInventory(inventory(), "dist/plugin-sdk/runtime.js");
+  },
+);
+
+it("omits interrupted Control UI build siblings through the root package files list", async () => {
+  const { files } = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
+  await writeJson("package.json", { files });
+  await writeFiles([
+    "dist/control-ui/index.html",
+    "dist/control-ui.build-123-AbCdEf/assets/index.js",
+    "dist/control-ui.build-123-AbCdEf.retired/index.html",
+  ]);
+
+  await expectInventory(inventory(), "dist/control-ui/index.html");
+});
+
+it.each([
+  { entry: "index.js", excluded: true },
+  { entry: "", excluded: true },
+  { entry: "index.js", excluded: false },
+])("honors plugin entry $entry exclusions (excluded=$excluded)", async ({ entry, excluded }) => {
+  await writeFiles([
+    path.join("dist/extensions/published-chat", entry),
+    "dist/extensions/bundled-chat/index.js",
+  ]);
+  if (excluded) {
+    await writeJson("package.json", {
+      files: ["dist/", "!dist/extensions/published-chat/**"],
+    });
+  }
+  await expect(inventory()).resolves.toEqual([
+    "dist/extensions/bundled-chat/index.js",
+    ...(excluded ? [] : ["dist/extensions/published-chat/index.js"]),
+    "dist/postinstall-content-inventory.json",
+  ]);
+});
+
+it("matches install-stage paths case-insensitively across path segments", () => {
+  const paths = [
+    "dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/package.json",
+    "dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123/node_modules/playwright-core/package.json",
+    "Dist/Extensions/browser/.OpenClaw-Install-Stage/package.json",
+    "dist/extensions/browser/.openclaw-runtime-deps-copy-AbC123/package.json",
+    "dist/extensions/.openclaw-install-stage",
+  ];
+  expect(paths.map(isInstallStage)).toEqual([true, true, true, false, false]);
+});
+
+it.each(["directory", "file", "symlink", "mixed-case"] as const)(
+  "rejects install-stage %s debris before changing published inventory artifacts",
+  async (kind) => {
+    const stagePath = path.join(
+      packageRoot,
+      kind === "mixed-case"
+        ? "Dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123"
+        : "dist/extensions/browser/.openclaw-install-stage-AbC123",
+    );
+    await fs.mkdir(path.dirname(stagePath), { recursive: true });
+    if (kind === "directory" || kind === "mixed-case") {
+      await fs.mkdir(stagePath);
+      await fs.writeFile(path.join(stagePath, "package.json"), "{}");
+    } else if (kind === "file") {
+      await fs.writeFile(stagePath, "debris");
+    } else {
+      await fs.symlink(packageRoot, stagePath, process.platform === "win32" ? "junction" : "dir");
+    }
+    const artifacts = [
+      "dist/postinstall-inventory.json",
+      "dist/postinstall-content-inventory.json",
+      PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+    ];
+    await writeFiles(artifacts, "previous publication\n");
+    await expect(publish()).rejects.toThrow(/unexpected legacy plugin dependency staging debris/u);
+    for (const artifact of artifacts) {
+      await expect(fs.readFile(at(artifact), "utf8")).resolves.toBe("previous publication\n");
+    }
+  },
+);
+
+it.each(["ENOENT", "EACCES"])("handles %s scans before publication", async (code) => {
+  const failure = Object.assign(new Error("inventory scan failed"), { code });
+  const scan = vi.spyOn(fs, "readdir").mockRejectedValueOnce(failure);
+  try {
+    if (code === "ENOENT") {
+      await expectInventory(publish());
+    } else {
+      await expect(publish()).rejects.toBe(failure);
+      await missing("dist");
+      await missing(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+    }
+  } finally {
+    scan.mockRestore();
+  }
+});
+
+it("only treats plugin-root install stages as dependency staging debris", async () => {
+  const files = [
+    "dist/extensions/.openclaw-install-stage/index.js",
+    "dist/extensions/browser/assets/.openclaw-install-stage/index.js",
+  ];
+  await writeFiles(files);
+  await expect(inventory()).resolves.toEqual([...files, "dist/postinstall-content-inventory.json"]);
 });

@@ -1,13 +1,13 @@
 /** Offline Doctor target discovery and legacy-source admission. */
 import fs from "node:fs";
 import path from "node:path";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { selectSessionStoreMaintenanceTargets } from "../config/sessions/targets-maintenance.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
-  resolveConfiguredAgentDatabaseTargets,
   resolveSessionStoreTargets,
   type SessionStoreTarget as ResolvedSessionStoreTarget,
 } from "../config/sessions/targets.js";
@@ -26,7 +26,7 @@ import {
   resolveSqliteDatabaseFilePaths,
 } from "../infra/sqlite-files.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import type {
   DoctorSessionSqliteMode,
@@ -47,6 +47,14 @@ export async function prepareDoctorSessionSqliteTargets(
     authority?: DoctorSqliteMaintenanceAuthority;
   },
 ) {
+  if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
+    const statePath = resolveOpenClawStateSqlitePath(params.env);
+    if (hasOrphanedSqliteSidecars(statePath)) {
+      throw new Error(
+        `OpenClaw state database ${statePath} is unavailable: SQLite sidecars remain without the database. Restore its matching database before retrying Doctor; keep the sidecars intact.`,
+      );
+    }
+  }
   const resolved = resolveDoctorSessionSqliteTargets(params);
   if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
     assertDoctorSqliteMaintenancePathsNotAliased(
@@ -65,6 +73,7 @@ export async function prepareDoctorSessionSqliteTargets(
       authority: params.authority,
       targets: projectExistingAgentDatabaseTargets(targets, params.env, params.cfg),
       deferSchemaRepair: params.mode === "import",
+      integrityCheck: params.mode === "import" ? params.integrityCheck : "full",
     });
   };
   if (params.mode === "import") {
@@ -92,9 +101,7 @@ export function resolveDoctorSessionSqliteConfig(
     return options.cfg;
   }
   const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
-  return options.store
-    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
-    : getRuntimeConfig();
+  return options.store ? { agents: { entries: { [requestedAgentId]: {} } } } : loadConfig();
 }
 
 export function resolveDoctorSessionSqliteMaintenancePaths(
@@ -192,26 +199,9 @@ export function resolveDoctorSessionSqliteTargets(params: {
       target,
       sqlitePath: resolveTargetSqlitePath(target, params.env),
     }));
-    const isRetained = createRetainedAgentDatabaseMatcher(
-      params.env,
-      () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
-      {
-        kind: "legacy-database",
-        readDatabasePaths: () => targets.map(({ sqlitePath }) => sqlitePath),
-      },
-    );
     return {
-      targets: targets
-        .filter(({ target, sqlitePath }) => {
-          const orphanedSidecars = hasOrphanedSqliteSidecars(sqlitePath);
-          return [target.storePath, sqlitePath].every((pathname) => {
-            const disposition = isRetained(pathname, target.agentId);
-            // Unknown history is not a deletion; an incomplete SQLite family still needs recovery.
-            return !disposition || (disposition === "unavailable" && !orphanedSidecars);
-          });
-        })
-        .map(({ target }) => target),
-      knownTargets: targets.map(({ target }) => target),
+      targets: selectSessionStoreMaintenanceTargets(targets, params).map(({ target }) => target),
+      knownTargets: candidates,
     };
   }
   return { targets: resolveSessionStoreTargets(params.cfg, {}, { env: params.env }) };

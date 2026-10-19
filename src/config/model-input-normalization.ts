@@ -1,4 +1,5 @@
 // Normalizes user-submitted model config at config mutation boundaries.
+import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   normalizeConfiguredProviderCatalogModelId,
   type ManifestModelIdNormalizationProvider,
@@ -13,8 +14,12 @@ import {
 } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-const MODEL_SELECTION_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 const MEDIA_MODEL_KEYS = ["image", "video", "music"] as const;
+
+type ModelIdNormalizationPolicies = ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
+type ModelIdNormalizationPolicySource =
+  | ModelIdNormalizationPolicies
+  | (() => ModelIdNormalizationPolicies);
 
 /** Preserve a string model when a path write enters its supported object form. */
 export function normalizeConfigModelSelectionParent(
@@ -37,14 +42,17 @@ export function normalizeConfigModelSelectionParent(
   const scopeIndex = isDefaults ? 2 : isAgentEntry ? 3 : undefined;
   const isAgentModel =
     scopeIndex !== undefined &&
-    ((parentIndex === scopeIndex && path[scopeIndex] === "model") ||
+    ((parentIndex === scopeIndex &&
+      (path[scopeIndex] === "model" || path[scopeIndex] === "utilityModel")) ||
       (parentIndex === scopeIndex + 1 &&
         path[scopeIndex] === "subagents" &&
         path[parentIndex] === "model"));
   const isToolModel =
     isDefaults &&
     ((parentIndex === 2 &&
-      MODEL_SELECTION_KEYS.some((key) => key !== "model" && key === path[2])) ||
+      AGENT_MODEL_CONFIG_KEYS.some(
+        (key) => key !== "model" && key !== "utilityModel" && key === path[2],
+      )) ||
       (parentIndex === 3 &&
         path[2] === "mediaModels" &&
         MEDIA_MODEL_KEYS.some((key) => key === path[3])));
@@ -60,6 +68,9 @@ export function normalizeConfigModelSelectionParent(
     (member === "timeoutMs" && !isToolModel)
   ) {
     return undefined;
+  }
+  if (path[parentIndex] === "utilityModel") {
+    return { primary: value.trim() };
   }
   return toAgentModelListLike(value);
 }
@@ -85,58 +96,37 @@ function normalizeAgentModelScope(value: unknown): unknown {
     return value;
   }
 
-  let next = value;
-  const assign = (key: string, candidate: unknown) => {
-    if (candidate === next[key]) {
-      return;
-    }
-    next = { ...next, [key]: candidate };
-  };
-
-  for (const key of MODEL_SELECTION_KEYS) {
-    if (Object.hasOwn(value, key)) {
-      assign(key, normalizeAgentModelSelectionForConfig(value[key]));
-    }
+  let next: unknown = value;
+  for (const key of AGENT_MODEL_CONFIG_KEYS) {
+    next = normalizeNestedModelField(next, key, normalizeAgentModelSelectionForConfig);
   }
-  if (Object.hasOwn(value, "utilityModel")) {
-    assign("utilityModel", normalizeStringModelRef(value.utilityModel));
-  }
-  const originalMediaModels = value.mediaModels;
-  if (isRecord(originalMediaModels)) {
-    let mediaModels: unknown = originalMediaModels;
+  next = normalizeNestedModelField(next, "mediaModels", (mediaModels) => {
+    let nextMediaModels = mediaModels;
     for (const key of MEDIA_MODEL_KEYS) {
-      mediaModels = normalizeNestedModelField(
-        mediaModels,
+      nextMediaModels = normalizeNestedModelField(
+        nextMediaModels,
         key,
         normalizeAgentModelSelectionForConfig,
       );
     }
-    assign("mediaModels", mediaModels);
-  }
-  assign("heartbeat", normalizeNestedModelField(value.heartbeat, "model", normalizeStringModelRef));
-  assign(
-    "subagents",
-    normalizeNestedModelField(value.subagents, "model", normalizeAgentModelSelectionForConfig),
+    return nextMediaModels;
+  });
+  next = normalizeNestedModelField(next, "heartbeat", (heartbeat) =>
+    normalizeNestedModelField(heartbeat, "model", normalizeStringModelRef),
   );
-
-  if (isRecord(value.compaction)) {
-    let compaction = normalizeNestedModelField(value.compaction, "model", normalizeStringModelRef);
-    if (isRecord(compaction)) {
-      const memoryFlush = normalizeNestedModelField(
-        compaction.memoryFlush,
-        "model",
-        normalizeStringModelRef,
-      );
-      if (memoryFlush !== compaction.memoryFlush) {
-        compaction = { ...compaction, memoryFlush };
-      }
-    }
-    assign("compaction", compaction);
-  }
-  if (isRecord(value.models)) {
-    assign("models", normalizeAgentModelMapForConfig(value.models));
-  }
-  return next;
+  next = normalizeNestedModelField(next, "subagents", (subagents) =>
+    normalizeNestedModelField(subagents, "model", normalizeAgentModelSelectionForConfig),
+  );
+  next = normalizeNestedModelField(next, "compaction", (compaction) =>
+    normalizeNestedModelField(
+      normalizeNestedModelField(compaction, "model", normalizeStringModelRef),
+      "memoryFlush",
+      (memoryFlush) => normalizeNestedModelField(memoryFlush, "model", normalizeStringModelRef),
+    ),
+  );
+  return normalizeNestedModelField(next, "models", (models) =>
+    isRecord(models) ? normalizeAgentModelMapForConfig(models) : models,
+  );
 }
 
 function normalizeAgentScopes(agents: unknown): unknown {
@@ -179,12 +169,13 @@ function normalizeAgentScopes(agents: unknown): unknown {
 
 function normalizeProviderCatalogs(
   models: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
+  modelIdNormalizationPolicies?: ModelIdNormalizationPolicySource,
 ): unknown {
   if (!isRecord(models) || !isRecord(models.providers)) {
     return models;
   }
 
+  let policies: ModelIdNormalizationPolicies | undefined;
   let providersChanged = false;
   const providers = Object.fromEntries(
     Object.entries(models.providers).map(([providerId, providerValue]) => {
@@ -200,11 +191,12 @@ function normalizeProviderCatalogs(
         if (!trimmed) {
           return model;
         }
-        const id = normalizeConfiguredProviderCatalogModelId(
-          providerId,
-          trimmed,
-          modelIdNormalizationPolicies,
-        );
+        // Only catalog IDs consume manifest policies; agent refs use core rules.
+        policies ??=
+          typeof modelIdNormalizationPolicies === "function"
+            ? modelIdNormalizationPolicies()
+            : modelIdNormalizationPolicies;
+        const id = normalizeConfiguredProviderCatalogModelId(providerId, trimmed, policies);
         return id === model.id ? model : { ...model, id };
       });
       if (providerModels.every((model, index) => model === originalModels[index])) {
@@ -220,14 +212,18 @@ function normalizeProviderCatalogs(
 /** Canonicalize model refs submitted through a config mutation API before persistence. */
 export function normalizeSubmittedConfigModelRefs(
   cfg: OpenClawConfig,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
+  modelIdNormalizationPolicies?: ModelIdNormalizationPolicySource,
+  options: { normalizeProviderCatalogs?: boolean } = {},
 ): OpenClawConfig {
   let next = cfg;
   const agents = normalizeAgentScopes(cfg.agents);
   if (agents !== cfg.agents) {
     next = { ...next, agents: agents as OpenClawConfig["agents"] };
   }
-  const models = normalizeProviderCatalogs(cfg.models, modelIdNormalizationPolicies);
+  const models =
+    options.normalizeProviderCatalogs === false
+      ? cfg.models
+      : normalizeProviderCatalogs(cfg.models, modelIdNormalizationPolicies);
   if (models !== cfg.models) {
     next = { ...next, models: models as OpenClawConfig["models"] };
   }

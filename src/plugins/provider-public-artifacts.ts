@@ -1,5 +1,4 @@
 import path from "node:path";
-// Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -37,26 +36,6 @@ type ProviderPolicyMetadata = {
   directSurface?: BundledProviderPolicySurface | null;
 };
 
-function resolveBundledProviderPolicyPlugin(
-  providerId: string,
-  options: ProviderPolicyMetadata = {},
-): PluginManifestRecord | null {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  if (!normalizedProviderId) {
-    return null;
-  }
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  if (!bundledPluginsDir) {
-    return null;
-  }
-
-  const registry =
-    options.manifestRegistry ??
-    options.loadManifestRegistry?.() ??
-    loadPluginManifestRegistryCore();
-  return resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
-}
-
 /** Resolves provider policy hooks for a bundled provider or its owning plugin. */
 export function resolveBundledProviderPolicySurface(
   providerId: string,
@@ -73,7 +52,14 @@ export function resolveBundledProviderPolicySurface(
   if (directSurface) {
     return directSurface;
   }
-  const ownerPlugin = resolveBundledProviderPolicyPlugin(normalizedProviderId, options);
+  if (!resolveBundledPluginsDir()) {
+    return null;
+  }
+  const registry =
+    options.manifestRegistry ??
+    options.loadManifestRegistry?.() ??
+    loadPluginManifestRegistryCore();
+  const ownerPlugin = resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
   if (!ownerPlugin) {
     return null;
   }

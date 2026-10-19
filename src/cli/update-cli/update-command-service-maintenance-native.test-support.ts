@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const command = vi.hoisted(() => ({
@@ -49,8 +49,11 @@ vi.mock("./update-command-schema.js", () => ({
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
   captureUpdateActivationSchemas: async () => ({}),
 }));
-vi.mock("./update-command-database-context.js", () => ({
-  inspectUpdateDatabaseContexts: async () => ({ services: new Map() }),
+vi.mock("./update-command-database-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-database-context.js")>()),
+  inspectUpdateDatabaseContexts: async (): ReturnType<
+    typeof import("./update-command-database-context.js").inspectUpdateDatabaseContexts
+  > => ({ services: new Map(), contexts: [], service: undefined, managedEnv: undefined }),
   revalidateUpdateDatabaseContexts: async (_params: unknown, context: unknown) => context,
 }));
 vi.mock("./update-command-managed-context.js", async (original) => ({
@@ -74,7 +77,6 @@ vi.mock("./update-command-package.js", () => ({
     await params.beforeActivate?.();
     return { status: "ok", mode: "npm", root: params.root, steps: [], durationMs: 0 };
   },
-  preparePackageDoctorContext: () => undefined,
 }));
 vi.mock("../../infra/update-global.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-global.js")>()),
@@ -131,7 +133,7 @@ export async function runNativeMaintenanceUpdate(
     discoveredRoot: root,
     installKind: "package",
     servicePlan: serviceRoot ? { rootRedirect: null, serviceRoot } : undefined,
-    pkgOwnership: createFreeBsdPkgOwnershipInspection(),
+    pkgOwnership: createSystemPackageOwnershipInspection(),
   });
   command.admit.mockResolvedValue(run);
   command.target.mockResolvedValue({

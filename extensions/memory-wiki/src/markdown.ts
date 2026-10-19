@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -10,78 +11,26 @@ import {
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
 import { extractWikiLinks } from "./markdown-links.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
-export const WIKI_PAGE_GROUPS = [
-  { kind: "source", dir: "sources", heading: "Sources" },
-  { kind: "entity", dir: "entities", heading: "Entities" },
-  { kind: "concept", dir: "concepts", heading: "Concepts" },
-  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
-  { kind: "report", dir: "reports", heading: "Reports" },
-] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
-type ParsedWikiMarkdown = {
+export type ParsedWikiMarkdown = {
   hasFrontmatter: boolean;
   frontmatter: Record<string, unknown>;
   body: string;
 };
 
-export type WikiClaimEvidence = {
-  kind?: string;
-  sourceId?: string;
-  path?: string;
-  lines?: string;
-  weight?: number;
-  confidence?: number;
-  privacyTier?: string;
-  note?: string;
-  updatedAt?: string;
-};
+export type WikiClaimEvidence = NonNullable<ReturnType<typeof normalizeWikiClaimEvidence>>;
+export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
+type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
+export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
 
-export type WikiClaim = {
-  id?: string;
-  text: string;
-  status?: string;
-  confidence?: number;
-  evidence: WikiClaimEvidence[];
-  updatedAt?: string;
-};
-
-type WikiPersonCard = {
-  canonicalId?: string;
-  handles: string[];
-  socials: string[];
-  emails: string[];
-  timezone?: string;
-  lane?: string;
-  askFor: string[];
-  avoidAskingFor: string[];
-  bestUsedFor: string[];
-  notEnoughFor: string[];
-  confidence?: number;
-  privacyTier?: string;
-  lastRefreshedAt?: string;
-};
-
-export type WikiRelationship = {
-  targetId?: string;
-  targetPath?: string;
-  targetTitle?: string;
-  kind?: string;
-  weight?: number;
-  confidence?: number;
-  evidenceKind?: string;
-  privacyTier?: string;
-  note?: string;
-  updatedAt?: string;
-};
-
-export type WikiPageFrontmatterError = {
+type WikiPageFrontmatterError = {
   relativePath: string;
   message: string;
 };
@@ -228,14 +177,14 @@ function normalizeOptionalStringFields<K extends string>(
   return fields;
 }
 
-function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
+function normalizeWikiClaimEvidence(value: unknown) {
   const record = asNullableRecord(value);
   if (!record) {
     return null;
   }
   const weight = asFiniteNumber(record.weight);
   const confidence = asFiniteNumber(record.confidence);
-  const evidence: WikiClaimEvidence = {
+  const evidence = {
     ...normalizeOptionalStringFields(record, ["kind", "sourceId", "path", "lines"]),
     ...(weight !== undefined ? { weight } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
@@ -244,7 +193,7 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   return Object.keys(evidence).length > 0 ? evidence : null;
 }
 
-export function normalizeWikiClaims(value: unknown): WikiClaim[] {
+export function normalizeWikiClaims(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -277,13 +226,13 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
   });
 }
 
-function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
+function normalizeWikiPersonCard(value: unknown) {
   const record = asNullableRecord(value);
   if (!record) {
     return undefined;
   }
   const confidence = asFiniteNumber(record.confidence);
-  const card: WikiPersonCard = {
+  const card = {
     ...normalizeOptionalStringFields(record, ["canonicalId"]),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
@@ -302,7 +251,7 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
   return hasAnyValue ? card : undefined;
 }
 
-function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
+function normalizeWikiRelationships(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -313,7 +262,7 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
     }
     const weight = asFiniteNumber(record.weight);
     const confidence = asFiniteNumber(record.confidence);
-    const relationship: WikiRelationship = {
+    const relationship = {
       ...normalizeOptionalStringFields(record, ["targetId", "targetPath", "targetTitle", "kind"]),
       ...(weight !== undefined ? { weight } : {}),
       ...(confidence !== undefined ? { confidence } : {}),
@@ -328,29 +277,12 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
   });
 }
 
-function normalizeMarkdownLines(markdown: string): string[] {
-  return markdown
-    .replace(/\r\n?/g, "\n")
-    .trimStart()
-    .split("\n")
-    .map((line) => line.trimEnd());
-}
-
 function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean {
-  const firstWrapperLineIndex = lines.findIndex(
-    (line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER,
-  );
-  if (firstWrapperLineIndex === -1 || !patterns[0]?.test(lines[firstWrapperLineIndex] ?? "")) {
-    return false;
-  }
-  const remainingLines = lines
-    .slice(firstWrapperLineIndex + 1)
-    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
-  if (patterns[1] && !patterns[1].test(remainingLines[0] ?? "")) {
+  if (!patterns[0]?.test(lines[0] ?? "") || (patterns[1] && !patterns[1].test(lines[1] ?? ""))) {
     return false;
   }
   let patternIndex = 2;
-  for (const line of remainingLines.slice(1)) {
+  for (const line of lines.slice(2)) {
     const pattern = patterns[patternIndex];
     if (!pattern) {
       return true;
@@ -360,10 +292,6 @@ function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean 
     }
   }
   return patternIndex === patterns.length;
-}
-
-function hasHumanNotesBlock(markdown: string): boolean {
-  return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
 }
 
 const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
@@ -460,11 +388,17 @@ const GENERATED_SOURCE_WRAPPERS: ReadonlyArray<{
 ];
 
 function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
-  const lines = normalizeMarkdownLines(markdown);
-  return hasHumanNotesBlock(lines.join("\n"))
-    ? GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
-        ?.kind
-    : undefined;
+  if (!markdown.includes(HUMAN_START_MARKER) || !markdown.includes(HUMAN_END_MARKER)) {
+    return undefined;
+  }
+  const lines = markdown
+    .replace(/\r\n?/g, "\n")
+    .trimStart()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
+  return GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
+    ?.kind;
 }
 
 function detectUnmanagedRawSourceBody(markdown: string): boolean {
@@ -613,4 +547,27 @@ export function toWikiPageSummary(params: {
 }): WikiPageSummary | null {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
+}
+
+class WikiPageNotUtf8Error extends Error {
+  constructor(displayPath: string) {
+    super(
+      `Wiki page is not valid UTF-8 and cannot be rewritten safely: ${displayPath}. ` +
+        "The file was left unchanged. Keep a byte-for-byte backup, convert a copy to UTF-8 with its original encoding, then retry.",
+    );
+    this.name = "WikiPageNotUtf8Error";
+  }
+}
+
+/**
+ * Decode vault page bytes for a whole-file rewrite. Compile and lint re-emit
+ * the full page from decoded text, so replacement-decodable bytes would be
+ * persisted back as U+FFFD over human content the update never touched (same
+ * rule as the edit/apply_patch tools, see src/agents/utf8-file.ts).
+ */
+export function decodeWikiPageUtf8(bytes: Buffer, displayPath: string): string {
+  if (!isUtf8(bytes)) {
+    throw new WikiPageNotUtf8Error(displayPath);
+  }
+  return bytes.toString("utf8");
 }

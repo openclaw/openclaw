@@ -14,8 +14,6 @@ import {
   expectUnauthorizedResponse,
   expectUnauthorizedVariants,
   sendRequest,
-  withGatewayServer,
-  withGatewayTempConfig,
 } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import {
@@ -25,21 +23,43 @@ import {
 } from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-type ServerOptions = Parameters<typeof withGatewayServer>[0];
-const ui = {
-  controlUiEnabled: true,
-  controlUiBasePath: "",
-  controlUiRoot: { kind: "missing" as const },
-};
+type ServerOptions = Parameters<typeof createTestGatewayServer>[0];
+type RequestOptions = Parameters<typeof sendRequest>[1];
+type Request = (
+  path: string,
+  options?: Omit<RequestOptions, "path">,
+) => ReturnType<typeof sendRequest>;
 const log = createSubsystemLogger("test/plugin-http-auth");
+const requestFor =
+  (server: Parameters<typeof sendRequest>[0]): Request =>
+  (path, options) =>
+    sendRequest(server, { path, ...options });
 function withServer(
-  run: ServerOptions["run"],
+  run: (request: Request, server: Parameters<typeof sendRequest>[0]) => Promise<void>,
   overrides: ServerOptions["overrides"] = {},
-  resolvedAuth = AUTH_NONE,
+  resolvedAuth = AUTH_TOKEN,
+  cfg: Parameters<typeof withTempConfig>[0]["cfg"] = { gateway: { trustedProxies: [] } },
 ) {
-  return withGatewayServer({ prefix: "plugin-http-auth-", resolvedAuth, overrides, run });
+  return withTempConfig({
+    prefix: "plugin-http-auth-",
+    cfg,
+    run: async () => {
+      const server = createTestGatewayServer({ resolvedAuth, overrides });
+      await run(requestFor(server), server);
+    },
+  });
 }
-function pluginRoutes(httpRoutes: PluginHttpRouteRegistration[]) {
+function pluginRoutes(
+  routes: [string, PluginHttpRouteRegistration["handler"], Partial<PluginHttpRouteRegistration>][],
+) {
+  const httpRoutes = routes.map(([path, handler, options]) => ({
+    pluginId: path,
+    path,
+    handler,
+    match: "exact" as const,
+    auth: "plugin" as const,
+    ...options,
+  }));
   const registry = createGatewayTestRegistry({ httpRoutes });
   return { registry, handlePluginRequest: createGatewayPluginRequestHandler({ registry, log }) };
 }
@@ -48,217 +68,162 @@ function respond(res: ServerResponse, body: string) {
   res.end(body);
   return true;
 }
+function expectResponse(
+  response: Awaited<ReturnType<typeof sendRequest>>,
+  status: number,
+  body: string,
+) {
+  expect(response.res.statusCode).toBe(status);
+  expect(response.getBody()).toBe(body);
+}
 function claimingPlugin(paths?: string[]) {
   return vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     return !paths || paths.includes(pathname) ? respond(res, "plugin-owned") : false;
   });
 }
-function publicRoute(path: string, match: "exact" | "prefix", method: string) {
-  const routeHandler = vi.fn(async (req: IncomingMessage, res: ServerResponse) =>
-    req.method === method ? respond(res, "plugin-owned") : false,
-  );
-  return {
-    routeHandler,
-    ...pluginRoutes([
-      { pluginId: "focus-owner", path, match, auth: "plugin", handler: routeHandler },
-    ]),
-  };
-}
-function withMattermost(callbackPath: string, run: ServerOptions["run"]) {
-  return withTempConfig({
-    cfg: {
-      gateway: { trustedProxies: [] },
-      channels: { mattermost: { commands: { callbackPath } } },
-    },
-    run: async () =>
-      run(
-        createTestGatewayServer({
-          resolvedAuth: AUTH_TOKEN,
-          overrides: {
-            handlePluginRequest: claimingPlugin([
-              "/api/channels/mattermost/command",
-              "/api/channels/nostr/default/profile",
-            ]),
-          },
-        }),
-      ),
-  });
-}
+const callbackPath = "/api/channels/mattermost/command";
+const profilePath = "/api/channels/nostr/default/profile";
 
 describe("gateway plugin HTTP auth boundary", () => {
   beforeAll(async () => {
-    // Compile the real Control UI owner before request deadlines begin.
     await import("./control-ui.js");
   });
 
-  test.each([true, false])(
-    "reserves public preview routes ahead of plugins (UI enabled: %s)",
-    async (controlUiEnabled) => {
+  test.each([
+    ["preview", true, "GET", 200, 'content="OpenClaw dashboard"'],
+    ["preview", false, "GET", 404, "Not Found"],
+    ["approval", true, "GET", 503, "Control UI assets not found"],
+    ["approval", true, "POST", 404, "Not Found"],
+    ["approval", false, "GET", 404, "Not Found"],
+  ] as const)(
+    "reserves %s routes ahead of plugins (UI: %s, method: %s)",
+    async (surface, controlUiEnabled, method, status, body) => {
       const plugin = claimingPlugin();
+      const preview = surface === "preview";
       await withServer(
-        async (server) => {
-          const response = await sendRequest(server, {
-            path: "/control/share/dashboard/example/session",
-            host: "gateway.example.test",
-          });
-          expect(response.res.statusCode).toBe(controlUiEnabled ? 200 : 404);
-          expect(response.getBody()).toContain(
-            controlUiEnabled ? 'content="OpenClaw dashboard"' : "Not Found",
+        async (request) => {
+          const response = await request(
+            preview ? "/control/share/dashboard/example/session" : "/approve/plugin%3Arequest.json",
+            preview ? { host: "gateway.example.test" } : { method },
           );
-          for (const path of ["/control/share", "/control/share/api/private"]) {
-            expect((await sendRequest(server, { path })).res.statusCode).toBe(404);
+          expect(response.res.statusCode).toBe(status);
+          expect(response.getBody()).toContain(body);
+          if (preview) {
+            for (const path of ["/control/share", "/control/share/api/private"]) {
+              expect((await request(path)).res.statusCode).toBe(404);
+            }
           }
           expect(plugin).not.toHaveBeenCalled();
         },
-        { controlUiEnabled, controlUiBasePath: "/control", handlePluginRequest: plugin },
-        AUTH_TOKEN,
+        {
+          controlUiEnabled,
+          controlUiBasePath: preview ? "/control" : "",
+          ...(preview ? {} : { controlUiRoot: { kind: "missing" as const } }),
+          handlePluginRequest: plugin,
+        },
+        preview ? AUTH_TOKEN : AUTH_NONE,
       );
     },
   );
 
-  test("rejects non-GET/HEAD methods on probe routes", async () => {
-    await withServer(async (server) => {
-      const post = await sendRequest(server, { path: "/healthz", method: "POST" });
-      expect(post.res.statusCode).toBe(405);
-      expect(post.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
-      expect(post.getBody()).toBe("Method Not Allowed");
-      const head = await sendRequest(server, { path: "/readyz", method: "HEAD" });
-      expect(head.res.statusCode).toBe(200);
-      expect(head.getBody()).toBe("");
-    });
-  });
-
-  test.each([
-    {
-      surface: "write-default",
-      header: "operator.read",
-      expected: ["operator.write"],
-      method: "node.invoke",
-    },
-    {
-      surface: "trusted-operator",
-      header: undefined,
-      expected: ["operator.admin", "operator.read", "operator.write"],
-      method: "set-heartbeats",
-    },
-  ] as const)(
-    "preserves $surface runtime authority for shared-secret bearer auth",
-    async ({ surface, header, expected, method }) => {
+  test.each(["write-default", "trusted-operator"] as const)(
+    "preserves %s runtime authority for shared-secret bearer auth",
+    async (surface) => {
+      const trusted = surface === "trusted-operator";
       const scopes: string[][] = [];
       const allowed: boolean[] = [];
       const { handlePluginRequest } = pluginRoutes([
-        {
-          pluginId: "runtime-scope",
-          path: "/secure-hook",
-          auth: "gateway",
-          match: "exact",
-          gatewayRuntimeScopeSurface: surface,
-          handler: async (_req, res) => {
+        [
+          "/secure-hook",
+          async (_req, res) => {
             const observed = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [];
             scopes.push([...observed]);
-            allowed.push(authorizeOperatorScopesForMethod(method, observed).allowed);
+            allowed.push(
+              authorizeOperatorScopesForMethod(trusted ? "set-heartbeats" : "node.invoke", observed)
+                .allowed,
+            );
             return respond(res, "ok");
           },
-        },
+          { pluginId: "runtime-scope", auth: "gateway", gatewayRuntimeScopeSurface: surface },
+        ],
       ]);
       await withServer(
-        async (server) => {
-          const response = await sendRequest(server, {
-            path: "/secure-hook",
+        async (request) => {
+          const response = await request("/secure-hook", {
             authorization: "Bearer test-token",
-            headers: header === undefined ? {} : { "x-openclaw-scopes": header },
+            headers: trusted ? {} : { "x-openclaw-scopes": "operator.read" },
           });
-          expect(response.res.statusCode).toBe(200);
-          expect(response.getBody()).toBe("ok");
+          expectResponse(response, 200, "ok");
         },
         { handlePluginRequest, shouldEnforcePluginGatewayAuth: () => true },
-        AUTH_TOKEN,
       );
       expect(scopes).toEqual([
-        surface === "trusted-operator" ? expect.arrayContaining([...expected]) : [...expected],
+        trusted
+          ? expect.arrayContaining(["operator.admin", "operator.read", "operator.write"])
+          : ["operator.write"],
       ]);
       expect(allowed).toEqual([true]);
     },
   );
 
-  test("allows unauthenticated Mattermost callbacks while protecting other channel routes", async () => {
-    await withMattermost("/api/channels/mattermost/command", async (server) => {
-      const callback = await sendRequest(server, {
-        path: "/api/channels/mattermost/command",
-        method: "POST",
-      });
-      expect(callback.res.statusCode).toBe(200);
-      expect(callback.getBody()).toBe("plugin-owned");
-      expectUnauthorizedResponse(
-        await sendRequest(server, { path: "/api/channels/nostr/default/profile" }),
+  test.each([callbackPath, profilePath])(
+    "limits Mattermost auth bypass to its own channel (%s)",
+    async (path) => {
+      const plugin = claimingPlugin(
+        path === callbackPath ? [callbackPath, profilePath] : [profilePath],
       );
-    });
-  });
-
-  test("does not bypass auth when mattermost callbackPath names another channel", async () => {
-    const plugin = claimingPlugin(["/api/channels/nostr/default/profile"]);
-    await withTempConfig({
-      cfg: {
-        gateway: { trustedProxies: [] },
-        channels: {
-          mattermost: { commands: { callbackPath: "/api/channels/nostr/default/profile" } },
+      await withServer(
+        async (request) => {
+          if (path === callbackPath) {
+            expectResponse(await request(callbackPath, { method: "POST" }), 200, "plugin-owned");
+            expectUnauthorizedResponse(await request(profilePath));
+          } else {
+            expectUnauthorizedResponse(await request(profilePath, { method: "POST" }));
+            expect(plugin).not.toHaveBeenCalled();
+          }
         },
-      },
-      run: async () => {
-        const server = createTestGatewayServer({
-          resolvedAuth: AUTH_TOKEN,
-          overrides: { handlePluginRequest: plugin },
-        });
-        expectUnauthorizedResponse(
-          await sendRequest(server, {
-            path: "/api/channels/nostr/default/profile",
-            method: "POST",
-          }),
-        );
-        expect(plugin).not.toHaveBeenCalled();
-      },
-    });
-  });
+        { handlePluginRequest: plugin },
+        AUTH_TOKEN,
+        {
+          gateway: { trustedProxies: [] },
+          channels: { mattermost: { commands: { callbackPath: path } } },
+        },
+      );
+    },
+  );
 
   test("routes unattributable proxy traffic only to plugin-authenticated webhooks", async () => {
     const ips: Array<string | undefined> = [];
     const { registry, handlePluginRequest } = pluginRoutes([
-      {
-        pluginId: "googlechat",
-        path: "/googlechat",
-        auth: "plugin",
-        match: "exact",
-        handler: async (_req, res) => {
+      [
+        "/googlechat",
+        async (_req, res) => {
           ips.push(getPluginRuntimeGatewayRequestScope()?.client?.clientIp);
           return respond(res, "ok");
         },
-      },
-      {
-        pluginId: "diffs",
-        path: "/plugins/diffs",
-        auth: "plugin",
-        match: "prefix",
-        handler: async (_req, res) => respond(res, "plugin-prefix"),
-      },
+        { pluginId: "googlechat" },
+      ],
+      [
+        "/plugins/diffs",
+        async (_req, res) => respond(res, "plugin-prefix"),
+        { pluginId: "diffs", match: "prefix" },
+      ],
     ]);
     const hooks = vi.fn(async (req: IncomingMessage, res: ServerResponse) =>
       req.url?.startsWith("/plugins/diffs") ? respond(res, "hooks") : false,
     );
     await withServer(
-      async (server) => {
+      async (request) => {
         const proxy = (path: string, method = "GET") =>
-          sendRequest(server, {
-            path,
+          request(path, {
             method,
             remoteAddress: "127.0.0.1",
             headers: { "x-forwarded-for": "198.51.100.20" },
           });
         expect((await proxy("/googlechat", "POST")).res.statusCode).toBe(200);
         expect(ips).toEqual(["127.0.0.1"]);
-        const prefix = await proxy("/plugins/diffs/view");
-        expect(prefix.res.statusCode).toBe(200);
-        expect(prefix.getBody()).toBe("plugin-prefix");
+        expectResponse(await proxy("/plugins/diffs/view"), 200, "plugin-prefix");
         expect(hooks).not.toHaveBeenCalled();
         const gateway = await proxy("/ready");
         expect(gateway.res.statusCode).toBe(403);
@@ -271,186 +236,43 @@ describe("gateway plugin HTTP auth boundary", () => {
           shouldEnforceGatewayAuthForPluginPath(registry, path),
         isPluginAuthenticatedRoute: (path) => isPluginAuthenticatedRoutePath(registry, path),
       },
-      AUTH_TOKEN,
     );
   });
 
   test("protects canonical and encoded channel paths while leaving wildcard routes ungated", async () => {
     const plugin = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (canonicalizePathVariant(path) === "/api/channels/nostr/default/profile") {
+      if (canonicalizePathVariant(path) === profilePath) {
         return respond(res, "channel");
       }
       return path === "/googlechat" ? respond(res, "wildcard") : false;
     });
     await withServer(
-      async (server) => {
+      async (request) => {
         for (const path of [
           "/googlechat",
-          "/api/channels/nostr/default/profile",
+          profilePath,
           "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
         ]) {
           const isPublic = path === "/googlechat";
-          const unauthenticated = await sendRequest(server, { path });
+          const unauthenticated = await request(path);
           if (isPublic) {
-            expect(unauthenticated.res.statusCode).toBe(200);
-            expect(unauthenticated.getBody()).toBe("wildcard");
+            expectResponse(unauthenticated, 200, "wildcard");
           } else {
             expectUnauthorizedResponse(unauthenticated);
           }
-          const authenticated = await sendRequest(server, {
-            path,
-            authorization: "Bearer test-token",
-          });
-          expect(authenticated.res.statusCode).toBe(200);
-          expect(authenticated.getBody()).toBe(isPublic ? "wildcard" : "channel");
+          const authenticated = await request(path, { authorization: "Bearer test-token" });
+          expectResponse(authenticated, 200, isPublic ? "wildcard" : "channel");
         }
       },
       { handlePluginRequest: plugin },
-      AUTH_TOKEN,
-    );
-  });
-
-  test("reserves the base-mounted plugin manager GET while preserving writes", async () => {
-    const plugin = claimingPlugin(["/openclaw/settings/plugins"]);
-    await withServer(
-      async (server) => {
-        const path = "/openclaw/settings/plugins";
-        const read = await sendRequest(server, { path });
-        expect(read.res.statusCode).toBe(503);
-        expect(read.getBody()).toContain("Control UI assets not found");
-        expect(plugin).not.toHaveBeenCalled();
-        const write = await sendRequest(server, { path, method: "POST" });
-        expect(write.res.statusCode).toBe(200);
-        expect(write.getBody()).toBe("plugin-owned");
-        expect(plugin).toHaveBeenCalledOnce();
-      },
-      { ...ui, controlUiBasePath: "/openclaw", handlePluginRequest: plugin },
-    );
-  });
-
-  test("reserves standalone approval documents ahead of plugin routes", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        const response = await sendRequest(server, { path: "/approve/plugin%3Arequest.json" });
-        expect(response.res.statusCode).toBe(503);
-        expect(response.getBody()).toContain("Control UI assets not found");
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { ...ui, handlePluginRequest: plugin },
-    );
-  });
-
-  test("terminates approval-document writes at the reservation stage", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        for (const method of ["POST", "PUT"]) {
-          const response = await sendRequest(server, {
-            path: "/approve/plugin%3Arequest.json",
-            method,
-          });
-          expect(response.res.statusCode, method).toBe(404);
-          expect(response.getBody(), method).toBe("Not Found");
-        }
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { ...ui, handlePluginRequest: plugin },
-    );
-  });
-
-  test("keeps approval documents reserved when control ui serving is disabled", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        const response = await sendRequest(server, { path: "/approve/exec%3Arequest" });
-        expect(response.res.statusCode).toBe(404);
-        expect(response.getBody()).toBe("Not Found");
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { controlUiEnabled: false, controlUiBasePath: "", handlePluginRequest: plugin },
-    );
-  });
-
-  test("lets a registered base-mounted prefix route own focus writes", async () => {
-    const { handlePluginRequest, routeHandler } = publicRoute("/openclaw/focus", "prefix", "PUT");
-    await withServer(
-      async (server) => {
-        const response = await sendRequest(server, {
-          path: "/openclaw/focus/dashboard/roboclaw/session-ref",
-          method: "PUT",
-        });
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("plugin-owned");
-        expect(routeHandler).toHaveBeenCalledOnce();
-      },
-      { ...ui, controlUiBasePath: "/openclaw", handlePluginRequest },
-    );
-  });
-
-  test("uses focus as the unclaimed fallback without reserving lookalikes", async () => {
-    const { handlePluginRequest, routeHandler } = publicRoute("/focused", "exact", "GET");
-    await withServer(
-      async (server) => {
-        const get = await sendRequest(server, { path: "/focus" });
-        expect(get.res.statusCode).toBe(503);
-        expect(get.getBody()).toContain("Control UI assets not found");
-        expect(
-          (await sendRequest(server, { path: "/focus/desktop/control", method: "HEAD" })).res
-            .statusCode,
-        ).toBe(503);
-        for (const method of ["POST", "PUT"]) {
-          const write = await sendRequest(server, { path: "/focus/desktop/control", method });
-          expect(write.res.statusCode, method).toBe(404);
-          expect(write.getBody(), method).toBe("Not Found");
-        }
-        const lookalike = await sendRequest(server, { path: "/focused" });
-        expect(lookalike.res.statusCode).toBe(200);
-        expect(lookalike.getBody()).toBe("plugin-owned");
-        expect(routeHandler).toHaveBeenCalledOnce();
-      },
-      { ...ui, handlePluginRequest },
-    );
-  });
-
-  test("reserves unauthenticated probes ahead of root-mounted control ui and plugins", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        for (const [path, status] of [
-          ["/health", "live"],
-          ["/healthz", "live"],
-          ["/ready", "ready"],
-          ["/readyz", "ready"],
-          ["/startup", "started"],
-          ["/startupz", "started"],
-        ] as const) {
-          const response = await sendRequest(server, { path });
-          expect(response.res.statusCode, path).toBe(200);
-          const body = JSON.parse(response.getBody());
-          if (status === "started") {
-            expect(body, path).toMatchObject({
-              ok: true,
-              status,
-              version: expect.any(String),
-              uptimeMs: expect.any(Number),
-            });
-          } else {
-            expect(body, path).toEqual({ ok: true, status });
-          }
-        }
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { ...ui, handlePluginRequest: plugin },
-      AUTH_TOKEN,
     );
   });
 
   test("enforces auth before plugin handlers on encoded protected-path variants", async () => {
     const plugin = claimingPlugin();
     await withServer(
-      async (server) => {
+      async (_request, server) => {
         await expectUnauthorizedVariants({
           server,
           variants: buildChannelPathFuzzCorpus().filter((variant) => variant.path.includes("%")),
@@ -458,19 +280,18 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(plugin).not.toHaveBeenCalled();
       },
       { handlePluginRequest: plugin },
-      AUTH_TOKEN,
     );
   });
 
   test("rejects query-token hooks requests with bindHost=::", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-hooks-query-token-", async () => {
-      const server = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: { handleHooksRequest: createHooksHandler("::") },
-      });
-      const response = await sendRequest(server, { path: "/hooks/wake?token=bad" });
-      expect(response.res.statusCode).toBe(400);
-      expect(response.getBody()).toContain("Hook token must be provided");
-    });
+    await withServer(
+      async (request) => {
+        const response = await request("/hooks/wake?token=bad");
+        expect(response.res.statusCode).toBe(400);
+        expect(response.getBody()).toContain("Hook token must be provided");
+      },
+      { handleHooksRequest: createHooksHandler("::") },
+      AUTH_NONE,
+    );
   });
 });

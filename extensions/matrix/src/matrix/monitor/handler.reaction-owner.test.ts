@@ -40,7 +40,8 @@ afterEach(() => {
 describe("Matrix reaction ownership", () => {
   it("keeps a reaction on the runtime-bound global owner's queue", async () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      agents: { entries: { main: {}, research: {} } },
+      bindings: [{ agentId: "main", match: { channel: "matrix", accountId: "ops" } }],
       channels: { matrix: { dm: { allowFrom: ["*"] } } },
     };
     setRuntimeConfigSnapshot(cfg);
@@ -128,7 +129,7 @@ describe("Matrix reaction ownership", () => {
       await targetLookup.promise;
       builder.rollbackPluginGlobalSideEffects(record.id, record);
       target.resolve(targetEvent);
-      await reaction;
+      await expect(reaction).rejects.toThrow('Plugin "matrix" runtime is no longer active');
 
       expect(peekSystemEventEntries("agent:ops:main")).toEqual([]);
       expect(runtime.error).toHaveBeenCalledWith(
@@ -136,7 +137,7 @@ describe("Matrix reaction ownership", () => {
       );
     } finally {
       target.resolve(targetEvent);
-      await reaction;
+      await reaction.catch(() => undefined);
       await disposePluginRegistryInstances(builder.registry);
     }
   });

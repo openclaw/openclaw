@@ -4,12 +4,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { inspectNpmPackageTarball } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const SESSION_KEY = "agent:native-proof:upgrade-native-proof";
 const MODEL = "openai/gpt-5.6-luna";
@@ -26,10 +27,6 @@ function required(name) {
 
 function artifact(name) {
   return path.join(required("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"), name);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(name, data) {
@@ -152,8 +149,7 @@ function runParent(phase, wait = true) {
 
 function snapshot() {
   const databasePath = path.join(required("OPENCLAW_STATE_DIR"), "state", "openclaw.sqlite");
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  return readDatabase(databasePath, (db) => {
     const tasks = db
       .prepare(
         "SELECT * FROM task_runs WHERE runtime = 'subagent' AND task_kind = 'codex-native' AND requester_session_key = ? ORDER BY run_id",
@@ -175,9 +171,7 @@ function snapshot() {
       );
     assert.equal(bindings.length, 1, "native parent binding was missing or ambiguous");
     return { databasePath, tasks, binding: bindings[0] };
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function captureInventory(stage) {
@@ -185,13 +179,7 @@ function captureInventory(stage) {
   const fingerprint = (value) => createHash("sha256").update(value).digest("hex");
   try {
     const baseline = readJson(artifact("native-assignment-baseline.json"));
-    const db = new DatabaseSync(
-      path.join(required("OPENCLAW_STATE_DIR"), "state", "openclaw.sqlite"),
-      {
-        readOnly: true,
-      },
-    );
-    try {
+    readDatabase(path.join(required("OPENCLAW_STATE_DIR"), "state", "openclaw.sqlite"), (db) => {
       const row = db
         .prepare(
           "SELECT value_json FROM plugin_state_entries WHERE plugin_id = 'codex' AND namespace = 'app-server-thread-bindings' AND entry_key = ?",
@@ -240,10 +228,8 @@ function captureInventory(stage) {
             })),
           }
         : null;
-    } finally {
-      db.close();
-    }
-    const sessions = new DatabaseSync(
+    });
+    readDatabase(
       path.join(
         required("OPENCLAW_STATE_DIR"),
         "agents",
@@ -251,24 +237,21 @@ function captureInventory(stage) {
         "agent",
         "openclaw-agent.sqlite",
       ),
-      { readOnly: true },
+      (sessions) => {
+        const row = sessions
+          .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+          .get(SESSION_KEY);
+        const entry = row ? JSON.parse(row.entry_json) : undefined;
+        observation.session = row
+          ? {
+              currentSessionId: row.current_session_id,
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+              agentHarnessId: entry.agentHarnessId,
+            }
+          : null;
+      },
     );
-    try {
-      const row = sessions
-        .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
-        .get(SESSION_KEY);
-      const entry = row ? JSON.parse(row.entry_json) : undefined;
-      observation.session = row
-        ? {
-            currentSessionId: row.current_session_id,
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            agentHarnessId: entry.agentHarnessId,
-          }
-        : null;
-    } finally {
-      sessions.close();
-    }
   } catch (error) {
     // Read failures remain explicit evidence without copying raw state or error text.
     observation.unavailable = { name: error.name, code: error.code };

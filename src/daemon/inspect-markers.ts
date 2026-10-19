@@ -2,7 +2,10 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
+import {
+  getCommandPositionalsWithRootOptions,
+  getRootOptionAwareCommandPath,
+} from "../infra/cli-root-options.js";
 import { isEnvAssignmentToken, resolveCarrierCommandArgv } from "../infra/command-carriers.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import {
@@ -25,29 +28,49 @@ export const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
 export type Marker = (typeof EXTRA_MARKERS)[number];
 
-export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
-  let args =
-    resolveCarrierCommandArgv(programArguments, 0, { includeExec: true }) ?? programArguments;
+type SystemdExecution = { path: string; programArguments: readonly string[] };
+
+function classifyGatewayCommand(programArguments: string[]): "run" | "maintenance" | "unknown" {
+  let args = resolveCarrierCommandArgv(programArguments) ?? programArguments;
   if (POSIX_SHELL_WRAPPERS.has(path.posix.basename(args[0] ?? "").toLowerCase())) {
     const { command } = resolveInlineCommandMatch(args, POSIX_INLINE_COMMAND_FLAGS, {
       allowCombinedC: true,
     });
     const inner = command ? splitShellArgs(command) : null;
     if (!inner) {
-      return false;
+      return "unknown";
     }
     while (inner.length > 0 && isEnvAssignmentToken(inner[0]!)) {
       inner.shift();
     }
-    args = resolveCarrierCommandArgv(inner, 0, { includeExec: true }) ?? inner;
+    args = resolveCarrierCommandArgv(inner) ?? inner;
   }
-  args = resolveCarrierCommandArgv(args, 0, { includeExec: true }) ?? args;
+  args = resolveCarrierCommandArgv(args) ?? args;
   const { position } = resolveRuntimeScriptPosition(args);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
-    return false;
+    return "unknown";
   }
   const entryIndex = typeof position === "number" ? position : 0;
-  return getRootOptionAwareCommandPath(["node", ...args.slice(entryIndex)], 1)[0] === "gateway";
+  const argv = ["node", ...args.slice(entryIndex)];
+  if (getRootOptionAwareCommandPath(argv, 1)[0] !== "gateway") {
+    return "unknown";
+  }
+  const subcommand = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["gateway"],
+    maxPositionals: 1,
+    mode: "command-path",
+  })?.[0];
+  // Unknown option roles and wrapper identities stay conservative: their values
+  // may look like OpenClaw commands without following its CLI contract.
+  if (subcommand === undefined || subcommand === "run") {
+    return "run";
+  }
+  const identity = classifyOpenClawArgv(args, { command: "gateway" });
+  return identity.kind === "openclaw" && identity.entryIndex === entryIndex ? "maintenance" : "run";
+}
+
+export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
+  return classifyGatewayCommand(programArguments) === "run";
 }
 
 export function detectMarkerLineWithGateway(contents: string): Marker | null {
@@ -86,6 +109,28 @@ export function hasGatewayServiceMarker(value: unknown): boolean {
   return (
     environment?.OPENCLAW_SERVICE_MARKER === GATEWAY_SERVICE_MARKER &&
     environment.OPENCLAW_SERVICE_KIND === GATEWAY_SERVICE_KIND
+  );
+}
+
+export function detectSystemdGatewayExecutionMarker(
+  commands: readonly SystemdExecution[],
+): Marker | null {
+  // Text is only a conservative discovery hint; exclusion uses typed commands.
+  const commandText = commands
+    .map((command) => `${command.path} ${command.programArguments.join(" ")}`)
+    .join(" ")
+    .toLowerCase();
+  return /(?:^|[\s;])gateway(?:[\s;]|$)/.test(commandText)
+    ? (EXTRA_MARKERS.find((value) => commandText.includes(value)) ?? null)
+    : null;
+}
+
+export function areSystemdCommandsMaintenance(commands: readonly SystemdExecution[]): boolean {
+  // ExecStart can override argv[0]; every actual executable must prove maintenance.
+  return commands.every(
+    (command) =>
+      classifyGatewayCommand([command.path, ...command.programArguments.slice(1)]) ===
+      "maintenance",
   );
 }
 
@@ -137,7 +182,7 @@ export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string
 export function detectLauncherGatewayMarker(contents: string): Marker | null {
   const environment: Record<string, string> = {};
   for (const line of contents.split(/\r?\n/)) {
-    const command = normalizeLowercaseStringOrEmpty(line.trim());
+    const command = normalizeLowercaseStringOrEmpty(line);
     if (command.startsWith("set ")) {
       const assignment = parseCmdSetAssignment(line.trimStart().slice(4), true);
       if (assignment) {

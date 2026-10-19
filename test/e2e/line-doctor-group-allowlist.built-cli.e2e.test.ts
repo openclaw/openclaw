@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -10,6 +12,12 @@ const userId = `U${"1".repeat(32)}`;
 const groupId = `C${"2".repeat(32)}`;
 const roomId = `R${"3".repeat(32)}`;
 const instances: OpenClawTestInstance[] = [];
+
+beforeAll(() => {
+  // Shared assets must be ready before Doctor starts its per-test CLI timeout.
+  const uiRoot = path.resolve(import.meta.dirname, "../../dist/control-ui");
+  expect(inspectControlUiRootAssets(uiRoot, null)).toMatchObject({ kind: "ready" });
+});
 
 afterEach(async () => {
   await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
@@ -66,6 +74,7 @@ async function runDoctor(line: Record<string, unknown>, accessGroups?: Record<st
     .replace(/\s+/gu, " ");
   expect(result.code, output).toBe(0);
   expect(result.signal, output).toBeNull();
+  expect(output).not.toMatch(/(?:Building Control|Rebuilding stale) UI assets/u);
   const config = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
     channels: { line: Record<string, unknown> };
     accessGroups?: Record<string, unknown>;

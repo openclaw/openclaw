@@ -153,7 +153,7 @@ Gateway upserts a presence entry for that connection.
 
 #### Why ephemeral control-plane connections do not show up
 
-CLI commands, backend RPC clients, and probes often connect briefly. To avoid
+CLI commands, backend RPC clients, and checks often connect briefly. To avoid
 retaining that churn for the full presence TTL, clients in `cli`, `backend`,
 or `probe` mode are **not** turned into presence entries. Test-mode clients
 stay tracked because test suites use them as stand-ins for real clients.
@@ -187,6 +187,12 @@ by parsed host or other beacon metadata. A stable `instanceId` helps consumers
 associate rows with the same client. It does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
 
+Reconnecting removes retained offline rows for the same operator identity: device
+id, then client instance id, then connection id. Closing a tab removes its row if
+another connection of that identity remains live. When the last connection closes,
+at most one offline row remains for that identity until the existing five-minute
+TTL, preserving recently-offline metadata without accumulating reconnect history.
+
 The Control UI groups connection rows by their recorded identity namespace when
 displaying people. Connections with the same qualified profile identity share one
 person. Unqualified connections with the same raw ID form a separate group. A raw
@@ -210,6 +216,11 @@ the first pending change. Later changes do not postpone it. Hello snapshots and
 `system-presence` replies read the current state immediately. The people card's
 activity age can therefore lag the latest interaction by less than 30 seconds.
 Fresh snapshots and `system-presence` reads include the latest stored timestamp.
+
+The Control UI combines viewer declarations within one browser turn. Replacing a
+chat pane with another owner of the same session does not briefly clear and
+re-add its viewer presence. Leaving the session still publishes an empty
+declaration and waits for acknowledgment.
 
 ## Online and recent activity
 
@@ -245,6 +256,11 @@ Presence is intentionally ephemeral:
 
 This keeps the list fresh and avoids unbounded memory growth.
 
+Expiry and eviction use the heartbeat's wall-clock timestamp. A host clock
+correction may retain stale rows or expire fresh ones early. Full presence updates
+or reconnects republish current metadata; stale rows clear as wall time catches up
+or on restart. Presence is best effort; it does not grant device authority.
+
 ## Remote/tunnel caveat (loopback IPs)
 
 When a client connects over an SSH tunnel / local port forward, the Gateway
@@ -254,6 +270,14 @@ detected-local (loopback) clients rather than writing the loopback address
 into the entry.
 
 ## Consumers
+
+The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
+to send changed fields, including heartbeat timestamps, without retransmitting
+each connection's metadata. Its Gateway
+store reconstructs the same ordered presence list and requests a fresh snapshot
+if an update does not match its current version. Native clients keep full
+presence events. Recipient visibility and the best-effort freshness policy are
+the same for both formats.
 
 ### Control UI Devices page
 
@@ -272,7 +296,7 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 - If you see duplicates:
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
-  - check for multiple tabs or reconnects. Separate user connections have separate rows, and old rows expire after the TTL
+  - check for multiple live tabs. Separate user connections have separate rows; only the last offline row for a device or instance remains until the TTL, and reconnecting removes it
 
 ## Related
 

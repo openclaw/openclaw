@@ -2,6 +2,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+// Each offline discovery probe takes about a second, up to 18 s on a loaded host, and
+// once 52 s while its cache write stalled in the kernel. A stalled child blocks until
+// that call returns, deadline or not; the bound stops a hung probe.
+const DISCOVERY_TIMEOUT_MS = 60_000;
+
 // These drivers use only the standard library. Running the script directly
 // makes UV build an inline-script venv; its launcher resolves shared temporary
 // ancestors even when the caller confines all writes to its own root.
@@ -72,8 +77,11 @@ export function createTelegramRuntimeEnvironment(stateRoot, hostEnv = process.en
       "--no-python-downloads",
       ">=3.12",
     ],
-    { env: discoveryEnv, encoding: "utf8", timeout: 15000 },
+    { env: discoveryEnv, encoding: "utf8", timeout: DISCOVERY_TIMEOUT_MS },
   );
+  if (found.error?.code === "ETIMEDOUT") {
+    throw new Error(`uv Python discovery did not finish within ${DISCOVERY_TIMEOUT_MS / 1000} s`);
+  }
   if (found.status !== 0) {
     // Credential restoration can run without uv; readiness owns its diagnostic.
     return env;
@@ -102,7 +110,7 @@ print(json.dumps(str(library) if library else None))`,
         TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR: hostEnv.TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR,
       },
       encoding: "utf8",
-      timeout: 15000,
+      timeout: DISCOVERY_TIMEOUT_MS,
     },
   );
   if (cached.status !== 0) {

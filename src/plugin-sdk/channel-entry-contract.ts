@@ -40,7 +40,7 @@ export type {
 type BundledChannelRuntime = unknown;
 
 type ChannelEntryConfigSchema<TPlugin> =
-  TPlugin extends ChannelPlugin<unknown>
+  TPlugin extends ChannelPlugin<unknown, unknown, unknown, 1 | 2>
     ? NonNullable<TPlugin["configSchema"]>
     : ChannelConfigSchema;
 
@@ -364,16 +364,6 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
   throw error;
 }
 
-function getSourceModuleLoader(modulePath: string, options: BundledEntryModuleLoadOptions) {
-  return getCachedPluginModuleLoader({
-    modulePath,
-    importerUrl: import.meta.url,
-    loaderFilename: import.meta.url,
-    ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
-    tryNative: false,
-  });
-}
-
 function canTryNodeRequireBuiltModule(modulePath: string): boolean {
   const isBuiltBundledArtifact =
     modulePath.includes(`${path.sep}dist${path.sep}`) ||
@@ -418,7 +408,13 @@ function loadBundledEntryModuleSync(
   if (native?.ok) {
     loaded = native.moduleExport;
   } else {
-    const moduleLoader = getSourceModuleLoader(modulePath, options);
+    const moduleLoader = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      loaderFilename: import.meta.url,
+      ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
+      tryNative: false,
+    });
     sourceLoaderReadyMs = profile ? performance.now() : 0;
     loaded = moduleLoader(toSafeImportPath(modulePath));
   }

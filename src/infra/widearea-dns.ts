@@ -5,6 +5,7 @@ import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CONFIG_DIR } from "../utils.js";
+import { hasErrnoCode } from "./errno.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -46,21 +47,13 @@ export function resolveWideAreaDiscoveryDomain(params?: {
   }
 }
 
-function zoneFilenameForDomain(domain: string): string {
-  return `${normalizedDomainLabels(domain).join(".")}.db`;
-}
-
-function assertZonePathUnderDnsDir(zonePath: string, dnsDir: string): void {
+export function getWideAreaZonePath(domain: string): string {
+  const dnsDir = path.resolve(CONFIG_DIR, "dns");
+  const zonePath = path.resolve(dnsDir, `${normalizedDomainLabels(domain).join(".")}.db`);
   const relativePath = path.relative(dnsDir, zonePath);
   if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error("wide-area discovery zone path must stay under DNS config directory");
   }
-}
-
-export function getWideAreaZonePath(domain: string): string {
-  const dnsDir = path.resolve(CONFIG_DIR, "dns");
-  const zonePath = path.resolve(dnsDir, zoneFilenameForDomain(domain));
-  assertZonePathUnderDnsDir(zonePath, dnsDir);
   return zonePath;
 }
 
@@ -182,15 +175,15 @@ export function renderWideAreaGatewayZoneText(
     txt.push(`cliPath=${opts.cliPath.trim()}`);
   }
 
-  const records: string[] = [];
-
-  records.push(`$ORIGIN ${domain}`);
-  records.push(`$TTL 60`);
   const soaLine = `@ IN SOA ns1 hostmaster ${opts.serial} 7200 3600 1209600 60`;
-  records.push(soaLine);
-  records.push(`@ IN NS ns1`);
-  records.push(`ns1 IN A ${opts.tailnetIPv4}`);
-  records.push(`${hostLabel} IN A ${opts.tailnetIPv4}`);
+  const records = [
+    `$ORIGIN ${domain}`,
+    `$TTL 60`,
+    soaLine,
+    `@ IN NS ns1`,
+    `ns1 IN A ${opts.tailnetIPv4}`,
+    `${hostLabel} IN A ${opts.tailnetIPv4}`,
+  ];
   if (opts.tailnetIPv6) {
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }
@@ -223,8 +216,11 @@ export async function writeWideAreaGatewayZone(
   const existing = (() => {
     try {
       return fs.readFileSync(zonePath, "utf-8");
-    } catch {
-      return null;
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return null;
+      }
+      throw error;
     }
   })();
 

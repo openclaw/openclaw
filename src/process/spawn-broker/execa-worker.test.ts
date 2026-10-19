@@ -50,85 +50,60 @@ afterEach(() => {
 });
 
 describe("broker execution deadline", () => {
-  it.each(["cancel", "kill"] as const)(
-    "preserves an earlier host %s while termination remains pending",
-    async (action) => {
+  it.each(["cancel", "kill", "cooperative", "signal", "exit-code", "exit-event"] as const)(
+    "settles the deadline from root lifecycle state (%s)",
+    async (state) => {
       const fixture = commandFixture();
       const run = await startBrokerExeca(["synthetic-command"], fixture.options, () => {});
+      const hostStopped = state === "cancel" || state === "kill";
+      const exited = state === "exit-code" || state === "exit-event";
+      const timedOut = !hostStopped && !exited;
       await vi.advanceTimersByTimeAsync(199);
-      run[action]();
+      if (hostStopped) {
+        run[state]();
+      } else if (exited) {
+        fixture.child.exitCode = 0;
+        if (state === "exit-event") {
+          fixture.child.emit("exit", 0, null);
+        }
+      }
+      // The result remains pending while either termination or output drain is stalled.
       await vi.advanceTimersByTimeAsync(1_002);
-      expect(fixture.kill).toHaveBeenCalledTimes(action === "kill" ? 1 : 0);
-      fixture.completion.reject(
-        Object.assign(new Error("Command stopped"), fixture.output, {
-          failed: true,
-          isCanceled: action === "cancel",
-        }),
-      );
-      expect(await run.result).toMatchObject({
-        failed: true,
-        timedOut: false,
-        isCanceled: action === "cancel",
-      });
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
-
-  it.each([false, true])(
-    "stops an executing root while host delivery is stalled (cooperative exit: %s)",
-    async (cooperative) => {
-      const fixture = commandFixture();
-      const run = await startBrokerExeca(["synthetic-command"], fixture.options, () => {});
-      await vi.advanceTimersByTimeAsync(1_201);
-      expect(fixture.kill).toHaveBeenCalledExactlyOnceWith();
-
-      fixture.child.exitCode = cooperative ? 0 : null;
-      fixture.child.signalCode = cooperative ? null : "SIGTERM";
-      fixture.child.emit("exit", fixture.child.exitCode, fixture.child.signalCode);
-      if (cooperative) {
-        fixture.completion.resolve(fixture.output);
-      } else {
+      expect(fixture.kill).toHaveBeenCalledTimes(timedOut || state === "kill" ? 1 : 0);
+      if (timedOut) {
+        expect(fixture.kill).toHaveBeenCalledExactlyOnceWith();
+        fixture.child.exitCode = state === "cooperative" ? 0 : null;
+        fixture.child.signalCode = state === "cooperative" ? null : "SIGTERM";
+        fixture.child.emit("exit", fixture.child.exitCode, fixture.child.signalCode);
+      }
+      if (hostStopped || state === "signal") {
         fixture.completion.reject(
-          Object.assign(new Error("Command was killed"), fixture.output, {
-            exitCode: undefined,
-            signal: "SIGTERM",
+          Object.assign(new Error("Command stopped"), fixture.output, {
             failed: true,
-            isTerminated: true,
+            isCanceled: state === "cancel",
+            ...(state === "signal"
+              ? {
+                  exitCode: undefined,
+                  signal: "SIGTERM",
+                  isTerminated: true,
+                }
+              : {}),
           }),
         );
+      } else {
+        fixture.completion.resolve(fixture.output);
       }
       const result = restoreExecaResult(await run.result);
-      expect(result).toBeInstanceOf(Error);
-      expect(result).toMatchObject({
-        failed: true,
-        timedOut: true,
-        stdout: "captured output",
-        exitCode: cooperative ? 0 : undefined,
-        signal: cooperative ? undefined : "SIGTERM",
-      });
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
-
-  it.each([false, true])(
-    "preserves an exited root while output drain is stalled (exit event: %s)",
-    async (emitExit) => {
-      const fixture = commandFixture();
-      const run = await startBrokerExeca(["synthetic-command"], fixture.options, () => {});
-      await vi.advanceTimersByTimeAsync(199);
-      fixture.child.exitCode = 0;
-      if (emitExit) {
-        fixture.child.emit("exit", 0, null);
+      if (timedOut) {
+        expect(result).toBeInstanceOf(Error);
       }
-      // Keep Execa's result pending, as transferred output does until host drain completes.
-      await vi.advanceTimersByTimeAsync(1_002);
-      expect(fixture.kill).not.toHaveBeenCalled();
-      fixture.completion.resolve(fixture.output);
-      expect(await run.result).toMatchObject({
-        exitCode: 0,
-        failed: false,
-        timedOut: false,
+      expect(result).toMatchObject({
+        failed: hostStopped || timedOut,
+        timedOut,
+        isCanceled: state === "cancel",
         stdout: "captured output",
+        exitCode: state === "signal" ? undefined : 0,
+        signal: state === "signal" ? "SIGTERM" : undefined,
       });
       expect(vi.getTimerCount()).toBe(0);
     },

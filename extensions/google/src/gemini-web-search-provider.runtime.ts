@@ -8,6 +8,7 @@ import {
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   MAX_SEARCH_COUNT,
@@ -110,10 +111,7 @@ function queryWithSoftFreshness(query: string, freshness?: GeminiFreshness): str
   return `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
 }
 
-function resolveGeminiTimeRangeFilter(
-  args: Record<string, unknown>,
-  now = new Date(),
-):
+function resolveGeminiTimeRangeFilter(args: Record<string, unknown>):
   | {
       timeRangeFilter?: GeminiTimeRangeFilter;
       freshness?: GeminiFreshness;
@@ -129,6 +127,7 @@ function resolveGeminiTimeRangeFilter(
       message: string;
       docs: string;
     } {
+  const now = new Date();
   const rawFreshness = readStringParam(args, "freshness");
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
@@ -474,12 +473,7 @@ export async function executeGeminiSearch(
     provider: "gemini",
     model,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "gemini",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("gemini"),
     content: wrapWebContent(result.content),
     citations: result.citations,
   };

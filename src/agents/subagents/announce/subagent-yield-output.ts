@@ -37,11 +37,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
     return undefined;
   }
   for (const block of content) {
-    const blockRecord = asOptionalRecord(block);
-    if (!blockRecord) {
-      continue;
-    }
-    const text = blockRecord.text;
+    const text = asOptionalRecord(block)?.text;
     if (typeof text !== "string") {
       continue;
     }

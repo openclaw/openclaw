@@ -1,10 +1,4 @@
 import type { lookup as dnsLookupCb } from "node:dns";
-/**
- * Chrome DevTools Protocol browser operations.
- *
- * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
- * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
- */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { axValue, type AriaSnapshotNode, type RawAXNode } from "./cdp-ax.js";
@@ -19,10 +13,8 @@ import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   fetchJson,
-  isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
-  normalizeCdpHttpBaseForJsonEndpoints,
-  normalizeCdpWsUrl,
+  resolveCdpWebSocketDiscovery,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
@@ -45,7 +37,6 @@ export async function getDocumentIdentitiesViaCdp(opts: {
   });
 }
 
-/** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
   lookup?: typeof dnsLookupCb;
@@ -107,19 +98,7 @@ export async function createTargetViaCdp(opts: {
   const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
-  let wsUrl: string;
-  if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
-    // Handshake-ready direct WebSocket URL — skip /json/version discovery.
-    wsUrl = opts.cdpUrl;
-  } else {
-    // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
-    // /json/version discovery first. For bare ws/wss URLs, fall back to
-    // using the URL itself as a direct WS endpoint when discovery is
-    // unavailable — some providers (e.g. Browserless/Browserbase) expose
-    // a direct WebSocket root without a /json/version route.
-    const discoveryUrl = isWebSocketUrl(opts.cdpUrl)
-      ? normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl)
-      : opts.cdpUrl;
+  const endpoint = await resolveCdpWebSocketDiscovery(opts.cdpUrl, async (discoveryUrl) => {
     let version: { webSocketDebuggerUrl?: string } | null = null;
     try {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
@@ -129,24 +108,16 @@ export async function createTargetViaCdp(opts: {
         cdpControlPolicy,
       );
     } catch (err) {
-      // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
       if (!isWebSocketUrl(opts.cdpUrl)) {
         throw err;
       }
-      // For bare ws/wss URLs, fall through: /json/version is unavailable
-      // so we attempt to use opts.cdpUrl as a direct WS endpoint below.
     }
-    const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
-    if (wsUrlRaw) {
-      wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
-    } else if (isWebSocketUrl(opts.cdpUrl)) {
-      // /json/version unavailable or returned no WebSocket URL. Treat the
-      // original URL as a direct WebSocket endpoint.
-      wsUrl = opts.cdpUrl;
-    } else {
-      throw new Error("CDP /json/version missing webSocketDebuggerUrl");
-    }
+    return version?.webSocketDebuggerUrl?.trim();
+  });
+  if (!endpoint) {
+    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
   }
+  const wsUrl = endpoint.url;
 
   const candidateWsUrls =
     isWebSocketUrl(opts.cdpUrl) && wsUrl !== opts.cdpUrl ? [wsUrl, opts.cdpUrl] : [wsUrl];
@@ -205,11 +176,9 @@ export async function createTargetViaCdp(opts: {
   throw new Error("CDP Target.createTarget failed");
 }
 
-/** Prefix assigned to generated accessibility-node refs. */
 const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
-/** Format raw AX nodes into bounded ARIA snapshot nodes. */
 export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
@@ -264,7 +233,6 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   return out;
 }
 
-/** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
   lookup?: typeof dnsLookupCb;

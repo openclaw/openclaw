@@ -1,4 +1,9 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { workerData } from "node:worker_threads";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
+import {
+  installDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../../infra/database-engine/context.js";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
@@ -8,22 +13,24 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import {
   encodeSessionTranscriptWorkerError,
-  SessionHistoryDeltaPreparationError,
+  encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
-import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
 import type {
-  SessionTranscriptWorkerInput,
+  SessionTranscriptWorkerRequest,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
-let closeReadOnlyCandidates:
-  | typeof import("../../state/openclaw-agent-db-readonly-scope.js").closeOpenClawAgentDatabaseReadOnlyCandidates
-  | undefined;
+const startup: { databaseEngineSelection?: DatabaseEngineSelection } | undefined = workerData;
+if (startup?.databaseEngineSelection) {
+  installDatabaseEngineSelection(startup.databaseEngineSelection);
+}
+
 let releaseReadValidation:
   | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation
   | undefined;
@@ -37,16 +44,21 @@ serveOwnedWorkerTasks(
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
     // Install cleanup before this worker can acquire either a cached or explicit reader.
-    if (!closeReadOnlyCandidates) {
-      const closeCandidates = (await import("../../state/openclaw-agent-db-readonly-scope.js"))
-        .closeOpenClawAgentDatabaseReadOnlyCandidates;
-      const releaseValidation = (await import("../../state/openclaw-agent-db-validation-cache.js"))
-        .releaseOpenClawAgentDatabaseReadValidation;
-      closeReadOnlyCandidates = closeCandidates;
-      releaseReadValidation = releaseValidation;
-    }
+    releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
+      .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
-    const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    const request = input as SessionTranscriptWorkerRequest | UsageCostWorkerInput;
+    if (request.kind === "cli-process-history") {
+      if (!channel) {
+        throw new Error("Process-held history requires its host reader channel");
+      }
+      const { readProcessHeldCliHistoryInWorker } =
+        await import("../../gateway/cli-session-history.process-held.js");
+      return {
+        ok: true,
+        value: await readProcessHeldCliHistoryInWorker(request.request, channel),
+      };
+    }
     if (request.kind === "sqlite-target") {
       const { resolveSqliteTargetFromSessionStorePath } =
         await import("./session-sqlite-target.js");
@@ -84,16 +96,76 @@ serveOwnedWorkerTasks(
         return usageCostWorkerFailure(error);
       }
     }
+    const [
+      { isSessionHistoryReadOperation, prepareSessionHistoryReadOperation },
+      { runWithSessionTranscriptReadFence },
+    ] = await Promise.all([
+      import("./session-history-read-operation.worker.js"),
+      import("./session-transcript-read-fence.js"),
+    ]);
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "transcript-search") {
+        if (!channel) {
+          throw new Error("Transcript search requires its host status channel");
+        }
+        const { searchSessionTranscriptsReadOnlySync } =
+          await import("./session-transcript-search.js");
+        const options = {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
+        };
+        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
+        let indexing = false;
+        if (found) {
+          // Search hits describe their read snapshot; readiness comes from the projection owner.
+          const status = await channel.request("transcript-index-status");
+          try {
+            if (typeof status.input !== "boolean") {
+              throw new Error("Invalid transcript search index status");
+            }
+            indexing = status.input;
+          } finally {
+            status.consumed();
+          }
+        }
+        return { kind: request.kind, result: { ...result, indexing } };
+      }
+      if (isSessionHistoryReadOperation(request)) {
+        const execute = await prepareSessionHistoryReadOperation(request);
+        return execute();
+      }
+      if (request.kind === "session-cleanup") {
+        const { readSessionCleanupSnapshot } = await import("./cleanup-service-read.worker.js");
+        return readSessionCleanupSnapshot(request);
+      }
+      if (request.kind === "lifecycle-artifact-plan") {
+        const { readSessionLifecycleArtifactCleanup } =
+          await import("./session-accessor.sqlite-lifecycle-artifacts.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readSessionLifecycleArtifactCleanup(database, request.input, request.expectedSource),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          plan: result.found ? result.value : { entries: [], deletePlans: [] },
+          diagnostics: request.input.diagnostics,
+        };
+      }
       if (request.kind === "prewarm") {
-        await Promise.all([
-          import("../../gateway/session-history-worker-reader.js"),
-          import("../../gateway/server-methods/chat-history-page-kernel.js"),
-          import("../../gateway/server-methods/chat-history-response-page.js"),
-          import("../../gateway/session-history-snapshot.js"),
-        ]);
+        // Maintenance needs database admission, not a second resident chat presentation graph.
+        if (request.history) {
+          await Promise.all([
+            import("../../gateway/session-history-worker-reader.js"),
+            import("../../gateway/server-methods/chat-history-page-kernel.js"),
+            import("../../gateway/server-methods/chat-history-response-page.js"),
+            import("../../gateway/session-history-snapshot.js"),
+          ]);
+        }
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
         const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
@@ -108,15 +180,14 @@ serveOwnedWorkerTasks(
       if (request.kind === "historical-eviction-candidates") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
+        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const {
           readHistoricalSessionIdsInDatabase,
           readDiskEvictableArchivedSessionBatchInDatabase,
         } = await import("./session-history-eviction-candidates.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
+            runSqliteReadSnapshotSync(database.db, () =>
               "archived" in request
                 ? {
                     batch: readDiskEvictableArchivedSessionBatchInDatabase(
@@ -142,20 +213,80 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
         const { hasPendingSessionTranscriptArchives } =
           await import("./session-accessor.sqlite-archive-store-kernel.js");
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
-              hasPendingSessionTranscriptArchives(database),
-            ),
-          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
-        );
+        const result = withOpenClawAgentDatabaseReadOnly(hasPendingSessionTranscriptArchives, {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.env),
+        });
         return {
           kind: "session-pending-archives" as const,
           pending: result.found && result.value,
+        };
+      }
+      if (request.kind === "transcript-stats-batch") {
+        const { readTranscriptStatsBatchReadOnlySync } =
+          await import("./session-accessor.sqlite-read.js");
+        return {
+          kind: request.kind,
+          stats: readTranscriptStatsBatchReadOnlySync(
+            request.sessionIds.map((sessionId) => ({
+              ...request.database,
+              storePath: request.database.path,
+              sessionId,
+              env: request.env,
+            })),
+          ),
+        };
+      }
+      if (request.kind === "session-transcript-instances") {
+        const { listSessionTranscriptInstances } = await import("./session-history.js");
+        return {
+          kind: request.kind,
+          instances: listSessionTranscriptInstances(
+            {
+              ...request.scope,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            request.options,
+            request.continuation,
+          ),
+        };
+      }
+      if (request.kind === "memory-session-targets") {
+        const { readMemorySessionTargets } = await import("./session-memory-targets.js");
+        return {
+          kind: request.kind,
+          targets: readMemorySessionTargets(
+            { ...request.params, env: cloneEnvWithPlatformSemantics(request.params.env) },
+            request.continuation,
+          ),
+        };
+      }
+      if (request.kind === "session-archive-inventory") {
+        const { listSessionTranscriptArchivesReadOnly } =
+          await import("./session-accessor.sqlite-history.js");
+        return {
+          kind: request.kind,
+          archives: listSessionTranscriptArchivesReadOnly({
+            ...request,
+            env: cloneEnvWithPlatformSemantics(request.env ?? process.env),
+          }),
+        };
+      }
+      if (request.kind === "session-corpus-inventory") {
+        const { readSessionTranscriptCorpusInventory } =
+          await import("../../../packages/memory-host-sdk/src/host/session-transcript-corpus.js");
+        return {
+          kind: request.kind,
+          entries: readSessionTranscriptCorpusInventory(
+            { ...request.scope, env: cloneEnvWithPlatformSemantics(request.scope.env) },
+            request.options,
+            request.artifacts,
+            request.database.path,
+            request.continuation,
+          ),
         };
       }
       if (request.kind === "session-archive-presence") {
@@ -187,34 +318,6 @@ serveOwnedWorkerTasks(
             }
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
-      if (request.kind === "transcript-match") {
-        const { findTranscriptEventMatchingInDatabase } =
-          await import("./session-transcript-match.js");
-        const { withOpenClawAgentDatabaseReadOnly } =
-          await import("../../state/openclaw-agent-db-readonly.js");
-        const opened = withOpenClawAgentDatabaseReadOnly(
-          (database) => findTranscriptEventMatchingInDatabase(database, request.request),
-          {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
-          },
-        );
-        return {
-          kind: "transcript-match" as const,
-          result: opened.found ? opened.value : undefined,
-        };
-      }
-      if (request.kind === "transcript-search") {
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
-        return {
-          kind: "transcript-search" as const,
-          result: searchSessionTranscriptsReadOnlySync(request.params, {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
-          }),
-        };
-      }
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =
           await import("./session-store-target-inventory.js");
@@ -229,6 +332,11 @@ serveOwnedWorkerTasks(
         }
         return read.value;
       }
+      if (request.kind === "session-retirement-read") {
+        const { readSessionRetirementInWorker } =
+          await import("./session-retirement-read.worker.js");
+        return { kind: request.kind, result: readSessionRetirementInWorker(request) };
+      }
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
           await import("./session-entry-read.worker.js");
@@ -240,21 +348,19 @@ serveOwnedWorkerTasks(
         return readSessionRowDatabaseFacts(request);
       }
       if (request.kind === "session-entry-current") {
-        const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
+        const { readSessionEntryCurrentFacts } =
+          await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
-      }
-      if (request.kind === "session-row-backfill") {
-        const { readSessionRowTranscriptFields } =
-          await import("../../gateway/session-row-transcript-backfill.kernel.js");
-        return {
-          kind: "session-row-backfill" as const,
-          fields: readSessionRowTranscriptFields(request.params),
-        };
       }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =
           await import("./session-store-target-inventory.js");
         return readSessionStoreTargetInventory(request.request);
+      }
+      if (request.kind === "combined-store-topology") {
+        const { readCombinedSessionStoreTopology } =
+          await import("./combined-store-topology.worker.js");
+        return readCombinedSessionStoreTopology(request.request);
       }
       if (request.kind === "session-identity-evidence") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -279,54 +385,20 @@ serveOwnedWorkerTasks(
             );
         return { kind: "session-identity-evidence" as const, evidence };
       }
-      if (request.kind === "session-diagnostic-text") {
-        const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
-        return readSessionDiagnosticText(request);
-      }
-      if (request.kind === "session-entry-read") {
-        const { loadSessionEntryReadOnlyResultInScope } =
-          await import("./session-accessor.sqlite-exact-read.js");
-        let source: SessionTranscriptWorkerValues["session-entry-read"]["source"];
-        const read = loadSessionEntryReadOnlyResultInScope(
-          {
-            ...request.scope,
-            env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-          },
-          request.continuation,
-          (readSource) => {
-            if (typeof readSource.databaseIdentity !== "string") {
-              throw new Error("Private session entry requires its process-held owner");
-            }
-            source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
-          },
-        );
-        if (!read.ok) {
-          const readError = encodeSessionTranscriptWorkerError(read.error);
-          if (!readError || readError.kind === "fence") {
-            throw read.error;
-          }
-          return {
-            kind: "session-entry-read" as const,
-            entry: undefined,
-            source,
-            readError,
-          };
-        }
-        return { kind: "session-entry-read" as const, entry: read.value, source };
+      if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
+        const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
+        return readSessionEntryWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
-        const { listSessionEntriesReadOnly } =
-          await import("./session-accessor.sqlite-entry-list.read.js");
+        const { readSessionEntryList } = await import("./session-entry-list.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: listSessionEntriesReadOnly(
-            {
-              ...request.scope,
-              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-            },
-            { continuation: request.continuation },
-          ),
+          ...readSessionEntryList(request),
         };
+      }
+      if (request.kind === "session-store-projection") {
+        const { readSessionStoreProjection } = await import("./session-entry-read.worker.js");
+        return readSessionStoreProjection(request);
       }
       if (request.kind === "session-store-summary") {
         const { readSessionStoreSummaryReadOnly } =
@@ -343,18 +415,10 @@ serveOwnedWorkerTasks(
           ),
         };
       }
-      if (request.kind === "usage-cache") {
-        const { readSessionCostUsageCache } =
-          await import("../../infra/session-cost-usage-cache-read.js");
-        return readSessionCostUsageCache(
-          { ...request.database, env: request.env },
-          request.request,
-        );
-      }
-      if (request.kind === "branch-summaries") {
-        const { readSessionBranchSummariesInWorker } =
-          await import("./session-accessor.sqlite-branches.js");
-        return readSessionBranchSummariesInWorker(request.request);
+      if (request.kind === "voice-sessions") {
+        const { readOpenVoiceSessions } =
+          await import("../../talk/client-voice-session-lookup.worker.js");
+        return readOpenVoiceSessions({ ...request.database, env: request.env }, request.request);
       }
       if (request.kind === "session-membership-facts") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -380,53 +444,79 @@ serveOwnedWorkerTasks(
       if (request.kind === "projection-status") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
-        const {
-          hasSessionsNeedingTranscriptIndexReconcile,
-          hasOrphanedTranscriptIndexRows,
-          sessionTranscriptIndexNeedsReconcile,
-        } = await import("./session-transcript-index.js");
+        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
+        const { sessionTranscriptIndexNeedsReconcile } =
+          await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           ({ db }) =>
-            runSqliteDeferredTransactionSync(db, () =>
-              request.sessionId !== undefined
-                ? sessionTranscriptIndexNeedsReconcile(db, request.sessionId)
-                : hasSessionsNeedingTranscriptIndexReconcile(db) ||
-                  hasOrphanedTranscriptIndexRows(db),
+            runSqliteReadSnapshotSync(db, () =>
+              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
             ),
           { ...request.database, env: request.env },
         );
-        return result.found
-          ? result.value
-          : request.sessionId === undefined && result.reason === "schema-missing";
+        return result.found && result.value;
       }
       if (request.kind === "session-members") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { listSessionMembersInDatabase } = await import("./session-sharing-store.kernel.js");
+        const { readSessionMembersInDatabase } = await import("./session-sharing-store.kernel.js");
+        const { readWithCanonicalSessionReaderContinuation } =
+          await import("./session-canonical-key.js");
         const result = withOpenClawAgentDatabaseReadOnly(
-          (database) => listSessionMembersInDatabase(database, request.sessionKey),
+          (database) =>
+            readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+              readSessionMembersInDatabase(database, request.sessionKey),
+            ),
           { ...request.database, env: request.env },
         );
-        return result.found ? result.value : [];
-      }
-      if (request.kind === "session-pending-input-receipts") {
-        const { listSessionPendingInputReceipts } =
-          await import("./session-accessor.sqlite-pending-input-receipts.js");
         return {
-          kind: "session-pending-input-receipts" as const,
-          receipts: listSessionPendingInputReceipts(
-            {
-              agentId: request.agentId,
-              sessionKey: request.sessionKey,
-              sessionId: request.sessionId,
-              storePath: request.database.path,
-              env: cloneEnvWithPlatformSemantics(request.env),
-            },
-            { runIds: request.runIds },
-          ),
+          kind: "session-members" as const,
+          ...(result.found ? result.value : { entry: undefined, members: [] }),
         };
+      }
+      if (request.kind === "session-reactions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionReactionsInDatabase } = await import("./session-reaction-store.read.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) => listSessionReactionsInDatabase(database, request.sessionKey, request),
+          { ...request.database, env: request.env },
+        );
+        return { kind: "session-reactions" as const, reactions: result.found ? result.value : {} };
+      }
+      if (request.kind === "session-suggestions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionSuggestionsInDatabase } =
+          await import("./session-suggestion-store.kernel.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listSessionSuggestionsInDatabase(database, request.sessionKey, request.params),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: "session-suggestions" as const,
+          suggestions: result.found ? result.value : [],
+        };
+      }
+      if (request.kind === "session-pending-input-history") {
+        const { readPendingInputHistoryInWorker } =
+          await import("./session-pending-input-history-read.worker.js");
+        return {
+          kind: "session-pending-input-history",
+          snapshot: readPendingInputHistoryInWorker(request),
+        };
+      }
+      if (request.kind === "conversation-rows") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { selectConversationRowsFromDatabase } =
+          await import("./session-accessor.sqlite-conversation-read.js");
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => selectConversationRowsFromDatabase(database, request.query),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return { kind: "conversation-rows", rows: read.found ? read.value : [] };
       }
       if (request.kind === "conversation-delivery") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -442,11 +532,9 @@ serveOwnedWorkerTasks(
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const {
-          assertSessionGoalOperationTime,
-          readSessionGoalOperationInDatabase,
-          SessionGoalOperationError,
-        } = await import("./goals-operations.js");
+        const { readSessionGoalOperationInDatabase, SessionGoalOperationError } =
+          await import("./goals-operations.js");
+        const { assertSessionGoalOperationTime } = await import("./goals-operation-policy.js");
         try {
           assertSessionGoalOperationTime(request.operation, Date.now());
           const result = withOpenClawAgentDatabaseReadOnly(
@@ -483,51 +571,29 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-row-presence") {
         const { loadSessionEntryReadOnlyInScope } =
-          await import("./session-accessor.sqlite-entry.js");
+          await import("./session-accessor.sqlite-exact-read.js");
         return (
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
-      if (request.kind === "transcript-watermark") {
-        const { readSessionTranscriptWatermark } =
-          await import("./session-accessor.sqlite-transcript-watermark.js");
-        return {
-          kind: "transcript-watermark",
-          watermark: readSessionTranscriptWatermark(request.scope),
-        };
+      if (request.kind === "session-entries") {
+        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return { entries: await prepareSessionMemoryEntries(request.entries) };
       }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
           if (request.kind === "session-activity-summary-source") {
             const { readActivitySummaryBatch } =
-              await import("../../gateway/session-activity-summary-source.js");
+              await import("../../gateway/session-activity-summary-source.worker.js");
             return {
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),
             };
           }
-          if (request.kind === "session-title-fields") {
-            const { readSessionTitleFieldsFromTranscript } =
-              await import("../../gateway/session-transcript-title-reader.js");
-            return {
-              kind: "session-title-fields" as const,
-              fields: readSessionTitleFieldsFromTranscript(request.scope, {
-                includeInterSession: request.includeInterSession,
-                readOnly: true,
-              }),
-            };
-          }
-          if (request.kind === "session-preview") {
-            const { readSessionPreviewItemsReadOnly } =
-              await import("../../gateway/session-transcript-preview-reader.js");
-            return {
-              kind: "session-preview" as const,
-              items: readSessionPreviewItemsReadOnly(request),
-            };
-          }
           if (
             request.kind === "transcript-hydration" ||
+            request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
             request.kind === "recent-active-events" ||
             request.kind === "latest-active-message"
@@ -535,15 +601,6 @@ serveOwnedWorkerTasks(
             const { readSessionTranscriptHydrationRequest } =
               await import("./session-transcript-hydration-read.worker.js");
             return readSessionTranscriptHydrationRequest(request, channel, control);
-          }
-          if (request.kind === "model-context") {
-            const { readSessionTranscriptModelContext } =
-              await import("./session-accessor.sqlite-model-context.js");
-            return readSessionTranscriptModelContext(
-              request.target,
-              request.through,
-              request.limits,
-            );
           }
           if (request.kind === "history-page") {
             const { readSessionHistoryRequest } =
@@ -558,20 +615,13 @@ serveOwnedWorkerTasks(
               await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
             return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
           }
-          const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
-            await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const { createSensitiveTextRedactor } = await import("../../logging/redact.js");
-          const entry = await buildSessionEntryInProcess(
-            request.absPath,
-            request.options,
-            createSensitiveTextRedactor(request.redaction),
-          );
-          return {
-            entry,
-            resetRecallCutoff: entry
-              ? readSessionEntryResetRecallCutoff(entry)
-              : { state: "absent" },
-          };
+          if (request.mode === "snapshot") {
+            const { readSessionEntrySnapshotRequest } =
+              await import("./session-transcript-hydration-read.worker.js");
+            return readSessionEntrySnapshotRequest(request);
+          }
+          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
+          return prepareSessionMemoryEntry(request);
         },
       );
     };
@@ -579,36 +629,19 @@ serveOwnedWorkerTasks(
       // Database-addressed reads share one custody and reply boundary; discovery and exports
       // retain their existing owners. The scope opens no connection until a reader asks for it.
       return "database" in request
-        ? await withHistoryDatabase(request.database, request.kind, readRequest)
+        ? await withHistoryDatabase(
+            request.database,
+            request.kind === "history-page"
+              ? request.request.kind === "summary"
+                ? `history.${request.request.params.query.kind}`
+                : `history.${request.request.kind}`
+              : request.kind,
+            () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
+            request.validation,
+          )
         : { ok: true, value: await readRequest() };
     } catch (error) {
-      if (
-        error instanceof SessionHistoryDeltaPreparationError &&
-        request.kind === "history-page" &&
-        request.request.kind === "delta"
-      ) {
-        // Keep the failed-reply path: auxiliary readers may also need retirement.
-        // The host joins worker exit before consuming any partial visibility facts.
-        return {
-          ok: false,
-          error: { kind: "delta-visibility", partial: error.partial },
-        };
-      }
-      if (
-        error instanceof SyntaxError &&
-        request.kind === "history-page" &&
-        (request.request.kind === "message-lookup" ||
-          request.request.kind === "message-by-id" ||
-          request.request.kind === "message-count" ||
-          request.request.kind === "artifacts" ||
-          request.request.kind === "message-page" ||
-          request.request.kind === "around-id" ||
-          request.request.kind === "source-messages" ||
-          request.request.kind === "recent-page")
-      ) {
-        return { ok: false, error: { kind: "syntax", message: error.message } };
-      }
-      const encoded = encodeSessionTranscriptWorkerError(error);
+      const encoded = encodeSessionTranscriptRequestError(error, request);
       if (encoded) {
         return { ok: false, error: encoded };
       }
@@ -621,38 +654,27 @@ serveOwnedWorkerTasks(
         return [];
       }
       const value = reply.value;
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        !("kind" in value) ||
-        value.kind !== "artifacts" ||
-        value.result.kind !== "download-response"
-      ) {
+      if (typeof value !== "object" || value === null || !("kind" in value)) {
         return [];
       }
-      const body = value.result.response?.body;
-      return body ? [body.buffer] : [];
+      const body =
+        value.kind === "rpc"
+          ? value.page.encodedResponse?.messages
+          : value.kind === "artifacts" && value.result.kind === "download-response"
+            ? value.result.response?.body
+            : undefined;
+      const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
+      return [...(body ? [body.buffer] : []), ...(deflated ? [deflated.buffer] : [])];
     },
     closeResource: (key) => {
-      const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
-      if (
-        !Array.isArray(parsed) ||
-        !parsed.every(
-          (candidate) =>
-            isRecord(candidate) &&
-            typeof candidate.path === "string" &&
-            (candidate.scope === undefined || candidate.scope === "sibling-family"),
-        )
-      ) {
+      const request = decodeAgentDatabaseReaderRequest(key);
+      if (request?.kind !== "close") {
         throw new Error("Session reader cleanup requires captured physical paths");
       }
-      const candidates = parsed.map((candidate: { path: string; scope?: "sibling-family" }) =>
-        candidate.scope
-          ? { path: candidate.path, scope: candidate.scope }
-          : { path: candidate.path },
+      releaseReadValidation?.(
+        request.candidates,
+        request.deleted ? undefined : request.retainedPaths,
       );
-      closeReadOnlyCandidates?.(candidates);
-      releaseReadValidation?.(candidates);
       pruneClosedHistoryDatabaseScopes();
     },
   },

@@ -131,3 +131,15 @@ enum OpenClawChatTypography {
     }
     #endif
 }
+
+func chatActionLabel(_ title: Text, systemImage: String) -> some View {
+    Label {
+        title.font(OpenClawChatTypography.body)
+    } icon: {
+        Image(systemName: systemImage)
+    }
+}
+
+func chatActionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    chatActionLabel(Text(title), systemImage: systemImage)
+}

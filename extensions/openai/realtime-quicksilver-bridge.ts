@@ -2,6 +2,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   rawDataToString,
   RealtimeVoiceSessionLifecycle,
   type RealtimeVoiceAgentConsultTranscriptEntry,
@@ -15,7 +16,7 @@ import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
 import { assertOpenAIQuicksilverPcmOutput } from "./realtime-quicksilver-audio-buffer.js";
-import { dispatchOpenAIQuicksilverBridgeDelegation } from "./realtime-quicksilver-bridge-delegation.js";
+import { buildOpenAIQuicksilverDelegationPrompt } from "./realtime-quicksilver-instructions.js";
 import {
   captureOpenAIQuicksilverTransportEvent,
   buildOpenAIQuicksilverContextAppend,
@@ -72,7 +73,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private closing?: { connection: RealtimeVoiceSessionConnection; completion?: Promise<void> };
   private readonly lifecycle: RealtimeVoiceSessionLifecycle;
   private activeDelegations = new Set<string>();
-  private publicDelegations: OpenAILiveDelegationQueue | undefined;
+  private delegations: OpenAILiveDelegationQueue | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
   private readonly requestIds = createOpenAIQuicksilverRequestIds();
 
@@ -171,70 +172,43 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       this.closeSocket("stale connection", connected.socket);
       return;
     }
-    if (isOpenAIGptLiveApiModel(this.config.model)) {
-      this.publicDelegations = new OpenAILiveDelegationQueue({
-        isActive: () => this.lifecycle.acceptsEvents(connection),
-        readInput: () => this.transcript.latestUserInput(),
-        dispatch: (id, input) => this.startDelegation(id, input, connection),
-        onExpired: (id) =>
-          this.sendContext(
-            "Ask the user to repeat their request; no user transcript was received.",
-            "speakable",
-            id,
-          ),
-        onError: () => this.fail(connection),
-      });
-    }
+    this.delegations = new OpenAILiveDelegationQueue({
+      isActive: () => this.lifecycle.acceptsEvents(connection),
+      readInput: () => this.transcript.latestUserInput(),
+      dispatch: (id, input) => this.startDelegation(id, input, connection),
+      onExpired: (id) =>
+        this.sendContext(
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+          id,
+        ),
+      onError: () => this.fail(connection),
+    });
     captureOpenAIQuicksilverTransportEvent(this.runtime, "local", "ws-open");
 
-    let reachedReady = false;
-    let readySettled = false;
-    let removeAbortListener = () => {};
-    const ready = createDeferred();
-    const settleReady = (providerReady = true, error?: Error) => {
-      if (readySettled) {
-        return;
-      }
-      readySettled = true;
-      if (!error) {
-        reachedReady = providerReady;
-      }
-      if (readyTimeout) {
-        clearTimeout(readyTimeout);
-      }
-      removeAbortListener();
-      if (error) {
-        ready.reject(error);
-      } else {
-        ready.resolve();
-      }
-    };
+    const ready = this.lifecycle.createConnectAttempt({
+      connection,
+      onAbort: () => {},
+      onTimeout: () => failStartup("session-start timeout"),
+      timeoutError: () => new Error(projectOpenAIQuicksilverErrorMessage("transport")),
+      timeoutMs: OPENAI_QUICKSILVER_READY_TIMEOUT_MS,
+      ref: false,
+    });
+    const settleReady = () => ready.resolve(true);
     const failStartup = (reason: string) => {
       if (this.lifecycle.terminalOutcome(connection) === "completed") {
-        settleReady(false);
+        ready.resolve();
         return;
       }
-      if (!this.lifecycle.acceptsEvents(connection) || reachedReady) {
+      if (!this.lifecycle.acceptsEvents(connection) || ready.ready) {
         return;
       }
+      // Settle the provider error before lifecycle failure aborts the connection.
+      ready.reject(new Error(projectOpenAIQuicksilverErrorMessage("transport")));
       this.failLifecycle(connection);
-      settleReady(false, new Error(projectOpenAIQuicksilverErrorMessage("transport")));
       this.closeSocket(reason, connected.socket);
     };
-    const readyTimeout = setTimeout(() => {
-      failStartup("session-start timeout");
-    }, OPENAI_QUICKSILVER_READY_TIMEOUT_MS);
-    readyTimeout.unref?.();
-    const onAbort = () => {
-      if (this.lifecycle.terminalOutcome(connection) === "completed") {
-        settleReady(false);
-      }
-    };
-    connection.signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => connection.signal.removeEventListener("abort", onAbort);
-    if (connection.signal.aborted) {
-      onAbort();
-    }
+    ready.startTimeout();
 
     connected.socket.on("message", (data: RawData, isBinary: boolean) => {
       const draining =
@@ -250,7 +224,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       if (isBinary) {
-        if (!reachedReady) {
+        if (!ready.ready) {
           failStartup("unexpected binary frame");
         } else {
           this.fail(connection);
@@ -271,7 +245,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       if (!this.lifecycle.acceptsEvents(connection) || this.socket !== connected.socket) {
         return;
       }
-      if (!reachedReady) {
+      if (!ready.ready) {
         failStartup("startup error");
       } else {
         this.fail(connection);
@@ -282,15 +256,15 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       this.socket = undefined;
-      if (!reachedReady) {
+      if (!ready.ready) {
         if (this.lifecycle.terminalOutcome(connection) === "completed") {
           settleReady();
           this.notifyClose(connection, "completed");
           return;
         }
         const error = new Error("GPT-Live WebSocket closed before session.started");
+        ready.reject(error);
         this.failLifecycle(connection);
-        settleReady(false, error);
         this.lifecycle.close(connection, "error");
         return;
       }
@@ -322,7 +296,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       }
     }
     if (terminalEvent) {
-      if (reachedReady) {
+      if (ready.ready) {
         if (
           terminalEvent.kind === "close" &&
           terminalEvent.code === 1000 &&
@@ -527,13 +501,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
               ? `session.${event.role === "user" ? "input" : "output"}_transcript.delta`
               : `${event.role === "user" ? "input" : "output"}_transcript.added`,
       });
-      this.publicDelegations?.resume();
+      this.delegations?.resume();
       return;
     }
     if (event.kind === "delegation") {
-      if (this.publicDelegations) {
-        this.publicDelegations.enqueue(event.id);
-      } else {
+      if (isOpenAIGptLiveApiModel(this.config.model)) {
+        this.delegations?.enqueue(event.id);
+      } else if (this.delegations?.claim(event.id)) {
         this.startDelegation(
           event.id,
           event.prompt ?? this.transcript.latestUserInput(),
@@ -572,18 +546,62 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     connection: RealtimeVoiceSessionConnection,
     prompt?: string,
   ): void {
-    dispatchOpenAIQuicksilverBridgeDelegation({
-      id,
-      input,
-      prompt,
-      model: this.config.model,
-      callbacks: this.config,
-      transcript: this.transcript,
-      activeDelegations: this.activeDelegations,
-      isActive: () => this.lifecycle.acceptsEvents(connection),
+    const isActive = () => this.lifecycle.acceptsEvents(connection);
+    const sendReply = (message: string) => this.sendContext(message, "speakable", id);
+    if (!isActive()) {
+      return;
+    }
+    if (!input.trim()) {
+      sendReply("Ask the user to repeat their request; no user transcript was received.");
+      return;
+    }
+    const { model, handleDelegationInput: handleInput } = this.config;
+    if (handleInput) {
+      let responded = false;
+      try {
+        const admission = handleInput(input, (message) => {
+          if (!responded && isActive()) {
+            responded = true;
+            sendReply(message);
+          }
+        });
+        if (admission === "control") {
+          this.transcript.clearPendingUserInput();
+          return;
+        }
+      } catch {
+        this.fail(connection);
+        return;
+      }
+    }
+    if (!isActive()) {
+      return;
+    }
+    const snapshot = this.transcript.consume();
+    this.transcript.publish(snapshot.publication, {
+      onTranscript: this.config.onTranscript,
       isCurrent: () => this.lifecycle.isCurrent(connection),
-      sendReply: (message) => this.sendContext(message, "speakable", id),
-      onError: () => this.fail(connection),
+    });
+    if (!isActive()) {
+      return;
+    }
+    this.activeDelegations.add(id);
+    this.config.onEvent?.({
+      direction: "server",
+      type: isOpenAIGptLiveApiModel(model) ? "session.delegation.created" : "delegation.created",
+      itemId: id,
+    });
+    if (!isActive()) {
+      return;
+    }
+    this.config.onToolCall?.({
+      itemId: id,
+      callId: id,
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: {
+        question:
+          prompt ?? buildOpenAIQuicksilverDelegationPrompt({ input, transcript: snapshot.context }),
+      },
     });
   }
 
@@ -669,8 +687,8 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private resetTerminalState(): void {
     this.closeAudioOutput();
     this.socket?.stopAudio();
-    this.publicDelegations?.stop();
-    this.publicDelegations = undefined;
+    this.delegations?.stop();
+    this.delegations = undefined;
     this.activeDelegations.clear();
     this.transcript.clear();
   }

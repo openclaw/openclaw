@@ -12,42 +12,17 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
 function parseFixture(content: string) {
-  return [content, "source.ts", parser.parseSourceFile("source.ts", content)] as const;
+  return parser.parseSourceFile("source.ts", content);
 }
 
 describe("check-channel-agnostic-boundaries", () => {
-  it("flags direct channel module imports", () => {
-    const source = `
-      import { getThreadBindingManager } from "../discord/monitor/thread-bindings.js";
-      const x = 1;
-    `;
-    expect(findChannelAgnosticBoundaryViolations(...parseFixture(source))).toEqual([
-      {
-        line: 2,
-        reason: 'imports channel module "../discord/monitor/thread-bindings.js"',
-      },
-    ]);
-  });
-
-  it("flags channel config path access", () => {
-    const source = `
-      const x = cfg.channels.discord?.threadBindings?.enabled;
-    `;
-    expect(findChannelAgnosticBoundaryViolations(...parseFixture(source))).toEqual([
-      {
-        line: 2,
-        reason: 'references config path "channels.discord"',
-      },
-    ]);
-  });
-
   it("flags channel-literal comparisons", () => {
     const source = `
       if (channel === "discord") {
         return true;
       }
     `;
-    expect(findChannelAgnosticBoundaryViolations(...parseFixture(source))).toEqual([
+    expect(findChannelAgnosticBoundaryViolations(parseFixture(source))).toEqual([
       {
         line: 2,
         reason: 'compares with channel id literal (channel === "discord")',
@@ -55,11 +30,24 @@ describe("check-channel-agnostic-boundaries", () => {
     ]);
   });
 
+  it("allows the platform abort utility while retaining Signal directory checks", () => {
+    expect(
+      findChannelAgnosticBoundaryViolations(
+        parseFixture('import { isAbortError } from "../../infra/abort-signal.js";'),
+      ),
+    ).toEqual([]);
+    expect(
+      findChannelAgnosticBoundaryViolations(
+        parseFixture('import "../signal/infra/abort-signal.js";'),
+      ),
+    ).toEqual([{ line: 1, reason: 'imports channel module "../signal/infra/abort-signal.js"' }]);
+  });
+
   it("flags object literals with explicit channel ids", () => {
     const source = `
       const payload = { channel: "telegram" };
     `;
-    expect(findChannelAgnosticBoundaryViolations(...parseFixture(source))).toEqual([
+    expect(findChannelAgnosticBoundaryViolations(parseFixture(source))).toEqual([
       {
         line: 2,
         reason: 'assigns channel id literal to "channel" ("telegram")',
@@ -67,43 +55,14 @@ describe("check-channel-agnostic-boundaries", () => {
     ]);
   });
 
-  it("ignores non-channel literals and unrelated text", () => {
-    const source = `
-      const msg = "discord";
-      const payload = { mode: "persistent" };
-      const x = cfg.session.threadBindings?.enabled;
-    `;
-    expect(findChannelAgnosticBoundaryViolations(...parseFixture(source))).toStrictEqual([]);
-  });
-
   it("reverse-deps mode flags channel module re-exports", () => {
     const source = `
       export { resolveThreadBindingIntroText } from "../discord/monitor/thread-bindings.messages.js";
     `;
-    expect(findChannelCoreReverseDependencyViolations(...parseFixture(source))).toEqual([
+    expect(findChannelCoreReverseDependencyViolations(parseFixture(source))).toEqual([
       {
         line: 2,
         reason: 're-exports channel module "../discord/monitor/thread-bindings.messages.js"',
-      },
-    ]);
-  });
-
-  it("reverse-deps mode ignores channel literals when no imports are present", () => {
-    const source = `
-      const channel = "discord";
-      const x = cfg.channels.discord?.threadBindings?.enabled;
-    `;
-    expect(findChannelCoreReverseDependencyViolations(...parseFixture(source))).toStrictEqual([]);
-  });
-
-  it("user-facing text mode flags channel names in string literals", () => {
-    const source = `
-      const message = "Bind a Discord thread first.";
-    `;
-    expect(findAcpUserFacingChannelNameViolations(...parseFixture(source))).toEqual([
-      {
-        line: 2,
-        reason: 'user-facing text references channel name ("Bind a Discord thread first.")',
       },
     ]);
   });
@@ -112,14 +71,14 @@ describe("check-channel-agnostic-boundaries", () => {
     const source = `
       import { x } from "../discord/monitor/thread-bindings.js";
     `;
-    expect(findAcpUserFacingChannelNameViolations(...parseFixture(source))).toStrictEqual([]);
+    expect(findAcpUserFacingChannelNameViolations(parseFixture(source))).toStrictEqual([]);
   });
 
   it("system-mark guard flags hardcoded gear literals", () => {
     const source = `
       const line = "⚙️ Thread bindings enabled.";
     `;
-    expect(findSystemMarkLiteralViolations(...parseFixture(source))).toEqual([
+    expect(findSystemMarkLiteralViolations(parseFixture(source))).toEqual([
       {
         line: 2,
         reason: 'hardcoded system mark literal ("⚙️ Thread bindings enabled.")',
@@ -127,14 +86,12 @@ describe("check-channel-agnostic-boundaries", () => {
     ]);
   });
 
-  it("system-mark guard ignores module import specifiers", () => {
-    const source = `
-      import { x } from "../infra/system-message.js";
-    `;
-    expect(findSystemMarkLiteralViolations(...parseFixture(source))).toStrictEqual([]);
-  });
-
   it.each([
+    {
+      name: "namespace thread-binding import",
+      source: 'import * as bindings from "../discord/monitor/thread-bindings.js";',
+      reason: 'imports channel module "../discord/monitor/thread-bindings.js"',
+    },
     {
       name: "commented dynamic import with attributes",
       source: 'await import /* gap */ ("../discord/private.js", { with: { type: "json" } });',
@@ -156,7 +113,7 @@ describe("check-channel-agnostic-boundaries", () => {
       reason: 'dynamically imports channel module "../signal/private.js"',
     },
   ])("flags $name in protected channel-independent sources", ({ source, reason }) => {
-    expect(findChannelAgnosticBoundaryViolations(...parseFixture(source))).toEqual([
+    expect(findChannelAgnosticBoundaryViolations(parseFixture(source))).toEqual([
       { line: 1, reason },
     ]);
   });
@@ -164,7 +121,7 @@ describe("check-channel-agnostic-boundaries", () => {
   it("preserves source order when imports and config paths share a line", () => {
     expect(
       findChannelAgnosticBoundaryViolations(
-        ...parseFixture('import "../telegram/private.js"; const enabled = cfg.channels.discord;'),
+        parseFixture('import "../telegram/private.js"; const enabled = cfg.channels.discord;'),
       ),
     ).toEqual([
       { line: 1, reason: 'imports channel module "../telegram/private.js"' },

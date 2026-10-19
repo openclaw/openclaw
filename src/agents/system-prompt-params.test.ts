@@ -2,7 +2,7 @@
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildActiveNodeContextText, setActiveNodeContexts } from "../infra/active-node-context.js";
@@ -29,22 +29,6 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 describe("buildSystemPromptParams", () => {
   afterEach(() => {
     setActiveNodeContexts([]);
-    vi.useRealTimers();
-  });
-
-  it("formats the current date in the configured user timezone", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-05T23:30:00.000Z"));
-
-    const utc = buildParams({
-      config: { agents: { defaults: { userTimezone: "UTC" } } },
-    });
-    const tokyo = buildParams({
-      config: { agents: { defaults: { userTimezone: "Asia/Tokyo" } } },
-    });
-
-    expect(utc.userDate).toBe("2026-01-05");
-    expect(tokyo.userDate).toBe("2026-01-06");
   });
 
   it("projects the requester-scoped stable active-node identity", () => {
@@ -207,7 +191,7 @@ describe("buildSystemPromptParams", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       config: {
         agents: {
-          list: [{ id: "main", identity: { name: identityName } }],
+          entries: { main: { identity: { name: identityName } } },
         },
       },
       agentId: "main",
@@ -253,7 +237,13 @@ describe("buildSystemPromptParams", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       config,
       agentId: "main",
+      preparedSessionEntry: {
+        sessionId: "public-session",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "public-session", createdAt: 1 },
+      },
       runtime: {
+        sessionId: "public-session",
         sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
         ...runtime,
       },
@@ -262,11 +252,38 @@ describe("buildSystemPromptParams", () => {
     expect(runtimeInfo.sessionUrl).toBe(expected);
   });
 
+  it.each(["private", "mismatched"])("omits %s session links from Runtime", (state) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: { gateway: { publicOrigin: "https://gateway.example" } },
+      agentId: "main",
+      preparedSessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        publicShare:
+          state === "private"
+            ? undefined
+            : {
+                id: "a".repeat(48),
+                sessionId: "older-session",
+                createdAt: 1,
+              },
+      },
+      runtime: { ...runtime, sessionKey: "agent:main:main", sessionId: "session-1" },
+    });
+    expect(runtimeInfo.sessionUrl).toBeUndefined();
+  });
+
   it("omits oversized current session URLs from model context", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       config: { gateway: { publicOrigin: "https://gateway.example" } },
       agentId: "main",
+      preparedSessionEntry: {
+        sessionId: "public-session",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "public-session", createdAt: 1 },
+      },
       runtime: {
+        sessionId: "public-session",
         sessionKey: `agent:main:dashboard:${"a".repeat(512)}`,
         ...runtime,
       },

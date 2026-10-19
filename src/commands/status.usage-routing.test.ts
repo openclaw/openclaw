@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { registerStatusHealthSessionsCommands } from "../cli/program/register.status-health-sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import type { UsageSummary } from "../infra/provider-usage.types.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../runtime.js";
@@ -16,7 +17,7 @@ import type { StatusScanOverviewResult } from "./status.scan-overview.js";
 import type { StatusScanResult } from "./status.scan-result.js";
 import type { scanStatus } from "./status.scan.js";
 import { resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
-import { baseStatusServices, createStatusScanResultFixture } from "./status.test-support.js";
+import { createStatusScanResultFixture } from "./status.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -40,8 +41,11 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 vi.mock("./status.scan.js", () => ({ scanStatus: mocks.scan }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scan }));
+// mock-isolation: Usage routing consumes fixture scans without local database or Gateway probes.
 vi.mock("./status.scan-overview.js", () => ({
-  resolveStatusSummaryFromOverview: async () => createStatusScanResultFixture().summary,
+  prepareStatusSummaryFromOverview: async () => ({
+    publish: () => ({ summary: createStatusScanResultFixture().summary, sessionStores: undefined }),
+  }),
   collectStatusScanOverview: async ({ opts }: { opts: Parameters<typeof scanStatus>[0] }) => {
     const scan = await mocks.scan(opts);
     return {
@@ -75,9 +79,17 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 vi.mock("./status.gateway-probe.js", () => ({
   resolveGatewayProbeAuthResolution: async () => ({ auth: { token: "fixture-token" } }),
 }));
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.gatewayService,
-  getNodeDaemonStatusSummary: mocks.nodeService,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.gatewayService,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.nodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -116,7 +128,7 @@ vi.mock("../state/backup-run-records.js", async (importOriginal) => ({
   readBackupRunFreshness: async () => ({}),
 }));
 vi.mock("../security/audit.runtime.js", () => ({ runSecurityAudit: mocks.audit }));
-vi.mock("../node-host/config.js", () => ({ loadNodeHostConfigReadOnly: mocks.nodeConfig }));
+vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.nodeConfig }));
 
 Object.assign(mocks.runtime, createTestRuntime());
 
@@ -253,8 +265,21 @@ describe("status commands", () => {
         agents: [],
       },
     });
-    mocks.gatewayService.mockResolvedValue(baseStatusServices.gatewayService);
-    mocks.nodeService.mockResolvedValue(baseStatusServices.nodeService);
+    mocks.gatewayService.mockReturnValue(
+      createMockGatewayService({
+        isLoaded: async () => true,
+        readCommand: async () => ({ programArguments: ["openclaw", "gateway", "run"] }),
+        readRuntime: async () => ({ status: "running" }),
+      }),
+    );
+    mocks.nodeService.mockReturnValue(
+      createMockGatewayService({
+        label: "node",
+        isLoaded: async () => true,
+        readCommand: async () => ({ programArguments: ["openclaw", "node", "run"] }),
+        readRuntime: async () => ({ status: "running", pid: 42 }),
+      }),
+    );
   });
 
   afterEach(() => {
@@ -337,7 +362,15 @@ describe("status commands", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    name: string;
+    args: string[];
+    summary?: UsageSummary;
+    agentId?: string;
+    line?: string;
+    timeoutMs?: number;
+    elapsedMs?: number;
+  }>([
     {
       name: "full report explicit agent",
       args: ["--all", "--usage", "--agent", "work"],
@@ -352,7 +385,23 @@ describe("status commands", () => {
       summary: summaries.work,
       agentId: "work",
     },
-  ])("$name", async ({ args, summary, agentId, line }) => {
+    {
+      name: "full report with the budget remaining after readiness",
+      args: ["--all", "--usage", "--timeout", "1234"],
+      summary: summaries.default,
+      line: "Window: 75% left",
+      timeoutMs: 1234,
+      elapsedMs: 234,
+    },
+  ])("$name", async ({ args, summary, agentId, line, timeoutMs = 60_000, elapsedMs = 0 }) => {
+    if (elapsedMs) {
+      const clock = vi.spyOn(performance, "now");
+      const scan = await mocks.scan(createStatusGatewayProbeBudget(timeoutMs));
+      mocks.scan.mockImplementation(async () => {
+        clock.mockReturnValue(elapsedMs);
+        return scan;
+      });
+    }
     mocks.usage.mockResolvedValue(summary ?? summaries.default);
     const program = new Command();
     registerStatusHealthSessionsCommands(program);
@@ -364,9 +413,7 @@ describe("status commands", () => {
       expect(JSON.parse(output).usage).toEqual(summary);
     } else {
       expect(output).toContain("OpenClaw status");
-      if (args.includes("--all")) {
-        expect(output).toContain("Diagnosis (read-only)");
-      }
+      expect(output).toContain("Diagnosis (read-only)");
       if (line) {
         expect(output).toContain(line);
         for (const provider of summary?.providers ?? []) {
@@ -377,48 +424,16 @@ describe("status commands", () => {
       }
     }
     if (summary) {
-      expect(mocks.usage).toHaveBeenCalledOnce();
-      expect(mocks.usage).toHaveBeenCalledWith({
+      expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({
         config,
-        timeoutMs: 60_000,
-        gatewayProbeDeadlineMs: 60_000,
+        timeoutMs: timeoutMs - elapsedMs,
+        gatewayProbeDeadlineMs: timeoutMs,
         ...(agentId ? { agentId } : {}),
       });
     } else {
       expect(mocks.usage).not.toHaveBeenCalled();
     }
   });
-
-  it.each([{ args: ["--all"], timeoutMs: 1234, elapsedMs: 234, expected: 1000 }])(
-    "bounds usage after readiness ($args, $timeoutMs)",
-    async ({ args, timeoutMs, elapsedMs, expected }) => {
-      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      try {
-        const scan = await mocks.scan(createStatusGatewayProbeBudget(timeoutMs));
-        mocks.scan.mockImplementation(async () => {
-          clock.mockReturnValue(elapsedMs);
-          return scan;
-        });
-        mocks.usage.mockResolvedValue(summaries.default);
-        const program = new Command();
-        registerStatusHealthSessionsCommands(program);
-        await program.parseAsync(
-          ["status", "--usage", ...args, ...(timeoutMs ? ["--timeout", String(timeoutMs)] : [])],
-          { from: "user" },
-        );
-
-        expect(mocks.runtime.error).not.toHaveBeenCalled();
-        expect(mocks.runtime.exit).not.toHaveBeenCalled();
-        expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({
-          config,
-          timeoutMs: expected,
-          gatewayProbeDeadlineMs: timeoutMs ?? 60_000,
-        });
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
 
   it("includes full JSON diagnostics only when requested", async () => {
     const warning = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
@@ -438,45 +453,51 @@ describe("status commands", () => {
     );
   });
 
-  it("includes invalid config diagnostics in JSON only when present", async () => {
-    setScan({ configDiagnostics: diagnostics });
-    expect(JSON.parse(await runStatusOutput({ json: true })).configDiagnostics).toEqual(
-      diagnostics,
-    );
-    setScan({ configDiagnostics: null });
-    expect(JSON.parse(await runStatusOutput({ json: true }))).not.toHaveProperty(
-      "configDiagnostics",
-    );
-  });
-
-  it("prints config diagnostics and recovery in text only when present", async () => {
-    setScan({ configDiagnostics: diagnostics });
-    mocks.callGateway.mockResolvedValueOnce({
-      ok: true,
-      channels: {},
-      agents: [],
-      ts: 1,
-      durationMs: 0,
-    });
-    setScan({ gatewayReachable: true });
-    const text = await runStatusOutput({ deep: true });
-    expect(text).toContain("Critical");
-    expect(text).toContain("Warning");
-    expect(text).toContain("Fix: Repair");
-    expect(text).toContain("Config diagnostics:");
-    expect(text).toContain("Config file is invalid: /tmp/openclaw.json");
-    expect(text).toContain("gateway.port: invalid");
-    expect(text).toContain("openclaw --profile isolated doctor --fix");
-    setScan({ configDiagnostics: null });
-    expect(await runStatusOutput()).not.toContain("Config diagnostics:");
-  });
-
-  it("prints config diagnostics before a deep gateway-health failure", async () => {
-    setScan({ configDiagnostics: diagnostics, gatewayReachable: true });
-    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health unavailable"));
-    await expect(runStatusOutput({ deep: true })).rejects.toThrow("gateway health unavailable");
-    expect(mocks.runtime.log.mock.calls.flat().join("\n")).toContain("Config diagnostics:");
-  });
+  it.each(["JSON", "text", "failing deep health"])(
+    "reports present config diagnostics in %s output",
+    async (mode) => {
+      setScan({ configDiagnostics: diagnostics, gatewayReachable: mode !== "JSON" });
+      if (mode === "failing deep health") {
+        mocks.callGateway.mockRejectedValueOnce(new Error("gateway health unavailable"));
+        await expect(runStatusOutput({ deep: true })).rejects.toThrow("gateway health unavailable");
+        expect(mocks.runtime.log.mock.calls.flat().join("\n")).toContain("Config diagnostics:");
+        return;
+      }
+      if (mode === "JSON") {
+        expect(JSON.parse(await runStatusOutput({ json: true })).configDiagnostics).toEqual(
+          diagnostics,
+        );
+      } else {
+        mocks.callGateway.mockResolvedValueOnce({
+          ok: true,
+          channels: {},
+          agents: [],
+          ts: 1,
+          durationMs: 0,
+        });
+        const text = await runStatusOutput({ deep: true });
+        for (const expected of [
+          "Critical",
+          "Warning",
+          "Fix: Repair",
+          "Config diagnostics:",
+          "Config file is invalid: /tmp/openclaw.json",
+          "gateway.port: invalid",
+          "openclaw --profile isolated doctor --fix",
+        ]) {
+          expect(text).toContain(expected);
+        }
+      }
+      setScan({ configDiagnostics: null });
+      if (mode === "JSON") {
+        expect(JSON.parse(await runStatusOutput({ json: true }))).not.toHaveProperty(
+          "configDiagnostics",
+        );
+      } else {
+        expect(await runStatusOutput()).not.toContain("Config diagnostics:");
+      }
+    },
+  );
 
   it("prints verbose session cache details and compatibility warnings", async () => {
     const recent = currentScan.summary.sessions.recent.map((row) => ({
@@ -535,10 +556,7 @@ describe("status commands", () => {
   });
 
   it("shows node-only gateway info when no local gateway service is installed", async () => {
-    mocks.gatewayService.mockResolvedValue({
-      ...baseStatusServices.gatewayService,
-      installed: false,
-    });
+    mocks.gatewayService.mockReturnValue(createMockGatewayService());
     mocks.nodeConfig.mockResolvedValue({
       version: 1,
       nodeId: "node-1",
@@ -549,21 +567,6 @@ describe("status commands", () => {
     expect(text).toContain("openclaw --profile isolated node status");
     expect(text).not.toContain("Gateway: local · ws://127.0.0.1:18789");
     expect(text).not.toContain("Fix reachability first");
-  });
-
-  it("shows gateway auth when reachable", async () => {
-    setScan({
-      gatewayReachable: true,
-      gatewayProbeAuth: { token: "fixture-token" },
-      gatewaySelf: { host: "gateway", ip: "127.0.0.1" },
-      gatewayProbe: {
-        ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", ""),
-        ok: true,
-        error: null,
-        connectLatencyMs: 123,
-      },
-    });
-    expect(await runStatusOutput()).toContain("auth token");
   });
 
   it("reports unresolved gateway auth in JSON without crashing", async () => {
@@ -579,7 +582,16 @@ describe("status commands", () => {
 
   it("distinguishes service-wrapper secret diagnostics from the CLI context", async () => {
     const wrapperPath = "/usr/local/bin/openclaw-doppler";
-    mocks.gatewayService.mockResolvedValue({ ...baseStatusServices.gatewayService, wrapperPath });
+    mocks.gatewayService.mockReturnValue(
+      createMockGatewayService({
+        isLoaded: async () => true,
+        readCommand: async () => ({
+          programArguments: ["openclaw", "gateway", "run"],
+          environment: { OPENCLAW_WRAPPER: wrapperPath },
+        }),
+        readRuntime: async () => ({ status: "running" }),
+      }),
+    );
     setScan({ secretDiagnostics: ["gateway.auth.token unavailable"] });
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     const text = await runStatusOutput();

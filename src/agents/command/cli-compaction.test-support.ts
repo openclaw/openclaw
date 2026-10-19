@@ -6,29 +6,77 @@ import { vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as contextEngineInit from "../../context-engine/init.js";
+import * as contextEngineRegistry from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import * as agentProjectSettings from "../agent-project-settings.js";
+import * as agentSettings from "../agent-settings.js";
+import * as cliBackends from "../cli-backends.js";
+import * as contextEngineMaintenance from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
-import { runCliTurnCompactionLifecycle, setCliCompactionTestDeps } from "./cli-compaction.js";
-import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
+import * as preemptiveCompaction from "../embedded-agent-runner/run/preemptive-compaction.js";
+import * as toolResultTruncation from "../embedded-agent-runner/tool-result-truncation.js";
+import * as harnessCompaction from "../harness/compaction.js";
+import * as harnessRuntimePlugin from "../harness/runtime-plugin.js";
+import * as preparedModelRuntime from "../prepared-model-runtime.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
+import { runCliTurnCompactionLifecycle } from "./cli-compaction.js";
+import * as sessionStoreModule from "./session-store.js";
 
-type CliCompactionTestDeps = Parameters<typeof setCliCompactionTestDeps>[0];
+export type CliCompactionTestDeps = {
+  [Key in keyof typeof installSpies]?: Parameters<
+    ReturnType<(typeof installSpies)[Key]>["mockImplementation"]
+  >[0];
+};
 type CliCompactionParams = Parameters<typeof runCliTurnCompactionLifecycle>[0];
 type CompactParams = Parameters<ContextEngine["compact"]>[0];
+type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
+type SessionCoordinates = { sessionKey: string; sessionId: string; storePath: string };
 
-export function buildContextEngine(params: {
-  compactCalls: Array<Parameters<ContextEngine["compact"]>[0]>;
-}): ContextEngine {
+export const resolveContextEngineFromRegistry = contextEngineRegistry.resolveContextEngine;
+export const resolveCliBackendConfig = cliBackends.resolveCliBackendConfig;
+export const recordCliCompactionInStoreImpl = sessionStoreModule.recordCliCompactionInStore;
+
+const installSpies = {
+  openSessionManager: () => vi.spyOn(SessionManager, "openAsync"),
+  ensureContextEnginesInitialized: () =>
+    vi.spyOn(contextEngineInit, "ensureContextEnginesInitialized"),
+  resolveContextEngine: () => vi.spyOn(contextEngineRegistry, "resolveContextEngine"),
+  createPreparedEmbeddedAgentSettingsManager: () =>
+    vi.spyOn(agentProjectSettings, "createPreparedEmbeddedAgentSettingsManager"),
+  applyAgentAutoCompactionGuard: () => vi.spyOn(agentSettings, "applyAgentAutoCompactionGuard"),
+  shouldPreemptivelyCompactBeforePrompt: () =>
+    vi.spyOn(preemptiveCompaction, "shouldPreemptivelyCompactBeforePrompt"),
+  resolveLiveToolResultMaxChars: () =>
+    vi.spyOn(toolResultTruncation, "resolveLiveToolResultMaxChars"),
+  runContextEngineMaintenance: () =>
+    vi.spyOn(contextEngineMaintenance, "runContextEngineMaintenance"),
+  acquirePreparedModelRuntime: () =>
+    vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime"),
+  ensureSelectedAgentHarnessPlugin: () =>
+    vi.spyOn(harnessRuntimePlugin, "ensureSelectedAgentHarnessPlugin"),
+  maybeCompactAgentHarnessSession: () =>
+    vi.spyOn(harnessCompaction, "maybeCompactAgentHarnessSession"),
+  resolveCliBackendConfig: () => vi.spyOn(cliBackends, "resolveCliBackendConfig"),
+  recordCliCompactionInStore: () => vi.spyOn(sessionStoreModule, "recordCliCompactionInStore"),
+};
+
+export function setCliCompactionTestDeps(overrides: CliCompactionTestDeps): void {
+  const replacements: Record<string, unknown> = overrides;
+  for (const [name, install] of Object.entries(installSpies)) {
+    const replacement = replacements[name];
+    if (typeof replacement === "function") {
+      install().mockImplementation((...args: unknown[]) => replacement(...args));
+    }
+  }
+}
+
+export function buildContextEngine(params: { compactCalls: CompactParams[] }): ContextEngine {
   return {
-    info: {
-      id: "legacy",
-      name: "Legacy Context Engine",
-    },
-    async ingest() {
-      return { ingested: false };
-    },
-    async assemble(assembleParams) {
-      return { messages: assembleParams.messages, estimatedTokens: 0 };
-    },
+    info: { id: "legacy", name: "Legacy Context Engine" },
+    ingest: async () => ({ ingested: false }),
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
     async compact(compactParams) {
       params.compactCalls.push(compactParams);
       return {
@@ -44,41 +92,9 @@ export function buildContextEngine(params: {
   };
 }
 
-export const systemCompactionHost = {
+const systemCompactionHost = {
   sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
 } satisfies Parameters<typeof runCliTurnCompactionLifecycle>[1];
-
-async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
-  // The lifecycle compacts canonical OpenClaw session JSONL, so tests write the
-  // same session/message envelope the real store appends.
-  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  await fs.writeFile(
-    params.sessionFile,
-    [
-      JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: params.sessionId,
-        timestamp: new Date(0).toISOString(),
-        cwd: path.dirname(params.sessionFile),
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "old ask", timestamp: 1 },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "old answer" }],
-          timestamp: 2,
-        },
-      }),
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-}
 
 export function createPreparedRuntimeLease(input: {
   config: OpenClawConfig;
@@ -108,11 +124,8 @@ export function createPreparedRuntimeLease(input: {
   };
 }
 
-export const defaultSettingsManager = async () => ({
-  getCompactionReserveTokens: () => 200,
-  getCompactionKeepRecentTokens: () => 0,
-  applyOverrides: () => {},
-});
+export const defaultSettingsManager = () =>
+  SettingsManager.inMemory({ compaction: { reserveTokens: 200, keepRecentTokens: 0 } });
 
 const defaultPreemptiveCompaction = () => ({
   route: "fits" as const,
@@ -129,8 +142,6 @@ export async function prepareCompactionScenario(params: {
   suffix: string;
   provider?: string;
   model?: string;
-  sessionKey?: string;
-  sessionId?: string;
   sessionEntry?: Partial<SessionEntry>;
   cfg?: OpenClawConfig;
   cwd?: string;
@@ -139,11 +150,27 @@ export async function prepareCompactionScenario(params: {
   recordCliCompactionInStore?: CliCompactionTestDeps["recordCliCompactionInStore"];
   deps?: CliCompactionTestDeps;
 }) {
-  const sessionKey = params.sessionKey ?? `agent:main:${params.suffix}`;
-  const sessionId = params.sessionId ?? `session-${params.suffix}`;
+  const sessionKey = `agent:main:${params.suffix}`;
+  const sessionId = `session-${params.suffix}`;
   const transcriptFile = path.join(params.tmpDir, `${params.suffix}.jsonl`);
   const storePath = path.join(params.tmpDir, `${params.suffix}.sqlite`);
-  await writeSessionFile({ sessionFile: transcriptFile, sessionId });
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: sessionId,
+    timestamp: new Date(0).toISOString(),
+    cwd: path.dirname(transcriptFile),
+  };
+  const messages = [
+    { role: "user", content: "old ask", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "old answer" }], timestamp: 2 },
+  ].map((message) => ({ type: "message", message }));
+  await fs.mkdir(path.dirname(transcriptFile), { recursive: true });
+  await fs.writeFile(
+    transcriptFile,
+    [header, ...messages].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    "utf-8",
+  );
 
   const sessionEntry = {
     sessionId,
@@ -156,6 +183,7 @@ export async function prepareCompactionScenario(params: {
     ...params.sessionEntry,
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+  const session = { sessionEntry, sessionId, sessionKey, sessionStore, storePath };
   await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
 
   const compactCalls: CompactParams[] = [];
@@ -182,11 +210,7 @@ export async function prepareCompactionScenario(params: {
 
   const runParams: CliCompactionParams = {
     cfg: params.cfg ?? ({} as OpenClawConfig),
-    sessionId,
-    sessionKey,
-    sessionEntry,
-    sessionStore,
-    storePath,
+    ...session,
     sessionAgentId: "main",
     workspaceDir: params.tmpDir,
     cwd: params.cwd,
@@ -201,11 +225,30 @@ export async function prepareCompactionScenario(params: {
     recordCliCompactionInStore,
     run: (overrides: Partial<CliCompactionParams> = {}) =>
       runCliTurnCompactionLifecycle({ ...runParams, ...overrides }, systemCompactionHost),
-    sessionEntry,
-    sessionId,
-    sessionKey,
-    sessionStore,
-    storePath,
+    ...session,
     transcriptFile,
   };
+}
+
+export async function prepareContextSuccessorScenario(params: {
+  result: (target: SessionCoordinates) => CompactResult | Promise<CompactResult>;
+  suffix: string;
+  tmpDir: string;
+}) {
+  const suffix = `cli-successor-${params.suffix}`;
+  return prepareCompactionScenario({
+    suffix,
+    tmpDir: params.tmpDir,
+    contextEngine: () => ({
+      ...buildContextEngine({ compactCalls: [] }),
+      async compact() {
+        return params.result({
+          sessionId: `session-${suffix}`,
+          sessionKey: `agent:main:${suffix}`,
+          storePath: path.join(params.tmpDir, `${suffix}.sqlite`),
+        });
+      },
+    }),
+    recordCliCompactionInStore: vi.fn(async (input) => input.sessionStore[input.sessionKey]),
+  });
 }

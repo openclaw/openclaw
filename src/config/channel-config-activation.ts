@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-/** Returns a channel config object when `channels.<id>` is present and object-shaped. */
 export function resolveChannelConfigRecord(
   cfg: OpenClawConfig,
   channelId: string,
@@ -10,17 +9,21 @@ export function resolveChannelConfigRecord(
   return isRecord(entry) ? entry : null;
 }
 
-/** Checks whether a shallow channel config contains activation-relevant values. */
-export function hasMeaningfulChannelConfigShallow(value: unknown): boolean {
+/** Returns true when channel settings supply activation intent beyond enabled/disabled state. */
+export function hasMeaningfulChannelConfig(value: unknown, channelId?: string): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  const keys = Object.keys(value);
-  if (keys.length === 1 && keys[0] === "enabled") {
-    // `enabled: false` alone is an explicit non-configuration signal, but true opts in.
-    return value.enabled === true;
-  }
-  return keys.some((key) => key !== "enabled");
+  // Teams can use env-only auth; preserving its transport must not opt it into activation.
+  return Object.keys(value).some(
+    (key) => key !== "enabled" && (channelId !== "msteams" || key !== "legacyWebhook"),
+  );
+}
+
+export function hasMeaningfulChannelConfigShallow(value: unknown, channelId?: string): boolean {
+  return (
+    (isRecord(value) && value.enabled === true) || hasMeaningfulChannelConfig(value, channelId)
+  );
 }
 
 /** Channel configuration can admit bundled plugin capabilities through an allowlist. */
@@ -28,7 +31,7 @@ export function resolveChannelConfigActivationFacts(config: OpenClawConfig): str
   return Object.keys(config.channels ?? {})
     .filter((channelId) => {
       const channel = resolveChannelConfigRecord(config, channelId);
-      return channel?.enabled !== false && hasMeaningfulChannelConfigShallow(channel);
+      return channel?.enabled !== false && hasMeaningfulChannelConfigShallow(channel, channelId);
     })
     .toSorted();
 }

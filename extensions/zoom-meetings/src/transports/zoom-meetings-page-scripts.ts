@@ -1,7 +1,7 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { ZOOM_MEETING_SELECTORS } from "./zoom-meetings-selectors.js";
-import { zoomMeetingStatusCallSource } from "./zoom-meetings-status-call-source.js";
-import { zoomMeetingStatusPreludeSource } from "./zoom-meetings-status-prejoin-source.js";
+import { zoomMeetingStatusCall } from "./zoom-meetings-status-call-source.js";
+import { zoomMeetingStatusPrelude } from "./zoom-meetings-status-prejoin-source.js";
 import { normalizeZoomMeetingUrlForReuse } from "./zoom-meetings-urls.js";
 
 function pageIdentityFunctionSource(): string {
@@ -17,7 +17,7 @@ function pageIdentityFunctionSource(): string {
       const webClient = parsed.pathname.match(/^\\/wc\\/(\\d{9,11})\\/join\\/?$/);
       const meetingId = invitation?.[1] || webClient?.[1];
       return meetingId ? "zoom:" + meetingId : undefined;
-    } catch {}
+    } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
   };`;
 }
@@ -50,13 +50,10 @@ function zoomMeetingToggleStateFunctionSource(): string {
   }`;
 }
 
-export const {
-  audioCapture: zoomMeetingAudioCaptureScript,
-  status: zoomMeetingStatusScript,
-  transcript: zoomMeetingTranscriptScript,
-  leave: zoomMeetingLeaveScript,
-} = MeetingPlatformAdapter.createPageScripts({
+export const zoomMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
   platform: {
+    audioOutputElementIdPrefix: "openclaw-zoom-audio-output-",
+    manualActionReasonPrefix: "zoom",
     displayName: "Zoom",
     globals: {
       audioOutputs: "__openclawZoomAudioOutputs",
@@ -69,8 +66,8 @@ export const {
   pageIdentitySource: pageIdentityFunctionSource,
   selectors: ZOOM_MEETING_SELECTORS,
   toggleStateFunction: zoomMeetingToggleStateFunctionSource,
-  statusPreludeSource: zoomMeetingStatusPreludeSource,
-  statusCallSource: zoomMeetingStatusCallSource,
+  statusPrelude: zoomMeetingStatusPrelude,
+  statusCall: zoomMeetingStatusCall,
   leave: {
     controlSource: `const first = (list) => {
     for (const selector of list) {
@@ -96,7 +93,7 @@ export const {
   try {
     const currentUrl = new URL(location.href);
     webClientHome = !leave && currentUrl.hostname === "app.zoom.us" && /^\\/wc\\/?$/.test(currentUrl.pathname);
-  } catch {}`,
+  } catch { /* An unparseable page URL is not proof of departure. */ }`,
     departedMarkerSource: "(postCall || webClientHome)",
     documentSetupSource: `const topDocument = globalThis.document;
   const document = topDocument.querySelector("#webclient")?.contentDocument || topDocument;`,

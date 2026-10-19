@@ -23,7 +23,6 @@ import type {
   SkillInstallSpec,
   SkillInvocationPolicy,
 } from "../types.js";
-import type { Skill } from "./skill-contract.js";
 
 export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   const parsed = parseFrontmatterBlockResult(content);
@@ -68,15 +67,10 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   if (!value || /\s/.test(value)) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed?.protocol === "http:" || parsed?.protocol === "https:"
+    ? parsed.toString()
+    : undefined;
 }
 
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
@@ -85,59 +79,45 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     return undefined;
   }
   const { raw } = parsed;
-  const spec = applyOpenClawManifestInstallCommonFields<SkillInstallSpec>(
+  const common = applyOpenClawManifestInstallCommonFields<SkillInstallSpec>(
     {
       kind: parsed.kind as SkillInstallSpec["kind"],
     },
     parsed,
   );
   const osList = normalizeCsvOrLooseStringList(raw.os);
-  if (osList.length > 0) {
-    spec.os = osList;
-  }
   const formula = normalizeSafeBrewFormula(raw.formula) ?? normalizeSafeBrewFormula(raw.cask);
-  if (formula) {
-    spec.formula = formula;
-  }
-  if (spec.kind === "node" || spec.kind === "uv") {
-    const pkg =
-      spec.kind === "node"
-        ? normalizeSafeNpmSpec(raw.package)
-        : normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
-    if (pkg) {
-      spec.package = pkg;
-    }
-  }
+  const pkg =
+    common.kind === "node"
+      ? normalizeSafeNpmSpec(raw.package)
+      : common.kind === "uv"
+        ? normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN)
+        : undefined;
   const moduleSpec = normalizeSafePackageSpec(raw.module, GO_MODULE_PATTERN);
-  if (moduleSpec) {
-    spec.module = moduleSpec;
-  }
   const downloadUrl = normalizeSafeDownloadUrl(raw.url);
-  if (downloadUrl) {
-    spec.url = downloadUrl;
-  }
-  if (spec.kind === "download" && raw.sha256 !== undefined) {
+  let sha256: string | undefined;
+  if (common.kind === "download" && raw.sha256 !== undefined) {
     if (typeof raw.sha256 !== "string") {
       return undefined;
     }
-    const sha256 = raw.sha256.trim().toLowerCase();
+    sha256 = raw.sha256.trim().toLowerCase();
     if (!/^[a-f0-9]{64}$/u.test(sha256)) {
       return undefined;
     }
-    spec.sha256 = sha256;
   }
-  if (typeof raw.archive === "string") {
-    spec.archive = raw.archive;
-  }
-  if (typeof raw.extract === "boolean") {
-    spec.extract = raw.extract;
-  }
-  if (typeof raw.stripComponents === "number") {
-    spec.stripComponents = raw.stripComponents;
-  }
-  if (typeof raw.targetDir === "string") {
-    spec.targetDir = raw.targetDir;
-  }
+  const spec: SkillInstallSpec = {
+    ...common,
+    ...(osList.length > 0 ? { os: osList } : {}),
+    ...(formula ? { formula } : {}),
+    ...(pkg ? { package: pkg } : {}),
+    ...(moduleSpec ? { module: moduleSpec } : {}),
+    ...(downloadUrl ? { url: downloadUrl } : {}),
+    ...(sha256 ? { sha256 } : {}),
+    ...(typeof raw.archive === "string" ? { archive: raw.archive } : {}),
+    ...(typeof raw.extract === "boolean" ? { extract: raw.extract } : {}),
+    ...(typeof raw.stripComponents === "number" ? { stripComponents: raw.stripComponents } : {}),
+    ...(typeof raw.targetDir === "string" ? { targetDir: raw.targetDir } : {}),
+  };
 
   const target = {
     brew: spec.formula,
@@ -183,6 +163,6 @@ export function resolveSkillInvocationPolicy(
   };
 }
 
-export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
-  return entry?.metadata?.skillKey ?? skill.name;
+export function resolveSkillKey(entry: SkillEntry): string {
+  return entry.metadata?.skillKey ?? entry.skill.name;
 }

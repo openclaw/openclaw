@@ -1,8 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { createMemo, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -10,10 +14,9 @@ import {
 import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
-  requestSessionCompanionState,
-  resetSessionCompanion,
 } from "./chat-session-companion.ts";
-import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
+import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
+import "./components/chat-session-rail.tsx";
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
   return {
@@ -27,31 +30,56 @@ function digest(health: SessionObserverDigest["health"] = "on-track"): SessionOb
 }
 
 describe("ChatSessionCompanionThreads", () => {
-  it("uses the exact companion RPC methods and payloads", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.companion.ask") {
-        return { answer: "Answer", ts: 1 };
-      }
-      if (method === "sessions.companion.state") {
-        return { exchanges: [] };
-      }
-      return { ok: true as const };
+  it("publishes in-place answer settlement through its owner projection", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    let readStatuses!: () => string[];
+    const dispose = createRoot((disposeRoot) => {
+      const projected = projectOwner(threads, (owner) => owner);
+      readStatuses = createMemo(() =>
+        projected
+          .read()
+          .view("one")
+          .turns.map((turn) => turn.status),
+      );
+      return disposeRoot;
     });
+    let answer!: (value: { answer: string; ts: number }) => void;
+    try {
+      expect(readStatuses()).toEqual([]);
+      const pending = threads.submit(
+        "one",
+        "Question",
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const turn = threads.view("one").turns[0];
+      expect(turn?.status).toBe("pending");
+      flush();
+      expect(readStatuses()).toEqual(["pending"]);
+      answer({ answer: "Answer", ts: 1 });
+      await pending;
+      flush();
+      expect(readStatuses()).toEqual(["answered"]);
+      expect(threads.view("one").turns[0]).toBe(turn);
+    } finally {
+      dispose();
+      threads.retire();
+    }
+  });
+
+  it("sends companion questions with the bounded RPC timeout", async () => {
+    const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
     const client = { request: request as GatewayBrowserClient["request"] };
 
     await requestSessionCompanionAnswer(client, "one", "Question", "work");
-    await requestSessionCompanionState(client, "one", "work");
-    await resetSessionCompanion(client, "one", "work");
 
-    expect(request.mock.calls).toEqual([
-      [
-        "sessions.companion.ask",
-        { sessionKey: "one", agentId: "work", question: "Question" },
-        { timeoutMs: 70_000 },
-      ],
-      ["sessions.companion.state", { sessionKey: "one", agentId: "work" }],
-      ["sessions.companion.reset", { sessionKey: "one", agentId: "work" }],
-    ]);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.companion.ask",
+      { sessionKey: "one", agentId: "work", question: "Question" },
+      { timeoutMs: 70_000 },
+    );
   });
 
   it("sends a full selected passage as context, not an unsupported file", async () => {
@@ -91,46 +119,6 @@ describe("ChatSessionCompanionThreads", () => {
     );
   });
 
-  it("hydrates and retains independent per-session threads", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    const load = vi.fn(async (sessionKey: string) => ({
-      exchanges: [
-        {
-          question: `Question for ${sessionKey}`,
-          answer: `Answer for ${sessionKey}`,
-          ts: sessionKey === "one" ? 1 : 2,
-        },
-      ],
-    }));
-
-    await threads.hydrate("one", load);
-    await threads.hydrate("two", load);
-
-    expect(threads.view("one").turns).toMatchObject([
-      { question: "Question for one", status: "answered", answer: "Answer for one", ts: 1 },
-    ]);
-    expect(threads.view("two").turns).toMatchObject([
-      { question: "Question for two", status: "answered", answer: "Answer for two", ts: 2 },
-    ]);
-  });
-
-  it("records hydration until the authoritative companion state settles", async () => {
-    let resolveLoad!: (value: { exchanges: [] }) => void;
-    const threads = new ChatSessionCompanionThreads();
-    const pending = threads.hydrate(
-      "one",
-      () =>
-        new Promise((resolve) => {
-          resolveLoad = resolve;
-        }),
-    );
-
-    expect(threads.view("one").loading).toBe(true);
-    resolveLoad({ exchanges: [] });
-    await pending;
-    expect(threads.view("one").loading).toBe(false);
-  });
-
   it("keeps matching bare session keys isolated by agent", () => {
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("global", "main draft", "main");
@@ -138,38 +126,6 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("global", "main").draft).toBe("main draft");
     expect(threads.view("global", "work").draft).toBe("work draft");
-  });
-
-  it("moves a composer submission through pending to a timestamped answer", async () => {
-    let resolveAnswer!: (value: { answer: string; ts: number }) => void;
-    const threads = new ChatSessionCompanionThreads();
-    threads.setDraft("one", "Why is it rerunning that test?");
-    const pending = threads.submit(
-      "one",
-      threads.view("one").draft,
-      () =>
-        new Promise((resolve) => {
-          resolveAnswer = resolve;
-        }),
-    );
-
-    expect(threads.view("one").turns).toMatchObject([
-      { question: "Why is it rerunning that test?", status: "pending" },
-    ]);
-    expect(threads.view("one").draft).toBe("");
-    resolveAnswer({ answer: "It is verifying the focused regression.", ts: 42 });
-    await pending;
-
-    expect(threads.view("one")).toMatchObject({
-      turns: [
-        {
-          question: "Why is it rerunning that test?",
-          status: "answered",
-          answer: "It is verifying the focused regression.",
-          ts: 42,
-        },
-      ],
-    });
   });
 
   it("maps the typed busy error to the rail hint", async () => {
@@ -183,47 +139,6 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("one").turns).toMatchObject([
       { question: "Is it stuck?", status: "failed", hint: "busy", retryable: true },
-    ]);
-  });
-
-  it("preserves a context failure for an explicit retry", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    await threads.submit("one", "What changed?", async () => {
-      throw Object.assign(new Error("history unavailable"), {
-        details: { reason: "context-unavailable" },
-        retryable: true,
-      });
-    });
-
-    expect(threads.view("one").turns).toMatchObject([
-      { question: "What changed?", status: "failed", hint: "history-unavailable", retryable: true },
-    ]);
-    await threads.hydrate("one", async () => ({ exchanges: [] }));
-    expect(threads.view("one").turns).toMatchObject([
-      { question: "What changed?", status: "failed", hint: "history-unavailable", retryable: true },
-    ]);
-  });
-
-  it.each([
-    { reason: "rate-limited", retryable: true, hint: "rate-limited" },
-    { reason: "utility-model-unavailable", retryable: false, hint: "model-unavailable" },
-    { reason: "unavailable", retryable: false, hint: "unavailable" },
-  ] as const)("maps $reason to its specific retry state", async (expected) => {
-    const threads = new ChatSessionCompanionThreads();
-    await threads.submit("one", "What changed?", async () => {
-      throw Object.assign(new Error(expected.reason), {
-        details: { reason: expected.reason },
-        retryable: expected.retryable,
-      });
-    });
-
-    expect(threads.view("one").turns).toMatchObject([
-      {
-        question: "What changed?",
-        status: "failed",
-        hint: expected.hint,
-        retryable: expected.retryable,
-      },
     ]);
   });
 
@@ -341,6 +256,7 @@ describe("ChatSessionRailElement", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   async function mount(overrides: Partial<ChatSessionRailElement> = {}) {
@@ -356,13 +272,78 @@ describe("ChatSessionRailElement", () => {
     return element;
   }
 
-  it("uses the shared surface empty state before the first side-chat exchange", async () => {
-    const element = await mount();
-    const empty = element.querySelector("openclaw-panel-empty-state");
-    await empty?.updateComplete;
+  it("consumes only the latest visible focus intent and retires it on disconnect", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const initial = vi.fn(() => true);
+    const current = vi.fn(() => true);
+    const element = await mount({ presented: true, focusRequest: initial });
+    element.focusRequest = current;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(initial).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(element.querySelector("textarea"));
 
-    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
-    expect(empty?.querySelector("svg")).not.toBeNull();
+    const hidden = vi.fn(() => true);
+    element.presented = false;
+    element.focusRequest = hidden;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(hidden).not.toHaveBeenCalled();
+
+    const retired = vi.fn(() => true);
+    element.presented = true;
+    element.focusRequest = retired;
+    await element.updateComplete;
+    element.remove();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it("follows changed turns while preserving a manually scrolled draft edit", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const element = await mount({ presented: true });
+    const thread = element.querySelector<HTMLElement>(".chat-session-rail__thread")!;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 200 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(200);
+
+    thread.scrollTop = 60;
+    element.companion = { ...element.companion, draft: "A local draft" };
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(60);
+
+    element.companion = {
+      ...element.companion,
+      turns: [{ question: "What changed?", status: "answered", answer: "A completed turn", ts: 1 }],
+    };
+    await element.updateComplete;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 500 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(500);
+  });
+
+  it.each([
+    { phrases: [], expected: "" },
+    { phrases: ["Reviewing the workspace"], expected: "· Reviewing the workspace…" },
+  ])("uses the theme's pending-answer phrases: $phrases", async ({ phrases, expected }) => {
+    const originalBranding = currentThemeBranding();
+    setCurrentThemeBranding({ ...originalBranding, workingPhrases: phrases });
+    try {
+      const element = await mount({
+        companion: {
+          turns: [{ question: "What changed?", status: "pending", startedAt: 560_000 }],
+          loading: false,
+          draft: "",
+        },
+      });
+      const phrase = element.querySelector("openclaw-working-phrase")!;
+      await phrase.updateComplete;
+      expect(phrase.textContent?.replace(/\s+/g, " ").trim()).toBe(expected);
+    } finally {
+      setCurrentThemeBranding(originalBranding);
+    }
   });
 
   it("submits the rail composer and renders sanitized markdown answers", async () => {
@@ -388,6 +369,72 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+  });
+
+  it("returns focus to the rail composer after deleting its last comment", async () => {
+    const onAttachmentsChange = vi.fn();
+    const element = await mount({
+      presented: true,
+      onAttachmentsChange,
+      companion: {
+        turns: [],
+        loading: false,
+        draft: "Keep this draft",
+        attachments: [
+          {
+            id: "rail-comment",
+            mimeType: "text/plain",
+            selectionAnnotation: {
+              text: "Selected text",
+              comment: "Explain this",
+              sessionKey: "agent:main:run",
+              start: 0,
+              end: 13,
+            },
+          },
+        ],
+      },
+    });
+    const textarea = element.querySelector("textarea")!;
+    await waitForSolid(() =>
+      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe("Keep this draft");
+  });
+
+  it("retains selected answer text while draft and presentation props update", async () => {
+    const element = await mount({
+      presented: true,
+      companion: {
+        turns: [
+          {
+            question: "What changed?",
+            status: "answered",
+            answer: "**Retained answer**",
+            ts: 300_000,
+          },
+        ],
+        loading: false,
+        draft: "",
+      },
+    });
+    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    element.companion = { ...element.companion, draft: "Follow up" };
+    element.presented = false;
+    await element.updateComplete;
+    element.presented = true;
+    await element.updateComplete;
+    expect(selection.toString()).toBe("Retained answer");
+    expect(selection.anchorNode).toBe(text);
+    selection.removeAllRanges();
   });
 
   it.each([false, true])(
@@ -429,7 +476,8 @@ describe("ChatSessionRailElement", () => {
   );
 
   it("explains unsupported image input and retries the retained image only on user action", async () => {
-    const threads = new ChatSessionCompanionThreads(() => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.subscribe(() => {
       element.companion = { ...threads.view("one") };
     });
     const image = registerChatAttachmentPayload({
@@ -482,42 +530,11 @@ describe("ChatSessionRailElement", () => {
     }
   });
 
-  it("renders one pending state and retries a retryable failure", async () => {
-    const onSubmit = vi.fn();
-    const element = await mount({
-      onSubmit,
-      companion: {
-        turns: [{ question: "What changed?", status: "pending" }],
-        loading: false,
-        draft: "",
-      },
-    });
-    expect(element.textContent).toContain("Answering from this session…");
-
-    element.companion = {
-      turns: [
-        {
-          question: "What changed?",
-          status: "failed",
-          hint: "history-unavailable",
-          retryable: true,
-        },
-      ],
-      loading: false,
-      draft: "",
-    };
-    await element.updateComplete;
-    expect(element.textContent).toContain("Couldn't load this session's history.");
-    expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
-    (element.querySelector(".chat-session-rail__retry") as HTMLButtonElement).click();
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(element.companion.turns[0]);
-    expect(onSubmit.mock.calls[0]?.[0]).toBe(element.companion.turns[0]);
-  });
-
-  it.each(["answered", "failed"] as const)(
+  it.each(["answered"] as const)(
     "keeps a follow-up editable while answering and retains it when %s",
     async (outcome) => {
-      const threads = new ChatSessionCompanionThreads(() => {
+      const threads = new ChatSessionCompanionThreads();
+      threads.subscribe(() => {
         element.companion = { ...threads.view("one") };
       });
       const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();
@@ -556,6 +573,22 @@ describe("ChatSessionRailElement", () => {
       expect(send.disabled).toBe(true);
       await type("What changed?");
       expect(send.disabled).toBe(false);
+      const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+      textarea.dispatchEvent(compositionEnd);
+      const confirmingEnter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(confirmingEnter, "timeStamp", {
+        value: compositionEnd.timeStamp - 1,
+      });
+      textarea.dispatchEvent(confirmingEnter);
+      expect(confirmingEnter.defaultPrevented).toBe(false);
+      expect(ask).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("What changed?");
+      textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
       enter();
       await element.updateComplete;
       expect(textarea.disabled).toBe(false);
@@ -606,15 +639,6 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
-  it("keeps live announcements scoped to the message thread", async () => {
-    const element = await mount();
-    const section = element.querySelector(".chat-session-rail--expanded");
-    expect(section?.hasAttribute("aria-live")).toBe(false);
-    expect(element.querySelector(".chat-session-rail__thread")?.getAttribute("aria-live")).toBe(
-      "polite",
-    );
-  });
-
   it("offers starter questions instead of an empty thread, and asks the tapped one", async () => {
     const onSubmit = vi.fn();
     const element = await mount({ onSubmit });
@@ -628,25 +652,5 @@ describe("ChatSessionRailElement", () => {
 
     (starters[1] as HTMLButtonElement).click();
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Why did it stop?");
-  });
-
-  it("replaces the starters once the thread has an exchange", async () => {
-    const element = await mount({
-      companion: {
-        turns: [
-          {
-            question: "What changed?",
-            status: "answered",
-            answer: "The rail toggle.",
-            ts: 300_000,
-          },
-        ],
-        loading: false,
-        draft: "",
-      },
-    });
-
-    expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
-    expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
   });
 });

@@ -1,5 +1,16 @@
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
-import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
+import { cronRunLogEntryToDetail } from "../run-history-detail.js";
+import { createCronExecutionId } from "../run-id.js";
+import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
+import {
+  isJobEnabled,
+  recomputeJobNextRunAtMs,
+  resolveCronRestartRetryAtMs,
+} from "../service/jobs-scheduling.js";
+import { resolveForcePreservedOneShotAtMs } from "../service/one-shot-schedule.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
@@ -9,223 +20,235 @@ import {
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";
 import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
-import { readCronDeliveryAttemptStateInDatabase } from "./run-receipt-delivery.js";
 import {
-  findActiveCronRunReceiptInDatabase,
-  finishCronRunReceiptInDatabase,
-  exactCronRunReceiptMatches,
-} from "./run-receipt-store.js";
+  recordCronRunInDatabase,
+  recordSkippedCronRequestInDatabase,
+} from "./run-history.kernel.js";
+import { finishCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
-import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
-import type { CronRunRecoveryResult, InterruptedStartupRun } from "./run-recovery.types.js";
-import type { CronJobReadRow } from "./schema.js";
+import type { CronRunReceipt } from "./run-receipt.types.js";
+import type { InterruptedStartupRun } from "./run-recovery.types.js";
+import { parseCronScheduledRunId } from "./run-request-id.js";
 
-export function repairCronRunInDatabase(params: {
-  state: CronJobPolicyContext;
+function recordInterruptedRun(params: {
+  database: EngineConnection;
   storeKey: string;
-  database: OpenClawStateDatabase;
-  receiptSchema: CronRunReceiptWriteSchema;
-  row: CronJobReadRow | undefined;
-  job: CronJob | undefined;
-  proposal: CronRunRecoveryProposal;
-  proposedReceiptIsStale: boolean;
-  mode: "startup" | "reclaim";
-}): CronRunRecoveryResult {
-  const { state, database, proposal } = params;
-  const { storeKey } = params;
-  const currentReceipt = findActiveCronRunReceiptInDatabase({
-    database: database.db,
-    storePath: storeKey,
-    jobId: proposal.jobId,
+  interrupted: InterruptedStartupRun;
+  nowMs: number;
+  job?: CronJob;
+  receipt?: CronRunReceipt;
+  taskRunId?: string;
+}): InterruptedStartupRun {
+  const { database, storeKey, job, receipt, nowMs } = params;
+  const publicRunId = receipt?.requestRunId?.trim();
+  const interrupted = { ...params.interrupted, ...(publicRunId ? { runId: publicRunId } : {}) };
+  const prefix = createCronExecutionId(interrupted.jobId, interrupted.runAtMs);
+  const runId = params.taskRunId ?? `${prefix}:${receipt?.receiptId ?? "interrupted"}`;
+  recordCronRunInDatabase(database, {
+    storeKey,
+    jobId: interrupted.jobId,
+    runId,
+    agentId: receipt?.agentId ?? job?.agentId,
+    startedAt: interrupted.runAtMs,
+    endedAt: nowMs,
+    status: "failed",
+    error: STARTUP_INTERRUPTED_ERROR,
+    detail: cronRunLogEntryToDetail(
+      {
+        ts: nowMs,
+        jobId: interrupted.jobId,
+        action: "finished",
+        status: "error",
+        completionStatus: "failed",
+        error: STARTUP_INTERRUPTED_ERROR,
+        delivered: false,
+        deliveryStatus: "unknown",
+        deliveryError: STARTUP_INTERRUPTED_ERROR,
+        failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
+        runId: interrupted.runId,
+        runAtMs: interrupted.runAtMs,
+        durationMs: interrupted.durationMs,
+        nextRunAtMs: job?.state.nextRunAtMs,
+      },
+      { storeKey },
+    ),
   });
-  if (proposal.receipt) {
-    // Receipt identity is the recovery CAS. The millisecond marker is checked
-    // only after this succeeds because successive runs may share a timestamp.
-    if (!exactCronRunReceiptMatches(currentReceipt, proposal.receipt) && currentReceipt) {
-      return { kind: "superseded", receipt: currentReceipt };
-    }
-    if (currentReceipt && !params.proposedReceiptIsStale) {
-      return { kind: "live", receipt: currentReceipt };
-    }
-  } else if (currentReceipt) {
-    return { kind: "superseded", receipt: currentReceipt };
-  }
+  return interrupted;
+}
 
-  const { row, job } = params;
-  if (!row || !job) {
-    if (proposal.receipt && currentReceipt) {
+/** Startup owns abandoned rows; there is no live foreign Cron owner to negotiate with. */
+export function recoverCronJobInDatabase(
+  params: {
+    state: CronJobPolicyContext;
+    storeKey: string;
+    database: OpenClawStateDatabase;
+    receiptSchema: CronRunReceiptWriteSchema;
+    notifications: DeferredCronNotifications;
+  } & ({ job: CronJob; receipt?: CronRunReceipt } | { job?: undefined; receipt: CronRunReceipt }),
+): { removed?: true; interrupted?: InterruptedStartupRun; skipStartupCatchup?: true } {
+  const { state, database, storeKey, job, receipt, notifications } = params;
+  const nowMs = state.deps.nowMs();
+  const pendingReceiptId =
+    job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId;
+  const finishReceipt = (
+    status: Exclude<CronRunReceipt["status"], "running">,
+    atMs: number,
+    error?: string,
+  ) => {
+    if (receipt) {
       finishCronRunReceiptInDatabase({
-        receiptSchema: params.receiptSchema,
         database: database.db,
-        handle: proposal.receipt,
-        status: "interrupted",
-        finishedAtMs: state.deps.nowMs(),
-        error: "cron: owner unavailable after the job row was finalized",
-      });
-      return { kind: "repaired", notifications: [] };
-    }
-    return { kind: "superseded" };
-  }
-  if (
-    proposal.runningAtMs !== undefined &&
-    job.state.runningAtMs === proposal.runningAtMs &&
-    job.state.runningReceiptId !== proposal.runningReceiptId
-  ) {
-    return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
-  }
-  const previousEnabled = job.enabled ?? true;
-  let changed = false;
-  if (proposal.queuedAtMs !== undefined && job.state.queuedAtMs === proposal.queuedAtMs) {
-    delete job.state.queuedAtMs;
-    if (proposal.receipt && currentReceipt) {
-      finishCronRunReceiptInDatabase({
         receiptSchema: params.receiptSchema,
-        database: database.db,
-        handle: proposal.receipt,
-        status: "interrupted",
-        finishedAtMs: state.deps.nowMs(),
-        error: "cron: queued run interrupted because owner is unavailable",
+        handle: receipt,
+        pendingReceiptId,
+        status,
+        finishedAtMs: atMs,
+        error,
       });
     }
-    changed = true;
-  }
-  let interrupted: InterruptedStartupRun | undefined;
-  let replacementAtMs: number | undefined;
-  const notifications: DeferredCronNotifications = [];
-  if (proposal.runningAtMs !== undefined) {
-    if (job.state.runningAtMs !== proposal.runningAtMs) {
-      if (proposal.receipt && currentReceipt) {
-        finishCronRunReceiptInDatabase({
-          receiptSchema: params.receiptSchema,
-          database: database.db,
-          handle: proposal.receipt,
-          status: "interrupted",
-          finishedAtMs: state.deps.nowMs(),
-          error: "cron: owner unavailable after run state was already finalized",
-        });
-        return { kind: "repaired", notifications: [] };
-      }
-      return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
-    }
+  };
+  if (!job) {
     const task = findCronRunRecoveryInDatabase({
       database: database.db,
-      jobId: proposal.jobId,
-      startedAt: proposal.runningAtMs,
       storeKey,
-      receiptId: proposal.runningReceiptId ?? proposal.receipt?.receiptId,
+      jobId: receipt.jobId,
+      startedAt: receipt.startedAtMs,
+      receiptId: receipt.receiptId,
     });
-    const finalized = task.finalized;
-    const receiptId = proposal.runningReceiptId ?? currentReceipt?.receiptId ?? task.receiptId;
-    const triggerStateRetired = receiptId
-      ? isCronRunTriggerStateRetiredInDatabase({
-          database: database.db,
-          handle: {
-            receiptId,
-            storeKey,
-            jobId: proposal.jobId,
-            startedAtMs: proposal.runningAtMs,
-          },
-        })
-      : false;
-    const restored = finalized
-      ? restoreFinalizedStartupRun({
-          state,
-          job,
-          runningAtMs: proposal.runningAtMs,
-          entry: finalized.entry,
-          triggerStateRetired,
-          ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
-          ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
-          deferredNotifications: notifications,
-        })
+    if (task.finalized) {
+      finishReceipt(
+        resolveCronRunReceiptTerminalStatus(
+          task.finalized.entry.status,
+          task.finalized.triggerEval?.fired,
+        ),
+        task.finalized.entry.ts,
+        task.finalized.entry.error,
+      );
+      return {};
+    }
+    const interrupted = recordInterruptedRun({
+      database: database.db,
+      storeKey,
+      receipt,
+      taskRunId: task.taskRunId,
+      nowMs,
+      interrupted: {
+        jobId: receipt.jobId,
+        runAtMs: receipt.startedAtMs,
+        durationMs: Math.max(0, nowMs - receipt.startedAtMs),
+      },
+    });
+    finishReceipt("interrupted", nowMs, STARTUP_INTERRUPTED_ERROR);
+    return { interrupted };
+  }
+  const previousEnabled = job.enabled ?? true;
+  const runningAtMs = job.state.runningAtMs;
+  if (runningAtMs === undefined) {
+    if (job.state.queuedAtMs !== undefined) {
+      const timed = receipt && parseCronScheduledRunId(receipt.receiptId);
+      if (timed && timed.storeKey === storeKey && timed.jobId === job.id && isJobEnabled(job)) {
+        return {};
+      }
+      const error = "cron: queued request lost its launch context";
+      recordSkippedCronRequestInDatabase(database.db, {
+        storeKey,
+        jobId: job.id,
+        receiptId: receipt?.receiptId,
+        agentId: receipt?.agentId,
+        startedAt: job.state.queuedAtMs,
+        endedAt: nowMs,
+        error,
+        nextRunAtMs: job.state.nextRunAtMs,
+      });
+      delete job.state.queuedAtMs;
+      finishReceipt("skipped", nowMs, error);
+      updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
+    } else {
+      finishReceipt("interrupted", nowMs, "cron: owner unavailable after run marker retirement");
+    }
+    return {};
+  }
+
+  const task = findCronRunRecoveryInDatabase({
+    database: database.db,
+    jobId: job.id,
+    startedAt: runningAtMs,
+    storeKey,
+    receiptId: job.state.runningReceiptId ?? receipt?.receiptId,
+  });
+  const receiptId = job.state.runningReceiptId ?? receipt?.receiptId ?? task.receiptId;
+  // Only the matching manual receipt can borrow a separate authored occurrence.
+  const preservedOccurrenceAtMs =
+    receipt?.receiptId === pendingReceiptId &&
+    receipt?.startedAtMs === runningAtMs &&
+    !parseCronScheduledRunId(receipt.receiptId)
+      ? resolveForcePreservedOneShotAtMs(job)
       : undefined;
-    replacementAtMs = restored?.replacementAtMs;
-    if (!restored) {
-      const nowMs = state.deps.nowMs();
-      interrupted = markInterruptedStartupRun({
+  const finalized = task.finalized;
+  const restored = finalized
+    ? restoreFinalizedStartupRun({
         state,
         job,
-        taskRunId: task.taskRunId,
-        runningAtMs: proposal.runningAtMs,
-        nowMs,
-        recoverInterruptedOneShot:
-          params.mode === "startup" &&
-          readCronDeliveryAttemptStateInDatabase({
-            database: database.db,
-            storeKey,
-            jobId: job.id,
-            receiptId: job.state.runningReceiptId ?? currentReceipt?.receiptId,
-            startedAtMs: proposal.runningAtMs,
-          }) === "not-started",
+        runningAtMs,
+        preservedOccurrenceAtMs,
+        entry: finalized.entry,
+        triggerStateRetired: receiptId
+          ? isCronRunTriggerStateRetiredInDatabase({
+              database: database.db,
+              handle: { receiptId, storeKey, jobId: job.id, startedAtMs: runningAtMs },
+            })
+          : false,
+        scriptResult: finalized.scriptResult,
+        triggerEval: finalized.triggerEval,
         deferredNotifications: notifications,
-      });
-      replacementAtMs = interrupted.replacementAtMs;
-      if (job.enabled && job.state.nextRunAtMs === undefined) {
-        recomputeJobNextRunAtMs({
-          state,
-          job,
-          nowMs,
-          deferredNotifications: notifications,
-        });
-      }
-      if (params.mode === "startup" && job.schedule.kind === "at" && job.enabled) {
-        // Commit the pending occurrence with receipt retirement, so another
-        // restart before admission cannot consume it as terminal run history.
-        job.state.startupCatchupAtMs = job.state.nextRunAtMs;
-      }
+      })
+    : undefined;
+  let interrupted: InterruptedStartupRun | undefined;
+  if (!restored) {
+    interrupted = markInterruptedStartupRun({
+      state,
+      job,
+      runningAtMs,
+      preservedOccurrenceAtMs,
+      nowMs,
+      restartRetryAtMs:
+        receipt &&
+        parseCronScheduledRunId(receipt.receiptId) &&
+        receipt.deliveryNotStarted === true &&
+        receipt.configRevision === resolveCronJobConfigRevision(job) &&
+        !job.state.runningScheduleChangeId
+          ? resolveCronRestartRetryAtMs(job, runningAtMs, nowMs)
+          : undefined,
+    });
+    if (job.enabled && job.state.nextRunAtMs === undefined) {
+      recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications });
     }
-    if (proposal.receipt) {
-      finishCronRunReceiptInDatabase({
-        receiptSchema: params.receiptSchema,
-        database: database.db,
-        handle: proposal.receipt,
-        status:
-          restored && finalized
-            ? resolveCronRunReceiptTerminalStatus(
-                finalized.entry.status,
-                finalized.triggerEval?.fired,
-              )
-            : "interrupted",
-        finishedAtMs: restored && finalized ? finalized.entry.ts : state.deps.nowMs(),
-        error:
-          restored && finalized
-            ? finalized.entry.error
-            : "cron: job interrupted because owner is unavailable",
-      });
-    }
-    if (restored?.shouldDelete) {
-      deleteCronJobRowInDatabase(database.db, storeKey, proposal.jobId);
-      return {
-        kind: "repaired",
-        notifications,
-        ...(restored.replacementAtMs === undefined ? { skipStartupCatchup: true } : {}),
-      };
-    }
-    changed = true;
+    interrupted = recordInterruptedRun({
+      database: database.db,
+      storeKey,
+      job,
+      receipt,
+      taskRunId: task.taskRunId,
+      interrupted,
+      nowMs,
+    });
   }
-  if (!changed) {
-    if (proposal.receipt && currentReceipt && params.proposedReceiptIsStale) {
-      finishCronRunReceiptInDatabase({
-        receiptSchema: params.receiptSchema,
-        database: database.db,
-        handle: proposal.receipt,
-        status: "interrupted",
-        finishedAtMs: state.deps.nowMs(),
-        error: "cron: owner unavailable after run marker retirement",
-      });
-      return { kind: "repaired", notifications };
-    }
-    return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
+  finishReceipt(
+    restored && finalized
+      ? resolveCronRunReceiptTerminalStatus(finalized.entry.status, finalized.triggerEval?.fired)
+      : "interrupted",
+    restored && finalized ? finalized.entry.ts : nowMs,
+    restored && finalized ? finalized.entry.error : STARTUP_INTERRUPTED_ERROR,
+  );
+  if (restored?.shouldDelete) {
+    deleteCronJobRowInDatabase(database.db, storeKey, job.id);
+    return { removed: true, skipStartupCatchup: true };
   }
   updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
   return {
-    kind: "repaired",
     ...(interrupted ? { interrupted } : {}),
-    notifications,
-    ...(replacementAtMs === undefined &&
-    proposal.runningAtMs !== undefined &&
-    !(params.mode === "startup" && interrupted && job.schedule.kind === "at" && job.enabled)
+    ...(restored?.replacementAtMs === undefined && interrupted?.replacementAtMs === undefined
       ? { skipStartupCatchup: true }
       : {}),
   };

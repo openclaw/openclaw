@@ -11,6 +11,7 @@ import {
 } from "./guard-review.mjs";
 import {
   GitHubDiffDataError,
+  GitHubNoticePublicationError,
   GitHubRateLimitError,
   GitHubReadTimeoutError,
   GitHubStatusPublicationError,
@@ -94,10 +95,26 @@ async function ciState(review) {
     return "pending";
   }
   const jobs = [];
-  for (let page = 1; ; page += 1) {
-    const result = await api.request(
-      `${root}/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
-    );
+  // GitHub can persistently fail a large job page while smaller pages of the same
+  // range succeed. Larger sizes skip server-error retries, which would spend the
+  // request deadline, and request that range again at half size. The smallest
+  // size keeps the normal retry and recovery path.
+  for (let perPage = 100, page = 1; ; page += 1) {
+    let result;
+    try {
+      result = await api.request(
+        `${root}/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=${perPage}&page=${page}`,
+        { retryServerErrors: perPage === 25 },
+      );
+    } catch (error) {
+      if (perPage === 25 || !(error?.status >= 500)) {
+        throw error;
+      }
+      perPage /= 2;
+      // Page `page` starts at the same offset as page `2 * page - 1` at half size.
+      page = 2 * page - 2;
+      continue;
+    }
     if (!Array.isArray(result.jobs) || !Number.isSafeInteger(result.total_count)) {
       throw new Error("CI returned an invalid job list.");
     }
@@ -126,15 +143,15 @@ async function ciState(review) {
     : "failure";
 }
 
-let diffRecoveryReview;
+let recoveryReview;
 let currentReview;
 
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
-  if (!["detect", "autoscrub", "enforce"].includes(mode)) {
+  if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
-  const review = await readGuardReview(diffRecoveryReview);
+  const review = await readGuardReview(recoveryReview);
   currentReview = review;
   if (!review) {
     return;
@@ -145,7 +162,7 @@ async function main() {
   try {
     review.rollout = await securityReviewRollout(review);
     if (review.rollout.mode === "enforced") {
-      if (mode !== "enforce") {
+      if (mode !== "enforce" && mode !== "prepare") {
         await reviewDependencyChanges(review, mode);
         return;
       }
@@ -154,13 +171,17 @@ async function main() {
       let allowed = true;
       for (const guard of [reviewDependencyChanges, reviewSecuritySensitiveChanges]) {
         try {
-          if (!(await guard(review))) {
+          if (!(await guard(review, mode === "prepare" ? "prepare" : "enforce"))) {
             allowed = false;
+          }
+          if (review.autoscrubPending) {
+            return;
           }
         } catch (error) {
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubNoticePublicationError ||
               error instanceof GitHubReadTimeoutError ||
               error instanceof GitHubDiffDataError ||
               error instanceof ObsoleteReviewError) &&
@@ -190,7 +211,7 @@ async function main() {
       } else {
         console.log(summary);
       }
-      if (mode !== "enforce") {
+      if (mode !== "enforce" && mode !== "prepare") {
         return;
       }
     }
@@ -227,12 +248,13 @@ async function main() {
     await assertGuardUnchanged(review);
     await publishGuardStatus(review, "success", securityReviewContracts.combined.success);
   } catch (error) {
-    if (error instanceof GitHubDiffDataError) {
-      diffRecoveryReview = review;
+    if (error instanceof GitHubDiffDataError || error instanceof GitHubNoticePublicationError) {
+      recoveryReview = review;
     }
     if (
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
+      error instanceof GitHubNoticePublicationError ||
       error instanceof GitHubReadTimeoutError ||
       error instanceof ObsoleteReviewError
     ) {
@@ -262,13 +284,26 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  withSecurityReviewRecovery(main, {
-    checkCurrent: async () => {
-      if (currentReview) {
-        await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+  withSecurityReviewRecovery(
+    async () => {
+      await main();
+      if (
+        process.env.OPENCLAW_SECURITY_REVIEW_MODE === "prepare" &&
+        currentReview &&
+        !currentReview.autoscrubPending &&
+        process.env.GITHUB_OUTPUT
+      ) {
+        await appendFile(process.env.GITHUB_OUTPUT, "completed=true\n");
       }
     },
-  }).catch(
+    {
+      checkCurrent: async () => {
+        if (currentReview) {
+          await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+        }
+      },
+    },
+  ).catch(
     /** @param {unknown} error */ (error) => {
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);

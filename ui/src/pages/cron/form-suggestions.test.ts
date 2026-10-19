@@ -9,7 +9,7 @@ describe("buildCronSuggestions", () => {
   const telegramTarget = "-1001234567890";
   const webhookTarget = "https://example.test/hooks/saved";
   const accountUrl = "https://example.test/account-name";
-  const telegramAccounts = ["default", telegramTarget, "work", accountUrl];
+  const telegramAccounts = ["default", "work", "ops"];
 
   it.each([
     {
@@ -22,7 +22,7 @@ describe("buildCronSuggestions", () => {
       channel: "last",
       mode: "announce",
       recipients: [telegramTarget, webhookTarget],
-      accounts: [...telegramAccounts, "discord-account", "Discord account"],
+      accounts: [...telegramAccounts, "discord-account"],
     },
     {
       channel: "telegram",
@@ -30,7 +30,13 @@ describe("buildCronSuggestions", () => {
       recipients: [webhookTarget],
       accounts: telegramAccounts,
     },
-  ] as const)("keeps $channel $mode recipients separate from account options", (scenario) => {
+    {
+      channel: "unconfigured",
+      mode: "announce",
+      recipients: [telegramTarget, webhookTarget],
+      accounts: [],
+    },
+  ] as const)("suggests account IDs and separate $channel $mode recipients", (scenario) => {
     const channels = createChannelCapability({
       snapshot: { client: null, phase: "stopped" },
       subscribe: () => () => undefined,
@@ -46,6 +52,8 @@ describe("buildCronSuggestions", () => {
         telegram: [
           { accountId: "default", name: telegramTarget },
           { accountId: "work", name: accountUrl },
+          // A real ID must survive even when another account uses it as a name.
+          { accountId: "ops", name: "work" },
         ],
         discord: [{ accountId: "discord-account", name: "Discord account" }],
       },
@@ -56,6 +64,7 @@ describe("buildCronSuggestions", () => {
     cron.cronForm.deliveryMode = scenario.mode;
     cron.cronJobs = [
       createCronViewJob("telegram-job", {
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Etc/GMT+12" },
         sessionTarget: "isolated",
         payload: { kind: "agentTurn", message: "Daily summary" },
         delivery: {
@@ -91,6 +100,7 @@ describe("buildCronSuggestions", () => {
           ].toSorted(),
     );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
+    expect(suggestions.timezoneSuggestions).toContain("Etc/GMT+12");
   });
 });
 

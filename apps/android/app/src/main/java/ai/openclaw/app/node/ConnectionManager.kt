@@ -83,10 +83,7 @@ class ConnectionManager internal constructor(
 
       // TXT may require TLS, but only a stored pin is authoritative.
       return GatewayTlsParams(
-        required = true,
         expectedFingerprint = stored,
-        allowTOFU = false,
-        stableId = stableId,
       )
     }
   }
@@ -105,12 +102,6 @@ class ConnectionManager internal constructor(
     }
   }
 
-  fun resolveModelIdentifier(): String? =
-    listOfNotNull(Build.MANUFACTURER, Build.MODEL)
-      .joinToString(" ")
-      .trim()
-      .ifEmpty { null }
-
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
     val release =
@@ -122,19 +113,16 @@ class ConnectionManager internal constructor(
   }
 
   /** Client identity block shared by node and operator gateway sessions. */
-  fun buildClientInfo(
-    clientId: String,
-    clientMode: String,
-  ): GatewayClientInfo =
+  fun buildClientInfo(clientMode: String): GatewayClientInfo =
     GatewayClientInfo(
-      id = clientId,
+      id = "openclaw-android",
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
       platform = "android",
       mode = clientMode,
       instanceId = prefs.instanceId.value,
       deviceFamily = "Android",
-      modelIdentifier = resolveModelIdentifier(),
+      modelIdentifier = listOfNotNull(Build.MANUFACTURER, Build.MODEL).joinToString(" ").trim().ifEmpty { null },
     )
 
   fun buildNodeConnectOptions(): GatewayConnectOptions =
@@ -144,7 +132,7 @@ class ConnectionManager internal constructor(
       caps = advertisedCapabilities(),
       commands = advertisedCommands(),
       permissions = buildPermissions(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
+      client = buildClientInfo(clientMode = "node"),
       userAgent = buildUserAgent(),
     )
 
@@ -163,7 +151,7 @@ class ConnectionManager internal constructor(
         },
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
+      client = buildClientInfo(clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
 

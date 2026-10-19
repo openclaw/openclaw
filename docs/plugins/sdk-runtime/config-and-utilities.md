@@ -14,7 +14,7 @@ How plugin code reads the runtime config snapshot, persists config writes, and r
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.
 
-Use `api.runtime.config.current()` only when a long-lived handler needs the current process snapshot and no config was passed to that function. The returned value is readonly; clone or use a mutation helper before editing.
+Use `api.runtime.config.current()` only when a long-lived handler needs the current process snapshot and no config was passed to that function. The returned value is readonly. Use `api.runtime.config.current({ clone: true })` when a downstream API needs an independent mutable copy; the copy retains resolved-secret metadata. Persist edits through the mutation helpers below.
 
 Tool factories receive `ctx.runtimeConfig` plus `ctx.getRuntimeConfig()`. Use the getter inside a long-lived tool's `execute` callback when config can change after the tool definition was created.
 
@@ -95,14 +95,38 @@ exports from `infra-runtime`. The retired `resolveExecModeFromPolicy`,
 `resolveExecPolicyForMode`, and `resolveExecModePolicy` exports can also migrate
 to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
-Native command probes should use `runCommandWithTimeout` from
+Native command checks should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
 `killProcessTree: true`. For commands whose output is always UTF-8, such as JSON status
-probes, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
+checks, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
 can return before canceled remote startup delivers its PID. When a command owns a
 session reservation or temporary output, await `withCommandProcessScope` from the
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
+
+For plugin-owned long-lived children, use `spawnOomScoreAdjusted` from the same
+subpath with native `spawn` options. On Linux it raises the child's
+`oom_score_adj` to `1000` immediately after native spawn so memory pressure
+preferentially kills the child. This preserves custom `argv0`, the environment,
+and native launch errors. There is a brief window before the score write;
+descendants created in that window can retain the inherited score. The Gateway's
+score is never changed. `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` disables the policy,
+including for sanitized child environments; an explicit child value overrides the parent.
+Explicit `shell` launches remain caller-owned. Lower-level users of
+`prepareOomScoreAdjustedSpawn` must call its optional `afterSpawn(child.pid)`
+immediately after spawning to apply the custom-`argv0` adjustment.
+
+`reapOrphanedProcesses` from the same subpath supports recovery of plugin-owned
+macOS process trees after their original host dies. Supply the exact managed
+executable and an argument predicate for its configured instance; also supply
+`cwd` when relative arguments depend on the launch directory. It only selects
+same-user, launchd-adopted roots, retains native birth identities and matching
+descendants, and joins bounded TERM-to-KILL cleanup. It never signals a process
+group or discovers new descendants after the root exits. Call it during managed
+service preparation, before health-based reuse, and leave externally managed
+endpoints outside that path. Unknown identities are rejected on supported hosts;
+hosts without native birth-identity support and other platforms leave existing
+processes untouched. PID 1 can itself be a live owner on Linux.
 
 For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
 the same subpath. It reuses the current Node executable and resolves a real Node
@@ -131,6 +155,42 @@ dispose dependent files only after closure is acknowledged. The optional
 It may return `void` or `Promise<void>`; observer throws and rejections do not
 replace the termination error or release custody, and closure does not wait for
 the observer.
+
+Bundled pools use the host sizing policy through a `workerClass` or a prepared
+numeric budget when constructing `WorkerTaskPool`. The host sizes the pool once
+from `os.availableParallelism()`, reserving one CPU when
+possible: `reader` admits up to two workers, `file-reader` up to two for small
+file reads, `compute` up to four, and `writer`
+or `singleton` exactly one. Workers are created on demand. Choose `singleton`
+for worker-local continuation state, generation-wide callbacks, or deliberately
+shared native heaps; independent requests do not make those owners parallel-safe.
+Choose `writer` when the pool owns serial side effects. SQLite's writer broker
+still owns one writer per physical database; its cross-database worker budget
+does not create additional writers for a database.
+
+Foreground transcript history and context each retain half the host's CPU
+headroom, capped at eight workers per pool. Background transcript owners remain
+serial. Shared-state readers retain a minimum of two workers so a held settlement
+read can admit a fresh catalog read before release.
+Inventory hashing retains its CPU and available-memory admission budget,
+including its in-process fallback on low-memory and Bun/Linux hosts.
+
+Reader, file-reader, and compute classes default to a 512 MiB V8 old-generation limit per
+worker. An explicit `workerOptions.resourceLimits` overrides the corresponding
+limits; native allocations, buffers, and WASM memory remain the caller's
+responsibility. Existing numeric `maxWorkers` remains supported. When both are
+supplied, `workerClass` takes precedence; a published plugin can retain its numeric
+limit for older supported hosts until its minimum host version includes class
+sizing. FIFO task admission remains unchanged; parallel tasks may finish
+out of order, so owners requiring serial completion must use a serial class.
+This policy adds no operator configuration or storage migration.
+
+Pools can set `burstIdleTimeoutMs` to retire workers beyond their first usable slot
+sooner than `idleTimeoutMs`. Retiring these surplus workers does not extend the
+first worker's adaptive warm window. Image processing uses at most two workers
+under shared compute admission and retires surplus capacity after five idle
+seconds. Control UI file reads use their own bounded two-worker pool so shared
+compute contention cannot block asset reads.
 
 `prepareWorker()` can return `temporaryDirectory` for disposable scratch files
 and an optional asynchronous `releaseResources()` callback for producer-owned
@@ -174,7 +234,7 @@ Empty quoted arguments are omitted.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
-exited. Keep the probe pending through cleanup, use `detached: true` only for a
+exited. Keep the check pending through cleanup, use `detached: true` only for a
 process group you created, and start Windows tree termination while its root is
 still alive.
 
@@ -210,13 +270,20 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 `openclaw/plugin-sdk/interactive-runtime`. Import
 `applySessionModelSelection(...)` and its result types from
 `openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
-seam, including its authoritative conflict check and post-commit effects. The
+interface, including its authoritative conflict check and post-commit effects. The
 lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
 persistence API.
 
+Model selection preserves the saved thinking preference; execution clamps it to
+the selected model's supported levels. `thinkingRemap` is no longer emitted in
+the selection result. Its optional type remains deprecated until the next SDK
+major version. Session rows expose the saved request as `thinkingLevel`.
+`sessions.patch` returns that preference in `entry.thinkingLevel` and the
+execution level in `resolved.thinkingLevel`.
+
 Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
 persistence fallback when a channel callback cannot enter the full live-session
-transaction and already owns an atomic canonical session-entry patch. Pass the
+transaction and already owns an atomic stored session-entry patch. Pass the
 active config, resolved agent directory, entry, effective provider before the
 change, and validated selection. The helper mutates that entry only: it keeps a
 pinned auth profile when its recorded credential provider or configured alias is
@@ -225,11 +292,18 @@ The caller still owns model allowlist validation, atomic persistence,
 `markLiveSwitchPending`, and any post-commit effects. Prefer
 `applySessionModelSelection(...)` whenever the full transaction is available.
 
+In an async session-entry patch, prepare an existing auth pin with
+`await prepareAuthProfileProvider({ agentDir, profileId })` from the same subpath
+and pass its result as `recordedProvider`. This reuses the runtime snapshot or
+reads persisted credentials through the auth owner. Pass the result even when
+its `provider` is `undefined`: it records completed preparation and prevents a
+synchronous fallback lookup. Skip preparation when the entry has no auth pin.
+
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
 the channel's private authenticated envelope. Channel codecs opt into resolving
 these actions with `{ modelPicker: true }`; channels without a picker
-capability continue to fail closed instead of treating the action as an opaque
+capability continue to reject the action instead of treating it as an opaque
 callback.
 
 Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. Retryable transports should also supply a stable `eventId`; replaying an accepted event while it remains in the active window does not consume another budget slot. Suppressed events add no retained event-identity state.
@@ -270,6 +344,35 @@ return {
 
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
+
+### Bounded waits
+
+`openclaw/plugin-sdk/time-runtime` exports
+`raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
+promise, or a function returning a promise when the timer must start before the
+work. The timeout callback returns a fallback or throws the caller's error.
+Delays use native `setTimeout` semantics; the timer keeps the process alive
+unless `ref` is `false`, and is cleared when the race settles.
+
+When `signal` is supplied, the same wait owns cancellation and clears both the
+timer and listener on any outcome. `onAbort(signal)` returns a fallback or throws
+the caller's error; the default throws an `AbortError` with the signal reason as
+its cause. The operation comes first in the promise race, including when both
+inputs have already settled. Check an existing abort before calling if it must
+prevent an operation factory from starting.
+
+`racePromiseWithAbortSignal(operation, signal?, createError?)` from the same
+subpath bounds observation by caller cancellation. An already-aborted signal
+wins over an already-settled promise. By default it rejects with an `AbortError`
+whose cause is the signal's reason; `createError(signal)` can preserve a
+transport's existing cancellation error. The helper removes its abort listener
+when the race settles and observes late source rejections. A function returning
+a promise starts after the abort listener is registered; an already-aborted
+signal prevents that function from starting.
+
+Neither helper cancels the underlying operation or certifies that cleanup has
+finished. Keep resource settlement, authority checks, and abort side effects
+with the operation's lifecycle owner.
 
 ### Stage timing diagnostics
 
@@ -316,6 +419,39 @@ their payload for the listener. `include` and `exclude` apply to every event;
 the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
-cannot override the dispatcher's trust metadata. Accepted events retain their
-individual frozen copies; this filter does not change diagnostic collection or
-queue behavior.
+cannot override the dispatcher's trust metadata. Accepted plain event payloads
+share one frozen snapshot across listeners in a dispatch. Payloads with mutable
+opaque values (such as Maps or Dates) and private listener data retain individual
+copies. Absent private data uses a shared frozen empty payload, including for
+OTel listeners without host-plugin attribution. Listener mutations remain isolated
+from other listeners and producers; filtering does not change diagnostic collection
+or queue behavior.
+
+## Darwin process inspection
+
+Use `openclaw/plugin-sdk/process-runtime` for macOS process observations.
+This is a breaking Plugin SDK change: `DarwinProcess.uid` is replaced by
+`owner: "same" | "different" | "unknown"`. Replace comparisons such as
+`row.uid === process.getuid()` with `row.owner === "same"`; unknown ownership
+does not authorize cleanup.
+Core cleanup and plugins share this owner. `readDarwinProcessSnapshot(deadline, pids?)`
+returns PID, parent PID, process group, state, ownership (`same`, `different`, or
+`unknown` relative to the observer), and an opaque `startedAt`
+identity. Omitting `pids` requests all start identities and can fail for other users.
+Prefer `readDarwinProcessTree(deadline, roots)` for containment: it reads complete
+process topology, then start identities only for the roots, their descendants,
+and the observer. An inaccessible relevant process still fails inspection. Start identities preserve the
+normalized UTC `ps lstart` format across Node and Bun so retained registrations
+remain comparable after runtime switches. They have second granularity; use a
+command fingerprint when authorizing cleanup of a retained PID.
+`readDarwinProcessCommandLine(pid, deadline)` returns joined arguments and never reads
+process environment values. Deadlines use `performance.now()` milliseconds.
+
+Node and Bun use the pinned proc-safe native census and argument reader, so neither
+operation executes `ps`, including inside macOS Seatbelt sandboxes. Unreadable
+topology fails the census; unrelated unreadable birth identities do not prevent
+inspection of a selected tree. There is no fallback from failed native inspection to `ps`.
+A missing PID is omitted, while `DarwinProcessInspectionError.reason` distinguishes
+`permission`, `deadline`, and `unavailable`; its `code` is respectively `EPERM`,
+`ETIMEDOUT`, or `EIO`. Callers must not treat these errors as
+proof that a process or integration is absent.

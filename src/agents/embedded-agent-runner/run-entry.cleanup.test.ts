@@ -1,9 +1,15 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import { captureContextEngineRegistryStateForTests } from "../../context-engine/registry.test-support.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const cleanupCases = [
   { kind: "command-rpc", settlement: "success" },
@@ -15,6 +21,8 @@ const cleanupCases = [
 it.each(cleanupCases)(
   "settles $kind replies and cleanup ownership for $settlement",
   async ({ kind, settlement }) => {
+    const cfg = { plugins: { slots: { contextEngine: "cleanup-probe" } } };
+    setRuntimeConfigSnapshot(cfg);
     const restoreRegistry = captureContextEngineRegistryStateForTests();
     const disposal = createDeferred();
     const disposalStarted = createDeferred();
@@ -42,7 +50,7 @@ it.each(cleanupCases)(
       .run(() =>
         runEmbeddedAgentEntry({
           selection: {
-            cfg: { plugins: { slots: { contextEngine: "cleanup-probe" } } },
+            cfg,
             provider: "synthetic",
             model: "synthetic-model",
             fallbacksOverride: [],
@@ -82,7 +90,12 @@ it.each(cleanupCases)(
         return result;
       });
     try {
-      await disposalStarted.promise;
+      await Promise.race([
+        disposalStarted.promise,
+        entry.then(() => {
+          throw new Error("Agent entry settled before context engine disposal started");
+        }),
+      ]);
       if (settlement === "success") {
         disposal.resolve();
       } else if (settlement === "failure") {

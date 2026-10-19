@@ -28,11 +28,13 @@ const {
   };
 });
 
+// mock-isolation: Plugin auth precedence uses seeded stores and source flags without host credential discovery.
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (ids: string[]) => [...new Set(ids)],
   ensureAuthProfileStore: () => loadStore(),
-  ensureAuthProfileStoreWithoutExternalProfiles: () => loadLocalStore(),
-  hasAnyAuthProfileStoreSource: () => hasSource(),
+  ensureAuthProfileStoreAsync: () => loadStore(),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: () => loadLocalStore(),
+  hasAnyAuthProfileStoreSourceAsync: () => hasSource(),
   listProfilesForProvider: () => [],
   resolveApiKeyForProfile: (params: { profileId: string }) => resolveKey(params),
   resolveAuthProfileOrder: (params: { provider: string }) => order(params),
@@ -110,14 +112,51 @@ describe("provider usage auth boundary", () => {
 
   it("normalizes direct plugin candidates ahead of provider environment credentials", async () => {
     resolvePlugin.mockImplementationOnce(async ({ context }) => {
-      const token = context.resolveApiKeyFromConfigAndStore({
-        envDirect: [undefined, "first-\r\nkey", "second-key"],
-      });
+      const token = (
+        await context.resolveApiKeyCandidatesFromConfigAndStore?.({
+          envDirect: [undefined, "first-\r\nkey", "second-key"],
+        })
+      )?.[0];
       return token ? { token } : undefined;
     });
     expect(await resolve(["zai"], { ZAI_API_KEY: "fallback-key" })).toEqual([
       { provider: "zai", token: "first-key" },
     ]);
+  });
+
+  it("keeps the supplied store when direct credentials admit a legacy usage hook", async () => {
+    const profileId = "anthropic:scoped";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: "anthropic", key: "scoped-key" },
+      },
+    };
+    const getStore = vi.fn(async () => store);
+    loadStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: "anthropic", key: "ambient-key" },
+      },
+    });
+    order.mockImplementation(({ provider }) => (provider === "anthropic" ? [profileId] : []));
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      const token = context.resolveApiKeyFromConfigAndStore({ providerIds: ["anthropic"] });
+      return token ? { token } : undefined;
+    });
+
+    await expect(
+      resolveProviderAuths({
+        providers: ["zai"],
+        env: { ZAI_API_KEY: "direct-key" },
+        config: {},
+        agentDir: "/tmp/openclaw-agent",
+        getStore,
+      }),
+    ).resolves.toEqual([{ provider: "zai", token: "scoped-key" }]);
+    expect(getStore).toHaveBeenCalledOnce();
+    expect(loadStore).not.toHaveBeenCalled();
+    expect(loadLocalStore).not.toHaveBeenCalled();
   });
 
   it("preserves plugin failures for direct callers", async () => {

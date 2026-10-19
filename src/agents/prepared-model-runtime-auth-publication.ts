@@ -146,14 +146,10 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     if (this.#transaction !== transaction) {
       return false;
     }
-    if (transaction.adoptedBy) {
-      this.#transaction = undefined;
-    } else if (transaction.ownerGates.size === 0) {
-      this.#transaction = undefined;
-      return true;
-    } else {
+    if (!transaction.adoptedBy && transaction.ownerGates.size > 0) {
       return false;
     }
+    this.#transaction = undefined;
     this.clearOwnerGates(transaction);
     for (const [owner, gate] of transaction.ownerGates) {
       const published =
@@ -290,6 +286,14 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           }
         } catch (error) {
           if (this.#transaction?.adoptedBy) {
+            if (
+              error instanceof PreparedModelRuntimePublicationSupersededError &&
+              this.#events.some((event) => event.some((owner) => componentOwners.includes(owner)))
+            ) {
+              // The queued mutation owns the next build; preserve its entire atomic component.
+              this.#events.push(componentOwners);
+              continue;
+            }
             // The replacement transaction exclusively settles adopted gates from its own result.
             throw error;
           }

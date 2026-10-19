@@ -5,10 +5,11 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
-  getSessionMcpRuntimeManagerForTesting,
+  acquireSessionMcpRuntime,
   peekSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -33,12 +34,12 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
@@ -101,6 +102,7 @@ it.each(["completed", "interrupted"] as const)(
       const entered = createDeferred();
       const interrupted = new AbortController();
       const human = "Reply only FOREGROUND_READY. Preserve ünicode 🦞.\nThis is the human request.";
+      const runtimeContext = "Synthetic current runtime fact for the next human turn.";
       const requests: ModelRequest[] = [];
       const requestErrors: unknown[] = [];
       const runtimeBudgets: number[] = [];
@@ -128,8 +130,8 @@ it.each(["completed", "interrupted"] as const)(
         }
         void readBody(request)
           .then((body) => {
-            // Memory preparation reads the MCP catalog before inference. Keep a real
-            // server owned by the run without adding tools to its model request.
+            // The held-run fixture seeds a real MCP resource for settlement proof;
+            // memory inference itself must not discover unrelated MCP tools.
             if (request.url === "/mcp") {
               const message = JSON.parse(body) as {
                 id?: number;
@@ -193,7 +195,7 @@ it.each(["completed", "interrupted"] as const)(
       };
       const cfg: OpenClawConfig = {
         agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             workspace: state.workspaceDir,
             model: { primary: "test-provider/owner-model" },
@@ -221,7 +223,7 @@ it.each(["completed", "interrupted"] as const)(
         },
       };
       let flush: ReturnType<typeof runMemoryFlushIfNeeded> | undefined;
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       const scheduler = createTestGatewayScheduler();
       try {
         await setSessionMcpRuntimeScheduler(scheduler);
@@ -285,7 +287,7 @@ it.each(["completed", "interrupted"] as const)(
           relativePath: "memory/checkpoint.md",
           model: "test-provider/test-model",
         }));
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: scope.storePath,
           identities: [scope.sessionKey, scope.sessionId],
           signal: interrupted.signal,
@@ -320,7 +322,21 @@ it.each(["completed", "interrupted"] as const)(
         const firstPrivateSessionIds = [...privateSessionIds];
         expect(firstPrivateSessionIds.length).toBeGreaterThan(0);
         for (const sessionId of firstPrivateSessionIds) {
-          expect(peekSessionMcpRuntime({ sessionId }) !== undefined).toBe(true);
+          expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+          // Seed a run-owned resource without widening the memory model tool surface.
+          // Release its lease before settlement so active-lease protection is not exercised.
+          const lease = await acquireSessionMcpRuntime({
+            sessionId,
+            workspaceDir: state.workspaceDir,
+            cfg,
+            manifestRegistry: { plugins: [] },
+          });
+          try {
+            await lease.runtime.getCatalog();
+          } finally {
+            lease.releaseLease();
+          }
+          expect(peekSessionMcpRuntime({ sessionId })).toBeDefined();
         }
         if (outcome === "interrupted") {
           interrupted.abort(new Error("next human turn"));
@@ -345,6 +361,7 @@ it.each(["completed", "interrupted"] as const)(
           expect.soft(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
         }
         foreground.prompt = human;
+        foreground.currentInboundContext = { text: runtimeContext };
         const current = loadSessionEntry(scope)!;
         const result = await runReplyAgent({
           commandBody: human,
@@ -381,6 +398,9 @@ it.each(["completed", "interrupted"] as const)(
         const userIndex = humanMessages.findLastIndex(isHumanMessage);
         const nextUser = text(humanMessages[userIndex]?.content);
         expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+        expect(text(humanMessages.find(isModelRuntimeContextCarrier)?.content)).toContain(
+          runtimeContext,
+        );
         expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
@@ -409,7 +429,7 @@ it.each(["completed", "interrupted"] as const)(
         admission?.release();
         await waitForSessionMaintenance(scope.sessionKey);
         // Retire fixture-owned leftovers after work settles, including failed setup or assertions.
-        const mcpManager = getSessionMcpRuntimeManagerForTesting();
+        const mcpManager = getSessionMcpRuntimeTestManager();
         for (const sessionId of mcpManager.listSessionIds()) {
           if (mcpManager.peekSession({ sessionId })?.workspaceDir === state.workspaceDir) {
             await mcpManager.disposeSession(sessionId);

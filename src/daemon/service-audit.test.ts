@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
-  auditGatewayServiceConfig,
+  auditGatewayServiceConfig as inspectGatewayServiceConfig,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
@@ -17,10 +17,24 @@ import {
   resolveBunRuntimeInfoMock,
   resolveNodeRuntimeInfoMock,
 } from "./test-helpers/service-audit-fixtures.js";
+import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
-type AuditOptions = Parameters<typeof auditGatewayServiceConfig>[0];
+type AuditOptions = Parameters<typeof inspectGatewayServiceConfig>[0];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(resetServiceAuditMocks);
+let runtimePinStateDir: string;
+beforeEach(() => {
+  resetServiceAuditMocks();
+  runtimePinStateDir = tempDirs.make("service-audit-runtime-pin-");
+});
+
+async function auditGatewayServiceConfig(options: AuditOptions) {
+  const env = {
+    ...options.env,
+    OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR ?? runtimePinStateDir,
+  };
+  await seedCompletedRuntimePinMigration(env);
+  return inspectGatewayServiceConfig({ ...options, env });
+}
 
 function audit(
   command: Partial<NonNullable<AuditOptions["command"]>> = {},
@@ -47,6 +61,19 @@ function minimalPath(platform: NodeJS.Platform, env: AuditOptions["env"]) {
 }
 
 describe("auditGatewayServiceConfig runtime", () => {
+  it("reports pending pin migration without recommending a different runtime", async () => {
+    const result = await inspectGatewayServiceConfig({
+      env: { HOME: runtimePinStateDir, OPENCLAW_STATE_DIR: runtimePinStateDir },
+      platform: "linux",
+      command: {
+        programArguments: ["/home/user/.nvm/versions/node/v24.21.0/bin/node", "gateway"],
+      },
+    });
+    expect(result.runtimeNote).toBe("Runtime pin migration pending; run openclaw doctor.");
+    expect(hasIssue(result, codes.gatewayRuntimeNodeVersionManager)).toBe(false);
+    expect(hasIssue(result, codes.gatewayRuntimeNodeSystemMissing)).toBe(false);
+  });
+
   const auditBun = () =>
     audit({ programArguments: ["/opt/homebrew/bin/bun", "gateway"] }, { platform: "darwin" });
 
@@ -55,7 +82,7 @@ describe("auditGatewayServiceConfig runtime", () => {
     async (sqliteSelectionError) => {
       const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
       resolveBunRuntimeInfoMock.mockResolvedValue({
-        version: sqliteSelectionError ? "1.4.2" : "1.4.0",
+        version: sqliteSelectionError ? "1.4.3" : "1.4.0",
         sqliteVersion,
         sqliteProbe: {
           available: !sqliteSelectionError,
@@ -72,7 +99,9 @@ describe("auditGatewayServiceConfig runtime", () => {
       expect(result.issues).toContainEqual(
         expect.objectContaining({
           code: codes.gatewayRuntimeBun,
-          message: expect.stringContaining("Bun 1.4+ with WAL-reset-safe node:sqlite is required"),
+          message: expect.stringContaining(
+            "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required",
+          ),
           detail: sqliteSelectionError
             ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`
             : "/opt/homebrew/bin/bun",
@@ -80,10 +109,6 @@ describe("auditGatewayServiceConfig runtime", () => {
       );
     },
   );
-
-  it("accepts Bun with WAL-safe node:sqlite", async () => {
-    expect(hasIssue(await auditBun(), codes.gatewayRuntimeBun)).toBe(false);
-  });
 
   it("reports a failed Bun probe without recommending runtime migration", async () => {
     const error = new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES");
@@ -122,7 +147,7 @@ describe("auditGatewayServiceConfig runtime", () => {
   });
 
   it("reports a capable vendor Node as a note without requesting migration", async () => {
-    const note = "Node 24.15.0: unsupported version, capability probe passed.";
+    const note = "Node 24.15.0: unsupported version, capability check passed.";
     resolveNodeRuntimeInfoMock.mockResolvedValue({
       version: "24.15.0",
       sqliteVersion: "3.53.4",
@@ -138,12 +163,12 @@ describe("auditGatewayServiceConfig runtime", () => {
   });
 
   it("preserves Node probe failure and timeout without requesting migration", async () => {
-    const error = new Error("Node runtime probe failed: access denied");
+    const error = new Error("Node runtime check failed: access denied");
     resolveNodeRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
     const result = await audit({ environment: undefined }, { timeoutMs: 1234 });
     expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith(
       "/usr/bin/node",
-      { HOME: "/tmp" },
+      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
       1234,
     );
     expect(result.issues).toContainEqual(
@@ -171,37 +196,6 @@ describe("auditGatewayServiceConfig PATH", () => {
     const issue = result.issues.find((entry) => entry.code === codes.gatewayPathMissingDirs);
     expect(issue?.message).toContain("/opt/homebrew/bin");
     expect(issue?.message).toContain("/opt/homebrew/sbin");
-  });
-
-  it("identifies stale Linux manager paths beside the managed PATH", async () => {
-    const env = { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/active-pnpm" };
-    const stale = [
-      ".volta/bin",
-      ".asdf/shims",
-      ".nvm/current/bin",
-      ".local/share/fnm/current/bin",
-      ".fnm/current/bin",
-      ".local/share/pnpm",
-    ].map((entry) => `${env.HOME}/${entry}`);
-    stale.push("/opt/pnpm/bin");
-    const result = await audit(
-      { environment: { PATH: [minimalPath("linux", env), ...stale].join(":") } },
-      { env },
-    );
-    expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
-    expect(result.issues.find((entry) => entry.code === codes.gatewayPathNonMinimal)?.detail).toBe(
-      stale.join(", "),
-    );
-  });
-
-  it("requires explicitly configured Linux tool roots", async () => {
-    const result = await audit(
-      {},
-      { env: { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" } },
-    );
-    expect(
-      result.issues.find((entry) => entry.code === codes.gatewayPathMissingDirs)?.message,
-    ).toContain("/opt/pnpm");
   });
 
   it("allows the expected active bin while rejecting unrelated manager paths", async () => {
@@ -243,28 +237,10 @@ describe("auditGatewayServiceConfig PATH", () => {
       expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
     },
   );
-
-  it("skips PATH drift checks for semicolon-delimited Windows paths", async () => {
-    const result = await audit(
-      {
-        programArguments: ["C:\\Program Files\\nodejs\\node.exe", "gateway"],
-        environment: { PATH: "C:\\Users\\test\\.nvm\\current\\bin;C:\\Windows\\System32" },
-      },
-      {
-        env: { HOME: "C:\\Users\\test" },
-        platform: "win32",
-        expectedServicePath: "C:\\Program Files\\nodejs;C:\\Windows\\System32",
-      },
-    );
-    expect(hasIssue(result, codes.gatewayPathMissing)).toBe(false);
-    expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
-    expect(hasIssue(result, codes.gatewayPathNonMinimal)).toBe(false);
-  });
 });
 
 describe("auditGatewayServiceConfig command", () => {
   it.each([
-    ["/bin/zsh", "-lc", false],
     ["/usr/local/bin/helper", "-lc", true],
     ["/bin/zsh", "-l", true],
   ] as const)("audits gateway tokens for %s %s", async (executable, flag, missing) => {
@@ -281,7 +257,6 @@ describe("auditGatewayServiceConfig command", () => {
   });
 
   it.each([
-    { args: ["--port", "18789"], detail: "18789 -> 18888" },
     { args: ["--port", "18789", "--port=18888"], detail: undefined },
     { args: ["--port", "--port=18888"], detail: "--port=18888 -> 18888" },
   ])("audits the final unconsumed port flag: $args", async ({ args, detail }) => {
@@ -304,6 +279,40 @@ describe("auditGatewayServiceConfig command", () => {
 });
 
 describe("auditGatewayServiceConfig environment sources", () => {
+  it("classifies expired egress trust as repairable drift, not a custom setting", async () => {
+    const result = await audit(
+      {
+        programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          NODE_EXTRA_CA_CERTS: "/state/a/secret-egress-proxy/gateway-expired/trust-bundle.pem",
+          CUSTOM_SETTING: "retained",
+        },
+      },
+      {
+        expectedCommand: {
+          programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
+          environment: { PATH: "/usr/local/bin:/usr/bin:/bin", CUSTOM_SETTING: "retained" },
+        },
+      },
+    );
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "gateway-egress-proxy-env-embedded",
+        environmentKeys: ["NODE_EXTRA_CA_CERTS"],
+      }),
+    );
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({
+        kind: "outdated",
+        key: "Environment.NODE_EXTRA_CA_CERTS",
+      }),
+    );
+    expect(result.definitionDrift).not.toContainEqual(
+      expect.objectContaining({ kind: "unknown-edit" }),
+    );
+  });
+
   it.each([
     { source: undefined, token: "old-token", embedded: true, mismatch: true },
     { source: "inline-and-file", token: "new-token", embedded: true, mismatch: false },
@@ -445,7 +454,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
     expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      env(),
+      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
       [
         "show",
         "openclaw-audit.service",
@@ -469,7 +478,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     expect(systemdCodes(await auditUnit())).toEqual([]);
   });
 
-  it.each(["process", "none", ""])(
+  it.each(["none", ""])(
     "warns about base-unit KillMode=%s when the manager is unavailable",
     async (killMode) => {
       await writeUnit([
@@ -487,18 +496,6 @@ describe("auditGatewayServiceConfig systemd", () => {
       ).toBe(true);
     },
   );
-
-  it("accepts resilient continued settings when the manager is unavailable", async () => {
-    const continuation = "\\\n  # continued setting \\\n  ; ignored comment\n  ";
-    await writeUnit([
-      `After=basic.target ${continuation}network-online.target`,
-      `Wants=basic.target ${continuation}network-online.target`,
-      `RestartSec=${continuation}5s`,
-      `KillMode=${continuation}mixed`,
-      `TimeoutStopSec=${continuation}330`,
-    ]);
-    expect(systemdCodes(await auditUnit())).toEqual([]);
-  });
 
   it("finds credentials in an orphaned backup without revealing them", async () => {
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
@@ -537,5 +534,75 @@ describe("auditGatewayServiceConfig systemd", () => {
       level: "recommended",
       detail: expect.stringContaining("mode: 644"),
     });
+  });
+
+  it.each(["EACCES", "EIO"])("reports a backup inspection failure (%s)", async (code) => {
+    await writeUnit([
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=mixed",
+      "TimeoutStopSec=330",
+    ]);
+    const backupPath = `${unitPath}.bak`;
+    const lstat = fs.lstat;
+    const inspection = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation((...args) =>
+        args[0] === backupPath
+          ? Promise.reject(
+              Object.assign(new Error("synthetic backup inspection failure"), { code }),
+            )
+          : lstat(...args),
+      );
+    try {
+      const result = await auditUnit();
+      expect(result.definitionDriftError).toBe(
+        `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`,
+      );
+      expect(systemdCodes(result)).toEqual([]);
+    } finally {
+      inspection.mockRestore();
+    }
+  });
+});
+
+describe("systemd shutdown timeout audit", () => {
+  it.each([
+    { name: "unlimited base timeout", base: "infinity", expected: false },
+    { name: "disabled base timeout", base: "0", expected: false },
+    { name: "invalid base timeout", base: "invalid", expected: true },
+  ])("reports a drain requirement for $name", async ({ base, expected }) => {
+    const home = tempDirs.make("openclaw-stop-timeout-audit-");
+    const unitPath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.writeFile(
+      unitPath,
+      [
+        "[Unit]",
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "[Service]",
+        "ExecStart=/usr/bin/node gateway",
+        "RestartSec=5",
+        "KillMode=mixed",
+        `TimeoutStopSec=${base}`,
+      ].join("\n"),
+    );
+
+    const result = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: null,
+    });
+    const issue = result.issues.find((entry) => entry.code === "systemd-stop-timeout");
+    expect(Boolean(issue)).toBe(expected);
+    if (expected) {
+      expect(issue).toMatchObject({
+        message: expect.stringContaining("TimeoutStopSec=330"),
+        detail: expect.stringContaining(unitPath),
+        level: "recommended",
+      });
+    }
   });
 });

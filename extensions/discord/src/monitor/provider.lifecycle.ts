@@ -6,7 +6,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
-import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
+import { waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
 import type { DiscordVoiceManager } from "../voice/voice-runtime.js";
 import {
@@ -28,11 +28,22 @@ const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
-const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
-const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
 
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
+
+function createGatewayNotReadyStatusPatch(
+  at: number,
+  reason: "runtime-not-ready" | "startup-not-ready",
+): Parameters<DiscordMonitorStatusSink>[0] {
+  return {
+    connected: false,
+    lifecycle: "recovering",
+    lastEventAt: at,
+    lastDisconnect: { at, error: reason },
+    lastError: reason,
+  };
+}
 
 function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
   const numeric = parseStrictPositiveInteger(value);
@@ -40,101 +51,6 @@ function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
     return undefined;
   }
   return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
-}
-
-async function restartGatewayAfterReadyTimeout(params: {
-  gateway?: Pick<MutableDiscordGateway, "connect" | "disconnect" | "ws">;
-  abortSignal?: AbortSignal;
-  runtime: RuntimeEnv;
-}): Promise<void> {
-  if (!params.gateway || params.abortSignal?.aborted) {
-    return;
-  }
-
-  const socket = params.gateway.ws;
-  if (!socket) {
-    params.gateway.disconnect();
-    if (!params.abortSignal?.aborted) {
-      params.gateway.connect(false);
-    }
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
-    let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
-    const ignoreSocketError = () => {};
-    const clearTimers = () => {
-      if (drainTimeout) {
-        clearTimeout(drainTimeout);
-        drainTimeout = undefined;
-      }
-      if (terminateCloseTimeout) {
-        clearTimeout(terminateCloseTimeout);
-        terminateCloseTimeout = undefined;
-      }
-    };
-    const cleanup = () => {
-      clearTimers();
-      socket.removeListener("close", onClose);
-      socket.removeListener("error", ignoreSocketError);
-    };
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      if (error && !params.abortSignal?.aborted) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onClose = () => finish();
-    const failClose = () =>
-      finish(
-        new Error(
-          `discord gateway socket did not close within ${DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS}ms before restart`,
-        ),
-      );
-
-    socket.on("error", ignoreSocketError);
-    socket.on("close", onClose);
-    params.gateway?.disconnect();
-
-    drainTimeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      if (typeof socket.terminate !== "function") {
-        failClose();
-        return;
-      }
-      params.runtime.error?.(
-        danger(
-          `discord: startup restart waiting on a stale gateway socket for ${DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS}ms; forcing terminate before reconnect`,
-        ),
-      );
-      try {
-        socket.terminate();
-      } catch {
-        failClose();
-        return;
-      }
-      terminateCloseTimeout = setTimeout(
-        failClose,
-        DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS,
-      );
-      terminateCloseTimeout.unref?.();
-    }, DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS);
-    drainTimeout.unref?.();
-  });
-
-  if (!params.abortSignal?.aborted) {
-    params.gateway.connect(false);
-  }
 }
 
 function parseGatewayCloseCode(message: string): number | undefined {
@@ -152,7 +68,7 @@ function resolveTransportActivityAt(event: unknown): number {
 }
 
 function createGatewayStatusObserver(params: {
-  gateway?: Pick<MutableDiscordGateway, "isConnected">;
+  gateway: Pick<MutableDiscordGateway, "isConnected">;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   pushStatus: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
@@ -189,7 +105,7 @@ function createGatewayStatusObserver(params: {
         clearReadyWatch();
         return;
       }
-      if (!params.gateway?.isConnected) {
+      if (!params.gateway.isConnected) {
         return;
       }
       clearReadyWatch();
@@ -202,23 +118,14 @@ function createGatewayStatusObserver(params: {
       readyPollId.unref?.();
       readyTimeoutId = setTimeout(() => {
         clearReadyWatch();
-        if (shouldStop() || params.gateway?.isConnected) {
+        if (shouldStop() || params.gateway.isConnected) {
           return;
         }
         const at = Date.now();
         const error = new Error(
           `discord gateway opened but did not reach READY within ${params.runtimeReadyTimeoutMs}ms`,
         );
-        params.pushStatus({
-          connected: false,
-          lifecycle: "recovering",
-          lastEventAt: at,
-          lastDisconnect: {
-            at,
-            error: "runtime-not-ready",
-          },
-          lastError: "runtime-not-ready",
-        });
+        params.pushStatus(createGatewayNotReadyStatusPatch(at, "runtime-not-ready"));
         params.runtime.error?.(danger(error.message));
         triggerForceStop(error);
       }, params.runtimeReadyTimeoutMs);
@@ -287,7 +194,7 @@ function createGatewayStatusObserver(params: {
 }
 
 async function waitForGatewayReady(params: {
-  gateway?: Pick<MutableDiscordGateway, "connect" | "disconnect" | "isConnected" | "ws">;
+  gateway: Pick<MutableDiscordGateway, "connect" | "disconnect" | "isConnected">;
   abortSignal?: AbortSignal;
   beforePoll?: () => Promise<"continue" | "stop"> | "continue" | "stop";
   pushStatus?: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
@@ -301,7 +208,7 @@ async function waitForGatewayReady(params: {
       if ((await params.beforePoll?.()) === "stop") {
         return "stopped";
       }
-      if (params.gateway?.isConnected === true) {
+      if (params.gateway.isConnected) {
         const at = Date.now();
         params.pushStatus?.(createDiscordReadyStatusPatch(at));
         return "ready";
@@ -317,21 +224,12 @@ async function waitForGatewayReady(params: {
     return "stopped";
   };
 
-  if (!params.gateway) {
-    const attempt = await waitUntilReady();
-    if (attempt === "timeout") {
-      throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
-    }
-    return;
-  }
-
   let attempt = 0;
   while (!params.abortSignal?.aborted) {
     const result = await waitUntilReady();
     if (result !== "timeout") {
       return;
     }
-
     attempt += 1;
     const restartAt = Date.now();
     params.runtime.error?.(
@@ -339,25 +237,17 @@ async function waitForGatewayReady(params: {
         `discord: gateway READY wait timed out after ${params.readyTimeoutMs}ms; reconnecting with backoff (attempt ${attempt})`,
       ),
     );
-    params.pushStatus?.({
-      connected: false,
-      lifecycle: "recovering",
-      lastEventAt: restartAt,
-      lastDisconnect: {
-        at: restartAt,
-        error: "startup-not-ready",
-      },
-      lastError: "startup-not-ready",
-    });
+    params.pushStatus?.(createGatewayNotReadyStatusPatch(restartAt, "startup-not-ready"));
     await params.beforeRestart?.();
-    await restartGatewayAfterReadyTimeout({
-      gateway: params.gateway,
-      abortSignal: params.abortSignal,
-      runtime: params.runtime,
-    });
     if (params.abortSignal?.aborted) {
       return;
     }
+    // Gateway owns replacement callbacks; ws bounds the old socket's asynchronous close.
+    params.gateway.disconnect();
+    if (params.abortSignal?.aborted) {
+      return;
+    }
+    params.gateway.connect(false);
     try {
       await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal, {
         ref: false,
@@ -371,7 +261,7 @@ async function waitForGatewayReady(params: {
 
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
-  gateway?: MutableDiscordGateway;
+  gateway: MutableDiscordGateway;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   isDisallowedIntentsError: (err: unknown) => boolean;
@@ -382,11 +272,9 @@ export async function runDiscordGatewayLifecycle(params: {
   statusSink?: DiscordMonitorStatusSink;
 }) {
   const gateway = params.gateway;
-  const gatewayReadyAtLifecycleStart = gateway?.isConnected === true;
-  if (gateway) {
-    registerGateway(params.accountId, gateway);
-  }
-  const gatewayEmitter = params.gatewaySupervisor.emitter ?? getDiscordGatewayEmitter(gateway);
+  const gatewayReadyAtLifecycleStart = gateway.isConnected;
+  registerGateway(params.accountId, gateway);
+  const gatewayEmitter = params.gatewaySupervisor.emitter;
   const stopGatewayLogging = attachDiscordGatewayLogging({
     emitter: gatewayEmitter,
     runtime: params.runtime,
@@ -410,7 +298,7 @@ export async function runDiscordGatewayLifecycle(params: {
     isLifecycleStopping: () => lifecycleStopping,
     runtimeReadyTimeoutMs: gatewayRuntimeReadyTimeoutMs,
   });
-  gatewayEmitter?.on("debug", statusObserver.onGatewayDebug);
+  gatewayEmitter.on("debug", statusObserver.onGatewayDebug);
   let lastTransportActivityStatusAt: number | undefined;
   const onGatewayTransportActivity = (event: unknown) => {
     if (lifecycleStopping || params.abortSignal?.aborted) {
@@ -426,7 +314,7 @@ export async function runDiscordGatewayLifecycle(params: {
     lastTransportActivityStatusAt = at;
     pushStatus(createTransportActivityStatusPatch(at));
   };
-  gatewayEmitter?.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, onGatewayTransportActivity);
+  gatewayEmitter.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, onGatewayTransportActivity);
 
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
@@ -520,8 +408,8 @@ export async function runDiscordGatewayLifecycle(params: {
       unregisterGateway(params.accountId);
       stopGatewayLogging();
       statusObserver.dispose();
-      gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
-      gatewayEmitter?.removeListener(
+      gatewayEmitter.removeListener("debug", statusObserver.onGatewayDebug);
+      gatewayEmitter.removeListener(
         DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
         onGatewayTransportActivity,
       );

@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -27,7 +27,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     return current;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
   if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
@@ -59,8 +59,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     server: null,
     port: resolved.controlPort,
     resolved,
-    owner: "service",
-    onWarn: (message) => logService.warn(message),
   });
 
   // Extension relays listen from service start so the Chrome extension can
@@ -84,7 +82,6 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
 
-/** Stops the in-process Browser control service runtime. */
 export async function stopBrowserControlService(): Promise<void> {
   try {
     await stopBrowserControlRuntime({

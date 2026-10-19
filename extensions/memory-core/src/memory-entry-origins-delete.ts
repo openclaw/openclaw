@@ -1,8 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
+  sqliteStringSet,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryOriginDeletion } from "./memory-entry-origins-task.js";
@@ -13,7 +14,7 @@ type OriginDatabase = {
 
 /** Forget retains its supplied connection and original transaction boundary. */
 export function deleteMemoryEntryOriginsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: MemoryOriginDeletion,
   admission?: { onBegin: () => void; withCommit: (commit: () => void) => void },
 ): number {
@@ -31,9 +32,9 @@ export function deleteMemoryEntryOriginsInDatabase(
       let query = getNodeSqliteKysely<OriginDatabase>(db)
         .deleteFrom("memory_entry_origins")
         .where("agent_id", "=", params.agentId)
-        .where("entry_key", "in", params.entryKeys);
+        .where("entry_key", "in", sqliteStringSet(params.entryKeys));
       if (params.sessionIds) {
-        query = query.where("session_id", "in", params.sessionIds);
+        query = query.where("session_id", "in", sqliteStringSet(params.sessionIds));
       }
       return Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0n);
     },

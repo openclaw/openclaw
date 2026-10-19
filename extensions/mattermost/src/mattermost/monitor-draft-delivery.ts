@@ -178,7 +178,7 @@ export async function deliverMattermostReplyWithDraftPreview(
                   ...payload,
                   text: resolvedDeliveryText?.trim() ? resolvedDeliveryText : supplement.spokenText,
                 }
-              : payload.isError !== true && typeof resolvedDeliveryText === "string"
+              : payload.isError !== true && resolvedDeliveryText !== undefined
                 ? { ...payload, text: resolvedDeliveryText }
                 : payload;
         const delivered = await params.deliverPayload(deliveryPayload);

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
@@ -11,8 +11,15 @@ export type OpenClawStateLeaseContext = {
   renew?(): void;
   /** Verify that this exact owner holds a non-expired lease at this instant. */
   assertOwned(): void;
+  /** Worker-heartbeat leases can verify durable ownership without blocking the caller. */
+  assertOwnedAsync?(this: void): Promise<void>;
   /** Verify ownership using the caller's active write transaction. */
-  assertOwnedInTransaction(database: DatabaseSync): void;
+  assertOwnedInTransaction(database: EngineConnection): void;
+  /** SQLite maintenance retains authority until its managed write transaction settles. */
+  holdWriteFence?(
+    this: void,
+    database: EngineConnection,
+  ): { renew(): string | undefined } | undefined;
 };
 
 /** Ordinary runtime leases whose durable checks and renewal are awaited. */

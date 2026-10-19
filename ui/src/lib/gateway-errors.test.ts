@@ -7,15 +7,6 @@ import {
   isSetupAdmissionBusyError,
 } from "./gateway-errors.ts";
 
-function gatewayRequestError(params: { code: string; message: string; details?: unknown }): Error {
-  return Object.assign(new Error(params.message), {
-    name: "GatewayRequestError",
-    code: params.code,
-    gatewayCode: params.code,
-    details: params.details,
-  });
-}
-
 describe("gateway error helpers", () => {
   it.each([
     [isWizardNotFoundError, "INVALID_REQUEST", "WIZARD_NOT_FOUND"],
@@ -66,7 +57,7 @@ describe("gateway error helpers", () => {
   it("classifies structured read-scope failures without message parsing", () => {
     expect(
       isMissingOperatorReadScopeError(
-        gatewayRequestError({
+        new GatewayRequestError({
           code: "FORBIDDEN",
           message: "permission denied",
           details: {
@@ -82,7 +73,7 @@ describe("gateway error helpers", () => {
   it("uses the shared client's missing-scope message reader", () => {
     expect(
       isMissingOperatorReadScopeError(
-        gatewayRequestError({
+        new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "missing scope: operator.read",
         }),
@@ -93,7 +84,7 @@ describe("gateway error helpers", () => {
   it("does not treat connect authorization errors as missing read scope", () => {
     expect(
       isMissingOperatorReadScopeError(
-        gatewayRequestError({
+        new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "unauthorized",
           details: { code: "AUTH_UNAUTHORIZED" },
@@ -105,7 +96,7 @@ describe("gateway error helpers", () => {
   it("does not confuse another missing scope with operator.read", () => {
     expect(
       isMissingOperatorReadScopeError(
-        gatewayRequestError({
+        new GatewayRequestError({
           code: "FORBIDDEN",
           message: "missing scope: operator.questions",
           details: {

@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   assertStateDatabaseAccessAllowed,
   resolveGatewayStateOwnerPath,
 } from "../infra/gateway-state-owner.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  deferSqlitePostCommitPublication,
+  stageSqliteCommittedPublication,
+} from "../infra/sqlite-post-commit.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,16 +21,51 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
+    for (const release of releases.splice(0)) {
+      release();
+    }
+    vi.restoreAllMocks();
+    fs.rmSync(resolveGatewayStateOwnerPath(options.path), { force: true });
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
 );
 
+let options: { path: string };
+let marker: string;
+const releases: Array<() => void> = [];
+beforeEach(() => {
+  options = { path: path.join(tempDirs.make("state-transaction-"), "state.sqlite") };
+  marker = resolveGatewayStateOwnerPath(options.path);
+});
+
+function insertEvent(db: EngineConnection, key: string, scope = "single-statement") {
+  return db
+    .prepare(
+      "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+    )
+    .run(scope, key, "{}", 1);
+}
+
+function events(db: EngineConnection, scope = "single-statement") {
+  return db.prepare("SELECT event_key FROM diagnostic_events WHERE scope=?").all(scope);
+}
+
+function onOpen(callback: (db: EngineConnection) => void) {
+  releases.push(
+    registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind === "opened" && resolveGatewayStateOwnerPath(event.database.path) === marker) {
+        callback(event.database.db);
+      }
+    }),
+  );
+}
+
 function publishForeignSchemaOwner(databasePath: string, incomplete = false): string {
-  const marker = resolveGatewayStateOwnerPath(databasePath);
-  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+  fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
   fs.writeFileSync(
-    marker,
+    ownerPath,
     incomplete
       ? '{"pid":'
       : JSON.stringify({
@@ -37,37 +77,27 @@ function publishForeignSchemaOwner(databasePath: string, incomplete = false): st
           stateOwnerKind: "schema",
         }),
   );
-  return marker;
+  return ownerPath;
 }
 
 it.each(["unchanged schema", "future schema"] as const)(
   "joins a foreign schema owner published between cold open and the first write callback: %s",
   (schema) => {
-    const options = {
-      path: path.join(tempDirs.make("state-first-write-schema-"), "state.sqlite"),
-    };
-    const marker = resolveGatewayStateOwnerPath(options.path);
-    let opened: DatabaseSync | undefined;
+    let opened: EngineConnection | undefined;
     let foreignHeld = false;
     let injected = false;
-    const callback = vi.fn(({ db }: { db: DatabaseSync }) => {
+    const callback = vi.fn(({ db }: { db: EngineConnection }) => {
       expect(foreignHeld).toBe(false);
-      db.prepare(
-        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-      ).run("first-write", "committed-once", "{}", 1);
+      insertEvent(db, "committed-once", "first-write");
       return "written";
     });
-    const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
-      if (
-        injected ||
-        event.kind !== "opened" ||
-        resolveGatewayStateOwnerPath(event.database.path) !== marker
-      ) {
+    onOpen((db) => {
+      if (injected) {
         return;
       }
       injected = true;
-      opened = event.database.db;
-      publishForeignSchemaOwner(event.database.path);
+      opened = db;
+      publishForeignSchemaOwner(options.path);
       foreignHeld = true;
     });
     const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
@@ -82,99 +112,63 @@ it.each(["unchanged schema", "future schema"] as const)(
       foreignHeld = false;
       return "ok";
     });
-    try {
-      if (schema === "future schema") {
-        expect(() => runOpenClawStateWriteTransaction(callback, options)).toThrow(
-          /newer.*schema|schema.*newer/i,
-        );
-        expect(callback).not.toHaveBeenCalled();
-      } else {
-        expect(runOpenClawStateWriteTransaction(callback, options)).toBe("written");
-        expect(callback).toHaveBeenCalledOnce();
-      }
-      expect(wait).toHaveBeenCalledOnce();
-      using reader = new DatabaseSync(options.path, { readOnly: true });
-      expect(
-        reader.prepare("SELECT event_key FROM diagnostic_events WHERE scope='first-write'").all(),
-      ).toEqual(schema === "unchanged schema" ? [{ event_key: "committed-once" }] : []);
-    } finally {
-      unregister();
-      wait.mockRestore();
-      fs.rmSync(marker, { force: true });
+    if (schema === "future schema") {
+      expect(() => runOpenClawStateWriteTransaction(callback, options)).toThrow(
+        /newer.*schema|schema.*newer/i,
+      );
+      expect(callback).not.toHaveBeenCalled();
+    } else {
+      expect(runOpenClawStateWriteTransaction(callback, options)).toBe("written");
+      expect(callback).toHaveBeenCalledOnce();
     }
+    expect(wait).toHaveBeenCalledOnce();
+    using reader = new DatabaseSync(options.path, { readOnly: true });
+    expect(events(reader, "first-write")).toEqual(
+      schema === "unchanged schema" ? [{ event_key: "committed-once" }] : [],
+    );
   },
 );
 
 it.each([
   { phase: "cached", publication: "schema" },
-  { phase: "supplied", publication: "incomplete" },
   { phase: "entered callback", publication: "schema" },
   { phase: "failed rollback", publication: "incomplete" },
 ] as const)(
   "does not retry $publication owner refusal after $phase admission",
   ({ phase, publication }) => {
-    const options = { path: path.join(tempDirs.make("state-no-write-replay-"), "state.sqlite") };
-    const marker = resolveGatewayStateOwnerPath(options.path);
-    const existing =
-      phase === "cached" || phase === "supplied" ? openOpenClawStateDatabase(options) : undefined;
+    const existing = phase === "cached" ? openOpenClawStateDatabase(options) : undefined;
     if (existing) {
       publishForeignSchemaOwner(existing.path, publication === "incomplete");
     }
-    let restoreRollback: (() => void) | undefined;
-    const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
-      if (
-        phase !== "failed rollback" ||
-        event.kind !== "opened" ||
-        resolveGatewayStateOwnerPath(event.database.path) !== marker
-      ) {
-        return;
-      }
-      publishForeignSchemaOwner(event.database.path, publication === "incomplete");
-      const exec = event.database.db.exec.bind(event.database.db);
-      const rollback = vi.spyOn(event.database.db, "exec").mockImplementation((sql) => {
-        if (sql === "ROLLBACK") {
-          throw new Error("Synthetic rollback cleanup failure");
-        }
-        exec(sql);
+    if (phase === "failed rollback") {
+      onOpen((db) => {
+        publishForeignSchemaOwner(options.path, publication === "incomplete");
+        const exec = db.exec.bind(db);
+        vi.spyOn(db, "exec").mockImplementation((sql) => {
+          if (sql === "ROLLBACK") {
+            throw new Error("Synthetic rollback cleanup failure");
+          }
+          exec(sql);
+        });
       });
-      restoreRollback = () => rollback.mockRestore();
-    });
-    const callback = vi.fn(({ db }: { db: DatabaseSync }) => {
-      db.prepare(
-        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-      ).run("no-replay", "must-roll-back", "{}", 1);
+    }
+    const callback = vi.fn(({ db }: { db: EngineConnection }) => {
+      insertEvent(db, "must-roll-back", "no-replay");
       publishForeignSchemaOwner(options.path, publication === "incomplete");
       assertStateDatabaseAccessAllowed(options.path);
     });
     const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
       throw new Error("Unsafe transaction replay attempted");
     });
-    try {
-      expect(() =>
-        runOpenClawStateWriteTransaction(
-          callback,
-          phase === "supplied" ? { ...options, database: existing } : options,
-        ),
-      ).toThrow();
-      expect(callback).toHaveBeenCalledTimes(phase === "entered callback" ? 1 : 0);
-      expect(wait).not.toHaveBeenCalled();
-      using reader = new DatabaseSync(options.path, { readOnly: true });
-      expect(
-        reader.prepare("SELECT event_key FROM diagnostic_events WHERE scope='no-replay'").all(),
-      ).toEqual([]);
-    } finally {
-      unregister();
-      restoreRollback?.();
-      wait.mockRestore();
-      fs.rmSync(marker, { force: true });
-    }
+    expect(() => runOpenClawStateWriteTransaction(callback, options)).toThrow();
+    expect(callback).toHaveBeenCalledTimes(phase === "entered callback" ? 1 : 0);
+    expect(wait).not.toHaveBeenCalled();
+    using reader = new DatabaseSync(options.path, { readOnly: true });
+    expect(events(reader, "no-replay")).toEqual([]);
   },
 );
 
 it("refuses a savepoint in an unmanaged enclosing transaction", () => {
-  const options = {
-    path: path.join(tempDirs.make("state-unmanaged-transaction-"), "state.sqlite"),
-  };
   const database = openOpenClawStateDatabase(options);
   const callback = vi.fn();
   database.db.exec("BEGIN IMMEDIATE");
@@ -189,40 +183,98 @@ it("refuses a savepoint in an unmanaged enclosing transaction", () => {
   }
 });
 
-it.each(["cached", "supplied"] as const)(
-  "lets SQLite exclude a competing %s writer and resumes after its commit",
-  (handle) => {
-    const options = { path: path.join(tempDirs.make("state-native-contention-"), "state.sqlite") };
-    const database = openOpenClawStateDatabase(options);
-    const writeOptions = handle === "supplied" ? { ...options, database } : options;
-    const other = new DatabaseSync(database.path);
-    const write = vi.fn(() => {
-      database.db
-        .prepare(
-          "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-        )
-        .run("native-transaction", "committed", "{}", 1);
-    });
-    try {
-      other.exec("BEGIN IMMEDIATE");
-      expect(() =>
-        runOpenClawStateWriteTransaction(write, writeOptions, { busyTimeoutMs: 0 }),
-      ).toThrow(/locked|busy/i);
-      expect(write).not.toHaveBeenCalled();
-      expect(database.db.isTransaction).toBe(false);
-      other.exec("COMMIT");
-      runOpenClawStateWriteTransaction(write, writeOptions, { busyTimeoutMs: 0 });
-      expect(write).toHaveBeenCalledOnce();
-      expect(
-        other
-          .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
-          .all("native-transaction"),
-      ).toEqual([{ event_key: "committed" }]);
-    } finally {
-      if (other.isTransaction) {
-        other.exec("ROLLBACK");
-      }
-      other.close();
+it("lets SQLite exclude a competing cached writer and resumes after its commit", () => {
+  const database = openOpenClawStateDatabase(options);
+  const other = new DatabaseSync(database.path);
+  const write = vi.fn(() => insertEvent(database.db, "committed", "native-transaction"));
+  try {
+    other.exec("BEGIN IMMEDIATE");
+    expect(() => runOpenClawStateWriteTransaction(write, options, { busyTimeoutMs: 0 })).toThrow(
+      /locked|busy/i,
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(database.db.isTransaction).toBe(false);
+    other.exec("COMMIT");
+    runOpenClawStateWriteTransaction(write, options, { busyTimeoutMs: 0 });
+    expect(write).toHaveBeenCalledOnce();
+    expect(events(other, "native-transaction")).toEqual([{ event_key: "committed" }]);
+  } finally {
+    if (other.isTransaction) {
+      other.exec("ROLLBACK");
     }
-  },
-);
+    other.close();
+  }
+});
+
+it("refuses a single-statement write before its effect when shared-state admission is lost", () => {
+  const database = openOpenClawStateDatabase(options);
+  publishForeignSchemaOwner(database.path);
+  const write = vi.fn(({ db }: { db: EngineConnection }) => insertEvent(db, "refused"));
+  expect(() =>
+    runOpenClawStateWriteTransaction(write, { ...options, database }, { singleStatement: true }),
+  ).toThrow(expect.objectContaining({ name: "StateDatabaseAccessError" }));
+  expect(write).not.toHaveBeenCalled();
+  expect(database.db.isTransaction).toBe(false);
+  expect(events(database.db)).toEqual([]);
+});
+
+it("publishes a committed single statement without an envelope or replaying a failed observer", () => {
+  const database = openOpenClawStateDatabase(options);
+  using reader = new DatabaseSync(database.path, { readOnly: true });
+  const publications: string[] = [];
+  const exec = vi.spyOn(database.db, "exec");
+  const write = vi.fn(({ db }: { db: EngineConnection }) => {
+    expect(db.isTransaction).toBe(false);
+    expect(
+      stageSqliteCommittedPublication(db, {
+        installFacts: () => {
+          expect(db.isTransaction).toBe(false);
+          publications.push("facts");
+        },
+        invalidate: () => publications.push("invalidated"),
+        notify: () => {
+          expect(events(reader)).toEqual([{ event_key: "committed" }]);
+          publications.push("notified");
+        },
+      }),
+    ).toBe(true);
+    deferSqlitePostCommitPublication(db, () => {
+      publications.push("failed observer");
+      throw new Error("synthetic observer failure");
+    });
+    deferSqlitePostCommitPublication(db, () => publications.push("last observer"));
+    return insertEvent(db, "committed");
+  });
+  const result = runOpenClawStateWriteTransaction(write, options, { singleStatement: true });
+  expect(result.changes).toBe(1);
+  expect(write).toHaveBeenCalledOnce();
+  expect(publications).toEqual(["facts", "notified", "failed observer", "last observer"]);
+  expect(
+    exec.mock.calls.filter(([sql]) => /\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql)),
+  ).toEqual([]);
+});
+
+it("keeps a nested single statement and its publication subject to the outer rollback", () => {
+  const database = openOpenClawStateDatabase(options);
+  const published = vi.fn();
+  expect(() =>
+    runOpenClawStateWriteTransaction(({ db }) => {
+      runOpenClawStateWriteTransaction(
+        ({ db: nested }) => {
+          expect(nested.isTransaction).toBe(true);
+          deferSqlitePostCommitPublication(nested, published);
+          return insertEvent(nested, "rolled-back");
+        },
+        { ...options, database },
+        { singleStatement: true },
+      );
+      expect(db.isTransaction).toBe(true);
+      expect(published).not.toHaveBeenCalled();
+      expect(events(db)).toEqual([{ event_key: "rolled-back" }]);
+      throw new Error("synthetic outer rollback");
+    }, options),
+  ).toThrow("synthetic outer rollback");
+  expect(database.db.isTransaction).toBe(false);
+  expect(published).not.toHaveBeenCalled();
+  expect(events(database.db)).toEqual([]);
+});

@@ -1,10 +1,10 @@
 import type { z } from "zod";
-import type { InstallRecordBase } from "./types.installs.js";
 import type {
   HookMappingConfigInput,
   HooksGmailConfigInput,
   InternalHooksConfigInput,
 } from "./zod-schema.hooks.js";
+import type { InstallRecordBase } from "./zod-schema.installs.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
 export type HookMappingConfig = Omit<HookMappingConfigInput, "channel"> & {

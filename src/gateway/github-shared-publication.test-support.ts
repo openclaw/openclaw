@@ -6,11 +6,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { PublicationSessionIdentity } from "./github-publication-availability.js";
-import {
-  digestGitHubPublicationRequest,
-  ensureGitHubPublicationStore,
-  insertGitHubPublicationRequest,
-} from "./github-publication-store.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
+import { ensureGitHubPublicationStoreFixture } from "./github-publication-store.test-support.js";
+import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   BRANCH,
   OLD_HEAD,
@@ -48,12 +46,13 @@ export function insertSharedWorktreeReceipt(
     repositoryFingerprint?: string;
   } = {},
 ) {
-  ensureGitHubPublicationStore();
+  ensureGitHubPublicationStoreFixture();
   const session = options.session ?? sharedPublicationSession;
   const request = {
     sessionKey: session.sessionKey,
     agentId: session.agentId,
     idempotencyKey: options.idempotencyKey ?? requestId,
+    draft: false,
   };
   return runOpenClawStateWriteTransaction(({ db }) =>
     insertGitHubPublicationRequest(db, {
@@ -135,6 +134,7 @@ export function repositoryReceipt(
     identity_login: "fixture-bot",
     title: null,
     body: null,
+    draft: null,
     push_repository: "owner/repository",
     repository: "owner/repository",
     base_branch: "main",

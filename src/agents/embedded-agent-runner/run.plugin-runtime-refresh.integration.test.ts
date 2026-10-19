@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { AgentHarness } from "../harness/types.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
@@ -19,11 +20,15 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
+let PreparedModelRuntimeInitialRunAdmissionError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeInitialRunAdmissionError;
+let PreparedModelRuntimeOwnerNotPublishedError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeOwnerNotPublishedError;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let registerPreparedAgentHarness: typeof import("../harness/registry.js").registerAgentHarness;
 
 beforeAll(async () => {
   runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+  ({ PreparedModelRuntimeInitialRunAdmissionError, PreparedModelRuntimeOwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js"));
   ({ registerAgentHarness: registerPreparedAgentHarness } = await import("../harness/registry.js"));
 });
 
@@ -31,6 +36,8 @@ beforeEach(async () => {
   resetSharedRunIntegrationHarnessMocks();
   const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
@@ -40,67 +47,289 @@ afterEach(async () => {
 });
 
 describe("plugin runtime refresh admission", () => {
-  it.each([false, true])(
-    "preserves same-route delivery dedupe across refresh (media: %s)",
-    async (media) => {
-      const text = "The requested result was delivered by the original plugin generation.";
-      const mediaUrl = "https://example.test/delivered-result.png";
-      const sentTarget = {
-        tool: "message",
-        provider: "telegram",
-        to: "telegram:123",
-        ...(media ? { mediaUrls: [mediaUrl] } : { text }),
-      };
-      const payload = media ? { mediaUrl } : { text };
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        params.registerPluginRuntimeRefreshConsumer?.(() => true);
-        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-        return makeAttemptResult({
-          assistantTexts: [],
-          toolMetas: [
-            { toolName: "message", isError: false },
-            { toolName: "plugins", isError: false },
-          ],
-          didSendViaMessagingTool: true,
-          messagingToolSentTexts: media ? [] : [text],
-          messagingToolSentMediaUrls: media ? [mediaUrl] : [],
-          messagingToolSentTargets: [sentTarget],
-        });
+  it("identifies an initial runtime admission refusal before an attempt can execute", async () => {
+    const refusal = new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress",
+      { admissionBlocked: true },
+    );
+    const onAttemptStart = vi.fn();
+    mockedAcquireAgentRunPreparedModelRuntime.mockRejectedValueOnce(refusal);
+
+    const error = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+      onAttemptStart,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PreparedModelRuntimeInitialRunAdmissionError);
+    expect(error).toMatchObject({ admissionBlocked: true, cause: refusal });
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
+    expect(onAttemptStart).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a runtime refusal after committed work unqualified for initial failure delivery", async () => {
+    const refusal = new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress",
+      { admissionBlocked: true },
+    );
+    const base = await mockedAcquireAgentRunPreparedModelRuntime({
+      agentId: "main",
+      agentDir: state.agentDir(),
+      config: {},
+      workspaceDir: state.workspaceDir,
+    });
+    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+    mockedAcquireAgentRunPreparedModelRuntime
+      .mockResolvedValueOnce(base)
+      .mockRejectedValueOnce(refusal);
+    const onAttemptStart = vi.fn();
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      params.registerPluginRuntimeRefreshConsumer?.(() => true);
+      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "write", isError: false },
+          { toolName: "plugins", isError: false },
+        ],
       });
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({ assistantTexts: [payload.text ?? "The requested image is ready."] }),
-      );
-      mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
-      const onAttemptStart = vi.fn();
-      const result = await runEmbeddedAgent({
+    });
+
+    await expect(
+      runEmbeddedAgent({
         ...createOverflowRunParams(state),
-        prompt: "send the result, reload the plugin, then verify the result",
+        prompt: "write the receipt, reload the plugin, then verify the receipt",
         agentHarnessId: "openclaw",
         provider: "fixture-provider",
         model: "fixture-model",
         sessionKey: undefined,
         onAttemptStart,
+      }),
+    ).rejects.toBe(refusal);
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(2);
+    expect(onAttemptStart).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
+    const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
+    const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };
+    const settledMessages: EmbeddedRunAttemptResult["messagesSnapshot"] = [
+      buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "receipt-write",
+            name: "write",
+            arguments: { path: "receipt.txt", content: "AMBER-731" },
+          },
+        ],
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "receipt-write",
+        toolName: "write",
+        content: [{ type: "text", text: "Created receipt AMBER-731." }],
+        isError: false,
+        timestamp: 2,
+      },
+    ];
+    const refreshedMessage = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "Plugin refreshed; receipt verification remains." }],
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        messagesSnapshot: settledMessages,
+        toolMetas: [{ toolName: "write", toolCallId: "receipt-write", isError: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: Object.assign(new Error("server_overloaded: server is overloaded"), {
+            status: 503,
+            code: "server_overloaded",
+          }),
+        },
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      expect(params.continuation).toEqual({ prompt: originalPrompt, messages: settledMessages });
+      params.registerPluginRuntimeRefreshConsumer?.(() => true);
+      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      return makeAttemptResult({
+        assistantTexts: [],
+        pluginRuntimeRefreshMessages: [originalMessage, refreshedMessage],
+        toolMetas: [{ toolName: "plugins", isError: false }],
       });
-      expect(result.meta.error).toBeUndefined();
-      expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(onAttemptStart).toHaveBeenCalledTimes(2);
-      const final = await buildReplyPayloads({
-        payloads: result.payloads ?? [],
-        messagingToolSentTexts: result.messagingToolSentTexts,
-        messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-        messagingToolSentTargets: result.messagingToolSentTargets,
-        messageProvider: "telegram",
-        originatingTo: "telegram:123",
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "off",
+    });
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      expect(params.pluginRuntimeRefreshMessages).toEqual([
+        ...settledMessages,
+        originalMessage,
+        refreshedMessage,
+      ]);
+      expect(params.continuation).toBeUndefined();
+      return makeAttemptResult({ assistantTexts: ["Receipt AMBER-731 verified."] });
+    });
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      prompt: originalPrompt,
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+    });
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([true, false])(
+    "preserves separate refresh totals (CLI price known: %s)",
+    async (priced) => {
+      const cliDispatch = await import("./cli-backend-dispatch.js");
+      const terminalUsage = {
+        input: 30,
+        output: 3,
+        total: 33,
+        cost: priced ? { total: 0.2 } : undefined,
+      };
+      const dispatch = vi
+        .spyOn(cliDispatch, "runEmbeddedAgentViaCliBackendIfEligible")
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({
+          payloads: [{ text: "Receipt verified." }],
+          meta: {
+            durationMs: 1,
+            stopReason: "completed",
+            agentMeta: {
+              sessionId: "test-session",
+              provider: "cli-provider",
+              model: "cli-model",
+              contextTokens: 64_000,
+              promptTokens: 30,
+              usage: terminalUsage,
+              diagnosticUsage: {
+                input: 300,
+                output: 30,
+                total: 330,
+                cost: priced ? { total: 0.4 } : undefined,
+              },
+              lastCallUsage: terminalUsage,
+            },
+          },
+        });
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+        return makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "plugins", isError: false }],
+          attemptUsage: { input: 100, output: 10, total: 110, cost: { total: 0.1 } },
+        });
       });
-      expect(final.replyPayloads).toEqual([]);
+
+      try {
+        const result = await runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          agentHarnessId: "openclaw",
+          provider: "fixture-provider",
+          model: "fixture-model",
+          sessionKey: undefined,
+        });
+
+        expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
+        expect(result.meta.agentMeta).toMatchObject({
+          provider: "cli-provider",
+          model: "cli-model",
+          contextTokens: 64_000,
+          promptTokens: 30,
+          usage: { input: 130, output: 13, total: 143 },
+          diagnosticUsage: { input: 400, output: 40, total: 440 },
+          lastCallUsage: terminalUsage,
+        });
+        for (const [usage, expected] of [
+          [result.meta.agentMeta?.usage, 0.3],
+          [result.meta.agentMeta?.diagnosticUsage, 0.5],
+        ] as const) {
+          const cost = estimateAggregateUsageCost({
+            usage,
+            cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+          });
+          if (priced) {
+            expect(cost).toBeCloseTo(expected, 9);
+          } else {
+            expect(cost).toBeUndefined();
+          }
+        }
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      } finally {
+        dispatch.mockRestore();
+      }
     },
   );
+
+  it("preserves same-route text delivery dedupe across refresh", async () => {
+    const text = "The requested result was delivered by the original plugin generation.";
+    const sentTarget = {
+      tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+      text,
+    };
+    const payload = { text };
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      params.registerPluginRuntimeRefreshConsumer?.(() => true);
+      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "message", isError: false },
+          { toolName: "plugins", isError: false },
+        ],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: [text],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [sentTarget],
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: [text] }));
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+    const onAttemptStart = vi.fn();
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      prompt: "send the result, reload the plugin, then verify the result",
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+      onAttemptStart,
+    });
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(onAttemptStart).toHaveBeenCalledTimes(2);
+    const final = await buildReplyPayloads({
+      payloads: result.payloads ?? [],
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+      messagingToolSentTargets: result.messagingToolSentTargets,
+      messageProvider: "telegram",
+      originatingTo: "telegram:123",
+      isHeartbeat: false,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "off",
+    });
+    expect(final.replyPayloads).toEqual([]);
+  });
 
   it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
     const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -493,7 +722,7 @@ describe("plugin runtime refresh admission", () => {
       } else {
         expect(finalizer).not.toHaveBeenCalled();
         expect(result.meta.error?.message).toContain(handoffError.message);
-        expect(result.payloads).not.toContainEqual({ text: "Recovered summary" });
+        expect(result.payloads).toBeUndefined();
       }
     },
   );
@@ -501,7 +730,6 @@ describe("plugin runtime refresh admission", () => {
 
 describe("plugin runtime refresh streaming delivery", () => {
   it.each([
-    { name: "same source", otherRoute: false, toolOnly: false, mirror: false },
     { name: "another target", otherRoute: true, toolOnly: false, mirror: false },
     { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true },
     {

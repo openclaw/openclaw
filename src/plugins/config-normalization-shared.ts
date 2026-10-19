@@ -1,9 +1,15 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  filterStringEntries,
+  normalizeArrayBackedTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { DEFAULT_PLUGINS_ENABLED } from "./default-enablement.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
@@ -20,25 +26,13 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
-      hooks?: {
-        allowPromptInjection?: boolean;
-        allowConversationAccess?: boolean;
-        timeoutMs?: number;
-        timeouts?: Record<string, number>;
-      };
-      subagent?: {
-        allowModelOverride?: boolean;
-        allowedModels?: string[];
+      hooks?: SchemaContract<NonNullable<PluginEntryConfig["hooks"]>>;
+      subagent?: SchemaContract<NonNullable<PluginEntryConfig["subagent"]>> & {
         hasAllowedModelsConfig?: boolean;
       };
-      llm?: {
-        allowModelOverride?: boolean;
-        allowedModels?: string[];
+      llm?: SchemaContract<NonNullable<PluginEntryConfig["llm"]>> & {
         hasAllowedModelsConfig?: boolean;
-        allowedCompletionModels?: string[];
         hasAllowedCompletionModelsConfig?: boolean;
-        allowAuthProfileOverride?: boolean;
-        allowAgentIdOverride?: boolean;
       };
       config?: unknown;
     }
@@ -55,11 +49,8 @@ export function normalizePluginConfigList(
   value: unknown,
   normalizePluginId: NormalizePluginId,
 ): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
+  return filterStringEntries(value)
+    .map((entry) => normalizePluginId(entry))
     .filter(Boolean);
 }
 
@@ -179,16 +170,17 @@ export function normalizePluginsConfigWithResolverCore(
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
   const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
+  const resolvePolicyId = (id: string) => normalizePluginPolicyId(normalizePluginId(id));
   return {
     enabled: config?.enabled ?? DEFAULT_PLUGINS_ENABLED,
-    allow: normalizePluginConfigList(config?.allow, normalizePluginId),
-    deny: normalizePluginConfigList(config?.deny, normalizePluginId),
+    allow: normalizePluginConfigList(config?.allow, resolvePolicyId),
+    deny: normalizePluginConfigList(config?.deny, resolvePolicyId),
     loadPaths: normalizePluginConfigList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
-    entries: normalizePluginEntries(config?.entries, normalizePluginId),
+    entries: normalizePluginEntries(config?.entries, resolvePolicyId),
   };
 }
 

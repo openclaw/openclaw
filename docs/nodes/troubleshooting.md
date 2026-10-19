@@ -165,7 +165,7 @@ SSH-verified and bootstrap enrollment can approve the first surface automaticall
 Trusted-network device approval does not. Later command, capability, or permission
 expansion still needs surface approval.
 
-For approval-backed `host=node` runs, the gateway also binds execution to the prepared canonical `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
+For approval-backed `host=node` runs, the gateway also binds execution to the prepared `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
 
 ## Common node error codes
 

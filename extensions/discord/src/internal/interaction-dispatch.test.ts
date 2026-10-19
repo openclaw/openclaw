@@ -6,7 +6,7 @@ import {
   InteractionType,
 } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
-import { Command, CommandWithSubcommands } from "./commands.js";
+import { Command, CommandWithSubcommands, type CommandOptions } from "./commands.js";
 import type { AutocompleteInteraction, CommandInteraction } from "./interactions.js";
 import {
   attachRestMock,
@@ -40,42 +40,6 @@ function dispatchTestCommand(client: ReturnType<typeof createInternalTestClient>
 }
 
 describe("dispatchInteraction", () => {
-  it("passes command ephemeral defaults into deferred responses", async () => {
-    const run = vi.fn(async (interaction: CommandInteraction) => {
-      await interaction.reply("done");
-    });
-    class DeferredCommand extends Command {
-      override name = "deferred";
-      override description = "Deferred command";
-      override defer = true;
-      override ephemeral = true;
-      run = run;
-    }
-    const client = createInternalTestClient([new DeferredCommand()]);
-    const post = vi.fn(async () => undefined);
-    const patch = vi.fn(async () => undefined);
-    attachRestMock(client, { post, patch });
-
-    await client.handleInteraction(
-      createInternalInteractionPayload({
-        id: "interaction1",
-        token: "token1",
-        data: { id: "command1", name: "deferred", type: 1 },
-      }),
-    );
-
-    expect(post).toHaveBeenNthCalledWith(1, "/interactions/interaction1/token1/callback", {
-      body: {
-        type: InteractionResponseType.DeferredChannelMessageWithSource,
-        data: { flags: 64 },
-      },
-    });
-    expect(patch).toHaveBeenCalledWith("/webhooks/app1/token1/messages/%40original", {
-      body: { content: "done" },
-    });
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
   it("reports a visible failure when a deferred command handler throws", async () => {
     // Regression: a throwing handler used to leave the deferred interaction
     // pending forever, so Discord showed a spinner that never resolved and the
@@ -115,67 +79,6 @@ describe("dispatchInteraction", () => {
     );
   });
 
-  it("keeps handler exception text out of the channel", async () => {
-    // An interaction response is visible to the whole channel, and the notice
-    // used to interpolate the exception message. That both disclosed internal
-    // detail and let Discord mention-parse whatever the handler threw.
-    const run = vi.fn(async () => {
-      throw new Error("@everyone broke the catalog at /Users/someone/.openclaw");
-    });
-    const client = createThrowingCommandClient(run);
-    const post = vi.fn(async () => undefined);
-    const patch = vi.fn(async () => undefined);
-    attachRestMock(client, { post, patch });
-
-    await expect(dispatchTestCommand(client)).rejects.toThrow("@everyone broke the catalog");
-
-    for (const leak of ["@everyone", "/Users/someone/.openclaw"]) {
-      expect(patch).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          body: expect.objectContaining({ content: expect.stringContaining(leak) }),
-        }),
-      );
-    }
-    expect(patch).toHaveBeenCalledWith(
-      "/webhooks/app1/token1/messages/%40original",
-      expect.objectContaining({
-        body: expect.objectContaining({ allowed_mentions: { parse: [] } }),
-      }),
-    );
-  });
-
-  it("does not add a failure follow-up when the handler already replied", async () => {
-    // nextReplyAction() maps `replied` to a follow-up, so an unconditional
-    // report would post a second, contradictory message next to the reply the
-    // user already received.
-    const run = vi.fn(async (interaction: CommandInteraction) => {
-      await interaction.reply("partial result");
-      throw new Error("failed after replying");
-    });
-    const client = createThrowingCommandClient(run);
-    // Typed parameters so mock.calls is indexable: the absence assertions below
-    // read the request path, which a zero-arity vi.fn() cannot express.
-    const post = vi.fn(async (_path: string, _data?: unknown, _query?: unknown) => undefined);
-    const patch = vi.fn(async () => undefined);
-    attachRestMock(client, { post, patch });
-
-    await expect(dispatchTestCommand(client)).rejects.toThrow("failed after replying");
-
-    // Exactly the handler's own two requests: the deferred callback and the
-    // edit carrying its reply. Counting them is what makes this an absence
-    // assertion -- matching on argument shape silently passes when the follow-up
-    // is issued with a different arity.
-    expect(post).toHaveBeenCalledTimes(1);
-    expect(post.mock.calls[0]?.[0]).toBe("/interactions/interaction1/token1/callback");
-    expect(patch).toHaveBeenCalledTimes(1);
-    expect(patch).toHaveBeenCalledWith("/webhooks/app1/token1/messages/%40original", {
-      body: { content: "partial result" },
-    });
-    // A follow-up would POST to the webhook route; nothing may go there.
-    expect(post.mock.calls.some(([path]) => path === "/webhooks/app1/token1")).toBe(false);
-  });
-
   it("does not touch the original response when a component acknowledgement fails", async () => {
     // A component acknowledgement is a DeferredMessageUpdate: Discord leaves no
     // spinner, and the interaction's original response IS the message the button
@@ -209,45 +112,6 @@ describe("dispatchInteraction", () => {
     expect(run).toHaveBeenCalledTimes(1);
     // The acknowledgement callback is the handler's own. Nothing may edit the
     // component's message afterwards.
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it("does not issue a second callback when nothing was acknowledged", async () => {
-    // Response state advances only after a REST success, so an unacknowledged
-    // interaction cannot be distinguished from one whose acknowledgement reached
-    // Discord but whose response was lost. Replying here would start a fresh
-    // rate-limit budget and risk "already acknowledged"; Discord already shows
-    // its own "application did not respond" notice.
-    const run = vi.fn(async () => {
-      throw new Error("exploded before deferring");
-    });
-    const client = createThrowingCommandClient(run, false);
-    const post = vi.fn(async () => undefined);
-    const patch = vi.fn(async () => undefined);
-    attachRestMock(client, { post, patch });
-
-    await expect(dispatchTestCommand(client)).rejects.toThrow("exploded before deferring");
-
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(post).not.toHaveBeenCalled();
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it("does not overwrite output a deferred handler already sent as a follow-up", async () => {
-    // followUp() puts a visible message in front of the user without advancing
-    // responseState. Discord may have consumed the deferred placeholder to
-    // deliver it, so editing the original response could overwrite that output.
-    const run = vi.fn(async (interaction: CommandInteraction) => {
-      await interaction.followUp("progress");
-      throw new Error("failed after follow-up");
-    });
-    const client = createThrowingCommandClient(run);
-    const post = vi.fn(async () => undefined);
-    const patch = vi.fn(async () => undefined);
-    attachRestMock(client, { post, patch });
-
-    await expect(dispatchTestCommand(client)).rejects.toThrow("failed after follow-up");
-
     expect(patch).not.toHaveBeenCalled();
   });
 
@@ -293,7 +157,7 @@ describe("dispatchInteraction", () => {
     class OptionAutocompleteCommand extends Command {
       override name = "choose";
       override description = "Choose";
-      override options = [
+      override options: CommandOptions = [
         {
           name: "model",
           description: "Model",

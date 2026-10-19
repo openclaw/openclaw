@@ -4,16 +4,18 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import { McpServer } from "@modelcontextprotocol/server";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
+import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
+import { resetPluginLoaderTestStateForTest, writePlugin } from "../plugins/loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
@@ -36,6 +38,7 @@ import { unopenedMcpConfig } from "./agent-bundle-mcp-manager.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import {
   settleCliPreparationError,
@@ -426,42 +429,36 @@ describe("runLocalAgentCommand resource lifetime", () => {
 });
 
 describe("runLocalAgentCommand operator authority", () => {
-  it("binds local authority to the exact admitted operator run and revokes it at settlement", async () => {
-    mocks.prepare.mockResolvedValueOnce(createPrepared(true));
-    let retained: ReturnType<typeof bindActiveOperatorTurnAuthority>;
-    let capability: CronCreatorAuthorityCapability | undefined;
-
-    await runLocalAgentCommand({
-      opts: { message: "test", runId: "run-local" },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      operatorAuthority: true,
-      run: async (prepared) => {
-        capability = prepared.opts.cronCreatorAuthorityCapability;
-        retained = bindActiveOperatorTurnAuthority(prepared.runId);
-        expect(capability?.callerOrigin).toEqual({ kind: "local" });
-        expect(retained?.source).toBe("local");
-      },
-    });
-
-    expect(() => retained?.assertActive()).toThrow();
-    expect(capability?.active).toBe(false);
-  });
-
-  it("does not mint local authority for a non-owner or system run", async () => {
+  it("admits only local operator owners and revokes their authority at settlement", async () => {
     for (const testCase of [
+      { operatorAuthority: true, senderIsOwner: true },
       { operatorAuthority: true, senderIsOwner: false },
       { operatorAuthority: false, senderIsOwner: true },
     ]) {
+      const admitted = testCase.operatorAuthority && testCase.senderIsOwner;
+      let retained: ReturnType<typeof bindActiveOperatorTurnAuthority>;
+      let capability: CronCreatorAuthorityCapability | undefined;
       mocks.prepare.mockResolvedValueOnce(createPrepared(testCase.senderIsOwner));
       await runLocalAgentCommand({
         opts: { message: "test", runId: "run-local" },
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         operatorAuthority: testCase.operatorAuthority,
         run: async (prepared) => {
-          expect(prepared.opts.cronCreatorAuthorityCapability).toBeUndefined();
-          expect(bindActiveOperatorTurnAuthority(prepared.runId)).toBeUndefined();
+          capability = prepared.opts.cronCreatorAuthorityCapability;
+          retained = bindActiveOperatorTurnAuthority(prepared.runId);
+          if (admitted) {
+            expect(capability?.callerOrigin).toEqual({ kind: "local" });
+            expect(retained?.source).toBe("local");
+          } else {
+            expect(capability).toBeUndefined();
+            expect(retained).toBeUndefined();
+          }
         },
       });
+      if (admitted) {
+        expect(() => retained?.assertActive()).toThrow();
+        expect(capability?.active).toBe(false);
+      }
     }
   });
 });
@@ -492,6 +489,55 @@ it("keeps runtime memory registrations through local command preparation", async
     },
   });
 });
+it("runs on the prepared plugin registry without another registration", async () => {
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  resetGlobalHookRunner();
+  const event = `local-registration:${state.root}`;
+  const registrations: string[] = [];
+  const onRegistration = (mode: string) => registrations.push(mode);
+  const plugin = writePlugin({
+    id: "local-owner",
+    dir: state.path("local-owner"),
+    registration: [
+      `process.emit(${JSON.stringify(event)}, api.registrationMode);`,
+      'api.on("before_tool_call", async () => ({ block: true, blockReason: "local policy" }));',
+    ].join("\n"),
+  });
+  mocks.prepare.mockResolvedValueOnce({
+    ...createPrepared(false),
+    cfg: {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+        slots: { memory: "none" },
+        entries: { [plugin.id]: { enabled: true } },
+      },
+    },
+  });
+  process.on(event, onRegistration);
+  try {
+    await runLocalAgentCommand({
+      opts: { message: "test", runId: "local-registry" },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      run: async () => {
+        // Headless local runs still enforce the prepared registry's tool policy.
+        expect(await runBeforeToolCallHook({ toolName: "exec", params: {} })).toMatchObject({
+          blocked: true,
+          reason: "local policy",
+        });
+      },
+    });
+  } finally {
+    process.off(event, onRegistration);
+    vi.unstubAllEnvs();
+    resetPluginLoaderTestStateForTest();
+  }
+  expect(registrations).toEqual(["discovery"]);
+});
+
+// This suite owns LiteLLM first-request capability proof. Authored models must
+// have capabilities that differ from the bundled defaults in both merge and
+// replace modes, or the cases cannot show which source won.
 describe("agent command static capabilities", () => {
   const cases = [
     { inventory: "empty", contextTokens: 1_000_000, thinking: "medium" },

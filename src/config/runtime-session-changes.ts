@@ -11,6 +11,7 @@ function projectionConfig({
   diagnostics: _diagnostics,
   update: _update,
   telemetry: _telemetry,
+  plugins: _plugins,
   channels,
   ui,
   gateway,
@@ -22,6 +23,7 @@ function projectionConfig({
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
   const { realtime, ...talkConfig } = talk ?? {};
   const { model: _realtimeModel, ...realtimeConfig } = realtime ?? {};
+  // Plugin-derived rows follow completed catalog publications, not config reloads.
   // Channel transport settings do not affect resident rows. Keep their catalog
   // inputs, including activation that can admit bundled plugin capabilities.
   return {
@@ -51,8 +53,6 @@ function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
         Object.fromEntries(
           Object.entries(agents.entries).map(([id, entry]) => [id, withoutIdentity(entry)]),
         ),
-      // The loader's non-enumerable list is a projection when entries owns the roster.
-      list: Object.hasOwn(agents, "entries") ? undefined : agents.list?.map(withoutIdentity),
     },
   };
 }
@@ -81,4 +81,33 @@ export function runtimeSessionChangeScope(
   return isDeepStrictEqual(withoutAgentIdentities(before), withoutAgentIdentities(after))
     ? "config-profiles"
     : "config";
+}
+
+export function runtimeSessionPublicationChangeScope(params: {
+  previousRuntimeConfig: OpenClawConfig | null;
+  runtimeConfig: OpenClawConfig;
+  previousSourceConfig: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  runtimeUnchanged: boolean;
+  sourceUnchanged: boolean;
+  previousEditedInPlace: boolean;
+}): ReturnType<typeof runtimeSessionChangeScope> {
+  if (params.previousEditedInPlace) {
+    return "config";
+  }
+  const runtimeScope = params.runtimeUnchanged
+    ? "config-presentation"
+    : runtimeSessionChangeScope(params.previousRuntimeConfig, params.runtimeConfig);
+  const sourceScope = params.sourceUnchanged
+    ? "config-presentation"
+    : runtimeSessionChangeScope(
+        params.previousSourceConfig ?? params.previousRuntimeConfig,
+        params.sourceConfig ?? params.runtimeConfig,
+      );
+  if (runtimeScope === "config" || sourceScope === "config") {
+    return "config";
+  }
+  return runtimeScope === "config-profiles" || sourceScope === "config-profiles"
+    ? "config-profiles"
+    : "config-presentation";
 }

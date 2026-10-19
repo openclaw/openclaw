@@ -2,9 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
 export { isRecord } from "../../../utils.js";
 
-/**
- * Formats optional match metadata for status issue messages.
- */
 export function formatMatchMetadata(params: {
   matchKey?: unknown;
   matchSource?: unknown;
@@ -23,9 +20,6 @@ export function formatMatchMetadata(params: {
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/**
- * Appends formatted match metadata to a status issue message.
- */
 export function appendMatchMetadata(
   message: string,
   params: { matchKey?: unknown; matchSource?: unknown },
@@ -34,9 +28,6 @@ export function appendMatchMetadata(
   return meta ? `${message} (${meta})` : message;
 }
 
-/**
- * Resolves the account id for enabled, configured account snapshots.
- */
 export function resolveEnabledConfiguredAccountId(account: {
   accountId?: unknown;
   enabled?: unknown;
@@ -48,9 +39,6 @@ export function resolveEnabledConfiguredAccountId(account: {
   return enabled && configured ? accountId : null;
 }
 
-/**
- * Collects status issues only for enabled account snapshots.
- */
 export function collectIssuesForEnabledAccounts<
   T extends { accountId?: unknown; enabled?: unknown },
 >(params: {

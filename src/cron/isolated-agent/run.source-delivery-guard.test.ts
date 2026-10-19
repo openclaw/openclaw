@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -8,6 +13,7 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
+  registerAgentRunContextMock,
   resolveConfiguredModelRefMock,
   resolveCronDeliveryPlanMock,
   resolveCronSessionMock,
@@ -30,7 +36,6 @@ describe("cron source delivery policy", () => {
     { mode: "none", disabled: false, explicitTarget: false, channel: "messagechat" },
     { mode: "announce", disabled: false, explicitTarget: true, channel: "messagechat" },
     { mode: "webhook", disabled: true, explicitTarget: false, channel: undefined },
-    { mode: undefined, disabled: false, explicitTarget: true, channel: "messagechat" },
   ] as const)("runs delivery mode $mode with its prepared tool policy", async (row) => {
     resolveDeliveryTargetMock.mockResolvedValue({
       ok: true,
@@ -38,6 +43,31 @@ describe("cron source delivery policy", () => {
       to: "123",
       accountId: "acct-1",
       threadId: "thread-99",
+    });
+    const registeredRunIds = new Set<string>();
+    registerAgentRunContextMock.mockImplementation(
+      (...args: Parameters<typeof registerAgentRunContext>) => {
+        const [runId] = args;
+        registeredRunIds.add(runId);
+        expect(getAgentRunContext(runId)).toBeDefined();
+        registerAgentRunContext(...args);
+      },
+    );
+    onTestFinished(() => {
+      for (const runId of registeredRunIds) {
+        clearAgentRunContext(runId);
+      }
+      registerAgentRunContextMock.mockReset();
+    });
+    const embeddedRun = expectDefined(
+      runEmbeddedAgentMock.getMockImplementation(),
+      "embedded result",
+    );
+    runEmbeddedAgentMock.mockImplementationOnce((params) => {
+      expect(getAgentRunContext(params.runId)?.sessionEventDelivery).toBe(
+        row.mode === "none" || row.mode === "webhook" ? false : undefined,
+      );
+      return embeddedRun(params);
     });
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
@@ -47,7 +77,7 @@ describe("cron source delivery policy", () => {
         }),
       }),
     );
-    expect(result.status).toBe("ok");
+    expect(result.status, result.error).toBe("ok");
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       sourceReplyDeliveryMode: undefined,
@@ -55,6 +85,8 @@ describe("cron source delivery policy", () => {
       disableMessageTool: row.disabled,
       forceMessageTool: false,
       requireExplicitMessageTarget: row.explicitTarget,
+      // A send to the configured target never ends the job's turn on its own.
+      messageToolFinalByDefault: false,
       messageChannel: row.channel,
       ...(row.channel
         ? { messageTo: "123", agentAccountId: "acct-1", messageThreadId: "thread-99" }
@@ -69,14 +101,21 @@ describe("cron source delivery policy", () => {
         messageToolAvailable: false,
         deliveryRequested: true,
         resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
-        sourceDelivery: createSourceDeliveryPlan({
+        sourceDelivery: {
           owner: "message_tool_then_direct_fallback",
           reason: "cron_announce",
           target: { channel: "messagechat", to: "123" },
-          messageToolEnabled: true,
-          messageToolForced: true,
-          directFallback: true,
-        }),
+          normalFinal: "private",
+          sourceReplyDeliveryMode: "message_tool_only",
+          messageTool: {
+            enabled: true,
+            force: true,
+            requireExplicitTarget: false,
+            requireExplicitTargetEvidence: false,
+            finalByDefault: true,
+          },
+          fallback: { directDelivery: true, skipWhenMessageToolSentToTarget: true },
+        },
       }),
     ).toThrow("Cron source delivery requires the message tool");
   });

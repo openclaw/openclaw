@@ -3,9 +3,11 @@ import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -22,12 +24,13 @@ import {
   type Verdict,
 } from "../protocol/index.js";
 import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
-import { ReefChannelConfigSchema } from "./config-schema.js";
-import { sameReefPeerIdentity, type ReefPeerIdentity, type ReefPeerTrust } from "./friend-types.js";
+import { openReefAuditStore } from "./audit-state.js";
+import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
+import type { ReefPeerTrust } from "./friend-types.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
-import type { ReefTrustStore } from "./trust-store.js";
-import type { ReefKeys, ReefRejectionNoticeState } from "./types.js";
+import { openReefTrustStore } from "./trust-store.js";
+import type { ReefKeys } from "./types.js";
 
 const model = "mock-2026-07-12";
 const stateDirs: string[] = [];
@@ -41,7 +44,7 @@ export async function resetFlowStoresForTests(): Promise<void> {
   }
 }
 
-export function flowStores(deliveredMaxEntries?: number) {
+export function flowStores(deliveredMaxEntries?: number, reviewsMaxEntries?: number) {
   const stateDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "reef-flow-"));
   stateDirs.push(stateDir);
   const runtime = createPluginRuntimeMock();
@@ -55,14 +58,40 @@ export function flowStores(deliveredMaxEntries?: number) {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
+    createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
+      authority ?? { assertCurrent() {} },
+    );
   return {
     runtime,
     stateDir,
-    reviews: new ReviewApprovalStore(runtime),
+    reviews: new ReviewApprovalStore(runtime, reviewsMaxEntries),
     delivered:
       deliveredMaxEntries === undefined
         ? new ReefDeliveredStore(runtime)
         : new ReefDeliveredStore(runtime, deliveredMaxEntries),
+  };
+}
+
+export async function workerFlowStores(
+  cfg: ReefChannelConfig,
+  peers: Record<string, ReefPeerTrust>,
+  options: { deliveredMaxEntries?: number } = {},
+) {
+  const stores = flowStores(options.deliveredMaxEntries);
+  const trusted = openReefTrustStore(stores.runtime, cfg);
+  for (const [peer, value] of Object.entries(peers)) {
+    await trusted.set(peer, value);
+  }
+  return {
+    ...stores,
+    trusted,
+    audit: openReefAuditStore(stores.runtime, new Uint8Array(32).fill(10)),
   };
 }
 
@@ -76,8 +105,10 @@ export const allow: Verdict = {
 
 export function guard(
   ...verdicts: Verdict[]
-): GuardAdapter & { classify: ReturnType<typeof vi.fn> } {
-  const classify = vi.fn(async () => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!);
+): GuardAdapter & { classify: ReturnType<typeof vi.fn<GuardAdapter["classify"]>> } {
+  const classify = vi.fn<GuardAdapter["classify"]>(
+    async (): Promise<Verdict> => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!,
+  );
   return { providerId: "mock", pinnedModel: model, classify };
 }
 
@@ -116,154 +147,6 @@ export function peerTrust(
     safetyNumberChanged: false,
     approvedAt: 1,
     ...overrides,
-  };
-}
-
-export function trust(initial: Record<string, ReefPeerTrust>) {
-  const values = new Map(Object.entries(initial));
-  const deliveries = new Map<
-    string,
-    {
-      bodyHash: string;
-      textHash?: string;
-      recipient: ReefPeerIdentity;
-      resendDisabled?: true;
-      overdueNotifiedAt?: number;
-      rejection?: {
-        category?: string;
-        notice?: ReefRejectionNoticeState;
-      };
-    }
-  >();
-  const rejectionNotices = new Map<string, ReefRejectionNoticeState>();
-  return {
-    values,
-    deliveries,
-    rejectionNotices,
-    store: {
-      get: (peer: string) => values.get(peer),
-      recordOutboundDelivery: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-        options: { resendDisabled?: true } = {},
-      ) => {
-        const key = `${peer}:${id}`;
-        if (deliveries.has(key)) {
-          throw new Error(`duplicate delivery ${id}`);
-        }
-        deliveries.set(key, { ...binding, ...options });
-      },
-      outboundDelivery: (peer: string, id: string) => deliveries.get(`${peer}:${id}`),
-      consumeOutboundDelivery: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (
-          current?.bodyHash !== binding.bodyHash ||
-          current.textHash !== binding.textHash ||
-          !sameReefPeerIdentity(current.recipient, binding.recipient) ||
-          current.rejection
-        ) {
-          return false;
-        }
-        return deliveries.delete(key);
-      },
-      discardOutboundDelivery: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (
-          current?.bodyHash !== binding.bodyHash ||
-          current.textHash !== binding.textHash ||
-          !sameReefPeerIdentity(current.recipient, binding.recipient)
-        ) {
-          return false;
-        }
-        return deliveries.delete(key);
-      },
-      recordOutboundRejection: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-        category?: string,
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (
-          current?.bodyHash !== binding.bodyHash ||
-          current.textHash !== binding.textHash ||
-          !sameReefPeerIdentity(current.recipient, binding.recipient)
-        ) {
-          return false;
-        }
-        if (current.rejection) {
-          return true;
-        }
-        deliveries.set(key, {
-          ...current,
-          rejection: {
-            ...(category ? { category } : {}),
-            ...(current.resendDisabled ? { notice: { lastRejectionAt: Date.now() } } : {}),
-          },
-        });
-        return true;
-      },
-      reserveOutboundRejectionNotice: (
-        peer: string,
-        id: string,
-        recipient: ReefPeerIdentity,
-        noticeState: ReefRejectionNoticeState,
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (!current?.rejection || !sameReefPeerIdentity(current.recipient, recipient)) {
-          throw new Error(`missing rejection ${id}`);
-        }
-        if (current.rejection.notice) {
-          return { kind: "existing" as const, state: current.rejection.notice };
-        }
-        deliveries.set(key, {
-          ...current,
-          rejection: {
-            ...current.rejection,
-            notice: noticeState,
-          },
-        });
-        return { kind: "reserved" as const };
-      },
-      completeOutboundRejection: (
-        peer: string,
-        id: string,
-        noticeState: ReefRejectionNoticeState,
-      ) => {
-        const key = `${peer}:${id}`;
-        const previous = rejectionNotices.get(peer);
-        rejectionNotices.set(peer, {
-          lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, noticeState.lastRejectionAt),
-          ...(previous?.lastResendAt !== undefined || noticeState.lastResendAt !== undefined
-            ? {
-                lastResendAt: Math.max(previous?.lastResendAt ?? 0, noticeState.lastResendAt ?? 0),
-              }
-            : {}),
-        });
-        const current = deliveries.get(key);
-        if (!current) {
-          return true;
-        }
-        if (!current?.rejection?.notice) {
-          return false;
-        }
-        return deliveries.delete(key);
-      },
-      rejectionNoticeState: (peer: string) => rejectionNotices.get(peer),
-    } as unknown as ReefTrustStore,
   };
 }
 

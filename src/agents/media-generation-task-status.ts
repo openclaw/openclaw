@@ -58,6 +58,8 @@ export async function buildMediaTaskRuntimeContext(params: {
   capabilityToolNames: ReadonlySet<string>;
   sessionKey?: string;
   agentId: string;
+  /** Retained carriers need explicit empty snapshots to supersede older facts. */
+  includeEmptySnapshots?: boolean;
 }): Promise<string | undefined> {
   const sections = [
     ["image_generate", IMAGE_GENERATION_TASK_KIND],
@@ -70,14 +72,14 @@ export async function buildMediaTaskRuntimeContext(params: {
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const tasks = sessionKey ? listMediaGenerationOperations(sessionKey, params.agentId) : [];
-  const facts = enabled.map(
-    ([tool, taskKind]) =>
-      buildActiveMediaGenerationTaskPromptContext({
-        tasks,
-        agentId: params.agentId,
-        taskKind,
-        sourcePrefix: tool,
-      }) ?? `- tool=${tool}; none`,
-  );
-  return ["## Media Generation Tasks", ...facts].join("\n");
+  const facts = enabled.flatMap(([tool, taskKind]) => {
+    const text = buildActiveMediaGenerationTaskPromptContext({
+      tasks,
+      agentId: params.agentId,
+      taskKind,
+      sourcePrefix: tool,
+    });
+    return text ? [text] : params.includeEmptySnapshots ? [`- tool=${tool}; none`] : [];
+  });
+  return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
 }

@@ -5,17 +5,13 @@ import type {
   AgentHarnessV2,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveSandboxContext as defaultResolveSandboxContext,
-  runAgentEndSideEffects,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runAgentEndSideEffectsAsync } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { OnAssistantDeltaPayload } from "./event-bridge.js";
 import type { CopilotHooksConfig } from "./hooks-bridge.js";
 import type { CopilotPermissionPolicy } from "./permission-bridge.js";
 import type { CopilotModelProviderInput as ModelRef } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
-import type { createCopilotToolBridge } from "./tool-bridge.js";
 export const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
 export const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
 export const COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE =
@@ -47,47 +43,7 @@ export function withPromptFailure(terminal: AttemptTerminal, error: unknown): At
     ? { ...terminal, failure: { source: "prompt", error } }
     : { kind: "failed", source: "prompt", error };
 }
-export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
-export type CopilotSessionConfig = Pick<
-  SessionConfig,
-  | "availableTools"
-  | "coauthorEnabled"
-  | "customAgents"
-  | "customAgentsLocalOnly"
-  | "embeddingCacheStorage"
-  | "enableConfigDiscovery"
-  | "enableFileHooks"
-  | "enableHostGitOperations"
-  | "enableOnDemandInstructionDiscovery"
-  | "enableSessionStore"
-  | "enableSkills"
-  | "enableSessionTelemetry"
-  | "excludedTools"
-  | "gitHubToken"
-  | "hooks"
-  | "includeSubAgentStreamingEvents"
-  | "instructionDirectories"
-  | "infiniteSessions"
-  | "manageScheduleEnabled"
-  | "mcpOAuthTokenStorage"
-  | "mcpServers"
-  | "memory"
-  | "model"
-  | "onPermissionRequest"
-  | "onUserInputRequest"
-  | "pluginDirectories"
-  | "provider"
-  | "reasoningEffort"
-  | "remoteSession"
-  | "requestCanvasRenderer"
-  | "requestExtensions"
-  | "skipCustomInstructions"
-  | "skipEmbeddingRetrieval"
-  | "skillDirectories"
-  | "systemMessage"
-  | "tools"
-  | "workingDirectory"
->;
+export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> & {
   hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"];
   auth?: {
@@ -141,19 +97,14 @@ export type ModelRefInputObject = {
   contextWindow?: number;
   maxTokens?: number;
 };
-type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 export interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   operation?: CopilotAttemptOperation;
-  now?: () => number;
-  createToolBridge?: typeof createCopilotToolBridge;
-  isHostScopedToolActive?: (toolName: string) => boolean;
-  resolveSandboxContextOverride?: ResolveSandboxContextFn;
   onSessionEstablished?: (info: {
-    compactionSessionConfig?: CopilotSessionConfig;
+    compactionSessionConfig?: SessionConfig;
     sdkSessionId: string;
     pooledClient: PooledClient;
-    sessionConfig: CopilotSessionConfig;
+    sessionConfig: SessionConfig;
   }) => void | Promise<void>;
   onDeferredCompaction?: (info: {
     abort: () => void;

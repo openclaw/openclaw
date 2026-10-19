@@ -22,8 +22,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: () => ({ session: { store: undefined } }),
 }));
-vi.mock("../../../config/sessions.js", () => ({
-  resolveAgentIdFromSessionKey: () => "main",
+// mock-isolation: Recovery owns worker-backed session facts; isolate the store locator.
+vi.mock("../../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: () => mocks.storePath,
 }));
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
@@ -57,10 +58,12 @@ vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
 const childSessionKey = "agent:main:subagent:restart-child";
 const dispatchAgent = vi.fn();
 const gatewayRuntime: GatewayRecoveryRuntime = {
+  prepareRestartRecovery: () => undefined,
   dispatchSessionMethod: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(),
   sendRecoveryNotice: vi.fn(),
+  resumeChatInput: vi.fn(),
 };
 const warn = vi.fn();
 
@@ -68,6 +71,7 @@ function run(overrides: Partial<SubagentRunRecordOverrides> = {}): SubagentRunRe
   return createSubagentRunRecord({
     runId: "original-run",
     childSessionKey,
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     requesterOrigin: { channel: "qa-channel", to: "qa-requester", accountId: "default" },
@@ -107,6 +111,7 @@ export const restartRecoveryTestHarness = {
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "session-id",
+        lifecycleRevision: "session-revision",
         updatedAt: Date.now(),
         abortedLastRun: true,
       },

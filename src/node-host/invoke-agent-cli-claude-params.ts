@@ -107,22 +107,23 @@ const CLEAR_ENV_ALLOWLIST = new Set([
   "OTEL_TRACES_EXPORTER",
 ]);
 
-export type ClaudeCliNodeRunParams = {
-  /** Opt-in to the negotiated invocation-owned resource and Workshop duplex. */
-  skillRuntime?: true;
-  argv: string[];
-  stdin?: string;
-  cwd?: string;
-  env?: Record<string, string>;
-  clearEnv?: string[];
-  systemPrompt?: string;
-  agentId?: string;
-  sessionKey?: string;
-  approvalDecision?: "allow-once" | "allow-always";
-  systemRunPlan?: SystemRunApprovalPlan;
-  idleTimeoutMs: number;
-  timeoutMs: number;
-};
+const ALLOWED_PARAMS = new Set([
+  "argv",
+  "stdin",
+  "cwd",
+  "env",
+  "clearEnv",
+  "systemPrompt",
+  "agentId",
+  "sessionKey",
+  "approvalDecision",
+  "systemRunPlan",
+  "idleTimeoutMs",
+  "timeoutMs",
+  "skillRuntime",
+]);
+
+export type ClaudeCliNodeRunParams = Awaited<ReturnType<typeof decodeClaudeCliNodeRunParams>>;
 
 export type ClaudeCliNodeRunResult = {
   exitCode: number;
@@ -136,6 +137,14 @@ function requireBoundedString(value: unknown, label: string, maxBytes: number): 
     throw new Error(`INVALID_REQUEST: ${label} must be a bounded string`);
   }
   return value;
+}
+
+function optionalBoundedString(
+  value: unknown,
+  label: string,
+  maxBytes: number,
+): string | undefined {
+  return value === undefined ? undefined : requireBoundedString(value, label, maxBytes);
 }
 
 /** Claude CLI session ids are bounded, non-option argv values. */
@@ -198,9 +207,7 @@ export function requestsClaudeNodeSkillRuntime(raw?: string | null): boolean {
 }
 
 /** Resource bytes use the negotiated duplex, never argv or node filesystem paths. */
-export async function decodeClaudeCliNodeRunParams(
-  raw?: string | null,
-): Promise<ClaudeCliNodeRunParams> {
+export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   if (Buffer.byteLength(raw ?? "", "utf8") > MAX_REQUEST_BYTES) {
     throw new Error("INVALID_REQUEST: Claude CLI request is too large");
   }
@@ -208,22 +215,7 @@ export async function decodeClaudeCliNodeRunParams(
   if (!value) {
     throw new Error("INVALID_REQUEST: Claude CLI params must be an object");
   }
-  const allowed = new Set([
-    "argv",
-    "stdin",
-    "cwd",
-    "env",
-    "clearEnv",
-    "systemPrompt",
-    "agentId",
-    "sessionKey",
-    "approvalDecision",
-    "systemRunPlan",
-    "idleTimeoutMs",
-    "timeoutMs",
-    "skillRuntime",
-  ]);
-  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  const unknown = Object.keys(value).find((key) => !ALLOWED_PARAMS.has(key));
   if (unknown) {
     throw new Error(`INVALID_REQUEST: unknown Claude CLI parameter: ${unknown}`);
   }
@@ -231,23 +223,11 @@ export async function decodeClaudeCliNodeRunParams(
   if (value.skillRuntime !== undefined && value.skillRuntime !== true) {
     throw new Error("INVALID_REQUEST: skillRuntime must be true when supplied");
   }
-  const stdin =
-    value.stdin === undefined
-      ? undefined
-      : requireBoundedString(value.stdin, "stdin", MAX_REQUEST_BYTES);
-  const systemPrompt =
-    value.systemPrompt === undefined
-      ? undefined
-      : requireBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
-  const agentId =
-    value.agentId === undefined
-      ? undefined
-      : requireBoundedString(value.agentId, "agentId", MAX_ARG_BYTES);
-  const sessionKey =
-    value.sessionKey === undefined
-      ? undefined
-      : requireBoundedString(value.sessionKey, "sessionKey", MAX_ARG_BYTES);
-  const approvalDecision =
+  const stdin = optionalBoundedString(value.stdin, "stdin", MAX_REQUEST_BYTES);
+  const systemPrompt = optionalBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
+  const agentId = optionalBoundedString(value.agentId, "agentId", MAX_ARG_BYTES);
+  const sessionKey = optionalBoundedString(value.sessionKey, "sessionKey", MAX_ARG_BYTES);
+  const approvalDecision: "allow-once" | "allow-always" | undefined =
     value.approvalDecision === "allow-once" || value.approvalDecision === "allow-always"
       ? value.approvalDecision
       : undefined;
@@ -259,8 +239,7 @@ export async function decodeClaudeCliNodeRunParams(
   if (value.systemRunPlan !== undefined && !systemRunPlan) {
     throw new Error("INVALID_REQUEST: systemRunPlan must be an object");
   }
-  const cwd =
-    value.cwd === undefined ? undefined : requireBoundedString(value.cwd, "cwd", MAX_ARG_BYTES);
+  const cwd = optionalBoundedString(value.cwd, "cwd", MAX_ARG_BYTES);
   if (cwd) {
     const stat = await fs.stat(cwd).catch(() => undefined);
     if (!stat?.isDirectory()) {

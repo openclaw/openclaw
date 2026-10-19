@@ -17,7 +17,7 @@ scenario:
     - docs/channels/group-messages.md
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
-    - extensions/qa-lab/src/runtime-api.ts
+    - extensions/qa-lab/runtime-api.ts
   execution:
     kind: flow
     summary: Assert portable top-level reply shape while native adapters normalize transport relations.

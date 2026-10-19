@@ -31,10 +31,11 @@ import {
 import { createMeetingRuntimeFacade } from "./runtime-facade.js";
 import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
 import { createMeetingRuntimeSetup } from "./runtime-setup.js";
-import type {
-  MeetingBrowserHealth,
-  MeetingTranscriptLine,
-  MeetingTranscriptSnapshot,
+import {
+  meetingCaptionSourceSchema,
+  type MeetingBrowserHealth,
+  type MeetingTranscriptLine,
+  type MeetingTranscriptSnapshot,
 } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -81,14 +82,6 @@ function browserResultString(result: unknown): string | undefined {
 const optionalBrowserString = z.string().optional().catch(undefined);
 const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
 const optionalBrowserNumber = z.number().optional().catch(undefined);
-const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
-const meetingCaptionSourceSchema = z.object({
-  id: z.string().min(1).max(512),
-  epoch: z.string().min(1).max(512),
-  revision: z.string().min(1).max(128),
-  finalized: z.boolean(),
-  ownEcho: z.boolean().optional(),
-});
 const meetingTranscriptLineSchema = z
   .object({
     at: optionalBrowserString,
@@ -104,15 +97,15 @@ const meetingTranscriptLineSchema = z
   }));
 
 const meetingTranscriptLinesSchema = z
-  .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+  .array(meetingTranscriptLineSchema.nullable().catch(null))
   .transform((lines) => lines.filter((line) => line !== null));
 
 const meetingCaptionLinesSchema = z
   .array(
-    z.union([
-      meetingTranscriptLineSchema.and(z.object({ source: z.unknown().optional() })),
-      invalidBrowserArrayItemSchema,
-    ]),
+    meetingTranscriptLineSchema
+      .and(z.object({ source: z.unknown().optional() }))
+      .nullable()
+      .catch(null),
   )
   .transform((lines) => lines.filter((line) => line !== null));
 
@@ -140,7 +133,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   url: optionalBrowserString,
   title: optionalBrowserString,
   notes: z
-    .array(z.union([z.string(), invalidBrowserArrayItemSchema]))
+    .array(z.string().nullable().catch(null))
     .transform((notes) => notes.filter((note) => note !== null))
     .optional()
     .catch(undefined),
@@ -256,14 +249,7 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
   if (!parsed || typeof parsed !== "object") {
     throw new Error(options.invalidTranscriptMessage);
   }
-  const payload = parsed as {
-    droppedLines?: unknown;
-    epoch?: unknown;
-    lines?: unknown;
-    pendingLines?: unknown;
-    sessionMatched?: unknown;
-    urlMatched?: unknown;
-  };
+  const payload = parsed as Record<string, unknown>;
   const droppedLines =
     typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
       ? Math.max(0, payload.droppedLines)

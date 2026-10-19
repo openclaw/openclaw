@@ -1,4 +1,3 @@
-// Public speech helpers for bundled or third-party plugins.
 //
 // Keep this surface provider-facing: types, validation, directive parsing, and
 // registry helpers. Runtime synthesis lives on `api.runtime.tts` or narrower
@@ -11,57 +10,27 @@ export type {
   SpeechListVoicesRequest,
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
-  SpeechProviderConfiguredContext,
-  SpeechProviderPreparedSynthesis,
-  SpeechProviderPrepareSynthesisContext,
-  SpeechProviderResolveConfigContext,
-  SpeechProviderResolveTalkConfigContext,
-  SpeechProviderResolveTalkOverridesContext,
   SpeechProviderOverrides,
   SpeechSynthesisRequest,
-  SpeechSynthesisStreamRequest,
-  SpeechSynthesisStreamResult,
   SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,
   TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
 } from "../tts/provider-types.js";
 
 export { parseTtsDirectives } from "../tts/directives.js";
-export {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
-  normalizeSpeechProviderId,
-} from "../tts/provider-registry.js";
-export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
+export { getSpeechProvider } from "../tts/provider-registry.js";
 // Public compatibility: preserve the established `asObject` export name.
 export { asOptionalRecord as asObject } from "@openclaw/normalization-core/record-coerce";
-export {
-  asBoolean,
-  asFiniteNumber,
-  assertOkOrThrowProviderError,
-  createProviderHttpError,
-  extractProviderErrorDetail,
-  extractProviderRequestId,
-  formatProviderHttpErrorMessage,
-  formatProviderErrorPayload,
-  readResponseTextLimited,
-  trimToUndefined,
-  truncateErrorDetail,
-} from "../agents/provider-http-errors.js";
+export { asBoolean, asFiniteNumber, trimToUndefined } from "../agents/provider-http-errors.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { readResponseTextLimited } from "../agents/provider-http-errors.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { truncateErrorDetail } from "../agents/provider-http-errors.js";
 export {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
-  scheduleCleanup,
 } from "../tts/tts-provider-helpers.js";
-export {
-  createOpenAiCompatibleSpeechProvider,
-  type OpenAiCompatibleSpeechProviderBaseUrlPolicy,
-  type OpenAiCompatibleSpeechProviderConfig,
-  type OpenAiCompatibleSpeechProviderExtraJsonBodyField,
-  type OpenAiCompatibleSpeechProviderOptions,
-} from "../tts/openai-compatible-speech-provider.js";
+export { createOpenAiCompatibleSpeechProvider } from "../tts/openai-compatible-speech-provider.js";

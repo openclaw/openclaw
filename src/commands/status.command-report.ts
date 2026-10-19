@@ -1,91 +1,184 @@
+import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { resolveOsSummary } from "../infra/os-summary.js";
+import type { SecurityAuditReport } from "../security/audit.js";
+import { readBackupRunFreshness } from "../state/backup-run-records.js";
+import {
+  buildStatusChannelsTableRows,
+  statusChannelsTableColumns,
+} from "./status-all/channels-table.js";
 import { statusOverviewTableColumns } from "./status-all/report-tables.js";
 import { appendStatusReportLines, appendStatusReportTable } from "./status-all/text-report.js";
+import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
+import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
+import {
+  buildStatusFooterLines,
+  buildStatusHealthRows,
+  buildStatusModelSelectionLines,
+  buildStatusPairingRecoveryLines,
+  buildStatusPluginCompatibilityLines,
+  buildStatusSecurityAuditLines,
+  buildStatusSessionsRows,
+  buildStatusSystemEventsRows,
+  buildStatusSystemEventsTrailer,
+  statusHealthColumns,
+} from "./status.command-sections.js";
+import type { StatusScanResult } from "./status.scan-result.ts";
+import { formatUpdateAvailableHint } from "./status.update.js";
+import { shortenText } from "./text-format.js";
 
-export async function buildStatusCommandReportLines(params: {
-  width: number;
-  overviewRows: Array<{ Item: string; Value: string }>;
-  pluginCompatibilityLines: string[];
-  pairingRecoveryLines: string[];
-  modelSelectionLines: string[];
-  securityAuditLines: string[];
-  channelsColumns: readonly TableColumn[];
-  channelsRows: Array<Record<string, string>>;
-  sessionsColumns: readonly TableColumn[];
-  sessionsRows: Array<Record<string, string>>;
-  systemEventsRows?: Array<Record<string, string>>;
-  systemEventsTrailer?: string | null;
-  healthColumns?: readonly TableColumn[];
-  healthRows?: Array<Record<string, string>>;
-  usageLines?: string[];
-  footerLines: string[];
-}) {
+export async function buildStatusCommandReportLines(
+  input: Omit<
+    Parameters<typeof buildStatusCommandOverviewRows>[0],
+    "backupFreshness" | "osLabel"
+  > & {
+    publish?: StatusScanResult["publish"];
+    opts: { deep?: boolean; verbose?: boolean };
+    osSummary: ReturnType<typeof resolveOsSummary>;
+    securityAudit?: SecurityAuditReport;
+    usageLines?: string[];
+    channels: {
+      rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
+    };
+    channelIssues: Array<
+      Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]
+    >;
+    pairingRecovery: {
+      requestId: string | null;
+      reason: ConnectPairingRequiredReason | null;
+      remediationHint: string | null;
+    } | null;
+    tableWidth: number;
+  },
+) {
+  const databaseEngines = await resolveStatusDatabaseEngines(
+    input.surface.cfg,
+    input.summary.databaseStores,
+  );
+  const backupFreshness = await readBackupRunFreshness(input.env);
+  const published = input.publish?.();
+  const params = {
+    ...input,
+    ...published,
+    surface: { ...input.surface, ...published, databaseEngines },
+  };
+  const overviewRows = buildStatusCommandOverviewRows({
+    ...params,
+    backupFreshness,
+    osLabel: params.osSummary.label,
+  });
+
+  const sessionsColumns = [
+    { key: "Key", header: "Key", minWidth: 20, flex: true },
+    { key: "Kind", header: "Kind", minWidth: 6 },
+    { key: "Age", header: "Age", minWidth: 9 },
+    { key: "Model", header: "Model", minWidth: 14 },
+    { key: "Runtime", header: "Runtime", minWidth: 14 },
+    { key: "Tokens", header: "Tokens", minWidth: 16 },
+    // Verbose mode exposes prompt-cache details because it can widen rows substantially.
+    ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
+  ] satisfies TableColumn[];
+  const securityAuditLines = params.securityAudit
+    ? buildStatusSecurityAuditLines({
+        securityAudit: params.securityAudit,
+      })
+    : [
+        theme.muted(
+          `Skipped in fast status. Full report: ${formatCliCommand("openclaw security audit")}`,
+        ),
+        theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
+      ];
+  const width = params.tableWidth;
+  const pluginCompatibilityLines = buildStatusPluginCompatibilityLines({
+    notices: params.pluginCompatibility,
+  });
+  const pairingRecoveryLines = buildStatusPairingRecoveryLines({
+    pairingRecovery: params.pairingRecovery,
+  });
+  const modelSelectionLines = buildStatusModelSelectionLines({
+    recent: params.summary.sessions.recent,
+  });
+  const channelsColumns = statusChannelsTableColumns;
+  const channelsRows = buildStatusChannelsTableRows({
+    rows: params.channels.rows,
+    channelIssues: params.channelIssues,
+    ok: theme.success,
+    warn: theme.warn,
+    muted: theme.muted,
+    accentDim: theme.accentDim,
+    formatIssueMessage: (message) => shortenText(message, 84),
+  });
+  const sessionsRows = buildStatusSessionsRows({
+    recent: params.summary.sessions.recent,
+    verbose: params.opts.verbose,
+  });
+  const systemEventsRows = buildStatusSystemEventsRows({
+    queuedSystemEvents: params.summary.queuedSystemEvents,
+  });
+  const systemEventsTrailer = buildStatusSystemEventsTrailer({
+    queuedSystemEvents: params.summary.queuedSystemEvents,
+  });
+  const healthColumns = params.health ? statusHealthColumns : undefined;
+  const healthRows = params.health
+    ? buildStatusHealthRows({
+        health: params.health,
+        sqliteWal: params.summary.sqliteWal,
+      })
+    : undefined;
+  const usageLines = params.usageLines;
+  const footerLines = buildStatusFooterLines({
+    updateHint: formatUpdateAvailableHint(params.surface.update),
+    nodeOnlyGateway: params.surface.nodeOnlyGateway,
+    gatewayReachable: params.surface.gatewayReachable,
+    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
+  });
+
   const lines: string[] = [];
   lines.push(theme.heading("OpenClaw status"));
 
   const report = {
     lines,
     heading: theme.heading,
-    width: params.width,
+    width,
   };
-  // Prepare callbacks and column snapshots before rendering any table, as one report view.
-  const overviewColumns = [...statusOverviewTableColumns];
-  const overviewRows = params.overviewRows;
-  const pluginCompatibilityLines = params.pluginCompatibilityLines;
-  const pairingRecoveryLines =
-    params.pairingRecoveryLines.length > 0 ? ["", ...params.pairingRecoveryLines] : [];
-  const modelSelectionLines = params.modelSelectionLines;
-  const securityAuditLines = params.securityAuditLines;
-  const channelsMessage =
-    params.channelsRows.length === 0 ? theme.muted("No channels configured") : undefined;
-  const channelsColumns = channelsMessage === undefined ? [...params.channelsColumns] : [];
-  const channelsRows = channelsMessage === undefined ? params.channelsRows : [];
-  const sessionsMessage = params.sessionsRows.length === 0 ? theme.muted("No sessions") : undefined;
-  const sessionsColumns = sessionsMessage === undefined ? [...params.sessionsColumns] : [];
-  const sessionsRows = sessionsMessage === undefined ? params.sessionsRows : [];
-  const systemEventsColumns = [{ key: "Event", header: "Event", flex: true, minWidth: 24 }];
-  const systemEventsRows = params.systemEventsRows ?? [];
-  const systemEventsTrailer = params.systemEventsTrailer;
-  const healthColumns = [...(params.healthColumns ?? [])];
-  const healthRows = params.healthRows ?? [];
-  const usageLines = params.usageLines ?? [];
-  const footerLines = ["", ...params.footerLines];
-
-  appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+  appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], overviewRows);
   if (pluginCompatibilityLines.length > 0) {
     appendStatusReportLines(report, "Plugin compatibility", pluginCompatibilityLines);
   }
-  lines.push(...pairingRecoveryLines);
+  if (pairingRecoveryLines.length > 0) {
+    lines.push("", ...pairingRecoveryLines);
+  }
   if (modelSelectionLines.length > 0) {
     appendStatusReportLines(report, "Model selection", modelSelectionLines);
   }
   appendStatusReportLines(report, "Security audit", securityAuditLines);
-  if (channelsMessage !== undefined) {
-    appendStatusReportLines(report, "Channels", [channelsMessage]);
-  } else {
-    appendStatusReportTable(report, "Channels", channelsColumns, channelsRows);
+  for (const [title, columns, rows, emptyMessage] of [
+    ["Channels", channelsColumns, channelsRows, "No channels configured"],
+    ["Sessions", sessionsColumns, sessionsRows, "No sessions"],
+  ] as const) {
+    if (rows.length === 0) {
+      appendStatusReportLines(report, title, [theme.muted(emptyMessage)]);
+    } else {
+      appendStatusReportTable(report, title, [...columns], rows);
+    }
   }
-  if (sessionsMessage !== undefined) {
-    appendStatusReportLines(report, "Sessions", [sessionsMessage]);
-  } else {
-    appendStatusReportTable(report, "Sessions", sessionsColumns, sessionsRows);
-  }
-  if (systemEventsRows.length > 0) {
+  if (systemEventsRows?.length) {
     appendStatusReportTable(
       report,
       "System events",
-      systemEventsColumns,
+      [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
       systemEventsRows,
       systemEventsTrailer,
     );
   }
-  if (healthRows.length > 0) {
-    appendStatusReportTable(report, "Health", healthColumns, healthRows);
+  if (healthRows?.length) {
+    appendStatusReportTable(report, "Health", [...(healthColumns ?? [])], healthRows);
   }
-  if (usageLines.length > 0) {
+  if (usageLines?.length) {
     appendStatusReportLines(report, "Usage", usageLines);
   }
-  lines.push(...footerLines);
+  lines.push("", ...footerLines);
   return lines;
 }

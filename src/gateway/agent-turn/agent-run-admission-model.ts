@@ -1,6 +1,6 @@
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
+import { resolveSessionModelRef } from "../session-utils.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 
 export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchParams) {
@@ -40,19 +40,12 @@ export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchPar
     provider: activeModel.provider,
     model: activeModel.model,
   };
-  const lifecycleStorePath = params.resolvedSessionKey
-    ? loadSessionEntry(params.resolvedSessionKey, {
-        ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
-        clone: false,
-        projection: "list",
-      }).storePath
-    : `agent:${params.activeSessionAgentId}`;
   return {
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,
     effectiveAllowModelOverride,
     resolvedRuntime,
-    lifecycleStorePath,
+    lifecycleStorePath: params.lifecycleStorePath,
   };
 }

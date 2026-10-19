@@ -1,7 +1,3 @@
-/**
- * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
- * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
- */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -14,6 +10,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -75,23 +72,7 @@ function mantleEndpoint(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws`;
 }
 
-type MantleBearerTokenProvider = () => Promise<string>;
-type MantleBearerTokenProviderFactory = (opts?: {
-  region?: string;
-  expiresInSeconds?: number;
-}) => MantleBearerTokenProvider;
-
-async function loadMantleBearerTokenProviderFactory(): Promise<MantleBearerTokenProviderFactory> {
-  const { getTokenProvider } = (await import("@aws/bedrock-token-generator")) as {
-    getTokenProvider: MantleBearerTokenProviderFactory;
-  };
-  return getTokenProvider;
-}
-
 /**
- * Resolve a bearer token for Mantle authentication.
- *
- * Returns the value of AWS_BEARER_TOKEN_BEDROCK if set, undefined otherwise.
  * When no explicit token is set, `resolveImplicitMantleProvider` will attempt
  * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
@@ -103,8 +84,6 @@ export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): 
 const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
 /** Last emitted IAM token failure per region, retained until token generation succeeds. */
 const iamTokenFailureDetailByRegion = new Map<string, string>();
-/** Success epoch per region; failures spanning a recovery cannot restore stale diagnostics. */
-const iamTokenSuccessEpochByRegion = new Map<string, number>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
@@ -135,20 +114,16 @@ function getCachedIamTokenEntry(
  */
 export async function generateBearerTokenFromIam(params: {
   region: string;
-  now?: () => number;
-  tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<string | undefined> {
-  const now = params.now?.() ?? Date.now();
+  const now = Date.now();
   const cached = getCachedIamTokenEntry(params.region, now);
 
   if (cached) {
     return cached.token;
   }
 
-  const successEpoch = iamTokenSuccessEpochByRegion.get(params.region) ?? 0;
   try {
-    const getTokenProvider =
-      params.tokenProviderFactory ?? (await loadMantleBearerTokenProviderFactory());
+    const { getTokenProvider } = await import("@aws/bedrock-token-generator");
     const token = await getTokenProvider({
       region: params.region,
       expiresInSeconds: 7200, // 2 hours
@@ -157,16 +132,9 @@ export async function generateBearerTokenFromIam(params: {
     if (expiresAt !== undefined) {
       iamTokenCache.set(params.region, { token, expiresAt });
     }
-    iamTokenSuccessEpochByRegion.set(
-      params.region,
-      (iamTokenSuccessEpochByRegion.get(params.region) ?? 0) + 1,
-    );
     iamTokenFailureDetailByRegion.delete(params.region);
     return token;
   } catch (error) {
-    if (successEpoch !== (iamTokenSuccessEpochByRegion.get(params.region) ?? 0)) {
-      return undefined;
-    }
     // Keep retrying the credential chain while surfacing each distinct failure cause once.
     if (log.isEnabled("debug")) {
       const errorMessage = formatErrorMessage(error);
@@ -182,27 +150,14 @@ export async function generateBearerTokenFromIam(params: {
   }
 }
 
-/**
- * Read a cached IAM bearer token for the given region (sync, no generation).
- *
- * Returns the token if it exists and has not expired, undefined otherwise.
- * Used by Mantle runtime auth and tests to inspect the current cache.
- */
-export function getCachedIamToken(region: string): string | undefined {
-  return getCachedIamTokenEntry(region)?.token;
-}
-
-/** Resolve the actual runtime bearer token for Mantle, generating IAM tokens when needed. */
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
-  now?: () => number;
-  tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<{ apiKey: string; expiresAt?: number } | undefined> {
   if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER) {
     return { apiKey: params.apiKey };
   }
-  const now = params.now?.() ?? Date.now();
+  const now = Date.now();
   const region = resolveMantleRegion(params.env ?? process.env);
   const cached = getCachedIamTokenEntry(region, now);
   if (cached) {
@@ -211,11 +166,7 @@ export async function resolveMantleRuntimeBearerToken(params: {
       expiresAt: cached.expiresAt,
     };
   }
-  const token = await generateBearerTokenFromIam({
-    region,
-    now: params.now,
-    tokenProviderFactory: params.tokenProviderFactory,
-  });
+  const token = await generateBearerTokenFromIam({ region });
   if (!token) {
     return undefined;
   }
@@ -231,7 +182,6 @@ interface OpenAIModelsResponse {
   data: Array<{ id: string }>;
 }
 
-/** Model ID substrings that indicate reasoning/thinking support. */
 const REASONING_PATTERNS = [
   "thinking",
   "reasoner",
@@ -288,15 +238,13 @@ export async function discoverMantleModels(params: {
   region: string;
   bearerToken: string;
   discoveryMode?: "strict";
-  fetchFn?: typeof fetch;
-  now?: () => number;
 }): Promise<ModelDefinitionConfig[]> {
-  const { region, bearerToken, fetchFn = fetch, now = Date.now } = params;
+  const { region, bearerToken } = params;
 
   const cached = discoveryCache.get(region);
   if (
     cached?.bearerToken === bearerToken &&
-    now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
+    Date.now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
   ) {
     return cached.models;
   }
@@ -307,36 +255,43 @@ export async function discoverMantleModels(params: {
   const endpoint = `${mantleEndpoint(region)}/v1/models`;
 
   try {
-    const response = await fetchFn(endpoint, {
-      method: "GET",
-      signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url: endpoint,
+      timeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
+      requireHttps: true,
+      auditContext: "amazon-bedrock-mantle.discovery",
+      init: {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+        },
       },
     });
+    try {
+      if (!response.ok) {
+        throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+      }
 
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+      const body = await readMantleModelDiscoveryJson(response);
+      const models = body.data
+        .filter((model) => model.id?.trim())
+        .map((model) => ({
+          id: model.id,
+          name: model.id,
+          reasoning: inferReasoningSupport(model.id),
+          input: ["text" as const],
+          cost: DEFAULT_COST,
+          contextWindow: DEFAULT_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_MAX_TOKENS,
+        }))
+        .toSorted((left, right) => left.id.localeCompare(right.id));
+
+      discoveryCache.set(region, { bearerToken, models, fetchedAt: Date.now() });
+      return models;
+    } finally {
+      await release();
     }
-
-    const body = await readMantleModelDiscoveryJson(response);
-    const models = body.data
-      .filter((model) => model.id?.trim())
-      .map((model) => ({
-        id: model.id,
-        name: model.id,
-        reasoning: inferReasoningSupport(model.id),
-        input: ["text" as const],
-        cost: DEFAULT_COST,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_MAX_TOKENS,
-      }))
-      .toSorted((left, right) => left.id.localeCompare(right.id));
-
-    discoveryCache.set(region, { bearerToken, models, fetchedAt: now() });
-    return models;
   } catch (error) {
     if (params.discoveryMode === "strict") {
       throw error;
@@ -359,8 +314,6 @@ export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
   discoveryMode?: "strict";
   pluginConfig?: { discovery?: MantleDiscoveryConfig };
-  fetchFn?: typeof fetch;
-  tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   if (params.pluginConfig?.discovery?.enabled === false) {
@@ -374,12 +327,7 @@ export async function resolveImplicitMantleProvider(params: {
     return null;
   }
 
-  const bearerToken =
-    explicitBearerToken ??
-    (await generateBearerTokenFromIam({
-      region,
-      tokenProviderFactory: params.tokenProviderFactory,
-    }));
+  const bearerToken = explicitBearerToken ?? (await generateBearerTokenFromIam({ region }));
 
   if (!bearerToken) {
     return null;
@@ -389,7 +337,6 @@ export async function resolveImplicitMantleProvider(params: {
     region,
     bearerToken,
     discoveryMode: params.discoveryMode,
-    fetchFn: params.fetchFn,
   });
   if (models.length === 0 && params.discoveryMode !== "strict") {
     return null;

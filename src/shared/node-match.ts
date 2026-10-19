@@ -1,6 +1,5 @@
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
@@ -11,21 +10,17 @@ import {
  * only accepted query shapes; fuzzy ordering lives here so callers agree.
  */
 
-/** Node fields accepted by shared CLI/API node selection helpers. */
 export type NodeMatchCandidate = {
-  /** Stable node id used for RPC/session routing. */
   nodeId: string;
-  /** Human-facing node name used for fuzzy operator input. */
   displayName?: string;
   /** Tailscale or network address accepted as an exact match. */
   remoteIp?: string;
   /** Connected nodes win only after the strongest match type is chosen. */
   connected?: boolean;
-  /** Client id used to prefer current OpenClaw nodes over legacy migration ties. */
+  /** Client id included in ambiguous-node diagnostics. */
   clientId?: string;
 };
 
-/** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
 function normalizeNodeKey(value: string) {
   // Emoji components can also be marks (variation selectors and keycaps); drop
   // them so decorated and plain display-name selectors stay equivalent.
@@ -40,13 +35,6 @@ function normalizeNodeKey(value: string) {
     .replace(/-+$/, "");
 }
 
-function listKnownNodes(nodes: NodeMatchCandidate[]): string {
-  return nodes
-    .map((n) => n.displayName || n.remoteIp || n.nodeId)
-    .filter(Boolean)
-    .join(", ");
-}
-
 function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   const label = node.displayName || node.remoteIp || node.nodeId;
   const details = [`node=${node.nodeId}`];
@@ -55,32 +43,6 @@ function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
     details.push(`client=${clientId}`);
   }
   return `${label} [${details.join(", ")}]`;
-}
-
-function isCurrentOpenClawClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
-  return normalized.startsWith("openclaw-");
-}
-
-function isLegacyClawdbotClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
-  return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
-}
-
-function pickPreferredLegacyMigrationMatch(
-  matches: NodeMatchCandidate[],
-): NodeMatchCandidate | undefined {
-  const current = matches.filter((match) => isCurrentOpenClawClient(match.clientId));
-  if (current.length !== 1) {
-    return undefined;
-  }
-  const legacyCount = matches.filter((match) => isLegacyClawdbotClient(match.clientId)).length;
-  if (legacyCount === 0 || current.length + legacyCount !== matches.length) {
-    return undefined;
-  }
-  // During Clawdbot -> OpenClaw migration, a unique current client should win only
-  // when every other tie is a known legacy client for the same human-facing node.
-  return current[0];
 }
 
 function resolveMatchScore(
@@ -107,7 +69,6 @@ function resolveMatchScore(
   return 0;
 }
 
-/** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
 export function resolveNodeIdFromCandidates(
   nodes: NodeMatchCandidate[],
   query: string,
@@ -139,21 +100,18 @@ export function resolveNodeIdFromCandidates(
     });
   }
   if (strongestMatches.length === 0) {
-    const known = listKnownNodes(nodes);
+    const known = nodes
+      .map((node) => node.displayName || node.remoteIp || node.nodeId)
+      .filter(Boolean)
+      .join(", ");
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
 
-  // Connected state only breaks ties within the strongest match class. Client
-  // identity may disambiguate known legacy migrations, never other current nodes.
+  // Connected state only breaks ties within the strongest match class.
   const connectedMatches = strongestMatches.filter((match) => match.connected === true);
   const matches = connectedMatches.length > 0 ? connectedMatches : strongestMatches;
   if (matches.length === 1) {
     return matches[0]?.nodeId ?? "";
-  }
-
-  const preferred = pickPreferredLegacyMigrationMatch(matches);
-  if (preferred) {
-    return preferred.nodeId;
   }
 
   throw new Error(

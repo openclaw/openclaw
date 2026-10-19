@@ -1,5 +1,6 @@
 import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts";
 import { isBuiltinThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -75,17 +76,23 @@ export function resolveTypefaces(
 
 // Load faces only when selected or previewed; retain them so switching slots
 // or reopening specimens never replaces an already loaded stylesheet.
-function loadTypefaceStylesheet(face: TypefaceId): void {
+export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | undefined {
   const id = `openclaw-typeface-${face}`;
   const asset = TYPEFACES[face].asset;
-  if (!asset || document.getElementById(id)) {
-    return;
+  if (!asset) {
+    return undefined;
+  }
+  const existing = document.getElementById(id);
+  if (existing instanceof HTMLLinkElement) {
+    return existing;
   }
   const link = document.createElement("link");
   link.id = id;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
+  listen(link, "error", () => link.remove(), { once: true });
   document.head.append(link);
+  return link;
 }
 
 export function syncTypefaceStylesheets(faces: TypefacePair): void {

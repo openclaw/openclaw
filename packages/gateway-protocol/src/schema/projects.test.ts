@@ -10,6 +10,7 @@ import {
   ProjectsSearchRemoteResultSchema,
   validateProjectsAddParams,
   validateProjectsListParams,
+  validateProjectsCheckoutOptionsParams,
   validateProjectsRegisterParams,
   validateProjectsRemoveParams,
   validateProjectsSearchRemoteParams,
@@ -18,6 +19,17 @@ import {
 
 describe("project protocol schemas", () => {
   it("validates project method inputs as closed objects", () => {
+    expect(validateProjectsCheckoutOptionsParams({ projectId: "project", agentId: "main" })).toBe(
+      true,
+    );
+    expect(validateProjectsCheckoutOptionsParams({ projectId: "project" })).toBe(false);
+    expect(
+      validateProjectsCheckoutOptionsParams({
+        projectId: "project",
+        agentId: "main",
+        cwd: "/private",
+      }),
+    ).toBe(false);
     expect(validateProjectsListParams({})).toBe(true);
     expect(validateProjectsListParams({ includeObserved: true })).toBe(true);
     expect(validateProjectsListParams({ includeObserved: false })).toBe(true);
@@ -54,6 +66,7 @@ describe("project protocol schemas", () => {
             description: "Personal AI assistant",
             cloneUrl: "https://github.com/openclaw/openclaw.git",
             webUrl: "https://github.com/openclaw/openclaw",
+            defaultBranch: "main",
             private: false,
           },
         ],
@@ -81,6 +94,12 @@ describe("project protocol schemas", () => {
             source: "registered",
           },
         ],
+        defaultRepository: {
+          identity: "acme/private-repo",
+          url: "https://ghe.example.test/acme/private-repo.git",
+          ref: "main",
+          profileId: "example-azure",
+        },
         recents: [
           { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
           { kind: "folder", folder: "/repo/scratch", displayName: "scratch" },

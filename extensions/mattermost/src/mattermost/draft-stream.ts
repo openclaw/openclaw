@@ -2,7 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   createMattermostPost,
   deleteMattermostPost,
@@ -34,10 +34,7 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
   if (!trimmed) {
     return "";
   }
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  return truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true });
 }
 
 function consumeMattermostPublishedChunk(params: {
@@ -54,25 +51,6 @@ function consumeMattermostPublishedChunk(params: {
     offset += 1;
   }
   return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
-}
-
-export function createMattermostDraftPreviewBoundaryController(params: {
-  enabled: boolean;
-  forceNewMessage: () => void | Promise<void>;
-}) {
-  let hasStreamedContent = false;
-  return {
-    noteUpdate() {
-      hasStreamedContent = true;
-    },
-    async noteBoundary() {
-      if (!params.enabled || !hasStreamedContent) {
-        return;
-      }
-      hasStreamedContent = false;
-      await params.forceNewMessage();
-    },
-  };
 }
 
 export function createMattermostDraftStream(params: {
@@ -355,8 +333,8 @@ export function createMattermostDraftStream(params: {
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
-      const completed = sealedText.text.trim();
-      if (!completed || !remainingText.startsWith(completed)) {
+      const completed = sealedText.text;
+      if (!remainingText.startsWith(completed)) {
         return { kind: "full", text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);

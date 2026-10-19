@@ -29,33 +29,11 @@ function fusionBody(fields: Record<string, unknown>) {
 }
 
 describe("openrouter Fusion prompt hooks", () => {
-  it("describes configured Fusion analysis models in the system prompt", () => {
-    const contribution = resolveContribution(
-      createFusionModelConfig(
-        "openrouter/openrouter/fusion",
-        fusionBody({
-          analysis_models: [
-            "google/gemini-3.5-flash",
-            "moonshotai/kimi-k2.6",
-            "deepseek/deepseek-v4-pro",
-          ],
-          model: "google/gemini-3.5-flash",
-        }),
-      ),
-    );
-
-    expect(contribution?.dynamicSuffix).toContain("OpenRouter Fusion Configuration");
-    expect(contribution?.dynamicSuffix).toContain(
-      "Analysis models: google/gemini-3.5-flash, moonshotai/kimi-k2.6, deepseek/deepseek-v4-pro.",
-    );
-    expect(contribution?.dynamicSuffix).toContain("Final Fusion model: google/gemini-3.5-flash.");
-  });
-
   it("keeps bounded Fusion model IDs on valid UTF-16 boundaries", () => {
     const boundaryModelId = `${"a".repeat(255)}😀tail`;
     const contribution = resolveContribution(
       createFusionModelConfig(
-        "openrouter/fusion",
+        "openrouter/openrouter/fusion",
         fusionBody({
           analysis_models: [boundaryModelId],
           model: boundaryModelId,
@@ -100,6 +78,33 @@ describe("openrouter Fusion prompt hooks", () => {
     );
 
     expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
+  });
+
+  it("uses the bound agent's model-specific Fusion configuration", () => {
+    const contribution = resolveContribution(
+      {
+        defaults: {
+          models: {
+            "openrouter/fusion": {
+              params: { extraBody: fusionBody({ model: "default/model" }) },
+            },
+          },
+        },
+        entries: {
+          reviewer: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: { extraBody: fusionBody({ model: "reviewer/model" }) },
+              },
+            },
+          },
+        },
+      },
+      "reviewer",
+    );
+
+    expect(contribution?.dynamicSuffix).toContain("Final Fusion model: reviewer/model.");
+    expect(contribution?.dynamicSuffix).not.toContain("default/model");
   });
 
   it("keeps arbitrary OpenRouter extraBody fields out of the system prompt", () => {

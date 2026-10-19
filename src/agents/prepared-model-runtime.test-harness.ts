@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -55,6 +56,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     getOAuthProviders: vi.fn(() => []),
   },
   modelRegistry: {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((authStorage: AuthStorage) => ({ authStorage })),
     getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
@@ -90,7 +92,6 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
       routeVariants: [],
     }),
   ),
-  catalogHookRows: new Map<string, Set<string>>(),
   runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveNativeModelPrimary: vi.fn<typeof import("./agent-scope.js").resolveNativeModelPrimary>(
     () => undefined,
@@ -117,7 +118,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   >(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   isPluginMetadataSnapshotCompatible: () => true,
   resolvePluginMetadataSnapshotCacheKey: () => "fixed-prepared-runtime-plugin-inventory",
   projectPluginMetadataSnapshot: (snapshot: PluginMetadataSnapshot) => snapshot,
@@ -126,7 +128,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshotAsync: async () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
-vi.mock("./prepared-model-catalog-worker.js", () => ({
+vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog-worker.js")>()),
   createPreparedModelCatalogWorker: (
     ...factoryArgs: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorker>
   ) => {
@@ -150,7 +153,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
           modelCatalog: catalog,
           runtimeModels: new Map(),
           providerExpiries: new Map(),
-          hookRows: preparedModelRuntimeMocks.catalogHookRows,
           configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
         };
       },
@@ -178,6 +180,7 @@ vi.mock("./agent-auth-discovery.js", () => ({
     preparedModelRuntimeMocks.resolveAmbientCredentials(...args),
 }));
 
+// mock-isolation: Prepared-runtime fixtures own credential and model state independently of real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorageFacts: (...args: unknown[]) => {
     if ((args[1] as { skipCredentials?: boolean } | undefined)?.skipCredentials === true) {
@@ -209,7 +212,7 @@ vi.mock("./agent-model-discovery.js", () => ({
   },
   discoverAuthStorage: (...args: unknown[]) =>
     preparedModelRuntimeMocks.discoverAuthStorage(...args) ?? preparedModelRuntimeMocks.authStorage,
-  discoverModels: (...args: unknown[]) => {
+  discoverModelsAsync: async (...args: unknown[]) => {
     preparedModelRuntimeMocks.discoverModels(...args);
     return preparedModelRuntimeMocks.modelRegistry;
   },
@@ -219,13 +222,17 @@ vi.mock("./agent-model-discovery.js", () => ({
   },
 }));
 
-vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>()),
   resolveRuntimeSyntheticAuthProviderRefs: () =>
     preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));
 
 const agentScopeMocks = vi.hoisted(() => ({
-  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
+  listAgentEntries: (config: OpenClawConfig) =>
+    Object.entries(config.agents?.entries ?? {}).map(([id, entry]) =>
+      Object.assign({}, entry, { id }),
+    ),
   listAgentIds: () => {
     if (preparedModelRuntimeMocks.configuredAgentIdsError) {
       throw preparedModelRuntimeMocks.configuredAgentIdsError;
@@ -238,11 +245,11 @@ const agentScopeMocks = vi.hoisted(() => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
   tryResolveSystemAgentWorkspaceDir: () => "/tmp/unused-workspace",
-  resolveAmbientOwnerAgentId: () => "default",
+  resolveAmbientOwnerAgentId: (_config: OpenClawConfig, agentId?: string) => agentId ?? "default",
   resolveDefaultAgentDir: vi.fn<() => string>(),
   resolveDefaultAgentId: () => "default",
-  resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-    config.agents?.list?.find((entry) => entry.id === agentId),
+  resolveAgentConfig: (config: OpenClawConfig, agentId: string) =>
+    config.agents?.entries?.[agentId],
   resolveNativeModelPrimary: preparedModelRuntimeMocks.resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride: () => undefined,
   resolveEffectiveModelFallbacks: () => undefined,
@@ -429,14 +436,18 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
-    const logger = {
+  createSubsystemLogger: (subsystem: string) => {
+    const logger: SubsystemLogger = {
+      subsystem,
       child: () => logger,
       isEnabled: () => false,
+      trace: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
       info: vi.fn(),
       warn: preparedModelRuntimeMocks.warn,
+      fatal: vi.fn(),
+      raw: vi.fn(),
     };
     return logger;
   },
@@ -544,7 +555,6 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     routeVariants: [],
   });
   preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
-  preparedModelRuntimeMocks.catalogHookRows = new Map();
   preparedModelRuntimeMocks.resolveNativeModelPrimary.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);

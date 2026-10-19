@@ -4,7 +4,10 @@ import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.j
 import * as configIO from "../config/io.factory.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
@@ -29,15 +32,19 @@ afterEach(() => {
   runtimeCache.clear.mockClear();
 });
 
+async function seedDisabledState(state: OpenClawTestState) {
+  const config = { plugins: { enabled: false } };
+  await state.writeConfig(config);
+  await seedInstalledPluginIndex({}, { config, env: state.env });
+  return readPersistedInstalledPluginIndexRowSync({ env: state.env });
+}
+
 describe("plugin registry refresh config ownership", () => {
   it("invalidates runtime discovery when committed config refresh cannot acquire custody", async () => {
     await withOpenClawTestState(
       { label: "registry-refresh-acquisition-failure" },
       async (state) => {
-        const config = { plugins: { enabled: false } };
-        await state.writeConfig(config);
-        await seedInstalledPluginIndex({}, { config, env: state.env });
-        const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+        const before = await seedDisabledState(state);
         const warn = vi.fn();
         vi.spyOn(leaseAcquisition, "acquireOpenClawStateLease").mockRejectedValueOnce(
           new Error("plugin lifecycle acquisition timed out"),
@@ -60,11 +67,9 @@ describe("plugin registry refresh config ownership", () => {
 
   it("refuses registry publication when the plugin lease is lost during the committed config read", async () => {
     await withOpenClawTestState({ label: "registry-refresh-lease-loss" }, async (state) => {
-      const config = { plugins: { enabled: false } };
-      await state.writeConfig(config);
-      await seedInstalledPluginIndex({}, { config, env: state.env });
-      const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+      const before = await seedDisabledState(state);
       const controller = new AbortController();
+      const refusal = new Error("plugin lease cancelled");
       const assertCurrent = vi.fn();
       const warn = vi.fn();
       const create = configIO.createConfigIO;
@@ -74,7 +79,7 @@ describe("plugin registry refresh config ownership", () => {
           ...io,
           readConfigFileSnapshot: async () => {
             const snapshot = await io.readConfigFileSnapshot();
-            controller.abort(new Error("plugin lease cancelled"));
+            controller.abort(refusal);
             return snapshot;
           },
         };
@@ -97,7 +102,7 @@ describe("plugin registry refresh config ownership", () => {
           },
         ),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-      expect(registryError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(registryError).toBe(refusal);
       expect(assertCurrent).toHaveBeenCalled();
       expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
       expect(warn).not.toHaveBeenCalled();
@@ -106,7 +111,7 @@ describe("plugin registry refresh config ownership", () => {
   });
 
   it.each([undefined, null, false, 0])(
-    "preserves a one-shot transactional authority refusal: %s",
+    "preserves a one-shot live authority refusal: %s",
     async (refusal) => {
       await withOpenClawTestState(
         { label: "registry-refresh-transaction-refusal" },
@@ -117,17 +122,15 @@ describe("plugin registry refresh config ownership", () => {
           const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
           const warn = vi.fn();
           await withPluginLifecycleLease({ env: state.env }, async (lease) => {
-            const assertOwnedInTransaction = vi
-              .fn<typeof lease.assertOwnedInTransaction>((database) =>
-                lease.assertOwnedInTransaction(database),
-              )
+            const assertCurrent = vi
+              .fn(() => lease.assertCurrent())
               .mockImplementationOnce(() => {
                 // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
                 throw refusal;
               });
             const result = await refreshPluginRegistryAfterConfigMutation({
               reason: "source-changed",
-              lease: { ...lease, assertOwnedInTransaction },
+              lease: { ...lease, assertCurrent },
               logger: { warn },
             }).then(
               () => ({ ok: true }),
@@ -137,7 +140,7 @@ describe("plugin registry refresh config ownership", () => {
             if ("error" in result) {
               expect(result.error).toBe(refusal);
             }
-            expect(assertOwnedInTransaction).toHaveBeenCalledOnce();
+            expect(assertCurrent).toHaveBeenCalledOnce();
           });
           expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
           expect(warn).not.toHaveBeenCalled();
@@ -238,23 +241,30 @@ describe("plugin registry refresh config ownership", () => {
     );
   });
 
-  it("rechecks authority after the runtime cache owner loads", async () => {
-    const refusal = new Error("owner revoked while loading runtime cache");
-    let current = true;
-    const warn = vi.fn();
-    const invalidation = invalidatePluginRuntimeDiscoveryAfterConfigMutation({
-      logger: { warn },
-      assertCurrent: () => {
-        if (!current) {
-          throw refusal;
-        }
-      },
-    });
-    current = false;
-    await expect(invalidation).rejects.toBe(refusal);
-    expect(runtimeCache.clear).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["native", "awaited"] as const)(
+    "rechecks %s authority after the runtime cache owner loads",
+    async (kind) => {
+      const refusal = new Error("owner revoked while loading runtime cache");
+      let current = true;
+      const warn = vi.fn();
+      const invalidation = invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+        logger: { warn },
+        assertCurrent: () => {
+          if (!current) {
+            if (kind === "awaited") {
+              return Promise.reject(refusal);
+            }
+            throw refusal;
+          }
+          return undefined;
+        },
+      });
+      current = false;
+      await expect(invalidation).rejects.toBe(refusal);
+      expect(runtimeCache.clear).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { reason: "source-changed", envSource: "process" },

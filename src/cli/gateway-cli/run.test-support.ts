@@ -13,7 +13,6 @@ type GatewayRunTestApi = {
   ): (params: { host: string; port: number }) => Promise<boolean>;
   isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
   resolveGatewayLockErrorExitCode(err: unknown): number;
-  resolveGatewayStartupFailureExitCode(err: unknown): number;
   runGatewayLoopWithSupervisedLockRecovery(params: {
     startLoop: (lifecycleDeadlineMs?: number) => Promise<void>;
     supervisor: RespawnSupervisor | null;
@@ -43,9 +42,6 @@ export const testing: GatewayRunTestApi = {
   },
   resolveGatewayLockErrorExitCode(err) {
     return getTestApi().resolveGatewayLockErrorExitCode(err);
-  },
-  resolveGatewayStartupFailureExitCode(err) {
-    return getTestApi().resolveGatewayStartupFailureExitCode(err);
   },
   async runGatewayLoopWithSupervisedLockRecovery(params) {
     await getTestApi().runGatewayLoopWithSupervisedLockRecovery({

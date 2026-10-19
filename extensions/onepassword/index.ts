@@ -10,7 +10,7 @@ import type { AuditRow, PendingAuthorization, StandingGrant } from "./src/broker
 import { OnePasswordBroker } from "./src/broker.js";
 import { MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./src/config.js";
 import { OpClient } from "./src/op-client.js";
-import { createOnePasswordTool, redactPersistedOnePasswordResult } from "./src/tool.js";
+import { createOnePasswordTool } from "./src/tool.js";
 
 const MAX_AUDIT_ROWS = 40_000;
 const MAX_STANDING_GRANTS = MAX_REGISTERED_ITEMS * 32;
@@ -23,12 +23,7 @@ export default definePluginEntry({
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
     const resolveCurrentConfig = () => {
-      const liveConfig = api.runtime.config?.current
-        ? (api.runtime.config.current() as OpenClawConfig)
-        : undefined;
-      if (!liveConfig) {
-        return startupConfig;
-      }
+      const liveConfig = api.runtime.config.current() as OpenClawConfig;
       const livePluginConfig = resolveLivePluginConfigObject(
         () => liveConfig,
         "onepassword",
@@ -123,6 +118,5 @@ export default definePluginEntry({
       name: "onepassword",
     });
     api.on("before_tool_call", (event, ctx) => broker.beforeToolCall(event, ctx));
-    api.on("tool_result_persist", redactPersistedOnePasswordResult);
   },
 });

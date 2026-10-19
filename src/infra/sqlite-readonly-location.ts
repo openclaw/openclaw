@@ -3,10 +3,11 @@ import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  copyFileDescriptorSync,
+  copyRootFileSync,
   sameFileContentsSync,
   sameFileIdentity,
 } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -15,7 +16,7 @@ import { copySqliteFile } from "./sqlite-file-copy.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
-  adoptPreparedLocation,
+  publishPreparedCopy,
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
@@ -28,11 +29,8 @@ import {
   readSqliteSchemaHeader,
   readSqliteSchemaHeaderFromSnapshot,
 } from "./sqlite-schema-header.js";
-import {
-  createSnapshotAttemptReporter,
-  MAX_SNAPSHOT_ATTEMPTS,
-  waitForSnapshotRetrySync,
-} from "./sqlite-snapshot-policy.js";
+import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
+import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -123,22 +121,12 @@ export function readSourceJournalMode(
   try {
     const header = Buffer.alloc(SQLITE_HEADER_BYTES);
     const bytesRead = fs.readSync(source.descriptor, header, 0, header.length, 0);
-    const confirmedHeader = Buffer.alloc(SQLITE_HEADER_BYTES);
-    const confirmedBytesRead = fs.readSync(
-      source.descriptor,
-      confirmedHeader,
-      0,
-      confirmedHeader.length,
-      0,
-    );
     assertPinnedIdentityUnchanged(source);
-    if (bytesRead === 0 && confirmedBytesRead === 0) {
+    if (bytesRead === 0) {
       return "empty";
     }
     if (
       bytesRead !== header.length ||
-      confirmedBytesRead !== confirmedHeader.length ||
-      !header.equals(confirmedHeader) ||
       header.subarray(0, 16).toString("utf8") !== "SQLite format 3\u0000"
     ) {
       return "unknown";
@@ -162,20 +150,41 @@ function assertPinnedIdentityUnchanged(file: PinnedFile): void {
   }
 }
 
-function copySourceFile(
+export function copySourceFile(
   sourcePath: string,
   targetPath: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): void {
   const source = openPinnedFile(sourcePath, expectedSourceIdentity);
   try {
-    const target = fs.openSync(targetPath, "wx", 0o600);
+    // Sidecars may be aliases. Resolve only after pinning, then bind the guarded
+    // copy to that inode and revalidate the original pathname before acceptance.
+    let physicalSourcePath: string;
     try {
-      copyFileDescriptorSync(source.descriptor, target);
-      fs.fsyncSync(target);
+      physicalSourcePath = fs.realpathSync.native(sourcePath);
+    } catch (error) {
+      if (extractErrorCode(error) === "ENOENT") {
+        throw new SqliteSourceChangedError(`SQLite source disappeared: ${sourcePath}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    // Helper failures can describe either path; retrying them could hide a
+    // destination or cleanup failure behind a simultaneous source change.
+    const target = copyRootFileSync({
+      source: { rootPath: path.dirname(physicalSourcePath), absolutePath: physicalSourcePath },
+      destination: { rootPath: path.dirname(targetPath), absolutePath: targetPath },
+      expectedSourceIdentity: source.identity,
+      sourceHardlinks: "allow",
+      clone: "auto",
+      mode: 0o600,
+    });
+    try {
+      fs.fsyncSync(target.fd);
       assertPinnedIdentityUnchanged(source);
     } finally {
-      fs.closeSync(target);
+      target.close();
     }
   } finally {
     fs.closeSync(source.descriptor);
@@ -188,23 +197,20 @@ function sourceMatchesCopy(
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): boolean {
   const source = openPinnedFile(sourcePath, expectedSourceIdentity);
-  let copy: number | undefined;
   try {
-    copy = fs.openSync(copyPath, "r");
-    if (!fs.fstatSync(copy).isFile()) {
-      return false;
-    }
-    const equal = sameFileContentsSync(source.descriptor, copy);
-    assertPinnedIdentityUnchanged(source);
-    return equal;
-  } finally {
+    const copy = fs.openSync(copyPath, "r");
     try {
-      if (copy !== undefined) {
-        fs.closeSync(copy);
+      if (!fs.fstatSync(copy).isFile()) {
+        return false;
       }
+      const equal = sameFileContentsSync(source.descriptor, copy);
+      assertPinnedIdentityUnchanged(source);
+      return equal;
     } finally {
-      fs.closeSync(source.descriptor);
+      fs.closeSync(copy);
     }
+  } finally {
+    fs.closeSync(source.descriptor);
   }
 }
 
@@ -251,6 +257,15 @@ function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
   }
 }
 
+function syncPrivateSnapshot(snapshotPath: string): void {
+  const descriptor = fs.openSync(snapshotPath, "r+");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function recoverPrivateJournalCopy(snapshotPath: string): void {
   if (rollbackJournalReferencesSuperJournal(`${snapshotPath}-journal`)) {
     throw new Error(
@@ -267,23 +282,7 @@ function recoverPrivateJournalCopy(snapshotPath: string): void {
     snapshot.close();
   }
   fs.rmSync(`${snapshotPath}-journal`, { force: true });
-  const descriptor = fs.openSync(snapshotPath, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
-
-function publishPreparedCopy(directory: string): PreparedSqliteReadOnlyLocation {
-  const location = path.join(directory, "database.sqlite");
-  for (const suffix of ["-wal", "-shm", "-journal", ""]) {
-    const staged = `${location}.partial${suffix}`;
-    if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
-    }
-  }
-  return adoptPreparedLocation(location, directory);
+  syncPrivateSnapshot(snapshotPath);
 }
 
 type CopyRequest = {
@@ -300,6 +299,7 @@ function* createStableReadOnlyCopyInTempDirectory(
     ? path.dirname(existingTempDir)
     : resolvePrivateSqliteSnapshotStagingRoot(),
   expectedSourceIdentity?: DatabaseFileIdentity,
+  expectedSourceContent?: SqliteFileContent,
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   let tempDir = existingTempDir;
   try {
@@ -347,6 +347,11 @@ function* createStableReadOnlyCopyInTempDirectory(
         yield { sourcePath: `${pathname}${suffix}`, targetPath: `${snapshotPath}${suffix}` };
       }
       yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
+      if (!sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity)) {
+        throw new SqliteSourceChangedError(
+          `SQLite main database changed while copying: ${pathname}`,
+        );
+      }
       for (const suffix of sidecarSuffixes) {
         if (!sourceMatchesCopy(`${pathname}${suffix}`, `${snapshotPath}${suffix}`)) {
           const label = suffix === "-wal" ? "WAL" : "rollback journal";
@@ -357,7 +362,11 @@ function* createStableReadOnlyCopyInTempDirectory(
     } else {
       yield { sourcePath: pathname, targetPath: firstPath, expectedSourceIdentity };
       assertExpectedSidecars(pathname, sidecars);
-      const mainUnchanged = sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
+      // A generation owner can bind the private bytes to its earlier source digest
+      // instead. Publication must verify that digest before any native open.
+      const mainUnchanged =
+        expectedSourceContent !== undefined ||
+        sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
       assertExpectedSidecars(pathname, sidecars);
       if (!mainUnchanged) {
         throw new SqliteSourceChangedError(
@@ -371,17 +380,30 @@ function* createStableReadOnlyCopyInTempDirectory(
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
       throw new SqliteSourceChangedError(`SQLite journal mode changed while copying: ${pathname}`);
     }
+    // A captured recovery-free digest cannot authorize newly observed recovery
+    // data. Refuse before any private native open rather than dropping the binding.
+    if (
+      expectedSourceContent &&
+      (sidecars.journal || (sidecars.wal && fs.statSync(`${snapshotPath}-wal`).size !== 0))
+    ) {
+      throw new SqliteSourceChangedError(
+        `SQLite recovery data appeared after generation capture: ${pathname}`,
+      );
+    }
     if (sidecars.journal) {
       // Journal filenames can coexist without activity. Let SQLite resolve the
       // verified private family; source recovery and sidecars remain untouched.
       recoverPrivateJournalCopy(snapshotPath);
     }
-    return publishPreparedCopy(tempDir);
+    return publishPreparedCopy(tempDir, expectedSourceContent);
   } catch (error) {
+    const stagingError = tempDir
+      ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
+      : error;
     if (tempDir && existingTempDir === undefined) {
       removeTempDirectory(tempDir);
     }
-    throw tempDir ? sqliteSnapshotStagingError(tempDir, error) : error;
+    throw stagingError;
   }
 }
 
@@ -413,15 +435,13 @@ async function copyPreparedLocation(
       const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
       const source = openPinnedFile(sourcePath, expectedSourceIdentity);
       try {
-        try {
-          await copySqliteFile(sourcePath, targetPath, source.identity);
-        } catch (error) {
-          assertPinnedIdentityUnchanged(source);
-          throw error;
-        }
-        assertPinnedIdentityUnchanged(source);
+        await copySqliteFile(sourcePath, targetPath, source.identity);
       } finally {
-        fs.closeSync(source.descriptor);
+        try {
+          assertPinnedIdentityUnchanged(source);
+        } finally {
+          fs.closeSync(source.descriptor);
+        }
       }
     } catch (error) {
       step = steps.throw(error);
@@ -430,6 +450,14 @@ async function copyPreparedLocation(
     step = steps.next();
   }
   return step.value;
+}
+
+function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
 }
 
 async function createStableReadOnlyCopy(
@@ -444,7 +472,13 @@ async function createStableReadOnlyCopy(
       createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir),
     );
   } catch (error) {
-    await removeTempDirectoryAsync(tempDir);
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, "SQLite snapshot preparation");
+    }
     throw error;
   }
 }
@@ -483,16 +517,18 @@ export async function createOnlineReadOnlyBackup(
     } finally {
       snapshot.close();
     }
-    const descriptor = fs.openSync(snapshotPath, "r+");
-    try {
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+    syncPrivateSnapshot(snapshotPath);
     return publishPreparedCopy(tempDir);
   } catch (error) {
-    await removeTempDirectoryAsync(tempDir);
-    throw sqliteSnapshotStagingError(tempDir, error);
+    const stagingError = sqliteSnapshotStagingError(tempDir, error, false, pathname);
+    const errors: unknown[] = [stagingError];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, "SQLite online backup");
+    }
+    throw stagingError;
   }
 }
 
@@ -511,40 +547,48 @@ async function prepareReadOnlySourceInProcess(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   signal?.throwIfAborted();
   const canonicalPath = fs.realpathSync.native(pathname);
-  const report = createSnapshotAttemptReporter(canonicalPath, 0, performance.now());
-  let operation: "raw-copy" | "online-backup" = "online-backup";
-  try {
-    const journalMode = readSourceJournalMode(canonicalPath);
-    const sidecars = readSourceSidecars(canonicalPath);
-    let prepared: PreparedSqliteReadOnlyLocation;
-    if (journalMode === "empty" || (journalMode === "wal" && (!sidecars.wal || !sidecars.shm))) {
-      // Incomplete inactive families need one private recovery copy so opening
-      // SQLite cannot create or recover coordination files beside the source.
-      operation = "raw-copy";
-      prepared = await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
-    } else {
-      try {
-        prepared = await createOnlineReadOnlyBackup(canonicalPath, stagingRoot, signal, onProgress);
-      } catch (error) {
-        signal?.throwIfAborted();
-        if (
-          !isSqliteReadOnlyError(error) ||
-          readSourceJournalMode(canonicalPath) !== "rollback" ||
-          !readSourceSidecars(canonicalPath).journal
-        ) {
-          throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    signal?.throwIfAborted();
+    try {
+      const journalMode = readSourceJournalMode(canonicalPath);
+      const sidecars = readSourceSidecars(canonicalPath);
+      let prepared: PreparedSqliteReadOnlyLocation;
+      if (journalMode === "empty" || (journalMode === "wal" && (!sidecars.wal || !sidecars.shm))) {
+        // Incomplete inactive families need one private recovery copy so opening
+        // SQLite cannot create or recover coordination files beside the source.
+        prepared = await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
+      } else {
+        try {
+          prepared = await createOnlineReadOnlyBackup(
+            canonicalPath,
+            stagingRoot,
+            signal,
+            onProgress,
+          );
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (
+            error instanceof AggregateError ||
+            !isSqliteReadOnlyError(error) ||
+            readSourceJournalMode(canonicalPath) !== "rollback" ||
+            !readSourceSidecars(canonicalPath).journal
+          ) {
+            throw error;
+          }
+          // Hot rollback recovery must operate on private files. A native
+          // read-only open refuses before backup starts, so this is the only copy.
+          prepared = await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
         }
-        // Hot rollback recovery must operate on private files. A native
-        // read-only open refuses before backup starts, so this is the only copy.
-        operation = "raw-copy";
-        prepared = await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
       }
+      return prepared;
+    } catch (error) {
+      if (!(error instanceof SqliteSourceChangedError) || attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
+        throw error;
+      }
+      // An inactive family can become active while its private copy is prepared.
+      // Cleanup has settled; classify the current family again so a live WAL
+      // writer uses the native backup protocol on the next attempt.
     }
-    report(operation, "success", prepared);
-    return prepared;
-  } catch (error) {
-    report(operation, "error", undefined, error);
-    throw error;
   }
 }
 
@@ -552,6 +596,7 @@ function* prepareArtifactPreservingCopy(
   pathname: string,
   stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  expectedSourceContent?: SqliteFileContent,
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   const canonicalPath = fs.realpathSync.native(pathname);
   let lastChange: Error | undefined;
@@ -566,6 +611,7 @@ function* prepareArtifactPreservingCopy(
         undefined,
         stagingRoot,
         expectedSourceIdentity,
+        expectedSourceContent,
       );
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
@@ -587,9 +633,15 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   pathname: string,
   stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  expectedSourceContent?: SqliteFileContent,
 ): PreparedSqliteReadOnlyLocation {
   return copyPreparedLocationSync(
-    prepareArtifactPreservingCopy(pathname, stagingRoot, expectedSourceIdentity),
+    prepareArtifactPreservingCopy(
+      pathname,
+      stagingRoot,
+      expectedSourceIdentity,
+      expectedSourceContent,
+    ),
   );
 }
 
@@ -610,8 +662,16 @@ export async function inspectSqliteSchemaHeaderInProcess(
   pathname: string,
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
+  preserveSourceArtifacts = false,
 ) {
   const canonicalPath = fs.realpathSync.native(pathname);
+  if (preserveSourceArtifacts) {
+    return readSqliteSchemaHeaderFromSnapshot(
+      await prepareSqliteReadOnlyCopyInProcess(canonicalPath, stagingRoot),
+      undefined,
+      agentSchemaVersionForOwnership,
+    );
+  }
   const mode = readSourceJournalMode(canonicalPath);
   const sidecars = readSourceSidecars(canonicalPath);
   if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
@@ -675,11 +735,14 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   signal?: AbortSignal,
   cleanupMode?: "async",
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  signal?.throwIfAborted();
-  assertCurrent();
-  if (!database.isOpen || database.isTransaction) {
-    throw new Error("SQLite inspection requires an open owner outside a transaction");
-  }
+  const assertReady = () => {
+    signal?.throwIfAborted();
+    assertCurrent();
+    if (!database.isOpen || database.isTransaction) {
+      throw new Error("SQLite inspection requires an open owner outside a transaction");
+    }
+  };
+  assertReady();
   const directory = await createSqliteSnapshotStagingDirectory(
     undefined,
     false,
@@ -687,11 +750,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
     cleanupMode === "async",
   );
   try {
-    signal?.throwIfAborted();
-    assertCurrent();
-    if (!database.isOpen || database.isTransaction) {
-      throw new Error("SQLite inspection requires an open owner outside a transaction");
-    }
+    assertReady();
     const location = path.join(directory, "database.sqlite.partial");
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();
@@ -703,11 +762,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
       errors.push(cleanupError),
     );
     if (!removed && cleanupMode === "async") {
-      throw createSqliteLifecycleAggregateError(
-        errors,
-        "Owned SQLite snapshot preparation and cleanup failed",
-        error,
-      );
+      throw preparationCleanupError(errors, "Owned SQLite snapshot preparation");
     }
     throw error;
   }

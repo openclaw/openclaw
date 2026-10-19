@@ -1,85 +1,21 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { CommandOptions } from "../process/exec.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import { describe, expect, it, vi } from "vitest";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { repairManagedNpmRootOpenClawPeer } from "./npm-managed-root.js";
+import {
+  readManifest,
+  successfulSpawn,
+  useManagedNpmRootFixture,
+  writeFixtureJson,
+} from "./npm-managed-root.test-support.js";
 
-const fixtureRootTracker = createSuiteTempRootTracker({
-  prefix: "openclaw-npm-managed-root-",
-});
-const tempDirs: string[] = [];
-let npmConfigEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-const successfulSpawn = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
-
-async function makeTempRoot(): Promise<string> {
-  const dir = await fixtureRootTracker.make("case");
-  tempDirs.push(dir);
-  return dir;
-}
-
-beforeAll(async () => {
-  const fixtureRoot = await fixtureRootTracker.setup();
-  npmConfigEnvSnapshot = captureEnv(["NPM_CONFIG_GLOBALCONFIG"]);
-  const globalConfig = path.join(fixtureRoot, "global-npmrc");
-  await fs.writeFile(globalConfig, "", "utf8");
-  process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
-});
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-afterAll(async () => {
-  npmConfigEnvSnapshot?.restore();
-  npmConfigEnvSnapshot = undefined;
-  await fixtureRootTracker.cleanup();
-});
+const makeTempRoot = useManagedNpmRootFixture();
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.lstat(targetPath);
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error);
-    const statError = error as NodeJS.ErrnoException;
-    expect({
-      code: statError.code,
-      path: statError.path,
-      syscall: statError.syscall,
-    }).toEqual({
-      code: "ENOENT",
-      path: targetPath,
-      syscall: "lstat",
-    });
-    return;
-  }
-  throw new Error(`Expected path to be missing: ${targetPath}`);
-}
-
-function requireCommandOptions(
-  options: number | CommandOptions | undefined,
-  label: string,
-): CommandOptions {
-  if (!options || typeof options === "number") {
-    throw new Error(`expected ${label} command options`);
-  }
-  return options;
-}
-
-async function writeFixtureJson(file: string, value: unknown): Promise<void> {
-  await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+  await expect(fs.lstat(targetPath)).rejects.toThrow(
+    expect.objectContaining({ code: "ENOENT", path: targetPath, syscall: "lstat" }),
+  );
 }
 
 async function writeManagedPeerMetadata(
@@ -101,20 +37,13 @@ async function writeManagedPeerMetadata(
   });
 }
 
-async function writePeerShims(npmRoot: string, version: string): Promise<void> {
+async function writePeerShims(npmRoot: string): Promise<void> {
   const modules = path.join(npmRoot, "node_modules");
   await fs.mkdir(path.join(modules, ".bin"), { recursive: true });
-  for (const [name, content] of Object.entries({
-    openclaw: "shim",
-    "openclaw.cmd": "cmd shim",
-    "openclaw.ps1": "ps1 shim",
-  })) {
-    await fs.writeFile(path.join(modules, ".bin", name), content);
+  for (const name of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
+    await fs.writeFile(path.join(modules, ".bin", name), "shim");
   }
-  await writeFixtureJson(path.join(modules, ".package-lock.json"), {
-    lockfileVersion: 3,
-    packages: { "node_modules/openclaw": { version } },
-  });
+  await fs.writeFile(path.join(modules, ".package-lock.json"), "hidden lockfile");
 }
 
 async function expectPeerMetadataRemoved(
@@ -122,20 +51,19 @@ async function expectPeerMetadataRemoved(
   peerName: string,
   peerVersion: string,
 ): Promise<void> {
-  const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
-  expect(manifest.dependencies).toEqual({ [peerName]: peerVersion });
-  const lockfile = JSON.parse(
-    await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8"),
-  ) as {
-    packages?: Record<string, { dependencies?: Record<string, string>; version?: string }>;
-    dependencies?: Record<string, unknown>;
-  };
-  expect(lockfile.packages?.[""]?.dependencies).toEqual({ [peerName]: peerVersion });
-  expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
-  expect(lockfile.packages?.[`node_modules/${peerName}`]?.version).toBe(peerVersion);
-  expect(lockfile.dependencies?.openclaw).toBeUndefined();
+  await expect(readManifest(npmRoot)).resolves.toEqual({
+    private: true,
+    dependencies: { [peerName]: peerVersion },
+  });
+  const lockfile = JSON.parse(await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8"));
+  expect(lockfile).toEqual({
+    lockfileVersion: 3,
+    packages: {
+      "": { dependencies: { [peerName]: peerVersion } },
+      [`node_modules/${peerName}`]: { version: peerVersion },
+    },
+    dependencies: {},
+  });
   for (const binName of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
     await expectPathMissing(path.join(npmRoot, "node_modules", ".bin", binName));
   }
@@ -157,19 +85,13 @@ describe("managed npm root peer repair", () => {
         name: "openclaw",
         version: "2026.5.4",
       });
-      await writePeerShims(npmRoot, "2026.5.4");
+      await writePeerShims(npmRoot);
 
       const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
       await expect(
         repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand, workTimeoutMs }),
       ).resolves.toBe(true);
-      expect(runCommand).toHaveBeenCalledTimes(1);
-      const [repairArgs, rawRepairOptions] = expectDefined(
-        runCommand.mock.calls[0],
-        "repair command call",
-      );
-      const repairOptions = requireCommandOptions(rawRepairOptions, "repair");
-      expect(repairArgs).toEqual(
+      expect(runCommand).toHaveBeenCalledExactlyOnceWith(
         expectedNpmCommand([
           "uninstall",
           "--loglevel=error",
@@ -179,94 +101,49 @@ describe("managed npm root peer repair", () => {
           "--no-fund",
           "openclaw",
         ]),
+        expect.objectContaining({
+          cwd: npmRoot,
+          timeoutMs: expectedTimeoutMs,
+          env: expect.objectContaining({ npm_config_legacy_peer_deps: "true" }),
+        }),
       );
-      expect(repairOptions.cwd).toBe(npmRoot);
-      expect(repairOptions.timeoutMs).toBe(expectedTimeoutMs);
-      expect(repairOptions.env?.npm_config_legacy_peer_deps).toBe("true");
 
       await expectPeerMetadataRemoved(npmRoot, "@openclaw/discord", "2026.5.4");
       await expectPathMissing(path.join(npmRoot, "node_modules", "openclaw"));
     },
   );
 
-  it("does not repair the active OpenClaw host package in a root-managed install", async () => {
+  it.each([false, true])("preserves the active host package (linked=%s)", async (linked) => {
     const npmRoot = await makeTempRoot();
-    const hostPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
+    const managedPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
+    const hostPackageRoot = linked ? await makeTempRoot() : managedPackageRoot;
     await fs.mkdir(path.join(hostPackageRoot, "dist"), { recursive: true });
-    const dependencies = {
-      openclaw: "2026.5.12-beta.6",
-      "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
-    };
-    await writeFixtureJson(path.join(npmRoot, "package.json"), { private: true, dependencies });
-    await writeFixtureJson(path.join(npmRoot, "package-lock.json"), {
-      lockfileVersion: 3,
-      packages: {
-        "": { dependencies },
-        "node_modules/openclaw": { version: "2026.5.12-beta.6" },
-      },
-    });
+    const version = "2026.5.12-beta.6";
+    const peerName = "@xdarkicex/openclaw-memory-libravdb";
+    await writeManagedPeerMetadata(npmRoot, version, peerName, "1.4.69");
     await writeFixtureJson(path.join(hostPackageRoot, "package.json"), {
       name: "openclaw",
-      version: "2026.5.12-beta.6",
+      version,
     });
-
+    if (linked) {
+      await writePeerShims(npmRoot);
+      await fs.symlink(hostPackageRoot, managedPackageRoot, "dir");
+    }
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(
-      repairManagedNpmRootOpenClawPeer({
-        npmRoot,
-        packageRoot: hostPackageRoot,
-        runCommand,
-      }),
-    ).resolves.toBe(false);
-
+      repairManagedNpmRootOpenClawPeer({ npmRoot, packageRoot: hostPackageRoot, runCommand }),
+    ).resolves.toBe(linked);
     expect(runCommand).not.toHaveBeenCalled();
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toMatchObject({
-      dependencies: {
-        openclaw: "2026.5.12-beta.6",
-        "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
-      },
-    });
-    await expect(
-      fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
-    ).resolves.toContain("2026.5.12-beta.6");
-  });
-
-  it("scrubs managed ownership metadata without deleting a linked active host package", async () => {
-    const npmRoot = await makeTempRoot();
-    const hostPackageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-package-"));
-    tempDirs.push(hostPackageRoot);
-    await writePeerShims(npmRoot, "2026.5.12-beta.6");
-    await writeFixtureJson(path.join(hostPackageRoot, "package.json"), {
-      name: "openclaw",
-      version: "2026.5.12-beta.6",
-    });
-    await fs.symlink(hostPackageRoot, path.join(npmRoot, "node_modules", "openclaw"), "dir");
-    await writeManagedPeerMetadata(
-      npmRoot,
-      "2026.5.12-beta.6",
-      "@xdarkicex/openclaw-memory-libravdb",
-      "1.4.69",
-    );
-
-    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
-    await expect(
-      repairManagedNpmRootOpenClawPeer({
-        npmRoot,
-        packageRoot: hostPackageRoot,
-        runCommand,
-      }),
-    ).resolves.toBe(true);
-
-    expect(runCommand).not.toHaveBeenCalled();
-    await expect(fs.realpath(path.join(npmRoot, "node_modules", "openclaw"))).resolves.toBe(
-      await fs.realpath(hostPackageRoot),
-    );
-    await expect(
-      fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
-    ).resolves.toContain("2026.5.12-beta.6");
-
-    await expectPeerMetadataRemoved(npmRoot, "@xdarkicex/openclaw-memory-libravdb", "1.4.69");
+    await expect(readManifest(hostPackageRoot)).resolves.toEqual({ name: "openclaw", version });
+    if (linked) {
+      await expect(fs.realpath(managedPackageRoot)).resolves.toBe(
+        await fs.realpath(hostPackageRoot),
+      );
+      await expectPeerMetadataRemoved(npmRoot, peerName, "1.4.69");
+    } else {
+      await expect(readManifest(npmRoot)).resolves.toMatchObject({
+        dependencies: { openclaw: version, [peerName]: "1.4.69" },
+      });
+    }
   });
 });

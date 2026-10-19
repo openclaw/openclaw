@@ -6,7 +6,7 @@ import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "../../channels/account-summary.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { asBoolean } from "../../utils/boolean.js";

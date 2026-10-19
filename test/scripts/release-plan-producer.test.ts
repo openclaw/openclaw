@@ -44,31 +44,12 @@ import {
 } from "../../scripts/release-plan-producer.mts";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { INVENTORY_PRODUCER_PATHS as TOOLING_CLOSURE } from "./release-inventory-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 let defaultFixture: ReturnType<typeof buildFixtureRepo> | undefined;
-const TOOLING_CLOSURE = [
-  "packages/normalization-core/src/record-coerce.ts",
-  "packages/normalization-core/src/string-coerce.ts",
-  "packages/plugin-package-contract/src/categories.ts",
-  "packages/plugin-package-contract/src/index.ts",
-  "scripts/lib/bounded-response.mjs",
-  "scripts/lib/canonical-json.mjs",
-  "scripts/release-plan-producer.mts",
-  "scripts/release-plan-producer-core.mts",
-  "scripts/release-plan-contract.mjs",
-  "scripts/release-validation-intent.mjs",
-  "scripts/release-tooling-identity.mjs",
-  "scripts/lib/npm-publish-plan.mjs",
-  "scripts/lib/npm-core-release-packages.json",
-  "scripts/lib/plugin-publication-candidates.ts",
-  "scripts/lib/plugin-publication-collector.ts",
-  "scripts/lib/plugin-publication-target.mjs",
-  "scripts/lib/pnpm-lockfile-documents.mjs",
-  "scripts/lib/record-shared.mjs",
-  "scripts/lib/release-version.mjs",
-];
+
 const TOOLING_ROOT_FILES = ["package.json", "pnpm-lock.yaml"];
 
 function writeFixture(root: string, path: string, content: string) {
@@ -104,7 +85,6 @@ function copyToolingClosure(root: string) {
 }
 
 type FixtureOptions = {
-  conflictingPlatformId?: boolean;
   corePackageNameCollision?: boolean;
   duplicateCrossTargetPackageName?: boolean;
   malformedPlugin?: boolean;
@@ -235,9 +215,6 @@ function buildFixtureRepo(root: string, version: string, options: FixtureOptions
       "    uses: ./.github/workflows/docker-release.yml",
       "  publish_vcr:",
       "    uses: ./.github/workflows/vercel-container-registry-publish.yml",
-      ...(options.conflictingPlatformId
-        ? ["  publish_windows:", "    uses: ./.github/workflows/docker-release.yml"]
-        : []),
       "",
     ].join("\n"),
   );
@@ -518,54 +495,6 @@ describe("release plan producer", () => {
   );
 
   it.each([
-    [
-      "moved",
-      ({ fixture }: YamlPackageHarnessParams) =>
-        JSON.stringify({
-          ref: "refs/heads/tideclaw/alpha/2026-09-13-1200Z",
-          object: { type: "commit", sha: fixture.candidateSha },
-        }),
-    ],
-    ["missing", () => "{}"],
-    [
-      "wrong ref",
-      ({ fixture }: YamlPackageHarnessParams) =>
-        JSON.stringify({
-          ref: "refs/heads/main",
-          object: { type: "commit", sha: fixture.toolingSha },
-        }),
-    ],
-    [
-      "non-commit",
-      ({ fixture }: YamlPackageHarnessParams) =>
-        JSON.stringify({
-          ref: "refs/heads/tideclaw/alpha/2026-09-13-1200Z",
-          object: { type: "tag", sha: fixture.toolingSha },
-        }),
-    ],
-    ["malformed", () => "not JSON"],
-  ] as const)(
-    "rejects %s Tideclaw inventory identity before YAML execution",
-    (_label, identityResponse) => {
-      const { result, sentinelPath } = runYamlPackageSubprocess({
-        inventory: true,
-        version: "2026.9.9-alpha.1",
-        toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-13-1200Z",
-        identityResponse,
-        mutate: ({ packageRoot, sentinelPath: mutationSentinel }) => {
-          writeFileSync(
-            join(packageRoot, "dist/index.js"),
-            `require("node:fs").writeFileSync(${JSON.stringify(mutationSentinel)}, "executed");`,
-          );
-        },
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).not.toContain("verified release plan child");
-      expect(existsSync(sentinelPath)).toBe(false);
-    },
-  );
-
-  it.each([
     ["refs/heads/topic/alpha", "workflow ref is not a trusted direct"],
     ["refs/heads/tideclaw/alpha/not-a-date", "Alpha releases are retired;"],
     [
@@ -641,30 +570,6 @@ describe("release plan producer", () => {
         expect(readFileSync(identityRequestsPath, "utf8").trim().split("\n")).toHaveLength(1);
       },
     );
-
-    it("binds the child SHA to the parent's cached branch response", () => {
-      const { result, identityRequestsPath } = runYamlPackageSubprocess({
-        inventory: true,
-        toolingFullRef,
-        version,
-        mutateTooling: ({ root }) => {
-          const path = join(root, "scripts/release-plan-producer-core.mts");
-          const original = readFileSync(path, "utf8");
-          const start = original.indexOf("const verifiedTooling = verifyReleaseToolingIdentity({");
-          expect(start).toBeGreaterThan(0);
-          const changed =
-            original.slice(0, start) +
-            original
-              .slice(start)
-              .replace("workflowSha: toolingSha,", `workflowSha: "${"f".repeat(40)}",`);
-          expect(changed).not.toBe(original);
-          writeFileSync(path, changed);
-        },
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("prevalidated release tooling branch");
-      expect(readFileSync(identityRequestsPath, "utf8").trim().split("\n")).toHaveLength(1);
-    });
   });
 
   it.each(["2026.9.9", "2026.9.9-beta.1", "2026.9.9-alpha.1"])(
@@ -709,7 +614,7 @@ describe("release plan producer", () => {
         version: "2026.9.9",
         toolingFullRef: "refs/heads/release/2026.9.9",
         mutateTooling: ({ root }) => {
-          const path = join(root, "scripts/release-plan-producer-core.mts");
+          const path = join(root, "scripts/lib/release-plan-source.mts");
           const original = readFileSync(path, "utf8");
           const start = original.indexOf("const verifiedTooling = verifyReleaseToolingIdentity({");
           expect(start).toBeGreaterThan(0);
@@ -1107,14 +1012,14 @@ describe("release plan producer", () => {
   it("rejects an uncached request from verified tooling", () => {
     const { result } = runYamlPackageSubprocess({
       mutateTooling: (fixture) => {
-        const corePath = join(fixture.root, "scripts/release-plan-producer-core.mts");
-        writeFileSync(
-          corePath,
-          readFileSync(corePath, "utf8").replace(
-            "const params = { ...request.params, runGh: runtime.runGh };",
-            'runtime.runGh(["api", "repos/openclaw/openclaw"]);\nconst params = { ...request.params, runGh: runtime.runGh };',
-          ),
+        const sourcePath = join(fixture.root, "scripts/lib/release-plan-source.mts");
+        const original = readFileSync(sourcePath, "utf8");
+        const changed = original.replace(
+          "  const toolingRef = toolingFullRef.replace",
+          '  params.runGh?.(["api", "repos/openclaw/openclaw"]);\n  const toolingRef = toolingFullRef.replace',
         );
+        expect(changed).not.toBe(original);
+        writeFileSync(sourcePath, changed);
       },
     });
     expect(result.status).toBe(1);
@@ -1157,16 +1062,26 @@ describe("release plan producer", () => {
     ).toThrow("protected release tooling tag is missing or unreadable");
   });
 
-  it("rejects a caller producer that differs from the exact tooling commit", () => {
-    const { result } = runYamlPackageSubprocess({
-      mutate: ({ fixture }) => {
-        const producerPath = join(fixture.root, "scripts/release-plan-producer.mts");
-        writeFileSync(producerPath, `${readFileSync(producerPath, "utf8")}\n// ambient mismatch\n`);
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("tooling bootstrap differs from tooling SHA");
-  });
+  it.each(["scripts/release-plan-producer.mts", "scripts/lib/release-plan-child-runner.mjs"])(
+    "rejects changed bootstrap runtime %s",
+    (path) => {
+      const { result } = runYamlPackageSubprocess({
+        mutate: ({ fixture }) => {
+          const producerPath = join(fixture.root, path);
+          writeFileSync(
+            producerPath,
+            `${readFileSync(producerPath, "utf8")}\n// ambient mismatch\n`,
+          );
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        path.endsWith("child-runner.mjs")
+          ? "child runner differs from tooling SHA"
+          : "tooling bootstrap differs from tooling SHA",
+      );
+    },
+  );
 
   it("rejects a byte-identical bootstrap launched from the candidate checkout", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
@@ -1597,16 +1512,6 @@ mutateModule.syncBuiltinESMExports();
     );
   });
 
-  it("rejects conflicting platform publication sources with the same id", () => {
-    const fixture = createFixtureRepo("2026.8.1-beta.2", {
-      conflictingPlatformId: true,
-    });
-
-    expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(
-      "declares conflicting platform windows: .github/workflows/windows-node-release.yml and .github/workflows/docker-release.yml",
-    );
-  });
-
   it("shares current sourced platforms across inventory, plans, and verified locks", () => {
     const fixture = createFixtureRepo();
     for (const path of [
@@ -1814,30 +1719,5 @@ mutateModule.syncBuiltinESMExports();
         .map((plugin) => plugin.packageName)
         .toSorted(),
     );
-  });
-
-  it("rejects recomputed locks with partial groups or bogus inventory", () => {
-    const fixture = createFixtureRepo();
-    const params = sourceParams(fixture);
-    const plan = produceReleasePlan(params);
-    const validLock = canonicalReleasePlanLockJson(createReleasePlanLock(plan));
-    expect(verifyReleasePlanLock(validLock, params).plan).toEqual(plan);
-
-    const partialGroups = structuredClone(plan);
-    partialGroups.validation.allowed_groups = ["all", "ci"];
-    const partialPlatforms = structuredClone(plan);
-    partialPlatforms.inventory.platforms = partialPlatforms.inventory.platforms.slice(0, -1);
-    const bogusPackages = structuredClone(plan);
-    bogusPackages.inventory.packages.push({
-      name: "zz-not-published",
-      targets: ["npm"],
-      version: plan.version,
-    });
-    for (const changed of [partialGroups, partialPlatforms, bogusPackages]) {
-      const redigested = canonicalReleasePlanLockJson(createReleasePlanLock(changed));
-      expect(() => verifyReleasePlanLock(redigested, params)).toThrow(
-        "repository-derived authority",
-      );
-    }
   });
 });

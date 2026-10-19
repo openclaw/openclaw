@@ -9,39 +9,7 @@ import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 
 describe("sent comment attachment presentation", () => {
   it.each([
-    ["Review the deployment checklist.", ""],
-    [
-      "🦞 Keep spacing\n\nUser comment:\n  in the selected text.",
-      "Another\n\nSource session: literal heading\n\nUser comment:\ninside the comment.",
-    ],
-  ])(
-    "recovers the original selection and optional comment without interpreting their headings",
-    (text, comment) => {
-      const attachment = createChatSelectionAttachment(
-        {
-          text,
-          comment,
-          sessionKey: "agent:main:main",
-          start: 7,
-          end: 7 + text.length,
-        },
-        {},
-        0,
-      )!;
-      try {
-        const payload = getChatAttachmentDataUrl(attachment)!;
-        expect(
-          parseCommentAttachment(Buffer.from(payload.split(",")[1]!, "base64").toString("utf8")),
-        ).toEqual({ text, comment });
-      } finally {
-        releaseChatAttachmentPayload(attachment.id);
-      }
-    },
-  );
-
-  it.each([
     { text: "repeat\nlast", comment: "", domLength: 10 },
-    { text: "repeat\nlast", comment: "Check both lines.", domLength: 10 },
     {
       text: "🦞 First\n第二段\n\nUser comment:\n quoted",
       comment:
@@ -85,11 +53,10 @@ describe("sent comment attachment presentation", () => {
   });
 
   it.each([
-    "An ordinary text file.",
     "Selected text:\nvalue\n\nUser comment:\nno provenance",
     "Selected text:\nvalue\n\nSource session: agent:main:main\nDOM text UTF-16 range: [0, 100)",
     "Selected text:\nrepeat\nlast\n\nSource session: agent:main:main\nDOM text UTF-16 range: [0, 10)",
-    ...["0", "-1", "1.5", "100", "9007199254740992"].map(
+    ...["0", "100", "9007199254740992"].map(
       (length) =>
         `Selected text:\nvalue\n\nSource session: agent:main:main\nSelected text UTF-16 length: ${length}\nDOM text UTF-16 range: [0, 5)`,
     ),

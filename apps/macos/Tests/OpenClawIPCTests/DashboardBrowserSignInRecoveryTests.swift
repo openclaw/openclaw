@@ -115,7 +115,7 @@ struct DashboardBrowserSignInRecoveryTests {
         }
 
         #expect(controller.webView.url == chatURL)
-        #expect(controller.dashboardBaseURL == baseURL)
+        #expect(controller.currentURL == baseURL)
         #expect(controller.webView.configuration.websiteDataStore === store)
         #expect(receivedIdentityCookie)
         #expect(try await controller.webView.evaluateJavaScript(

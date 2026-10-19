@@ -1,11 +1,13 @@
-// Gateway Protocol schema module for the operator terminal surface.
 // Terminal methods open a PTY-backed shell session bound to one authenticated
 // operator connection and stream its bytes back over the existing WebSocket.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { SessionCatalogLocatorSchema } from "./sessions-catalog.js";
+import {
+  SessionCatalogLocatorSchema,
+  SessionsCatalogStartTerminalResultSchema,
+} from "./sessions-catalog.js";
 import { withSince } from "./since.js";
 import {
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
@@ -31,20 +33,12 @@ export const TerminalOpenParamsSchema = closedObject({
 });
 export type TerminalOpenParams = Static<typeof TerminalOpenParamsSchema>;
 
-/** Result of a successful open; carries the facts the UI header renders. */
-export const TerminalOpenResultSchema = closedObject({
-  sessionId: NonEmptyString,
-  agentId: NonEmptyString,
-  shell: NonEmptyString,
-  cwd: NonEmptyString,
-  // True when the shell runs inside the agent's sandbox and cannot escape the
-  // workspace; false for a host shell that can navigate the whole filesystem.
-  confined: Type.Boolean(),
-  title: Type.Optional(NonEmptyString),
-});
+// `confined` is true for a sandboxed workspace shell and false for a host shell.
+export const TerminalOpenResultSchema = closedObject(
+  SessionsCatalogStartTerminalResultSchema.properties,
+);
 export type TerminalOpenResult = Static<typeof TerminalOpenResultSchema>;
 
-/** Writes client keystrokes to the session stdin. */
 export const TerminalInputParamsSchema = closedObject({
   sessionId: NonEmptyString,
   // Raw terminal input (already-encoded escape sequences from the emulator).
@@ -70,7 +64,6 @@ export const TerminalUploadResultSchema = closedObject({
 export type TerminalUploadResult = Static<typeof TerminalUploadResultSchema>;
 export type TerminalUploadPathStyle = NonNullable<TerminalUploadResult["uploadPathStyle"]>;
 
-/** Resizes the PTY grid after the client viewport changes. */
 export const TerminalResizeParamsSchema = closedObject({
   sessionId: NonEmptyString,
   cols: TerminalDimension,
@@ -104,7 +97,6 @@ export const TerminalAttachResultSchema = closedObject({
 });
 export type TerminalAttachResult = Static<typeof TerminalAttachResultSchema>;
 
-/** One attachable session, as reported by terminal.list. */
 export const TerminalSessionInfoSchema = closedObject({
   sessionId: NonEmptyString,
   agentId: NonEmptyString,
@@ -170,7 +162,6 @@ export const TerminalExitEventSchema = withSince(
 );
 export type TerminalExitEvent = Static<typeof TerminalExitEventSchema>;
 
-/** Union of every event a terminal session can emit. */
 export const TerminalEventSchema = withSince(
   "2026.7",
   Type.Union([TerminalDataEventSchema, TerminalExitEventSchema]),

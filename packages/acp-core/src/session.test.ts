@@ -1,17 +1,18 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemorySessionStore } from "./session.js";
 
 describe("acp session manager", () => {
   let nowMs = 0;
-  const now = () => nowMs;
-  let store = createInMemorySessionStore({ now });
+  let store = createInMemorySessionStore();
   const createSession = (sessionId: string, target = store) =>
     target.createSession({ sessionId, sessionKey: `acp:${sessionId}`, cwd: "/tmp" });
 
   beforeEach(() => {
     nowMs = 1_000;
-    store = createInMemorySessionStore({ now });
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    store = createInMemorySessionStore();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("tracks active runs and clears on cancel", () => {
     const session = store.createSession({
@@ -90,39 +91,9 @@ describe("acp session manager", () => {
     expect(store.hasSession("existing")).toBe(true);
   });
 
-  it("falls back for non-finite idle TTL options", () => {
-    const boundedStore = createInMemorySessionStore({
-      maxSessions: 2,
-      idleTtlMs: Number.NaN,
-      now,
-    });
-    createSession("first", boundedStore);
-    nowMs += 1;
-    createSession("second", boundedStore);
-
-    expect(boundedStore.hasSession("first")).toBe(true);
-    expect(boundedStore.hasSession("second")).toBe(true);
-  });
-
-  it("falls back for non-finite max session options", () => {
-    const boundedStore = createInMemorySessionStore({
-      maxSessions: Number.NaN,
-      idleTtlMs: 24 * 60 * 60 * 1_000,
-      now,
-    });
-    for (let index = 0; index < 5_000; index += 1) {
-      const session = createSession(`session-${index}`, boundedStore);
-      boundedStore.setActiveRun(session.sessionId, `run-${index}`, new AbortController());
-    }
-
-    expect(() => createSession("overflow", boundedStore)).toThrow(/session limit reached/i);
-  });
-
   it("uses soft-cap eviction for the oldest idle session when full", () => {
     const boundedStore = createInMemorySessionStore({
       maxSessions: 2,
-      idleTtlMs: 24 * 60 * 60 * 1_000,
-      now,
     });
     const first = createSession("first", boundedStore);
     nowMs += 100;
@@ -142,8 +113,6 @@ describe("acp session manager", () => {
   it("rejects when full and no session is evictable", () => {
     const boundedStore = createInMemorySessionStore({
       maxSessions: 1,
-      idleTtlMs: 24 * 60 * 60 * 1_000,
-      now,
     });
     const only = createSession("only", boundedStore);
     boundedStore.setActiveRun(only.sessionId, "run-only", new AbortController());
@@ -154,9 +123,7 @@ describe("acp session manager", () => {
   it("reports every removal path through onSessionRemoved", () => {
     const removed: string[] = [];
     const reportingStore = createInMemorySessionStore({
-      now,
       maxSessions: 2,
-      idleTtlMs: 1_000,
       onSessionRemoved: (sessionId) => removed.push(sessionId),
     });
 
@@ -166,7 +133,7 @@ describe("acp session manager", () => {
 
     // Idle reaping: the session ages past the TTL and is swept on the next create.
     createSession("stale", reportingStore);
-    nowMs += 5_000;
+    nowMs += 24 * 60 * 60 * 1_000 + 1;
     createSession("fresh", reportingStore);
     expect(removed).toEqual(["deleted", "stale"]);
 

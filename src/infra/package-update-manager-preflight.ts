@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -5,6 +6,8 @@ import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { hasErrnoCode, isErrno } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
+import { packageActivationIdentity } from "./package-update-activation-paths.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
@@ -30,10 +33,10 @@ export async function runPnpmPreflightProbe(params: {
   env?: NodeJS.ProcessEnv;
   name?: string;
   cwd?: string;
-}): Promise<{
-  result: Awaited<ReturnType<CommandRunner>> | null;
-  failedStep: UpdateStepResult | null;
-}> {
+}): Promise<
+  | { result: Awaited<ReturnType<CommandRunner>>; failedStep: null }
+  | { result: null; failedStep: UpdateStepResult }
+> {
   const startedAt = Date.now();
   const argv = [params.installTarget.command, ...params.args];
   const probeCwd = params.cwd ?? params.installTarget.globalRoot ?? undefined;
@@ -129,7 +132,7 @@ export async function validatePnpmIsolatedUpdate(params: {
   }
 
   const rootProbe = await runPnpmPreflightProbe({ ...params, args: ["root", "-g"] });
-  if (rootProbe.failedStep || !rootProbe.result) {
+  if (rootProbe.failedStep) {
     return {
       globalBinDir: null,
       failedStep: rootProbe.failedStep,
@@ -228,10 +231,12 @@ async function permissionFailure(
   };
 }
 
-/** Inspect the directories npm staging and launcher publication must write, without creating a probe. */
-export async function checkGlobalPackageUpdatePermissions(
+/** Admit writable npm parents and owned publication objects before staging or validation. */
+export async function checkGlobalPackageUpdateAdmission(
   target: ResolvedGlobalInstallTarget,
+  packageName: string,
   env?: NodeJS.ProcessEnv,
+  stagedBinDir?: string,
 ): Promise<UpdateStepResult | null> {
   if (target.manager !== "npm" || !target.globalRoot) {
     return null;
@@ -260,6 +265,43 @@ export async function checkGlobalPackageUpdatePermissions(
       }
       // An unavailable inspection is not proof of a permission failure. The
       // install boundary still classifies an actual denial after this read.
+    }
+  }
+  if (process.platform !== "win32" && layout && target.packageRoot) {
+    try {
+      const packageStat = fsSync.lstatSync(target.packageRoot, { throwIfNoEntry: false });
+      // Admit the source link itself; its external checkout remains operator-owned.
+      if (packageStat) {
+        packageActivationIdentity(
+          target.packageRoot,
+          packageStat.isSymbolicLink() ? "symlink" : true,
+        );
+      }
+      const entries = target.directNodeModulesRoot
+        ? []
+        : stagedBinDir === undefined
+          ? undefined
+          : await fs.readdir(stagedBinDir).catch((error: unknown) => {
+              if (hasErrnoCode(error, "ENOENT")) {
+                return [];
+              }
+              throw error;
+            });
+      for (const name of resolvePackageUpdateLauncherNames(packageName, entries)) {
+        const launcher = path.join(layout.binDir, name);
+        if (fsSync.lstatSync(launcher, { throwIfNoEntry: false })) {
+          packageActivationIdentity(launcher, "launcher");
+        }
+      }
+    } catch (error) {
+      return {
+        name: "package-publication-admission",
+        command: "inspect npm publication objects",
+        cwd: target.packageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: formatErrorMessage(error),
+      };
     }
   }
   return null;

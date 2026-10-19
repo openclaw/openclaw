@@ -33,12 +33,11 @@ enum PushRelayRegistrationStore {
     static func loadRegistrationState() -> RegistrationState? {
         guard let raw = GenericPasswordKeychainStore.loadString(
             service: self.service,
-            account: self.registrationStateAccount),
-            let data = raw.data(using: .utf8)
+            account: self.registrationStateAccount)
         else {
             return nil
         }
-        return try? JSONDecoder().decode(RegistrationState.self, from: data)
+        return try? JSONDecoder().decode(RegistrationState.self, from: Data(raw.utf8))
     }
 
     @discardableResult
@@ -55,12 +54,10 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadAppAttestKeyID(scope: AppAttestScope) -> String? {
-        let value = GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            .trimmedNonEmpty
     }
 
     @discardableResult
@@ -79,12 +76,10 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadAttestedKeyID(scope: AppAttestScope) -> String? {
-        let value = GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            .trimmedNonEmpty
     }
 
     @discardableResult

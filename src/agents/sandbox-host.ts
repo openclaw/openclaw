@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { LruCache } from "../infra/lru-cache.js";
 import {
-  COMMAND_PALETTE_SHORTCUT,
+  COMMAND_PALETTE_SHORTCUTS,
   createKeyboardShortcutMatcher,
 } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
+import { buildSandboxWidgetScrollBridgeHtml } from "./sandbox-widget-scroll-bridge.js";
 
 export type SandboxHostCsp = {
   connectDomains?: string[];
@@ -21,6 +24,8 @@ const SANDBOX_HOST_CSP_QUERY = "csp";
 const SANDBOX_HOST_CSP_MAX_JSON_BYTES = 5 * 1024;
 const SANDBOX_HOST_CSP_MAX_HEADER_BYTES = 6 * 1024;
 const SANDBOX_HOST_CSP_MAX_ENCODED_BYTES = Math.ceil(SANDBOX_HOST_CSP_MAX_JSON_BYTES / 3) * 4 + 4;
+// The complete policy keys immutable public URLs; shell code changes retire this process cache.
+const sandboxHostPaths = new LruCache<string>(64);
 
 function buildSandboxShortcutBridgeHtml(): string {
   return `<script>(()=>{
@@ -42,7 +47,7 @@ function buildSandboxShortcutBridgeHtml(): string {
   const HTMLElementType=HTMLElement;
   const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
   const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
-  const combo=${JSON.stringify(COMMAND_PALETTE_SHORTCUT)};
+  const combos=${JSON.stringify(COMMAND_PALETTE_SHORTCUTS)};
   const matcher=(${createKeyboardShortcutMatcher.toString()})();
   const applePlatform=matcher.isApplePlatform();
   let nonce="";
@@ -64,7 +69,12 @@ function buildSandboxShortcutBridgeHtml(): string {
     if(!nonce||!event.isTrusted||apply(preventedGetter,event,[])||apply(repeatGetter,event,[]))return;
     const snapshot=create(null);
     for(let index=0;index<fields.length;index++)snapshot[fields[index]]=apply(getters[index],event,[]);
-    if(!matcher.matchesKeyboardShortcut(combo,snapshot,applePlatform,matcher.resolveAsciiShortcutKey(snapshot)))return;
+    const asciiKey=matcher.resolveAsciiShortcutKey(snapshot);
+    let matched=false;
+    for(let index=0;index<combos.length;index++){
+      if(matcher.matchesKeyboardShortcut(combos[index],snapshot,applePlatform,asciiKey)){matched=true;break;}
+    }
+    if(!matched)return;
     const target=apply(path,event,[])[0];
     returnFocus=target instanceof HTMLElementType?target:null;
     apply(prevent,event,[]);
@@ -142,53 +152,40 @@ function normalizeDomains(
   const allowedProtocols = options?.allowWebSocket
     ? new Set(["http:", "https:", "ws:", "wss:"])
     : new Set(["http:", "https:"]);
-  const entries = value
-    .filter((entry): entry is string => {
-      if (
-        typeof entry !== "string" ||
-        entry.length === 0 ||
-        entry.length > 2048 ||
-        entry !== entry.trim()
-      ) {
-        return false;
-      }
-      for (let index = 0; index < entry.length; index += 1) {
-        const code = entry.charCodeAt(index);
-        if (code <= 31 || code === 127) {
-          return false;
-        }
-      }
-      if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
-        return true;
-      }
-      let parsed: URL;
-      try {
-        parsed = new URL(entry);
-      } catch {
-        return false;
-      }
-      if (
-        !allowedProtocols.has(parsed.protocol) ||
-        parsed.username !== "" ||
-        parsed.password !== "" ||
-        parsed.pathname !== "/" ||
-        parsed.search !== "" ||
-        parsed.hash !== ""
-      ) {
-        return false;
-      }
-      // URL parsing validates bracketed IPv6. MCP Apps additionally support one
-      // leading wildcard label, while board declarations arrive as exact hosts.
-      return (
-        /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
-        /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
-      );
-    })
-    .map((entry) =>
-      options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")
-        ? entry
-        : new URL(entry).origin,
-    );
+  const entries = value.flatMap((entry) => {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.length > 2048 ||
+      entry !== entry.trim()
+    ) {
+      return [];
+    }
+    if (containsAsciiControlCharacter(entry)) {
+      return [];
+    }
+    if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
+      return [entry];
+    }
+    const parsed = URL.parse(entry);
+    if (
+      !parsed ||
+      !allowedProtocols.has(parsed.protocol) ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return [];
+    }
+    // URL parsing validates bracketed IPv6. MCP Apps additionally support one
+    // leading wildcard label, while board declarations arrive as exact hosts.
+    return /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
+      /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
+      ? [parsed.origin]
+      : [];
+  });
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -221,23 +218,27 @@ export function normalizeSandboxHostCsp(value: unknown): SandboxHostCsp | undefi
 
 export function buildSandboxHostPath(csp?: SandboxHostCsp): string {
   const normalized = normalizeSandboxHostCsp(csp);
+  const policy = normalized ? JSON.stringify(normalized) : "";
+  const cached = sandboxHostPaths.get(policy);
+  if (cached !== undefined) {
+    return cached;
+  }
   const query = new URLSearchParams();
   if (normalized) {
-    query.set(
-      SANDBOX_HOST_CSP_QUERY,
-      Buffer.from(JSON.stringify(normalized)).toString("base64url"),
-    );
+    query.set(SANDBOX_HOST_CSP_QUERY, Buffer.from(policy).toString("base64url"));
   }
   query.set("v", buildSandboxHostDocument(normalized).version);
-  return `${SANDBOX_HOST_PATH}?${query}`;
+  const pathname = `${SANDBOX_HOST_PATH}?${query}`;
+  sandboxHostPaths.set(policy, pathname);
+  return pathname;
 }
 
 /** Version the public shell and its security headers together, never widget content. */
-export function buildSandboxHostDocument(csp?: SandboxHostCsp) {
+export function buildSandboxHostDocument(csp?: SandboxHostCsp, frameAncestors?: readonly string[]) {
   const html = buildSandboxHostProxyHtml(csp);
   const headers = {
     "Content-Type": "text/html; charset=utf-8",
-    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp),
+    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp, frameAncestors),
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-write=()",
     "Cross-Origin-Resource-Policy": "cross-origin",
     "Origin-Agent-Cluster": "?1",
@@ -291,10 +292,12 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const blockDescendantFrames = csp?.blockDescendantFrames === true;
   // Runtime insertion reaches existing saved widgets without changing their
-  // approved bytes. Its first capture listener consumes private shortcut state
-  // before stored scripts; other sandbox documents never receive that nonce.
+  // approved bytes. Capture listeners consume private host state before stored
+  // scripts, including older wrappers whose scroll bridge must stay nonce-less.
   const serializedDocumentGuard = JSON.stringify(
-    buildSandboxDocumentGuardHtml(blockDescendantFrames) + buildSandboxShortcutBridgeHtml(),
+    buildSandboxDocumentGuardHtml(blockDescendantFrames) +
+      buildSandboxShortcutBridgeHtml() +
+      buildSandboxWidgetScrollBridgeHtml(),
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
@@ -316,6 +319,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   }
   const createInner = (allowScripts = true) => {
     const frame = document.createElement("iframe");
+    frame.setAttribute("allow", "fullscreen *");
     // Block native popups here without reserving widget globals such as open.
     frame.setAttribute("sandbox", allowScripts ? "allow-scripts allow-forms" : "");
     return frame;
@@ -407,7 +411,10 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
 }
 
 /** HTTP response policy for the isolated proxy and its inner about:blank content. */
-function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
+function buildSandboxHostContentSecurityPolicy(
+  csp?: SandboxHostCsp,
+  frameAncestors?: readonly string[],
+): string {
   const resources = csp?.resourceDomains ?? [];
   const media = csp?.mediaDomains ?? resources;
   const connections = csp?.connectDomains ?? [];
@@ -428,7 +435,7 @@ function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
     `base-uri ${bases.length > 0 ? bases.join(" ") : "'self'"}`,
     "object-src 'none'",
     "form-action 'none'",
-    "frame-ancestors http: https:",
+    `frame-ancestors ${frameAncestors ? (frameAncestors.length ? frameAncestors.join(" ") : "'none'") : "http: https:"}`,
   ];
   if (csp) {
     directives.splice(5, 0, `font-src 'self' ${resources.join(" ")}`.trim());

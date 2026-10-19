@@ -14,7 +14,8 @@ import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { classifySqliteFtsIntegrityFindings } from "../infra/sqlite-index-schema.js";
+import { assertSqliteIntegrity, SqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
   moveSqliteFilesAside,
@@ -27,6 +28,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
@@ -42,7 +44,6 @@ import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
-  type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
@@ -58,7 +59,6 @@ const CANONICAL_AGENT_INDEX_NAMES = getCanonicalSqliteNamedIndexContracts(
 /** Restores the latest failed migration run and validates only selected manifest targets. */
 export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
-  options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
@@ -115,9 +115,9 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
         ))
     ) {
-      return summarizeRecoverReport(retainedReports);
+      return summarizeDoctorSessionSqliteReport("recover", retainedReports);
     }
-    return summarizeRecoverReport([
+    return summarizeDoctorSessionSqliteReport("recover", [
       createSyntheticRecoverTargetReport(
         params.env,
         "No failed session SQLite migration manifest found.",
@@ -165,7 +165,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       message: `${conflict.sourcePath}: ${conflict.reason}`,
     })),
   );
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  const report = summarizeDoctorSessionSqliteReport(
+    "recover",
+    targetReports.length > 0 ? targetReports : [reportTarget],
+  );
   if (report.totals.issues === 0) {
     report.migrationRun = {
       manifestPath: failedRun.manifestPath,
@@ -212,28 +215,27 @@ async function recoverCorruptSqliteTargets(
     if (recoveryFiles.existing.length === 0) {
       continue;
     }
-    if (!recoveryFiles.existing.includes(sqlitePath)) {
-      reports.push(
-        recoverCorruptSqliteTarget(
-          target,
-          sqlitePath,
-          new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
-          () => maintenance.assertOwned(),
-        ),
-      );
-      continue;
-    }
-    const inspection = inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing);
+    const hasDatabase = recoveryFiles.existing.includes(sqlitePath);
+    const inspection = hasDatabase
+      ? inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing)
+      : {
+          ok: false,
+          ftsOnly: false,
+          error: new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
+        };
     if (inspection.ok) {
       continue;
     }
-    if (!isSqliteCorruptionError(inspection.error)) {
+    if (hasDatabase && !isSqliteCorruptionError(inspection.error)) {
       reports.push(
         createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error),
       );
       continue;
     }
-    if (!isCanonicalAgentIndexCorruptionError(inspection.error)) {
+    if (
+      !hasDatabase ||
+      (!inspection.ftsOnly && !isCanonicalAgentIndexCorruptionError(inspection.error))
+    ) {
       reports.push(
         recoverCorruptSqliteTarget(target, sqlitePath, inspection.error, () =>
           maintenance.assertOwned(),
@@ -273,7 +275,7 @@ async function repairCanonicalIndexesForRecovery(
     }
     if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: databaseOptions.env })) {
       throw new Error(
-        `Repaired canonical SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
+        `Repaired SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
       );
     }
     return { ok: true };
@@ -287,10 +289,11 @@ async function repairCanonicalIndexesForRecovery(
 function inspectSqliteForRecovery(
   sqlitePath: string,
   sourcePaths: readonly string[],
-): { ok: true } | { error: unknown; ok: false } {
+): { ok: true } | { error: unknown; ok: false; ftsOnly?: boolean } {
   let inspectionDir: string | undefined;
   let database: DatabaseSync | undefined;
   let inspectionError: unknown;
+  let ftsOnly = false;
   try {
     inspectionDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-recovery-"));
     const inspectionPath = path.join(inspectionDir, path.basename(sqlitePath));
@@ -305,9 +308,18 @@ function inspectSqliteForRecovery(
     database = openNodeSqliteDatabase(inspectionPath);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     database.exec("PRAGMA trusted_schema = OFF;");
-    assertSqliteIntegrity(database, inspectionPath);
+    assertSqliteIntegrity(database, inspectionPath, { allFindings: true });
   } catch (error) {
     inspectionError = error;
+    if (database && error instanceof SqliteIntegrityError && error.findings) {
+      try {
+        ftsOnly = Boolean(
+          classifySqliteFtsIntegrityFindings(database, error.findings, OPENCLAW_AGENT_FTS_SCHEMAS),
+        );
+      } catch {
+        // An unreadable file is never eligible for derived-index repair.
+      }
+    }
   }
   try {
     database?.close();
@@ -321,7 +333,9 @@ function inspectSqliteForRecovery(
   } catch (error) {
     inspectionError ??= error;
   }
-  return inspectionError === undefined ? { ok: true } : { error: inspectionError, ok: false };
+  return inspectionError === undefined
+    ? { ok: true }
+    : { error: inspectionError, ok: false, ftsOnly };
 }
 
 function recoverCorruptSqliteTarget(
@@ -398,13 +412,4 @@ function createEmptyRecoverTargetReport(
     sqlitePath,
     storePath: target.storePath,
   });
-}
-
-function summarizeRecoverReport(
-  targets: DoctorSessionSqliteTargetReport[],
-): DoctorSessionSqliteReport {
-  const report = summarizeDoctorSessionSqliteReport("recover", targets);
-  delete report.totals.archivedLegacyStoreFiles;
-  delete report.totals.reclaimedBytes;
-  return report;
 }

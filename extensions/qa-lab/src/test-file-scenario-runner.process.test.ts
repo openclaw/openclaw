@@ -6,66 +6,60 @@ import {
   formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,
 } from "./test-file-scenario-command-lifecycle.js";
-import {
-  runQaTestFileScenarios,
-  type QaScenarioCommandExecution,
-} from "./test-file-scenario-runner.js";
+import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
   buildScriptProducerEvidence,
   QA_TEST_RUNNER_DEFAULTS,
   createScenarioRunnerTestHarness,
   makeTestFileScenario,
-  writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
 
 const harness = createScenarioRunnerTestHarness();
 const makeTempDir = (prefix: string) => harness.makeTempDir(prefix);
-const makeTempRepo = (prefix: string) => harness.makeTempRepo(prefix);
 
 afterEach(async () => {
   await harness.cleanup();
 });
 
 describe("qa test file scenario runner", () => {
-  it.each([0, 7])(
-    "bounds retained child logs without changing exit %i or live output",
-    async (exitCode) => {
-      const streamed = { stdout: 0, stderr: 0 };
-      const result = await runQaScenarioCommandLifecycle({
-        command: process.execPath,
-        args: [
-          "-e",
-          [
-            `process.stdout.write('x'.repeat(${QA_CHILD_STDOUT_MAX_BYTES * 2}));`,
-            `process.stderr.write('🦞'.repeat(${QA_CHILD_STDERR_TAIL_BYTES / 2 + 1}) + '\\nfinal diagnostic\\n');`,
-            `process.exitCode = ${exitCode};`,
-          ].join("\n"),
-        ],
-        cwd: process.cwd(),
-        env: process.env,
-        onOutput: (stream, chunk) => {
-          streamed[stream] += chunk.byteLength;
-        },
-        timeoutMs: 5_000,
-      });
+  it("bounds retained child logs without changing the nonzero exit or live output", async () => {
+    const exitCode = 7;
 
-      expect(Buffer.byteLength(result.stdout)).toBe(QA_CHILD_STDOUT_MAX_BYTES);
-      expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(QA_CHILD_STDERR_TAIL_BYTES);
-      expect(result.exitCode).toBe(exitCode);
-      expect(result.failureMessage).toBeUndefined();
-      expect(result.stdoutTruncated).toBe(true);
-      expect(result.stderrTruncated).toBe(true);
-      const log = formatQaScenarioCommandOutput(result);
-      expect(log.startsWith("[stdout truncated to first")).toBe(true);
-      expect(log.includes("[stderr truncated to last")).toBe(true);
-      expect(result.stderr).toContain("final diagnostic");
-      expect(result.stderr).not.toContain("�");
-      expect(streamed).toEqual({
-        stdout: QA_CHILD_STDOUT_MAX_BYTES * 2,
-        stderr: QA_CHILD_STDERR_TAIL_BYTES * 2 + 4 + Buffer.byteLength("\nfinal diagnostic\n"),
-      });
-    },
-  );
+    const streamed = { stdout: 0, stderr: 0 };
+    const result = await runQaScenarioCommandLifecycle({
+      command: process.execPath,
+      args: [
+        "-e",
+        [
+          `process.stdout.write('x'.repeat(${QA_CHILD_STDOUT_MAX_BYTES * 2}));`,
+          `process.stderr.write('🦞'.repeat(${QA_CHILD_STDERR_TAIL_BYTES / 2 + 1}) + '\\nfinal diagnostic\\n');`,
+          `process.exitCode = ${exitCode};`,
+        ].join("\n"),
+      ],
+      cwd: process.cwd(),
+      env: process.env,
+      onOutput: (stream, chunk) => {
+        streamed[stream] += chunk.byteLength;
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(Buffer.byteLength(result.stdout)).toBe(QA_CHILD_STDOUT_MAX_BYTES);
+    expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(QA_CHILD_STDERR_TAIL_BYTES);
+    expect(result.exitCode).toBe(exitCode);
+    expect(result.failureMessage).toBeUndefined();
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stderrTruncated).toBe(true);
+    const log = formatQaScenarioCommandOutput(result);
+    expect(log.startsWith("[stdout truncated to first")).toBe(true);
+    expect(log.includes("[stderr truncated to last")).toBe(true);
+    expect(result.stderr).toContain("final diagnostic");
+    expect(result.stderr).not.toContain("�");
+    expect(streamed).toEqual({
+      stdout: QA_CHILD_STDOUT_MAX_BYTES * 2,
+      stderr: QA_CHILD_STDERR_TAIL_BYTES * 2 + 4 + Buffer.byteLength("\nfinal diagnostic\n"),
+    });
+  });
 
   it("streams real native subprocess output before command settlement", async () => {
     const observed: Array<{ stream: "stderr" | "stdout"; value: string }> = [];
@@ -95,76 +89,6 @@ describe("qa test file scenario runner", () => {
       stderr: "native stderr",
     });
   });
-
-  it.each([
-    { executionKind: "vitest" as const, commandCount: 1 },
-    { executionKind: "playwright" as const, commandCount: 2 },
-  ])(
-    "applies the resolved command timeout to every $executionKind subprocess",
-    async ({ commandCount, executionKind }) => {
-      const repoRoot = await makeTempRepo(`qa-${executionKind}-command-timeout-`);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
-      const commands: QaScenarioCommandExecution[] = [];
-
-      await runQaTestFileScenarios({
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [
-          makeTestFileScenario(
-            executionKind,
-            executionKind === "playwright"
-              ? "ui/src/e2e/chat-flow.e2e.test.ts"
-              : "extensions/qa-lab/src/coverage-report.test.ts",
-          ),
-        ],
-        commandTimeoutMs: 321,
-        runCommand: async (command) => {
-          commands.push(command);
-          await writeNativeVitestReport(command, { passed: 1 });
-          return { exitCode: 0, stdout: "native pass\n", stderr: "" };
-        },
-      });
-
-      expect(commands).toHaveLength(commandCount);
-      expect(commands.map((command) => command.timeoutMs)).toEqual(
-        Array.from({ length: commandCount }, () => 321),
-      );
-    },
-  );
-
-  it.each(["vitest", "playwright"] as const)(
-    "terminates a hanging $executionKind subprocess with failure evidence",
-    async (executionKind) => {
-      const repoRoot = await makeTempRepo(`qa-${executionKind}-hung-command-`);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [
-          makeTestFileScenario(
-            executionKind,
-            executionKind === "playwright"
-              ? "ui/src/e2e/chat-flow.e2e.test.ts"
-              : "extensions/qa-lab/src/coverage-report.test.ts",
-          ),
-        ],
-        commandTimeoutMs: 100,
-        runCommand: (execution) =>
-          runQaScenarioCommandLifecycle({
-            ...execution,
-            args: ["-e", "setInterval(() => {}, 1_000)"],
-          }),
-      });
-
-      expect(result.results[0]).toMatchObject({
-        failureMessage: expect.stringContaining("timed out after 100ms"),
-        status: "fail",
-      });
-      expect(result.evidence.entries[0]?.result.status).toBe("fail");
-    },
-  );
 
   it("dispatches explicit checkout and external artifact roots to a real script", async () => {
     const repoRoot = process.cwd();

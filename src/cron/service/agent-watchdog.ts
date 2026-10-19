@@ -1,4 +1,5 @@
 /** Timeout watchdogs for isolated cron agent setup and execution phases. */
+import { raceWithTimeout } from "@openclaw/retry";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -209,23 +210,17 @@ export async function settleTimedOutCronRun(
   if (!cleanupPromise && !commandSettlement) {
     return;
   }
-  let settleTimer: NodeJS.Timeout | undefined;
   const cleanup = cleanupPromise?.catch((err: unknown) => {
     state.deps.log.warn(
       { jobId: job.id, err: String(err) },
       "cron: timed-out agent cleanup failed",
     );
   });
-  const settleTimeout = new Promise<void>((resolve) => {
-    settleTimer = setTimeout(resolve, CRON_TIMEOUT_CLEANUP_GUARD_MS);
-  });
-  try {
-    await Promise.race([Promise.allSettled([cleanup, commandSettlement]), settleTimeout]);
-  } finally {
-    if (settleTimer) {
-      clearTimeout(settleTimer);
-    }
-  }
+  await raceWithTimeout(
+    Promise.allSettled([cleanup, commandSettlement]),
+    CRON_TIMEOUT_CLEANUP_GUARD_MS,
+    () => undefined,
+  );
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {

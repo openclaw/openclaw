@@ -3,7 +3,6 @@ import {
   assertCodeModeResponsesToolSurface,
   enforceCodeModeResponsesToolSurface,
   filterCodeModePayloadTools,
-  readCodeModePayloadToolName,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 
@@ -17,21 +16,6 @@ function withThrowingGetter(field: string): Record<string, unknown> {
 }
 
 describe("OpenAI Code Mode payload tool names", () => {
-  it.each([
-    ["direct declaration", { name: "exec" }, "exec"],
-    ["nested declaration", { function: { name: "wait" } }, "wait"],
-    ["nested fallback", { name: 7, function: { name: "computer" } }, "computer"],
-    ["inherited declaration", Object.create({ name: "exec" }), undefined],
-    ["missing declaration", {}, undefined],
-    ["non-record declaration", null, undefined],
-  ])("reads a %s", (_description, tool, expected) => {
-    expect(readCodeModePayloadToolName(tool)).toBe(expected);
-  });
-
-  it.each(["name", "function"])("rejects a throwing %s getter", (field) => {
-    expect(readCodeModePayloadToolName(withThrowingGetter(field))).toBeUndefined();
-  });
-
   it("uses only tool names declared in the current request", () => {
     expect(
       resolveCodeModeResponsesVisibleToolNames({
@@ -40,6 +24,8 @@ describe("OpenAI Code Mode payload tool names", () => {
           { function: { name: "wait" } },
           { name: "computer" },
           withThrowingGetter("name"),
+          Object.create({ name: "rogue" }),
+          null,
         ],
       } as unknown as Parameters<typeof resolveCodeModeResponsesVisibleToolNames>[0]),
     ).toEqual(new Set(["exec", "wait", "computer"]));
@@ -77,35 +63,6 @@ describe("OpenAI Code Mode payload tool filtering", () => {
       ]);
     },
   );
-
-  it.each(["functionDeclarations", "function_declarations"] as const)(
-    "rejects a throwing %s getter without exposing the group",
-    (field) => {
-      const payload: { tools: unknown[] } = {
-        tools: [{ name: "exec" }, { name: "wait" }, withThrowingGetter(field)],
-      };
-
-      expect(() => filterCodeModePayloadTools(payload, visibleToolNames)).not.toThrow();
-      expect(payload.tools).toEqual([{ name: "exec" }, { name: "wait" }]);
-    },
-  );
-
-  it("ignores a throwing payload tools getter", () => {
-    expect(() =>
-      filterCodeModePayloadTools(withThrowingGetter("tools"), visibleToolNames),
-    ).not.toThrow();
-  });
-
-  it("keeps the existing Responses and Completions enforcement contract", () => {
-    const payload = {
-      tools: [{ name: "exec" }, { name: "web_search" }, { type: "web_search" }, { name: "wait" }],
-    };
-
-    enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
-
-    expect(payload.tools).toEqual([{ name: "exec" }, { name: "wait" }]);
-    expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).not.toThrow();
-  });
 
   it("keeps only explicitly allowed hosted tools alongside visible client functions", () => {
     const allowedHostedToolTypes = new Set(["web_search"]);

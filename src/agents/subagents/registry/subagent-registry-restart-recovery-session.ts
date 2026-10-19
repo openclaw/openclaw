@@ -1,17 +1,15 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import {
-  getSessionWorkAdmissionRelease,
-  isSessionWorkAdmissionActive,
-} from "../../../sessions/session-lifecycle-admission.js";
+  captureSessionControllerSettlement,
+  isSessionControllerWorkActive,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   isRetiredSubagentExecution,
   isRetiredSubagentSessionOwner,
@@ -23,11 +21,11 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 function retainSessionOwner(storePath: string, sessionKey: string, sessionId: string | undefined) {
   const isCurrent = () =>
     listAgentRunsForSession({ sessionKey, sessionId }).length > 0 ||
-    isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId]);
+    isSessionControllerWorkActive(storePath, [sessionKey, sessionId]);
   return isCurrent()
     ? {
         isCurrent,
-        released: getSessionWorkAdmissionRelease({
+        released: captureSessionControllerSettlement({
           scope: storePath,
           identities: [sessionKey, sessionId],
         }),
@@ -44,11 +42,14 @@ export async function loadSubagentRecoverySession(params: {
   sessionEntry: InternalSessionEntry | undefined;
   currentRead: ReturnType<typeof captureSessionEntryCurrentRead>;
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
+  replacementReason?: string;
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const scope = { storePath, sessionKey, projection: "list" as const };
+  if (resolveSubagentChildAuthority(params.entry).status === "mismatch") {
+    return null;
+  }
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params.entry, getRuntimeConfig());
+  const scope = { agentId, storePath, sessionKey, projection: "list" as const };
   const { sessionEntry, currentRead } = await withSessionEntryReadOnlyInWorker(
     scope,
     () => {
@@ -66,8 +67,15 @@ export async function loadSubagentRecoverySession(params: {
       };
     },
   );
+  const authority = resolveSubagentChildAuthority(params.entry, sessionEntry);
+  // A replacement session cannot own effects for the retained task, but the
+  // registry can still settle that task and notify its original requester.
+  if (authority.status === "mismatch") {
+    return { agentId, storePath, sessionEntry, currentRead, replacementReason: authority.error };
+  }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
   if (
+    authority.status === "legacy-unverified" ||
     retained ||
     params.entry.execution.restartRecovery ||
     sessionEntry?.abortedLastRun === true ||
@@ -81,7 +89,7 @@ export async function loadSubagentRecoverySession(params: {
     params.isOwnerCurrent() &&
     isRetiredSubagentExecution(params.entry) &&
     listAgentRunsForSession(target).length === 0 &&
-    !isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId]);
+    !isSessionControllerWorkActive(storePath, [sessionKey, sessionId]);
   const interrupted = await applySessionEntryExactReplacements<InternalSessionEntry | null>({
     agentId,
     storePath,

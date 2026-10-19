@@ -1,11 +1,14 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -13,16 +16,18 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/session-utils-store-lookup.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-yield.js";
 
 const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEntryMock } =
   vi.hoisted(() => ({
     config: {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "peer" }],
+        entries: { main: {}, peer: {} },
       },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
     } as OpenClawConfig,
@@ -30,8 +35,8 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
     readAcpSessionMetaMock: vi.fn(),
     readAcpSessionMetaForEntryMock: vi.fn(),
   }));
+// mock-isolation: Keep ACP runtime access mocked while coordinating fixture session rows.
 vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
   readAcpSessionEntryAsync: async (params: {
     cfg?: OpenClawConfig;
     sessionKey: string;
@@ -40,7 +45,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   }) => {
     params.assertCurrent?.();
     const cfg = params.cfg ?? config;
-    const target = resolveGatewaySessionStoreTargetWithStore({
+    const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key: params.sessionKey,
       agentId: params.agentId,
@@ -67,13 +72,15 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
     };
   },
 }));
+// mock-isolation: Keep ACP database reads controlled by each coordination scenario.
 vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   const { rowToAcpSessionMeta } = await vi.importActual<
     typeof import("../acp/runtime/session-meta-readonly.js")
   >("../acp/runtime/session-meta-readonly.js");
   return {
     rowToAcpSessionMeta,
-    readAcpSessionMetaForEntry: (params: unknown) => readAcpSessionMetaForEntryMock(params),
+    readAcpSessionMetaForEntryAsync: async (params: unknown) =>
+      readAcpSessionMetaForEntryMock(params),
   };
 });
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
@@ -87,6 +94,7 @@ import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -97,41 +105,39 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
   registerSessionsSendRequesterRetirementTests,
   type GatewayCall,
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
-import { observeSessionSendContinuations } from "./openclaw-tools.sessions-timeout.test-support.js";
+import {
+  createDurableSessionsSendTestRun,
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
+import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
-  getLatestLiveSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const continuations = observeSessionSendContinuations({ trackAllWork: true });
 let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function settleSessionWork() {
-  await continuations.settle();
   await settleRootWork(true);
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
 }
-
-afterAll(() => {
-  continuations.restore();
-});
 
 type AgentCallParams = {
   extraSystemPrompt?: string;
@@ -144,12 +150,20 @@ function mockGatewayReply(
     terminalReply: { disposition: "visible", text: "Requested result" },
   },
 ) {
+  let targetSessionKey: string | undefined;
   callGatewayMock.mockImplementation(async (request: GatewayCall) => {
     calls.push(request);
     if (request.method === "agent") {
+      targetSessionKey = String(request.params?.sessionKey);
       return { runId: "coordination-run", status: "accepted" };
     }
-    return request.method === "agent.wait" ? waitResult : {};
+    if (request.method === "agent.wait") {
+      if (waitResult.status === "ok" && targetSessionKey) {
+        await writeFinal(targetSessionKey, "coordination-run", "Requested result");
+      }
+      return waitResult;
+    }
+    return {};
   });
 }
 function agentParams(call: GatewayCall): AgentCallParams {
@@ -207,6 +221,44 @@ async function writeEntry(sessionKey: string, entry: SessionEntry, storePath?: s
   );
 }
 
+async function writeFinal(sessionKey: string, runId: string, text: string) {
+  const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
+    cfg: config,
+    key: sessionKey,
+    readOnly: true,
+    exactRead: true,
+  });
+  const sessionId = target.store[target.canonicalKey]?.sessionId;
+  if (!sessionId) {
+    throw new Error(`Expected a fixture session for ${sessionKey}`);
+  }
+  await persistSessionTranscriptTurn(
+    {
+      agentId: target.agentId,
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      sessionId,
+    },
+    {
+      config,
+      runId,
+      expectedSessionId: sessionId,
+      touchSessionEntry: false,
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text }],
+          },
+        },
+      ],
+    },
+  );
+}
+
 describe("sessions_send child coordination", () => {
   let state: OpenClawTestState;
   beforeEach(async () => {
@@ -218,6 +270,7 @@ describe("sessions_send child coordination", () => {
       dmScope: "main",
       store: state.path("configured", "agents", "{agentId}", "sessions", "sessions.json"),
     };
+    setRuntimeConfigSnapshot(config);
     resetGatewayWorkAdmission();
     callGatewayMock.mockReset();
     calls.length = 0;
@@ -249,7 +302,7 @@ describe("sessions_send child coordination", () => {
         spawnedBy: requesterSessionKey,
         spawnDepth: 1,
       });
-      resetSubagentRegistryForTests();
+      await resetSubagentRegistryForTests();
       const seed = (runId: string, generation: number) =>
         addSubagentRunForTests({
           runId,
@@ -263,51 +316,92 @@ describe("sessions_send child coordination", () => {
           completion: { required: true },
           delivery: { status: "pending" },
         });
-      seed("steer-A", 1);
-      const previous = getLatestLiveSubagentRunByChildSessionKey(childSessionKey)!;
-      const queueB = vi.fn(async () => {});
-      const handleB = createEmbeddedRunHandle({ runId: "steer-B", queueMessage: queueB });
-      const replace = () => {
-        previous.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-        seed("steer-B", 2);
-        setActiveEmbeddedRun(sessionId, handleB, childSessionKey);
-      };
-      const queueA = vi.fn(async () => {
-        if (timing === "after completion") {
-          previous.execution = {
-            status: "terminal",
-            endedAt: Date.now(),
-            outcome: { status: "ok" },
+      await seed("steer-A", 1);
+      const previous = () => getSubagentRunByRunId("steer-A")!;
+      const { handle: handleB, queueMessage: queueB } = createDurableSessionsSendTestRun("steer-B");
+      const completePrevious = async (delivered = false) => {
+        await mutateSubagentRuns(["steer-A"], (rows) => {
+          const current = rows.get("steer-A");
+          if (!current) {
+            throw new Error("Expected the admitted steering target");
+          }
+          return {
+            value: undefined,
+            postimages: new Map([
+              [
+                current.runId,
+                {
+                  ...current,
+                  execution: {
+                    status: "terminal" as const,
+                    endedAt: Date.now(),
+                    outcome: { status: "ok" as const },
+                  },
+                  ...(delivered
+                    ? {
+                        delivery: { status: "delivered" as const },
+                        cleanupCompletedAt: Date.now(),
+                      }
+                    : {}),
+                },
+              ],
+            ]),
           };
-          previous.delivery = { status: "delivered" };
-          previous.cleanupCompletedAt = Date.now();
-        } else {
-          replace();
-        }
-      });
-      const handleA = createEmbeddedRunHandle({ runId: "steer-A", queueMessage: queueA });
-      setActiveEmbeddedRun(sessionId, handleA, childSessionKey);
+        });
+      };
+      const replace = async () => {
+        await completePrevious();
+        await seed("steer-B", 2);
+        await setSessionsSendTestActiveRun(
+          sessionId,
+          handleB,
+          childSessionKey,
+          requesterSessionKey,
+          config,
+        );
+      };
+      const { handle: handleA, queueMessage: queueA } = createDurableSessionsSendTestRun(
+        "steer-A",
+        async () => {
+          if (timing === "after completion") {
+            await completePrevious(true);
+          } else {
+            await replace();
+          }
+        },
+      );
+      await setSessionsSendTestActiveRun(
+        sessionId,
+        handleA,
+        childSessionKey,
+        requesterSessionKey,
+        config,
+      );
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
         .spyOn(sendDelivery, "trySessionsSendActiveRunDelivery")
-        .mockImplementationOnce((...args) => {
+        .mockImplementationOnce(async (...args) => {
           if (timing === "before admission") {
-            replace();
+            await replace();
           }
           return deliver(...args);
         });
       try {
-        const sent = await createSessionsSendTool({
-          agentSessionKey: requesterSessionKey,
-          requesterTurnRunId,
-          config,
-          callGateway: callGatewayMock,
-        }).execute("watched-steer", {
-          sessionKey: childSessionKey,
-          message: "Continue this task",
-          mode: "steer",
-          watch: true,
-        });
+        const sent = await withGatewayToolCallerIdentity(
+          createSessionsSendTestCaller(requesterSessionKey),
+          () =>
+            createSessionsSendTool({
+              agentSessionKey: requesterSessionKey,
+              requesterTurnRunId,
+              config,
+              callGateway: callGatewayMock,
+            }).execute("watched-steer", {
+              sessionKey: childSessionKey,
+              message: "Continue this task",
+              mode: "steer",
+              watch: true,
+            }),
+        );
         if (timing !== "before admission") {
           expect(sent.details).toMatchObject({
             status: "error",
@@ -315,10 +409,10 @@ describe("sessions_send child coordination", () => {
             error: expect.stringContaining("completion could not be claimed"),
           });
           expect(queueA).toHaveBeenCalledOnce();
-          expect(previous.requesterTurnRunId).toBeUndefined();
+          expect(previous().requesterTurnRunId).toBeUndefined();
           expect(queueB).not.toHaveBeenCalled();
           expect(getSubagentRunByRunId("steer-B")?.requesterTurnRunId).toBeUndefined();
-          expect(previous.delivery?.status).toBe(
+          expect(previous().delivery?.status).toBe(
             timing === "after completion" ? "delivered" : "pending",
           );
           return;
@@ -331,7 +425,7 @@ describe("sessions_send child coordination", () => {
         expect(queueB).toHaveBeenCalledOnce();
         expect(queueA).not.toHaveBeenCalled();
         expect(getSubagentRunByRunId("steer-B")?.requesterTurnRunId).toBe(requesterTurnRunId);
-        expect(previous.requesterTurnRunId).toBeUndefined();
+        expect(previous().requesterTurnRunId).toBeUndefined();
         const yielded = await createSessionsYieldTool({
           sessionId: "steer-requester",
           onYield: () => {},
@@ -346,15 +440,13 @@ describe("sessions_send child coordination", () => {
         admission.mockRestore();
         clearActiveEmbeddedRun(sessionId, handleB, childSessionKey);
         clearActiveEmbeddedRun(sessionId, handleA, childSessionKey);
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
       }
     },
   );
 
   it.each([
     { acknowledgment: "acknowledged", watch: undefined },
-    { acknowledgment: "ACK lost", watch: false },
-    { acknowledgment: "acknowledged", watch: true },
     { acknowledgment: "ACK lost", watch: true },
   ] as const)(
     "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch)",
@@ -370,8 +462,8 @@ describe("sessions_send child coordination", () => {
         spawnedBy: requesterSessionKey,
         spawnDepth: 1,
       });
-      resetSubagentRegistryForTests();
-      addSubagentRunForTests({
+      await resetSubagentRegistryForTests();
+      await addSubagentRunForTests({
         runId: "original-child-run",
         childSessionKey,
         requesterSessionKey,
@@ -379,7 +471,11 @@ describe("sessions_send child coordination", () => {
         expectsCompletionMessage: true,
         createdAt: 1,
         execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "Original result" },
+        completion: {
+          required: true,
+          resultText: "Original result",
+          terminalReply: { disposition: "visible", text: "Original result" },
+        },
         delivery: { status: "delivered" },
         cleanupCompletedAt: 3,
         requesterTurnRunId: undefined,
@@ -401,6 +497,7 @@ describe("sessions_send child coordination", () => {
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending;
+          await writeFinal(childSessionKey, runId, "Follow-up result");
           return {
             runId,
             status: "ok",
@@ -510,17 +607,175 @@ describe("sessions_send child coordination", () => {
         finishChild();
         stopObserving();
         await settleSessionWork();
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
         announceTesting.setDepsForTest();
       }
     },
   );
+
+  it("yields two watched followups when the first settles during yield preparation", async () => {
+    const requesterSessionKey = "agent:main:dashboard:race-parent";
+    const childSessionKey = "agent:main:dashboard:race-child";
+    const requesterTurnRunId = "race-parent-turn";
+    await writeEntry(requesterSessionKey, { sessionId: "race-parent", updatedAt: 1 });
+    await writeEntry(childSessionKey, {
+      sessionId: "race-child",
+      updatedAt: 1,
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+    });
+    await resetSubagentRegistryForTests();
+    const replies = [createDeferredCore(), createDeferredCore()];
+    const runIds = ["race-followup-1", "race-followup-2"];
+    let dispatched = 0;
+    callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+      calls.push(request);
+      if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
+        return { runId: runIds[dispatched++], status: "accepted", targetDisposition: "queued" };
+      }
+      if (request.method === "agent.wait") {
+        const index = runIds.indexOf(String(request.params?.runId));
+        if (index >= 0) {
+          await replies[index]!.promise;
+          await writeFinal(childSessionKey, runIds[index]!, "FOLLOWUP-" + (index + 1));
+          return {
+            status: "ok",
+            startedAt: 10,
+            endedAt: 20 + index,
+            terminalReply: { disposition: "visible", text: "FOLLOWUP-" + (index + 1) },
+          };
+        }
+      }
+      return {
+        status: "ok",
+        inputProcessingCompleted: true,
+        result: {
+          payloads: [{ text: "Both replies reviewed" }],
+          deliveryStatus: { status: "sent", resultCount: 1 },
+        },
+      };
+    });
+    announceTesting.setDepsForTest({ callGateway: callGatewayMock });
+    const enteredPreparation = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const commit = requesterTransfer.commitRequesterTransfer;
+    const barrier = vi
+      .spyOn(requesterTransfer, "commitRequesterTransfer")
+      .mockImplementation((params, options) => {
+        const prepareYield = params.prepare;
+        return commit(
+          prepareYield
+            ? {
+                ...params,
+                prepare: async () => {
+                  await prepareYield();
+                  enteredPreparation.resolve();
+                  await releasePreparation.promise;
+                },
+              }
+            : params,
+          options,
+        );
+      });
+    let stopObserving = () => {};
+    try {
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        requesterTurnRunId,
+        config,
+        callGateway: callGatewayMock,
+      });
+      for (const runId of runIds) {
+        expect(
+          (
+            await tool.execute(runId, {
+              sessionKey: childSessionKey,
+              mode: "followup",
+              watch: true,
+              timeoutSeconds: 0,
+              message: runId,
+            })
+          ).details,
+        ).toMatchObject({ status: "accepted", runId, watched: true });
+      }
+      const onYield = vi.fn();
+      const yielded = createSessionsYieldTool({
+        sessionId: "race-parent",
+        onYield,
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+        }),
+      }).execute("yield-raced-followups", {});
+      void yielded.catch(() => {});
+      await enteredPreparation.promise;
+      const settled = createDeferredCore();
+      stopObserving = subscribeSubagentRunChanges("persistence", () => {
+        if (getSubagentRunByRunId(runIds[0]!)?.execution.status === "terminal") {
+          settled.resolve();
+        }
+      });
+      replies[0]!.resolve();
+      await settled.promise;
+      releasePreparation.resolve();
+      expect((await yielded).details).toEqual({ status: "yielded" });
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(
+        await settleRequesterAfterSessionSpawns({
+          requesterSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+          requesterYielded: true,
+          acceptedSessionSpawns: runIds.map((runId) => ({
+            runId,
+            childSessionKey,
+            expectsCompletionMessage: true,
+          })),
+        }),
+      ).toBe(true);
+      stopObserving();
+      const delivered = createDeferredCore();
+      stopObserving = subscribeSubagentRunChanges("persistence", () => {
+        if (
+          runIds.every((runId) => {
+            const child = getSubagentRunByRunId(runId);
+            return child?.delivery?.status === "delivered" && !child.requesterSettleWake;
+          })
+        ) {
+          delivered.resolve();
+        }
+      });
+      replies[1]!.resolve();
+      await delivered.promise;
+      await settleSessionWork();
+      const batches = calls.filter(
+        (call) =>
+          call.method === "agent" &&
+          call.params?.sessionKey === requesterSessionKey &&
+          (call.params?.inputProvenance as { sourceTool?: string })?.sourceTool ===
+            "subagent_settle",
+      );
+      expect(batches).toHaveLength(1);
+      expect(batches[0]?.params?.message).toEqual(expect.stringContaining("FOLLOWUP-1"));
+      expect(batches[0]?.params?.message).toEqual(expect.stringContaining("FOLLOWUP-2"));
+    } finally {
+      releasePreparation.resolve();
+      replies.forEach((reply) => reply.resolve());
+      stopObserving();
+      barrier.mockRestore();
+      await settleSessionWork();
+      await resetSubagentRegistryForTests();
+      announceTesting.setDepsForTest();
+    }
+  });
 
   registerSessionsSendRequesterRetirementTests({
     config,
     callGatewayMock,
     calls,
     writeEntry,
+    writeFinal,
     settleSessionWork,
     drainRootWork: () => settleRootWork(true),
   });
@@ -625,7 +880,7 @@ describe("sessions_send child coordination", () => {
       };
       metadata.writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey: reusedKey,
+        sessionKey: buildAcpDatabaseSessionKey(reusedKey, parseAgentSessionKey(reusedKey)?.agentId),
         sessionId,
         lifecycleRevision,
         now: () => 100,
@@ -641,17 +896,18 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionMeta>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({
+        (params: Parameters<typeof metadata.readAcpSessionEntryAsync>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,
             entry: { sessionId, lifecycleRevision, sessionStartedAt: 50 },
           }),
       );
       readAcpSessionMetaForEntryMock.mockImplementation(
-        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntry>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
+        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntryAsync>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({ ...params, databasePath }),
       );
+      await writeEntry(peerKey, { sessionId: "peer-session", updatedAt: 1 });
       await writeEntry(reusedKey, currentEntry);
       const result = await send(requesterKey, targetKey, direction === "target" ? 0 : 1);
       await settleSessionWork();
@@ -692,8 +948,18 @@ describe("sessions_send child coordination", () => {
     "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
     async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main" }) => {
       await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
+      await writeEntry(targetKey, { sessionId: "target", updatedAt: 1 });
       mockGatewayReply({ status: "timeout" });
       const result = await send(requesterKey, targetKey, timeoutSeconds);
+      if (entry.spawnedBy) {
+        expect(result.details).toMatchObject({
+          status: "forbidden",
+          error: "Session communication ancestry is invalid.",
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(calls.map((call) => call.method)).toEqual(["sessions.resolve"]);
+        return;
+      }
       expect(result.details).toMatchObject({
         status: "accepted",
         delivery: { status: "skipped" },

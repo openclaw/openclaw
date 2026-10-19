@@ -63,7 +63,7 @@ describe("resolveBareResetBootstrapFileAccess runtime model ownership", () => {
     inventoryMocks.resolveRuntimeModelContext.mockClear();
   });
 
-  it("resolves runtime model context once and passes explicit facts to sync inventory", async () => {
+  it("resolves runtime model context once and passes explicit facts to inventory", async () => {
     const cfg = {} as OpenClawConfig;
     const params = {
       cfg,

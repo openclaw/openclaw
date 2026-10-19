@@ -21,18 +21,29 @@ export function buildMessageToolTargetGuidance(requireExplicitMessageTarget: boo
     : "`send`: `message`; current source is default target. Set `target` only elsewhere.";
 }
 
+/** States when a message send ends this turn, if the run changes the default. */
+export function buildMessageToolFinalityGuidance(
+  messageToolFinalByDefault: boolean | undefined,
+): string | undefined {
+  return messageToolFinalByDefault === false
+    ? "A send ends this turn only with `final=true`. With `final` omitted, the turn continues after the send, so finish every remaining step."
+    : undefined;
+}
+
 export function buildHarnessVisibleReplyGuidance(params: {
   sourceReplyDeliveryMode?: string;
   messageToolAvailable: boolean;
   requireExplicitMessageTarget?: boolean;
+  messageToolFinalByDefault?: boolean;
   uiPresentation?: Parameters<typeof buildUiPresentationPrompt>[0];
 }): string {
+  const omittedFinalCompletes = params.messageToolFinalByDefault !== false;
   const deliveryGuidance = messageToolOwnsVisibleReply(params)
     ? params.messageToolAvailable
-      ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer."
+      ? `Visible source replies are not automatically delivered for this run. Use \`message(action=send)\` for source output. For progress, set \`final=false\`. Set \`final=true\`${omittedFinalCompletes ? ", or omit it," : ""} for a completed reply to the current source. An added reaction to the current source message with \`final=true\` can also complete the reply. Do not repeat delivered content.`
       : "No source-conversation reply can be sent from this turn. Final assistant text remains private and returns to the invoking workflow; it is not automatically delivered to the source conversation."
     : params.messageToolAvailable
-      ? "You can participate in the conversation throughout your work. Use `message` when you have something worth saying; you don’t need to wait until you’re finished, and sending a message doesn’t end your task. OpenClaw delivers your final response automatically."
+      ? `Use \`message\` with \`final=false\` for progress. A completed send to the current source conversation (\`final=true\`${omittedFinalCompletes ? ", or omitted" : ""}) or an added reaction to its current message with \`final=true\` is your complete reply. Do not repeat delivered content. Otherwise, OpenClaw delivers your final response automatically.`
       : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
   const targetGuidance =
     params.messageToolAvailable && params.requireExplicitMessageTarget !== undefined
@@ -46,6 +57,9 @@ export function buildHarnessVisibleReplyGuidance(params: {
   return [
     deliveryGuidance,
     targetGuidance,
+    params.messageToolAvailable
+      ? buildMessageToolFinalityGuidance(params.messageToolFinalByDefault)
+      : undefined,
     pendingReplyGuidance,
     params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
   ]

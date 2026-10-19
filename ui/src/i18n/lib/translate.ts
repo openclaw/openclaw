@@ -1,14 +1,15 @@
+import {
+  DEFAULT_LOCALE,
+  RTL_LOCALES,
+  SUPPORTED_LOCALES,
+  isSupportedLocale,
+  resolveNavigatorLocale,
+  type Locale,
+} from "../../../../src/shared/control-ui-locale.ts";
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
-import {
-  DEFAULT_LOCALE,
-  SUPPORTED_LOCALES,
-  isSupportedLocale,
-  loadLazyLocaleTranslation,
-  resolveNavigatorLocale,
-  type Locale,
-} from "./registry.ts";
+import { loadLazyLocaleTranslation } from "./registry.ts";
 import type { TranslationMap } from "./types.ts";
 
 function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
@@ -31,14 +32,12 @@ type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
-const RTL_LOCALES = new Set<Locale>(["ar", "fa"]);
-
 function syncDocumentLocale(locale: Locale): void {
   if (typeof document === "undefined") {
     return;
   }
   document.documentElement.lang = locale;
-  document.documentElement.dir = RTL_LOCALES.has(locale) ? "rtl" : "ltr";
+  document.documentElement.dir = RTL_LOCALES.includes(locale) ? "rtl" : "ltr";
 }
 
 class I18nManager {
@@ -87,25 +86,19 @@ class I18nManager {
     }
   }
 
-  private resolveInitialLocale(): { locale: Locale; shouldPersist: boolean } {
-    const saved = this.readStoredLocale();
-    if (isSupportedLocale(saved)) {
-      return { locale: saved, shouldPersist: true };
-    }
-    return { locale: this.getSystemLocale(), shouldPersist: false };
-  }
-
   private loadLocale() {
-    const initial = this.resolveInitialLocale();
-    if (initial.locale === DEFAULT_LOCALE) {
+    const saved = this.readStoredLocale();
+    const shouldPersist = isSupportedLocale(saved);
+    const locale = shouldPersist ? saved : this.getSystemLocale();
+    if (locale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
       syncDocumentLocale(DEFAULT_LOCALE);
-      if (!initial.shouldPersist) {
+      if (!shouldPersist) {
         this.persistLocale(null);
       }
       return;
     }
-    void this.applyLocale(initial.locale, false, initial.shouldPersist);
+    void this.applyLocale(locale, false, shouldPersist);
   }
 
   public getLocale(): Locale {
@@ -221,10 +214,7 @@ class I18nManager {
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value = lookupTranslation(
-      this.translations[this.locale] || this.translations[DEFAULT_LOCALE],
-      keys,
-    );
+    let value = lookupTranslation(this.translations[this.locale], keys);
     if (value === undefined && this.locale !== DEFAULT_LOCALE) {
       value = lookupTranslation(this.translations[DEFAULT_LOCALE], keys);
     }

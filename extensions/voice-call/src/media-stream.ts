@@ -1,16 +1,7 @@
-/**
- * Media Stream Handler
- *
- * Handles bidirectional audio streaming between Twilio and the AI services.
- * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to the selected realtime transcription provider
- * - Sends TTS audio back to Twilio
- */
-
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -30,7 +21,6 @@ import { WebSocket, WebSocketServer, type RawData } from "openclaw/plugin-sdk/we
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
 
 export interface MediaStreamConfig {
-  /** Realtime transcription provider for streaming STT. */
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
   /** Provider-owned config blob passed into the transcription session. */
   providerConfig: RealtimeTranscriptionProviderConfig;
@@ -48,17 +38,11 @@ export interface MediaStreamConfig {
   resolveClientIp?: (request: IncomingMessage) => string | undefined;
   /** Validate whether to accept a media stream for the given call ID. Missing validator rejects. */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
-  /** Callback when transcript is received */
   onTranscript?: (callId: string, transcript: string, streamSid: string) => void;
-  /** Callback for partial transcripts (streaming UI) */
   onPartialTranscript?: (callId: string, partial: string, streamSid: string) => void;
-  /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
-  /** Callback when realtime transcription is ready for the stream */
   onTranscriptionReady?: (callId: string, streamSid: string) => void;
-  /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string, streamSid: string) => void;
-  /** Callback when stream disconnects */
   onDisconnect?: (callId: string, streamSid: string) => void;
   /** Callback for common Talk events emitted by the telephony STT/TTS adapter. */
   onTalkEvent?: (callId: string, streamSid: string, event: TalkEvent) => void;
@@ -72,16 +56,12 @@ interface StreamSession {
   talk: TalkSessionController;
 }
 
-type TtsQueueEntry = {
-  playFn: (signal: AbortSignal) => Promise<void>;
-  controller: AbortController;
-  resolve: () => void;
-  reject: (error: unknown) => void;
+type TtsPlaybackQueue = {
+  permits: ReturnType<typeof createPermitPool>;
+  controllers: Set<AbortController>;
 };
 
-type PendingPlaybackMark = {
-  settle: (error?: Error, ignoreLateAck?: boolean) => void;
-};
+type PendingPlaybackMark = (error?: Error) => void;
 
 type PendingConnection = {
   ip: string;
@@ -95,7 +75,6 @@ const DEFAULT_MAX_CONNECTIONS = 128;
 const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const MAX_PENDING_TTS_OPERATIONS_PER_STREAM = 8;
-const MAX_IGNORED_PLAYBACK_MARKS_PER_STREAM = 64;
 const PLAYBACK_MARK_TIMEOUT_GRACE_MS = 2_000;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
@@ -124,25 +103,18 @@ export class MediaStreamHandler {
   private closePromise: Promise<void> | null = null;
   private closing = false;
   private sessions = new Map<string, StreamSession>();
-  private config: MediaStreamConfig;
   /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
   private pendingConnections = new Map<WebSocket, PendingConnection>();
-  /** Pending socket count per remote IP for pre-auth throttling. */
   private pendingByIp = new Map<string, number>();
   private preStartTimeoutMs: number;
   private maxPendingConnections: number;
   private maxPendingConnectionsPerIp: number;
   private maxConnections: number;
   private inflightUpgrades = 0;
-  /** TTS playback queues per stream (serialize audio to prevent overlap) */
-  private ttsQueues = new Map<string, TtsQueueEntry[]>();
-  private ttsPlaying = new Map<string, boolean>();
-  private ttsActiveControllers = new Map<string, AbortController>();
+  private ttsQueues = new Map<string, TtsPlaybackQueue>();
   private pendingPlaybackMarks = new Map<string, Map<string, PendingPlaybackMark>>();
-  private ignoredPlaybackMarks = new Map<string, Set<string>>();
 
-  constructor(config: MediaStreamConfig) {
-    this.config = config;
+  constructor(private readonly config: MediaStreamConfig) {
     this.preStartTimeoutMs = resolveTimerTimeoutMs(
       config.preStartTimeoutMs,
       DEFAULT_PRE_START_TIMEOUT_MS,
@@ -179,27 +151,24 @@ export class MediaStreamHandler {
     this.inflightUpgrades += 1;
     let released = false;
     const releaseUpgradeReservation = () => {
+      socket.removeListener("error", releaseUpgradeReservation);
+      socket.removeListener("close", releaseUpgradeReservation);
       if (released) {
         return;
       }
       released = true;
       this.inflightUpgrades = Math.max(0, this.inflightUpgrades - 1);
     };
-    const handleUpgradeAbort = () => {
-      socket.removeListener("error", handleUpgradeAbort);
-      socket.removeListener("close", handleUpgradeAbort);
-      releaseUpgradeReservation();
-    };
-    socket.once("error", handleUpgradeAbort);
-    socket.once("close", handleUpgradeAbort);
+    socket.once("error", releaseUpgradeReservation);
+    socket.once("close", releaseUpgradeReservation);
 
     try {
       this.wss.handleUpgrade(request, socket, head, (ws) => {
-        handleUpgradeAbort();
+        releaseUpgradeReservation();
         this.wss?.emit("connection", ws, request);
       });
     } catch (error) {
-      handleUpgradeAbort();
+      releaseUpgradeReservation();
       throw error;
     }
   }
@@ -271,11 +240,7 @@ export class MediaStreamHandler {
               this.emitTalkEvent(session, {
                 type: "input.audio.delta",
                 turnId,
-                payload: {
-                  callId: session.callId,
-                  streamSid: session.streamSid,
-                  bytes: audioBuffer.byteLength,
-                },
+                payload: { bytes: audioBuffer.byteLength },
               });
               session.sttSession.sendAudio(audioBuffer);
             }
@@ -350,39 +315,36 @@ export class MediaStreamHandler {
       return null;
     }
 
-    const sttSession = this.config.transcriptionProvider.createSession({
-      cfg: this.config.cfg,
-      providerConfig: this.config.providerConfig,
-      onPartial: (partial) => {
-        const session = this.sessions.get(streamSid);
-        if (session) {
-          this.emitTalkEvent(session, {
-            type: "transcript.delta",
-            turnId: this.ensureActiveTurn(session),
-            payload: { callId: callSid, streamSid, text: partial, role: "user" },
-          });
-        }
-        this.config.onPartialTranscript?.(callSid, partial, streamSid);
-      },
-      onTranscript: (transcript) => {
-        const session = this.sessions.get(streamSid);
-        if (session) {
-          const turnId = this.ensureActiveTurn(session);
+    const onTranscript = (text: string, isFinal: boolean) => {
+      const session = this.sessions.get(streamSid);
+      if (session) {
+        const turnId = this.ensureActiveTurn(session);
+        if (isFinal) {
           this.emitTalkEvent(session, {
             type: "input.audio.committed",
             turnId,
             final: true,
-            payload: { callId: callSid, streamSid },
-          });
-          this.emitTalkEvent(session, {
-            type: "transcript.done",
-            turnId,
-            final: true,
-            payload: { callId: callSid, streamSid, text: transcript, role: "user" },
+            payload: { callId: callSid },
           });
         }
-        this.config.onTranscript?.(callSid, transcript, streamSid);
-      },
+        this.emitTalkEvent(session, {
+          type: isFinal ? "transcript.done" : "transcript.delta",
+          turnId,
+          ...(isFinal ? { final: true } : {}),
+          payload: { callId: callSid, text, role: "user" },
+        });
+      }
+      if (isFinal) {
+        this.config.onTranscript?.(callSid, text, streamSid);
+      } else {
+        this.config.onPartialTranscript?.(callSid, text, streamSid);
+      }
+    };
+    const sttSession = this.config.transcriptionProvider.createSession({
+      cfg: this.config.cfg,
+      providerConfig: this.config.providerConfig,
+      onPartial: (text) => onTranscript(text, false),
+      onTranscript: (text) => onTranscript(text, true),
       onSpeechStart: () => {
         const session = this.sessions.get(streamSid);
         if (session) {
@@ -397,7 +359,7 @@ export class MediaStreamHandler {
           this.emitTalkEvent(session, {
             type: "session.error",
             final: true,
-            payload: { callId: callSid, streamSid, error: error.message },
+            payload: { callId: callSid, error: error.message },
           });
         }
       },
@@ -408,14 +370,29 @@ export class MediaStreamHandler {
       streamSid,
       ws,
       sttSession,
-      talk: this.createTalkEvents(callSid, streamSid),
+      talk: createTalkSessionController(
+        {
+          sessionId: `voice-call:${callSid}:${streamSid}`,
+          mode: "stt-tts",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          provider: this.config.transcriptionProvider.id,
+          turnIdPrefix: `${streamSid}:turn`,
+        },
+        {
+          onEvent: (event) => {
+            recordTalkObservabilityEvent(event);
+            this.config.onTalkEvent?.(callSid, streamSid, event);
+          },
+        },
+      ),
     };
 
     this.sessions.set(streamSid, session);
     this.config.onConnect?.(callSid, streamSid);
     this.emitTalkEvent(session, {
       type: "session.started",
-      payload: { callId: callSid, streamSid, provider: this.config.transcriptionProvider.id },
+      payload: { provider: this.config.transcriptionProvider.id },
     });
     void this.connectTranscriptionAndNotify(session);
 
@@ -434,8 +411,6 @@ export class MediaStreamHandler {
         type: "session.error",
         final: true,
         payload: {
-          callId: session.callId,
-          streamSid: session.streamSid,
           error: error instanceof Error ? error.message : String(error),
         },
       });
@@ -460,7 +435,6 @@ export class MediaStreamHandler {
 
     this.emitTalkEvent(session, {
       type: "session.ready",
-      payload: { callId: session.callId, streamSid: session.streamSid },
     });
     this.config.onTranscriptionReady?.(session.callId, session.streamSid);
   }
@@ -474,7 +448,6 @@ export class MediaStreamHandler {
     this.emitTalkEvent(session, {
       type: "session.closed",
       final: true,
-      payload: { callId: session.callId, streamSid: session.streamSid },
     });
     this.config.onDisconnect?.(session.callId, session.streamSid);
   }
@@ -594,7 +567,7 @@ export class MediaStreamHandler {
       this.emitTalkEvent(session, {
         type: "output.audio.delta",
         turnId: this.ensureActiveTurn(session),
-        payload: { callId: session.callId, streamSid, bytes: muLawAudio.byteLength },
+        payload: { bytes: muLawAudio.byteLength },
       });
     }
     return this.sendToStream(streamSid, {
@@ -626,14 +599,13 @@ export class MediaStreamHandler {
     if (marks.has(name)) {
       throw new Error(`Telephony playback mark is already pending: ${name}`);
     }
-    this.ignoredPlaybackMarks.get(streamSid)?.delete(name);
 
     let pending!: PendingPlaybackMark;
     const acknowledgement = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(
         () => {
           console.warn(`[MediaStream] Playback mark timed out; continuing stream=${streamSid}`);
-          pending.settle();
+          pending();
         },
         Math.max(1, audioDurationMs + PLAYBACK_MARK_TIMEOUT_GRACE_MS),
       );
@@ -643,35 +615,30 @@ export class MediaStreamHandler {
           signal.reason instanceof Error
             ? signal.reason
             : new Error("Telephony playback mark wait aborted");
-        pending.settle(reason, true);
+        pending(reason);
       };
-      pending = {
-        settle: (error, ignoreLateAck = false) => {
-          if (marks.get(name) !== pending) {
-            return;
-          }
-          clearTimeout(timeout);
-          signal.removeEventListener("abort", onAbort);
-          marks.delete(name);
-          if (marks.size === 0) {
-            this.pendingPlaybackMarks.delete(streamSid);
-          }
-          if (ignoreLateAck) {
-            this.ignorePlaybackMark(streamSid, name);
-          }
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        },
+      pending = (error) => {
+        if (marks.get(name) !== pending) {
+          return;
+        }
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        marks.delete(name);
+        if (marks.size === 0) {
+          this.pendingPlaybackMarks.delete(streamSid);
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
       };
       marks.set(name, pending);
       signal.addEventListener("abort", onAbort, { once: true });
     });
 
     if (!this.sendMark(streamSid, name)) {
-      pending.settle(new Error("Telephony stream playback failed: completion mark not delivered"));
+      pending(new Error("Telephony stream playback failed: completion mark not delivered"));
     }
     return acknowledgement;
   }
@@ -686,57 +653,74 @@ export class MediaStreamHandler {
    * Only one TTS operation plays at a time per stream to prevent overlap.
    */
   async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
-    const queue: TtsQueueEntry[] = this.ttsQueues.get(streamSid) ?? [];
+    const queue = this.ttsQueues.get(streamSid) ?? {
+      permits: createPermitPool(1),
+      controllers: new Set<AbortController>(),
+    };
     this.ttsQueues.set(streamSid, queue);
-    if (queue.length >= MAX_PENDING_TTS_OPERATIONS_PER_STREAM) {
+    if (queue.permits.pendingCount >= MAX_PENDING_TTS_OPERATIONS_PER_STREAM) {
       throw new Error(
         `Telephony TTS queue is full for stream; maxPending=${MAX_PENDING_TTS_OPERATIONS_PER_STREAM}`,
       );
     }
 
-    const { promise, resolve, reject } = createDeferred<void>();
-
-    queue.push({
-      playFn,
-      controller: new AbortController(),
-      resolve,
-      reject,
-    });
-
-    if (!this.ttsPlaying.get(streamSid)) {
-      void this.processQueue(streamSid);
+    const controller = new AbortController();
+    queue.controllers.add(controller);
+    // Start idle streams synchronously; queued callers use the SDK's cancellable FIFO.
+    const release =
+      queue.permits.tryAcquire() ?? (await queue.permits.acquire({ signal: controller.signal }));
+    const session = this.sessions.get(streamSid);
+    try {
+      if (!release || controller.signal.aborted) {
+        return;
+      }
+      let playbackTurnId: string | undefined;
+      if (session) {
+        playbackTurnId = this.ensureActiveTurn(session);
+        this.emitTalkEvent(session, {
+          type: "output.audio.started",
+          turnId: playbackTurnId,
+        });
+      }
+      await playFn(controller.signal);
+      if (session && !controller.signal.aborted) {
+        this.emitTalkEvent(session, {
+          type: "output.audio.done",
+          turnId: playbackTurnId,
+          final: true,
+        });
+        if (session.talk.activeTurnId) {
+          session.talk.endTurn({ payload: { callId: session.callId, streamSid } });
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error("[MediaStream] TTS playback error:", error);
+        throw error;
+      }
+    } finally {
+      queue.controllers.delete(controller);
+      release?.();
+      if (queue.controllers.size === 0 && this.ttsQueues.get(streamSid) === queue) {
+        this.ttsQueues.delete(streamSid);
+      }
     }
-
-    return promise;
   }
 
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
-    const queue = this.ttsQueues.get(streamSid);
-    if (queue) {
-      this.resolveQueuedTtsEntries(queue);
-    }
-    this.ttsActiveControllers.get(streamSid)?.abort();
+    this.abortTtsPlayback(streamSid);
     const session = this.sessions.get(streamSid);
     if (session?.talk.activeTurnId) {
-      const cancelled = session.talk.cancelTurn({
+      session.talk.cancelTurn({
         payload: { callId: session.callId, streamSid, reason: _reason },
       });
-      if (cancelled.ok) {
-        this.config.onTalkEvent?.(session.callId, session.streamSid, cancelled.event);
-      }
     }
     this.clearAudio(streamSid);
   }
 
   private acknowledgePlaybackMark(streamSid: string, name: string): void {
-    const ignored = this.ignoredPlaybackMarks.get(streamSid);
-    if (ignored?.delete(name)) {
-      if (ignored.size === 0) {
-        this.ignoredPlaybackMarks.delete(streamSid);
-      }
-      return;
-    }
-    this.pendingPlaybackMarks.get(streamSid)?.get(name)?.settle();
+    // TTS marks are unique; cleared playback leaves no waiter for a late carrier echo.
+    this.pendingPlaybackMarks.get(streamSid)?.get(name)?.();
   }
 
   private invalidatePlaybackMarks(streamSid: string): void {
@@ -744,140 +728,37 @@ export class MediaStreamHandler {
     if (!marks) {
       return;
     }
-    // Map iteration tolerates settle() deleting entries mid-walk.
+    // Map iteration tolerates settlement deleting entries mid-walk.
     for (const pending of marks.values()) {
-      pending.settle(new Error("Telephony playback cleared before completion"), true);
+      pending(new Error("Telephony playback cleared before completion"));
     }
   }
 
-  private ignorePlaybackMark(streamSid: string, name: string): void {
-    const ignored = this.ignoredPlaybackMarks.get(streamSid) ?? new Set<string>();
-    ignored.add(name);
-    while (ignored.size > MAX_IGNORED_PLAYBACK_MARKS_PER_STREAM) {
-      const oldest = ignored.values().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      ignored.delete(oldest);
-    }
-    this.ignoredPlaybackMarks.set(streamSid, ignored);
-  }
-
-  /**
-   * Process the TTS queue for a stream.
-   * Uses iterative approach to avoid stack accumulation from recursion.
-   */
-  private async processQueue(streamSid: string): Promise<void> {
-    this.ttsPlaying.set(streamSid, true);
-
-    while (true) {
-      const queue = this.ttsQueues.get(streamSid);
-      if (!queue || queue.length === 0) {
-        this.ttsPlaying.delete(streamSid);
-        this.ttsActiveControllers.delete(streamSid);
-        this.ttsQueues.delete(streamSid);
-        return;
-      }
-
-      const entry = queue.shift()!;
-      this.ttsActiveControllers.set(streamSid, entry.controller);
-      const session = this.sessions.get(streamSid);
-      let playbackTurnId: string | undefined;
-
-      try {
-        if (session) {
-          playbackTurnId = this.ensureActiveTurn(session);
-          this.emitTalkEvent(session, {
-            type: "output.audio.started",
-            turnId: playbackTurnId,
-            payload: { callId: session.callId, streamSid },
-          });
-        }
-        await entry.playFn(entry.controller.signal);
-        if (entry.controller.signal.aborted) {
-          entry.resolve();
-          continue;
-        }
-        if (session) {
-          const turnId = playbackTurnId ?? this.ensureActiveTurn(session);
-          this.emitTalkEvent(session, {
-            type: "output.audio.done",
-            turnId,
-            final: true,
-            payload: { callId: session.callId, streamSid },
-          });
-          if (session.talk.activeTurnId) {
-            const ended = session.talk.endTurn({
-              payload: { callId: session.callId, streamSid },
-            });
-            if (ended.ok) {
-              this.config.onTalkEvent?.(session.callId, session.streamSid, ended.event);
-            }
-          }
-        }
-        entry.resolve();
-      } catch (error) {
-        if (entry.controller.signal.aborted) {
-          entry.resolve();
-        } else {
-          console.error("[MediaStream] TTS playback error:", error);
-          entry.reject(error);
-        }
-      } finally {
-        if (this.ttsActiveControllers.get(streamSid) === entry.controller) {
-          this.ttsActiveControllers.delete(streamSid);
-        }
-      }
-    }
-  }
-
-  private createTalkEvents(callId: string, streamSid: string): TalkSessionController {
-    return createTalkSessionController(
-      {
-        sessionId: `voice-call:${callId}:${streamSid}`,
-        mode: "stt-tts",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        provider: this.config.transcriptionProvider.id,
-        turnIdPrefix: `${streamSid}:turn`,
-      },
-      { onEvent: recordTalkObservabilityEvent },
-    );
-  }
-
-  private emitTalkEvent(session: StreamSession, input: TalkEventInput): void {
-    const event = session.talk.emit(input);
-    this.config.onTalkEvent?.(session.callId, session.streamSid, event);
+  private emitTalkEvent(
+    session: StreamSession,
+    input: Omit<TalkEventInput, "payload"> & { payload?: Record<string, unknown> },
+  ): void {
+    session.talk.emit({
+      ...input,
+      payload: { callId: session.callId, streamSid: session.streamSid, ...input.payload },
+    });
   }
 
   private ensureActiveTurn(session: StreamSession): string {
-    const turn = session.talk.ensureTurn({
+    return session.talk.ensureTurn({
       payload: { callId: session.callId, streamSid: session.streamSid },
-    });
-    if (turn.event) {
-      this.config.onTalkEvent?.(session.callId, session.streamSid, turn.event);
-    }
-    return turn.turnId;
+    }).turnId;
   }
 
   private clearTtsState(streamSid: string): void {
-    const queue = this.ttsQueues.get(streamSid);
-    if (queue) {
-      this.resolveQueuedTtsEntries(queue);
-    }
-    this.ttsActiveControllers.get(streamSid)?.abort();
-    this.ttsActiveControllers.delete(streamSid);
-    this.ttsPlaying.delete(streamSid);
+    this.abortTtsPlayback(streamSid);
     this.ttsQueues.delete(streamSid);
     this.invalidatePlaybackMarks(streamSid);
-    this.ignoredPlaybackMarks.delete(streamSid);
   }
 
-  private resolveQueuedTtsEntries(queue: TtsQueueEntry[]): void {
-    const pending = queue.splice(0);
-    for (const entry of pending) {
-      entry.controller.abort();
-      entry.resolve();
+  private abortTtsPlayback(streamSid: string): void {
+    for (const controller of this.ttsQueues.get(streamSid)?.controllers ?? []) {
+      controller.abort();
     }
   }
 }
@@ -896,4 +777,3 @@ interface TwilioMediaMessage {
     name: string;
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -57,10 +57,7 @@ function sortedUniqueStrings(value, label) {
     fail(`${label} must be a non-empty array`);
   }
   const result = value.map((entry, index) => asciiString(entry, `${label}[${index}]`));
-  if (
-    new Set(result).size !== result.length ||
-    result.some((entry, index) => index > 0 && compareAscii(result[index - 1], entry) >= 0)
-  ) {
+  if (result.some((entry, index) => index > 0 && compareAscii(result[index - 1], entry) >= 0)) {
     fail(`${label} must contain unique strings in ascending ASCII order`);
   }
   return result;
@@ -134,10 +131,7 @@ function validatePackages(value) {
     };
   });
   const names = packages.map((entry) => entry.name);
-  if (
-    new Set(names).size !== names.length ||
-    names.some((entry, index) => index > 0 && compareAscii(names[index - 1], entry) >= 0)
-  ) {
+  if (names.some((entry, index) => index > 0 && compareAscii(names[index - 1], entry) >= 0)) {
     fail("release plan packages must have unique names in ascending ASCII order");
   }
   return packages;
@@ -158,10 +152,7 @@ function validatePlatforms(value) {
     };
   });
   const ids = platforms.map((entry) => entry.id);
-  if (
-    new Set(ids).size !== ids.length ||
-    ids.some((entry, index) => index > 0 && compareAscii(ids[index - 1], entry) >= 0)
-  ) {
+  if (ids.some((entry, index) => index > 0 && compareAscii(ids[index - 1], entry) >= 0)) {
     fail("release plan platforms must have unique ids in ascending ASCII order");
   }
   return platforms;
@@ -317,8 +308,8 @@ export function canonicalReleasePlanJson(value) {
   return canonicalAsciiJson(validateReleasePlan(value));
 }
 
-function releasePlanDigest(value) {
-  return `sha256:${createHash("sha256").update(canonicalReleasePlanJson(value), "ascii").digest("hex")}`;
+function releasePlanDigest(plan) {
+  return `sha256:${createHash("sha256").update(canonicalAsciiJson(plan), "ascii").digest("hex")}`;
 }
 
 export function createReleasePlanLock(value) {
@@ -366,7 +357,7 @@ export function parseReleasePlanLockJson(text) {
     throw new Error("release plan lock JSON is invalid JSON", { cause: error });
   }
   const lock = validateReleasePlanLock(value);
-  if (text !== canonicalReleasePlanLockJson(lock)) {
+  if (text !== canonicalAsciiJson(lock)) {
     fail("release plan lock JSON does not use canonical bytes");
   }
   return lock;

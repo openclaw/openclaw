@@ -1,4 +1,5 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { listen } from "../lib/reactive/listener.ts";
+import type { LobsterComposerElements } from "./lobster-pet-contract.ts";
 
 export type LobsterSceneLane = { start: number; end: number; y: number };
 export type LobsterSceneTravel = {
@@ -116,20 +117,21 @@ export function lobsterLanePoint(lane: LobsterSceneLane | null, pct: number) {
 
 // Geometry has one lifecycle owner. Observers never watch pet mutations, and
 // queued measurements cannot revive a detached host or reroll a visit.
-export class LobsterComposerGeometry implements ReactiveController {
+export class LobsterComposerGeometry {
   scene: LobsterComposerScene = { top: null, floor: null, passage: null };
   private resize: ResizeObserver | null = null;
   private mutation: MutationObserver | null = null;
   private active = false;
   private frame: number | null = null;
   private observed: Element[] = [];
+  private stopResize?: () => void;
 
   constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
+    private readonly host: HTMLElement,
+    private readonly elements: () => LobsterComposerElements | null,
     private readonly twins: () => boolean,
-  ) {
-    host.addController(this);
-  }
+    private readonly notify: () => void,
+  ) {}
 
   planWalk(anchor: "top" | "floor", spotPct: number, roll: number): LobsterSceneMove | null {
     const lane = this.scene[anchor];
@@ -184,21 +186,28 @@ export class LobsterComposerGeometry implements ReactiveController {
     };
   }
 
-  hostConnected() {
+  connect() {
     this.active = true;
     if (typeof ResizeObserver !== "undefined") {
       // ResizeObserver runs after layout; keep collision lanes current for this paint.
       this.resize = new ResizeObserver(() => this.measure());
     } else {
-      window.addEventListener("resize", this.scheduleMeasure);
+      this.stopResize = listen(window, "resize", this.scheduleMeasure);
     }
-    const composer = this.host.parentElement;
-    const root = composer?.closest(".new-session-page__draft") ?? composer;
+    const root = this.elements()?.root;
     if (root) {
       this.mutation = new MutationObserver((records) => {
+        // Popup teardown can report descendants after their ancestry is gone.
+        // The attached removal target still records real in-flow geometry changes.
         if (
           records.some(
-            (record) => record.target !== this.host && !this.host.contains(record.target),
+            (record) =>
+              record.target.isConnected &&
+              record.target !== this.host &&
+              !this.host.contains(record.target) &&
+              !(
+                record.target instanceof Element ? record.target : record.target.parentElement
+              )?.closest("[popover]"),
           )
         ) {
           this.scheduleMeasure();
@@ -214,7 +223,7 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.scheduleMeasure();
   }
 
-  hostDisconnected() {
+  dispose() {
     this.active = false;
     if (this.frame !== null) {
       cancelAnimationFrame(this.frame);
@@ -225,7 +234,8 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.mutation?.disconnect();
     this.mutation = null;
     this.observed = [];
-    window.removeEventListener("resize", this.scheduleMeasure);
+    this.stopResize?.();
+    this.stopResize = undefined;
   }
 
   readonly scheduleMeasure = () => {
@@ -245,30 +255,12 @@ export class LobsterComposerGeometry implements ReactiveController {
     if (!this.active || !this.host.isConnected) {
       return;
     }
-    const composer = this.host.parentElement;
-    if (!composer?.matches(".agent-chat__input")) {
+    const elements = this.elements();
+    if (!elements) {
       return;
     }
-    const footer = composer.querySelector(".agent-chat__composer-footer");
-    const editor = composer.querySelector("textarea");
-    const controls = Array.from(
-      footer?.querySelectorAll(
-        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions, button, wa-button, [role=button]",
-      ) ?? [],
-    );
-    const root = composer.closest(".new-session-page__draft");
-    const obstacles = Array.from(
-      root?.querySelectorAll(
-        ".new-session-page__triggers > *, .new-session-page__incognito-notice--visible",
-      ) ?? [],
-    );
-    const observed = [
-      composer,
-      ...controls,
-      ...obstacles,
-      ...(footer ? [footer] : []),
-      ...(editor ? [editor] : []),
-    ];
+    const { composer, footer, editor, controls, obstacles } = elements;
+    const observed = [composer, ...controls, ...obstacles, footer, editor];
     if (
       observed.length !== this.observed.length ||
       observed.some((node, index) => node !== this.observed[index])
@@ -279,30 +271,28 @@ export class LobsterComposerGeometry implements ReactiveController {
       }
       this.observed = observed;
     }
-    const editorBox = editor?.getBoundingClientRect() ?? null;
-    let placeholderRight = editorBox?.left ?? 0;
-    if (editor && editorBox) {
-      const style = getComputedStyle(editor);
-      // The aria-label holds the complete placeholder while its visible text
-      // types in. Measure that full string so a route cannot overtake it.
-      const label = editor.getAttribute("aria-label") ?? editor.placeholder;
-      const fontSize = Number.parseFloat(style.fontSize) || 16;
-      let textWidth = label.length * fontSize * 0.65;
-      if (typeof CanvasRenderingContext2D !== "undefined") {
-        const context = document.createElement("canvas").getContext("2d");
-        if (context) {
-          context.font = style.font;
-          textWidth = context.measureText(label).width;
-        }
+    const editorBox = editor.getBoundingClientRect();
+    let placeholderRight = editorBox.left;
+    const style = getComputedStyle(editor);
+    // The aria-label holds the complete placeholder while its visible text
+    // types in. Measure that full string so a route cannot overtake it.
+    const label = editor.getAttribute("aria-label") ?? editor.placeholder;
+    const fontSize = Number.parseFloat(style.fontSize) || 16;
+    let textWidth = label.length * fontSize * 0.65;
+    if (typeof CanvasRenderingContext2D !== "undefined") {
+      const context = document.createElement("canvas").getContext("2d");
+      if (context) {
+        context.font = style.font;
+        textWidth = context.measureText(label).width;
       }
-      placeholderRight += Math.min(
-        editorBox.width,
-        textWidth + (Number.parseFloat(style.paddingLeft) || 0),
-      );
     }
+    placeholderRight += Math.min(
+      editorBox.width,
+      textWidth + (Number.parseFloat(style.paddingLeft) || 0),
+    );
     const next = resolveLobsterComposerScene({
       composer: composer.getBoundingClientRect(),
-      footer: footer?.getBoundingClientRect() ?? null,
+      footer: footer.getBoundingClientRect(),
       controls: controls.map((node) => node.getBoundingClientRect()),
       topObstacles: obstacles.map((node) => node.getBoundingClientRect()),
       editor: editorBox,
@@ -312,7 +302,7 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.host.toggleAttribute("data-scene-ready", next.top !== null);
     if (JSON.stringify(next) !== JSON.stringify(this.scene)) {
       this.scene = next;
-      this.host.requestUpdate();
+      this.notify();
     }
   }
 }

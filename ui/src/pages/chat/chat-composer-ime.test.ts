@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createComposerContainer,
   createComposerProps,
   renderComposerFixture,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -57,15 +58,22 @@ describe("chat composer IME composition", () => {
       const onSend = vi.fn();
       const onDraftChange = vi.fn();
       const props = createComposerProps({ onSend, onDraftChange, sendShortcut });
-      const container = document.createElement("div");
-      render(renderChatComposer(props), container);
+      const container = createComposerContainer();
+      renderComposerInto(container, props);
       const textarea = getComposerTextarea(container);
+      textarea.style.height = "42px";
       textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      for (const value of ["shi", "shichang"]) {
+        textarea.value = value;
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+      }
+      expect(textarea.style.height).toBe("42px");
       textarea.value = "日本語";
       textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
       const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
       textarea.dispatchEvent(end);
-      render(renderChatComposer({ ...props, draft: "日本語" }), container);
+      expect(textarea.style.height).not.toBe("42px");
+      renderComposerInto(container, { ...props, draft: "日本語" });
 
       for (const offset of [confirmOffset, 99, 100]) {
         const enter = new KeyboardEvent("keydown", {
@@ -122,49 +130,5 @@ describe("chat composer IME composition", () => {
 
     expect(enterEvent.defaultPrevented).toBe(true);
     expect(onSend).toHaveBeenCalledOnce();
-  });
-
-  it("invalidates after handled input history navigation", () => {
-    const onRequestUpdate = vi.fn();
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "up" as const,
-    }));
-    const container = renderComposerFixture({ onHistoryKeydown, onRequestUpdate }).container;
-    const textarea = getComposerTextarea(container);
-    const arrowEvent = new KeyboardEvent("keydown", {
-      key: "ArrowUp",
-      bubbles: true,
-      cancelable: true,
-    });
-
-    textarea.dispatchEvent(arrowEvent);
-    expect(arrowEvent.defaultPrevented).toBe(true);
-    expect(onHistoryKeydown).toHaveBeenCalledOnce();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("does not force textarea resize during IME composition", () => {
-    const container = renderComposerFixture().container;
-    const textarea = getComposerTextarea(container);
-
-    // Set a sentinel height to detect unwanted overwrites
-    textarea.style.height = "42px";
-
-    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    textarea.value = "shi";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-    textarea.value = "shichang";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-
-    // Height must stay untouched — no forced reflow during composition
-    expect(textarea.style.height).toBe("42px");
-
-    textarea.value = "市场";
-    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-
-    // After composition ends, adjustTextareaHeight runs via syncComposerValue
-    expect(textarea.style.height).not.toBe("42px");
   });
 });

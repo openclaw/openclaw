@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -5,6 +6,11 @@ import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -34,6 +40,7 @@ import {
   waitForSlackTestApp,
 } from "../monitor.test-helpers.js";
 import { getSlackRuntime } from "../runtime.js";
+import type { SlackMessageEvent } from "../types.js";
 import { startStalledSlackApiServer } from "./provider.stalled-api.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
@@ -65,6 +72,40 @@ async function runTrackedSlackMessageOnce(
   }
 }
 
+function messageEvent(
+  user: string,
+  text: string,
+  ts: string,
+  channel: string,
+  channel_type: "im" | "channel",
+) {
+  return { type: "message", user, text, ts, channel, channel_type } satisfies SlackMessageEvent;
+}
+
+function clearProxyEnv(value = "") {
+  for (const key of PROXY_ENV_KEYS) {
+    vi.stubEnv(key, value);
+  }
+}
+
+const enterpriseAuth = {
+  user_id: "UENTERPRISE",
+  bot_id: "BENTERPRISE",
+  enterprise_id: "E_ENTERPRISE",
+  is_enterprise_install: true,
+};
+
+function expectReadyStatus(setStatus: ReturnType<typeof vi.fn>) {
+  expect(setStatus).toHaveBeenCalledWith({
+    running: true,
+    connected: true,
+    lastConnectedAt: expect.any(Number),
+    terminalDisconnect: undefined,
+    lifecycle: "ready",
+    lastError: null,
+  });
+}
+
 function configureSlack(slack: SlackAccountConfig) {
   return resetSlackTestState({ channels: { slack } });
 }
@@ -94,10 +135,32 @@ afterEach(async () => {
 afterAll(disposeSlackTestRuntime);
 
 describe("auth.test boot call", () => {
-  it("omits the empty body on the shipped Socket Mode startup path", async () => {
+  it("hands Socket Mode a dispatcher from its own undici copy", async () => {
     for (const key of PROXY_ENV_KEYS) {
-      vi.stubEnv(key, "");
+      vi.stubEnv(key, undefined);
     }
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example.com:3128");
+    const requireFromTest = createRequire(import.meta.url);
+    const requireFromBolt = createRequire(requireFromTest.resolve("@slack/bolt/package.json"));
+    const requireFromSocketMode = createRequire(
+      requireFromBolt.resolve("@slack/socket-mode/package.json"),
+    );
+    const { EnvHttpProxyAgent } = requireFromSocketMode(
+      "undici/index.js",
+    ) as typeof import("undici");
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      await getSlackHandlerOrThrow("message");
+      expect(getSlackTestState().socketModeReceiverArgs?.dispatcher).toBeInstanceOf(
+        EnvHttpProxyAgent,
+      );
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  });
+
+  it("omits the empty body on the shipped Socket Mode startup path", async () => {
+    clearProxyEnv();
     const actualClient = await vi.importActual<typeof import("../client.js")>("../client.js");
     useSlackStartupAuthClientOnce(actualClient.createSlackStartupAuthClient);
     const globalFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -144,14 +207,7 @@ describe("auth.test boot call", () => {
     await runTrackedSlackMessageOnce(
       monitorSlackProvider,
       {
-        event: {
-          type: "message",
-          user: "USENDER",
-          text: "<@UUSER> status",
-          ts: "100.000",
-          channel: "C1",
-          channel_type: "channel",
-        },
+        event: messageEvent("USENDER", "<@UUSER> status", "100.000", "C1", "channel"),
       },
       { botToken: "xoxp-user-token" },
     );
@@ -166,9 +222,7 @@ describe("auth.test boot call", () => {
     it("settles and closes a real stalled startup auth request before degraded startup", async (context) => {
       const run = (async () => {
         const events: string[] = [];
-        for (const key of PROXY_ENV_KEYS) {
-          vi.stubEnv(key, "");
-        }
+        clearProxyEnv();
         const server = await startStalledSlackApiServer(events);
         vi.stubEnv("SLACK_API_URL", server.apiUrl);
         useShortSlackStartupAuthClientOnce();
@@ -245,9 +299,7 @@ describe("auth.test boot call", () => {
 describe("presence polling transport", () => {
   it("aborts a stalled presence request when the provider stops", async () => {
     const events: string[] = [];
-    for (const key of PROXY_ENV_KEYS) {
-      vi.stubEnv(key, "");
-    }
+    clearProxyEnv();
     const server = await startStalledSlackApiServer(events);
     vi.stubEnv("SLACK_API_URL", server.apiUrl);
     await configureSlack({
@@ -265,32 +317,14 @@ describe("presence polling transport", () => {
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "ok" });
 
-    const nativeSetInterval = globalThis.setInterval;
-    let triggerPresencePoll: (() => void) | undefined;
-    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      if (timeout === 60_000 && !triggerPresencePoll) {
-        triggerPresencePoll = () => handler(...args);
-        return nativeSetInterval(() => undefined, 60 * 60 * 1_000);
-      }
-      return nativeSetInterval(handler, timeout, ...args);
-    }) as typeof setInterval);
-
-    const monitor = startSlackMonitor(monitorSlackProvider);
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
+    const monitor = startSlackMonitor((options) => monitorSlackProvider({ ...options, scheduler }));
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
       const handler = await getSlackHandlerOrThrow("message");
       await runSlackHandlerWithDispatch(handler, {
-        event: {
-          type: "message",
-          user: "U_STALLED",
-          text: "hello",
-          ts: "100.000",
-          channel: "D_STALLED",
-          channel_type: "im",
-        },
+        event: messageEvent("U_STALLED", "hello", "100.000", "D_STALLED", "im"),
         context: { botUserId: "bot-user" },
         body: {},
       });
@@ -303,8 +337,8 @@ describe("presence polling transport", () => {
         WasMentioned: false,
       });
       expect(sendMock).toHaveBeenCalledWith("channel:D_STALLED", "ok", expect.any(Object));
-      expect(triggerPresencePoll).toBeTypeOf("function");
-      triggerPresencePoll?.();
+      expect(clock.armedAtMs).toBe(60_000);
+      void clock.wake();
       await vi.waitFor(() => expect(server.requestCount).toBe(1), { timeout: 1_000 });
 
       const startedAt = Date.now();
@@ -312,7 +346,7 @@ describe("presence polling transport", () => {
       const outcome = await Promise.race([
         monitor.run.then(() => "settled" as const),
         new Promise<"timed-out">((resolve) => {
-          setTimeout(() => resolve("timed-out"), 2_000);
+          deadline = setTimeout(() => resolve("timed-out"), 2_000);
         }),
       ]);
 
@@ -320,17 +354,21 @@ describe("presence polling transport", () => {
       expect(Date.now() - startedAt).toBeLessThan(2_000);
       await vi.waitFor(() => expect(events).toContain("socket-closed"), { timeout: 1_000 });
       expect(server.requestUrl).toBe("/api/users.getPresence");
+      expect(clock.armedAtMs).toBeNull();
+      await clock.advanceBy(60_000);
+      expect(server.requestCount).toBe(1);
     } finally {
-      intervalSpy.mockRestore();
+      clearTimeout(deadline);
       monitor.controller.abort();
       await server.close();
       await monitor.run;
+      await scheduler.stop();
     }
   });
 });
 
 describe("user identity provider transport", () => {
-  const userSocketConfig = () =>
+  const userSocketConfig = (overrides: SlackAccountConfig = {}) =>
     ({
       channels: {
         slack: {
@@ -341,6 +379,7 @@ describe("user identity provider transport", () => {
           dmPolicy: "open",
           allowFrom: ["*"],
           groupPolicy: "open",
+          ...overrides,
         },
       },
     }) satisfies OpenClawConfig;
@@ -348,6 +387,7 @@ describe("user identity provider transport", () => {
   async function startWithoutBotToken(config: OpenClawConfig) {
     const controller = new AbortController();
     const run = monitorSlackProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       abortSignal: controller.signal,
     });
@@ -358,14 +398,7 @@ describe("user identity provider transport", () => {
   }
 
   it("uses the authenticated human id as the mention target", async () => {
-    const config = {
-      channels: {
-        slack: {
-          ...userSocketConfig().channels.slack,
-          channels: { C1: { enabled: true, requireMention: true } },
-        },
-      },
-    };
+    const config = userSocketConfig({ channels: { C1: { enabled: true, requireMention: true } } });
     await resetSlackTestState(config);
     const client = getSlackClient();
     client.auth.test.mockResolvedValueOnce({
@@ -391,14 +424,7 @@ describe("user identity provider transport", () => {
     const handler = await getSlackHandlerOrThrow("message");
 
     await runSlackHandlerWithDispatch(handler, {
-      event: {
-        type: "message",
-        user: "U_OTHER",
-        text: "<@U_SELF> status",
-        ts: "100.000",
-        channel: "C1",
-        channel_type: "channel",
-      },
+      event: messageEvent("U_OTHER", "<@U_SELF> status", "100.000", "C1", "channel"),
       context: { botUserId: "U_SELF" },
       body: {},
     });
@@ -476,6 +502,7 @@ describe("user identity provider transport", () => {
     vi.stubEnv("SLACK_APP_TOKEN", "");
     await expect(
       monitorSlackProvider({
+        scheduler: createTestPluginServiceScheduler(),
         config: { channels: { slack: { postAs: "user", ...config } } },
       }),
     ).rejects.toThrow(error);
@@ -484,9 +511,7 @@ describe("user identity provider transport", () => {
 
 describe("connected identity health", () => {
   it("blocks an Enterprise identity without a bot user", async () => {
-    await resetSlackTestState({
-      channels: { slack: { dmPolicy: "disabled", groupPolicy: "open" } },
-    });
+    await configureSlack({ dmPolicy: "disabled", groupPolicy: "open" });
     getSlackClient().auth.test.mockResolvedValue({
       enterprise_id: "E1",
       is_enterprise_install: true,
@@ -546,14 +571,7 @@ describe("connected identity health", () => {
       await stopSlackMonitor(monitor);
     }
 
-    expect(setStatus).toHaveBeenCalledWith({
-      running: true,
-      connected: true,
-      lastConnectedAt: expect.any(Number),
-      terminalDisconnect: undefined,
-      lifecycle: "ready",
-      lastError: null,
-    });
+    expectReadyStatus(setStatus);
     expect(getSlackInstallationKind("default")).toBeUndefined();
     expect(() => assertSlackDetachedTargetAllowed("default")).not.toThrow();
   });
@@ -568,12 +586,9 @@ describe("connected identity health", () => {
       },
     });
     const client = getSlackClient();
-    client.auth.test.mockRejectedValueOnce(new Error("request_timeout")).mockResolvedValue({
-      user_id: "UENTERPRISE",
-      bot_id: "BENTERPRISE",
-      enterprise_id: "E_ENTERPRISE",
-      is_enterprise_install: true,
-    });
+    client.auth.test
+      .mockRejectedValueOnce(new Error("request_timeout"))
+      .mockResolvedValue(enterpriseAuth);
     client.conversations.info.mockResolvedValueOnce({
       channel: { name: "general", is_channel: true },
     });
@@ -599,25 +614,17 @@ describe("connected identity health", () => {
       "unsupported_enterprise_slack_delivery",
     );
     expect(() => assertSlackDetachedTargetAllowed("default", "TWORKSPACE")).not.toThrow();
-    expect(setStatus).toHaveBeenCalledWith({
-      running: true,
-      connected: true,
-      lastConnectedAt: expect.any(Number),
-      terminalDisconnect: undefined,
-      lifecycle: "ready",
-      lastError: null,
-    });
+    expectReadyStatus(setStatus);
     expect(getSlackHandlers().has("reaction_added")).toBe(true);
 
     await runSlackHandlerWithDispatch(handler, {
-      event: {
-        type: "message",
-        user: "UOTHER123",
-        text: "<@UENTERPRISE> status",
-        ts: "999999.123",
-        channel: "C12345678",
-        channel_type: "channel",
-      },
+      event: messageEvent(
+        "UOTHER123",
+        "<@UENTERPRISE> status",
+        "999999.123",
+        "C12345678",
+        "channel",
+      ),
       context: {
         isEnterpriseInstall: true,
         enterpriseId: "E_ENTERPRISE",
@@ -648,14 +655,11 @@ describe("connected identity health", () => {
   });
 
   it("validates Enterprise policy before promoting recovered identity", async () => {
-    await resetSlackTestState({ channels: { slack: { dangerouslyAllowNameMatching: true } } });
+    await configureSlack({ dangerouslyAllowNameMatching: true });
     const client = getSlackClient();
-    client.auth.test.mockRejectedValueOnce(new Error("request_timeout")).mockResolvedValue({
-      user_id: "UENTERPRISE",
-      bot_id: "BENTERPRISE",
-      enterprise_id: "E_ENTERPRISE",
-      is_enterprise_install: true,
-    });
+    client.auth.test
+      .mockRejectedValueOnce(new Error("request_timeout"))
+      .mockResolvedValue(enterpriseAuth);
     const setStatus = vi.fn();
     const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
 

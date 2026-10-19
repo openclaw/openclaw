@@ -2,38 +2,116 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   SessionGitHubConfirmParamsSchema,
-  SessionGitHubOptionsParamsSchema,
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
-  SessionGitHubStatusParamsSchema,
+  SessionGitHubActionParamsSchema,
 } from "./session-github-publication.js";
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
-  it.each([
-    ["options", SessionGitHubOptionsParamsSchema, {}],
-    ["publish", SessionGitHubPublishParamsSchema, { idempotencyKey: "global-publication" }],
-    [
-      "status",
-      SessionGitHubStatusParamsSchema,
+  it("accepts a fixed current-PR review request without freeform text or target selectors", () => {
+    const request = {
+      sessionKey: "agent:main:publication",
+      action: "request_review",
+      requestId: "a1111111-1111-4111-8111-111111111111",
+      expectedHeadCommit: "a".repeat(40),
+    };
+    expect(Value.Check(SessionGitHubActionParamsSchema, request)).toBe(true);
+    for (const extra of [
+      { body: "@clawsweeper stop" },
+      { focus: "maintainer instructions" },
+      { publishingSessionKey: "child" },
+      { repository: "other/repo" },
+      { url: "https://github.com/other/repo/pull/1" },
+      { mergeMethod: "squash" },
+      { requestId: undefined },
+      { expectedHeadCommit: undefined },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...request, ...extra })).toBe(false);
+    }
+  });
+  it("admits only a current-workspace refresh and bounded conflict acknowledgment", () => {
+    const refresh = { sessionKey: "agent:main:publication", action: "refresh_base" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, refresh)).toBe(true);
+    expect(
+      Value.Check(SessionGitHubActionParamsSchema, {
+        ...refresh,
+        conflictsResolved: true,
+        baseCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    for (const extra of [
+      { repository: "other/repo" },
+      { ref: "main" },
+      { publishingSessionKey: "other" },
       { requestId: "a1111111-1111-4111-8111-111111111111" },
-    ],
-    [
-      "confirm",
-      SessionGitHubConfirmParamsSchema,
-      {
+      { mergeMethod: "merge" },
+      { baseCommit: "main" },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...refresh, ...extra })).toBe(false);
+    }
+  });
+  it("keeps metadata edits bound to the session without target or lifecycle selectors", () => {
+    const edit = { sessionKey: "agent:main:publication", action: "edit" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, edit)).toBe(true);
+    expect(
+      Value.Check(SessionGitHubActionParamsSchema, {
+        ...edit,
+        title: "New title",
+        expectedTitle: "Old title",
+        body: "Full description",
+        expectedBody: "Previous description",
         requestId: "a1111111-1111-4111-8111-111111111111",
-        generation: "a1111111-1111-4111-8111-111111111111",
-        account: { accountId: 101, login: "alice" },
-        requestDigest: "a".repeat(64),
-      },
-    ],
-  ] as const)("preserves an optional selected owner for %s", (_name, schema, fields) => {
-    const request = { sessionKey: "global", ...fields };
-    expect(Value.Check(schema, request)).toBe(true);
-    expect(Value.Check(schema, { ...request, agentId: "research" })).toBe(true);
-    expect(Value.Check(schema, { ...request, agentId: "" })).toBe(false);
+        expectedHeadCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    for (const extra of [
+      { publishingSessionKey: "other" },
+      { repository: "other/repo" },
+      { url: "https://github.com/other/repo/pull/1" },
+      { mergeMethod: "squash" },
+      { draft: false },
+      { state: "closed" },
+      { token: "synthetic" },
+      { conflictsResolved: true },
+      { body: "x".repeat(65537) },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...edit, ...extra })).toBe(false);
+    }
+  });
+  it("keeps session PR actions closed to arbitrary targets, credentials and auto-merge", () => {
+    const inspect = { sessionKey: "agent:main:publication", action: "inspect" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, inspect)).toBe(true);
+    for (const extra of [
+      { action: "auto_merge" },
+      { url: "https://github.com/another/repository/pull/1" },
+      { token: "synthetic" },
+      { admin: true },
+      { mergeMethod: "admin" },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...inspect, ...extra })).toBe(false);
+    }
+  });
+  it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
+    const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
+    for (const sharedUnavailableReason of [
+      "unavailable",
+      "changed",
+      "rate_limited",
+      "unverified",
+      "unsupported_workspace",
+    ]) {
+      expect(
+        Value.Check(SessionGitHubOptionsResultSchema, { ...options, sharedUnavailableReason }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(SessionGitHubOptionsResultSchema, {
+        ...options,
+        sharedUnavailableReason: "raw diagnostics",
+      }),
+    ).toBe(false);
   });
 
   it("allows shared-only options and one closed personal recovery descriptor", () => {
@@ -135,6 +213,18 @@ describe("session GitHub publication protocol", () => {
       expect(Value.Check(schema, { token: "synthetic-PAT" })).toBe(false);
     }
   });
+  it.each([undefined, false, true, "true", 1, null])(
+    "validates publication draft choice %s",
+    (draft) => {
+      expect(
+        Value.Check(SessionGitHubPublishParamsSchema, {
+          idempotencyKey: "draft-choice",
+          ...(draft !== undefined ? { draft } : {}),
+        }),
+      ).toBe(draft === undefined || typeof draft === "boolean");
+    },
+  );
+
   it("accepts bounded intent without caller-owned repository authority", () => {
     expect(
       Value.Check(SessionGitHubPublishParamsSchema, {
@@ -158,55 +248,17 @@ describe("session GitHub publication protocol", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["token", "secret"],
-    ["repository", "openclaw/openclaw"],
-    ["branch", "main"],
-  ])("rejects caller-owned %s authority independently", (field, value) => {
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        idempotencyKey: "tool-call-1",
-        [field]: value,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      requestId: "request-1",
-      status: "needs_confirmation",
-      message: "Confirm the original account and snapshot.",
-      publisher: { source: "personal", accountId: 101, login: "alice" },
-      effect: { kind: "push", status: "dispatched", headCommit: "a".repeat(40) },
+  it.each([["token", "secret"]])(
+    "rejects caller-owned %s authority independently",
+    (field, value) => {
+      expect(
+        Value.Check(SessionGitHubPublishParamsSchema, {
+          idempotencyKey: "tool-call-1",
+          [field]: value,
+        }),
+      ).toBe(false);
     },
-    {
-      requestId: "request-1",
-      status: "requested",
-      message: "Publication was accepted.",
-    },
-    {
-      requestId: "request-1",
-      status: "publishing",
-      message: "The Gateway is publishing.",
-    },
-    {
-      requestId: "request-1",
-      status: "published",
-      url: "https://github.com/openclaw/openclaw/pull/1",
-      repository: "openclaw/openclaw",
-      branch: "openclaw/task",
-      headCommit: "a".repeat(40),
-    },
-    {
-      requestId: "request-1",
-      status: "failed",
-      code: "push_rejected",
-      message: "GitHub publication failed.",
-      nextAction: "Check branch access and retry.",
-    },
-  ])("accepts the closed $status result", (result) => {
-    expect(Value.Check(SessionGitHubPublicationResultSchema, result)).toBe(true);
-  });
+  );
 
   it("rejects extra fields from terminal results", () => {
     expect(

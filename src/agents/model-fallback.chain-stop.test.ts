@@ -186,7 +186,15 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
   const run = vi.fn(async () =>
     resolveEmbeddedRunTerminalTimeout({
       terminalPrepared: {
+        replyDeliveryState: "missing",
+        sourceReplyDeliveryState: "missing",
+        preparedTerminalReply: { text: "", terminalReply: { disposition: "empty" } },
+        reportedModelRef: { provider: "runtime-provider", model: "runtime-model" },
+        finalAssistantVisibleText: "",
+        finalAssistantRawText: undefined,
+        finalAssistantMessageRawText: undefined,
         timedOutDuringPrompt: true,
+        recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
         hasSuccessfulFinalAssistantAfterPromptTimeout: false,
         hasPartialAssistantTextAfterPromptTimeout: false,
         payloads: [],
@@ -198,6 +206,7 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
         },
         attemptToolSummary: undefined,
         failureSignal: undefined,
+        terminalToolFailure: undefined,
       },
       attempt,
       terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant: undefined }),

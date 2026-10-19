@@ -1,3 +1,5 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+
 type MeetingSessionCleanupProgress = {
   browserLeft?: boolean;
   browserSettled: boolean;
@@ -72,15 +74,7 @@ export class MeetingSessionCleanupTracker {
             state.stops.delete(stop);
           }),
         );
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "Meeting runtime cleanup failed");
-        }
+        throwIfSettledRejected(results, "Meeting runtime cleanup failed");
       })
       .finally(() => {
         if (state.stopping === stopping) {
@@ -144,73 +138,6 @@ export class MeetingSessionCleanupTracker {
         : new Error("Meeting session cleanup failed", { cause: cleanupError });
     }
     return { browserLeft: state.browserLeft, complete, unpublished };
-  }
-
-  async retryBrowserAfterFailedJoin(params: {
-    sessionId: string;
-    browserLeft?: boolean;
-    hasBrowserTab: () => boolean;
-    releaseBrowser: () => Promise<boolean | undefined>;
-  }): Promise<{ browserLeft?: boolean; complete: boolean; error?: unknown; incomplete: boolean }> {
-    const state = this.#states.get(params.sessionId)?.cleanup;
-    if (!state) {
-      return { browserLeft: params.browserLeft, complete: true, incomplete: false };
-    }
-    if (!params.hasBrowserTab()) {
-      state.browserSettled = true;
-    } else if (!state.browserSettled) {
-      try {
-        state.browserLeft = await params.releaseBrowser();
-        state.browserSettled = state.browserLeft !== false;
-      } catch (error) {
-        return {
-          browserLeft: state.browserLeft,
-          complete: false,
-          error,
-          incomplete: params.hasBrowserTab(),
-        };
-      }
-    }
-    return {
-      browserLeft: state.browserLeft,
-      complete: this.#completeIfSettled(params.sessionId, state),
-      incomplete: params.hasBrowserTab(),
-    };
-  }
-
-  async rollbackFailedJoin(params: {
-    sessionId: string;
-    browserLeft?: boolean;
-    leave: () => Promise<unknown>;
-    hasBrowserTab: () => boolean;
-    releaseBrowser: () => Promise<boolean | undefined>;
-    formatError: (error: unknown) => string;
-    warn: (message: string) => void;
-    onBrowserResult: (left: boolean | undefined) => void;
-    onComplete: () => void;
-  }): Promise<void> {
-    // Try rollback twice before the caller retains an ended session for cleanup retry.
-    try {
-      await params.leave();
-    } catch (error) {
-      params.warn(`replacement cleanup failed: ${params.formatError(error)}`);
-      try {
-        await params.leave();
-      } catch (retryError) {
-        params.warn(`replacement cleanup retry failed: ${params.formatError(retryError)}`);
-      }
-    }
-    const retry = await this.retryBrowserAfterFailedJoin(params);
-    params.onBrowserResult(retry.browserLeft);
-    if (retry.error) {
-      params.warn(`replacement browser cleanup retry failed: ${params.formatError(retry.error)}`);
-    }
-    if (retry.complete) {
-      params.onComplete();
-    }
-    if (retry.incomplete) {
-      params.warn("replacement browser cleanup incomplete after failed join");
-    }
   }
 
   #completeIfSettled(sessionId: string, state: MeetingSessionCleanupProgress): boolean {

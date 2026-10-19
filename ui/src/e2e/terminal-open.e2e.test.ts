@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectRequestCount } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal open",
@@ -44,6 +46,63 @@ async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "Syste
 }
 
 suite.define(() => {
+  it.each([
+    { dock: "bottom", keepFiles: false },
+    { dock: "bottom", keepFiles: true },
+    { dock: "right", keepFiles: false },
+    { dock: "right", keepFiles: true },
+  ] as const)(
+    "removes the last exited terminal in the $dock dock while preserving another panel=$keepFiles",
+    async ({ dock, keepFiles }) => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: ["chat.startup", "terminal.open"],
+            terminalEnabled: true,
+            methodResponses: {
+              "terminal.open": {
+                sessionId: "logout-shell",
+                agentId: "main",
+                shell: "/bin/bash",
+                cwd: "/workspace/openclaw",
+                confined: false,
+                owner: "agent:main:main",
+              },
+            },
+          });
+          const panel = await openTerminalSidePanel(page);
+          await gateway.waitForRequest("terminal.open");
+          await panel.locator(".tp-host canvas").waitFor();
+          await dockChatSidePanel(page, dock);
+          if (keepFiles) {
+            await openChatSidePanelType(page, "Files");
+          }
+          const output = "$ logout\r\nlogout\r\n";
+          await gateway.emitGatewayEvent("terminal.data", {
+            sessionId: "logout-shell",
+            seq: output.length,
+            data: output,
+          });
+          await gateway.emitGatewayEvent("terminal.exit", {
+            sessionId: "logout-shell",
+            reason: "process_exit",
+            exitCode: 0,
+            signal: null,
+          });
+
+          await expect.poll(() => panel.count()).toBe(0);
+          const side = page.locator(".sidebar-region__right-runtime .side-panel");
+          await expect.poll(() => side.isVisible()).toBe(keepFiles);
+          if (keepFiles) {
+            await page.locator('[data-panel-slot="workspace"]').waitFor();
+          }
+          expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("opens against the shared mock and renders echoed terminal output", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -107,9 +166,9 @@ suite.define(() => {
           .toBe("light");
         expect(await canvas.getAttribute("data-theme-sync-identity")).toBe("original");
 
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await expect.poll(() => canvas.isVisible()).toBe(false);
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await canvas.waitFor({ state: "visible" });
         await expect
           .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
@@ -154,7 +213,7 @@ suite.define(() => {
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
 
       await retry.click();
-      await expect.poll(async () => (await gateway.getRequests("terminal.open")).length).toBe(2);
+      await expectRequestCount(gateway, "terminal.open", 2);
       await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });

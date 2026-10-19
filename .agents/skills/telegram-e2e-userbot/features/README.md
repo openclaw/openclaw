@@ -28,7 +28,7 @@ sees through the dedicated QA user account.
 - [Private yielded reply policy](./private-yield-reply-policy.md): real private-child settlement with tool-only and automatic delivery controls.
 - [Restart attribution](./restart-attribution.md): visible baseline, process replacement, and a distinct fresh reply.
 - [Reaction lifecycle](./reaction-lifecycle.md): acknowledgement and status reactions on the user's message.
-- Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence.
+- Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence. That album goes out when recording starts, before the Gateway's poller is long-polling, so Telegram hands every member back in one `getUpdates` response. For album delivery timing, send it from a scenario instead: `{ "type": "send", "atMs": 25000, "photos": ["/abs/a.png", "/abs/b.png"] }` (2–10 paths, one `sendMessageAlbum` call; `text` is the optional first caption). The action row carries every member in `messageIds`. Use distinct, small (tens of KB) photo files per album: reused files let TDLib resend cached uploads, and multi-MB photos uploaded too slowly to the Test DC for the 30 s send confirmation. Judge with `getUpdates` `updates` counts in `scenario.telegramApiRequestLog`, spool-to-spool gaps from the Gateway's `isolated polling update spooled` diagnostics, and one agent turn whose newest user message holds every image.
 - Forwarded bursts: use scenario action `{ "type": "forwardBurst", "text": "...", "photo": "/abs/path.png" }` with `--dm` (required). The SUT bot posts both into the DM via the direct Test Bot API, then the QA user forwards them back in one `forwardMessages` call so each carries `forward_origin` (the QA user's own Saved Messages posts lose it, verified live). Source messages appear as SUT rows before the action row; exclude them when judging replies. The summary/recording action row carries `messageIds` (forwarded) and `sourceMessageIds`. Count only `/v1/responses` requests whose latest user content contains the burst text and an image; recaps/embeddings do not count. Inspect `getUpdates` `updates` counts plus `getFile`/`file` latency (`doneAt - at`) in `scenario.telegramApiRequestLog`.
 
 ## Other branches
@@ -46,7 +46,7 @@ The audit lane exercises config the default path never uses:
 | `E2E_REQUIRE_MENTION=true`  | makes the test group mention-required; ack scope treats `group-mentions` as mention-_required_ groups, so reaction rows need it |
 | `E2E_TELEGRAM_PROVIDER_API` | `openai-completions` for commentary and preamble scenarios                                                                      |
 | `E2E_MOCK_SERVER_PATH`      | an alternate mock server for provider-shape controls                                                                            |
-| `--source-gateway`          | the exact TypeScript checkout without a build step                                                                              |
+| `--source-gateway`          | core and the Telegram plugin from TypeScript source; other plugins use built output when present                                |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
 Scenario action `command` runs argv without an implicit shell in the leased

@@ -330,11 +330,10 @@ export async function applySystemAgentSetup(
     const allowWorkspaceWrite = params.allowWorkspaceChange || !currentHasRoster;
     let setupBaseConfig = currentBaseConfig;
     if (currentHasRoster) {
-      const { list: _legacyList, ...agents } = setupBaseConfig.agents ?? {};
       setupBaseConfig = {
         ...setupBaseConfig,
         agents: {
-          ...agents,
+          ...setupBaseConfig.agents,
           entries: toAgentEntriesRecord(roster),
         },
       };
@@ -502,7 +501,7 @@ export async function applySystemAgentSetup(
         agentId: effectiveAgentId,
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-        beforePersistentApply,
+        guard: { assertHost: beforePersistentApply },
       }),
     (error) => lines.push(`Workspace files: ${formatErrorMessage(error)}`),
   );
@@ -514,16 +513,12 @@ export async function applySystemAgentSetup(
       const { updateExecApprovals } = await import("../infra/exec-approvals.js");
       beforePersistentApply?.();
       await updateExecApprovals({
-        update: (approvals) =>
-          approvals.agents?.openclaw
-            ? null
-            : {
-                ...approvals,
-                agents: {
-                  ...approvals.agents,
-                  openclaw: { security: "full", ask: "off" },
-                },
-              },
+        assertCurrent: beforePersistentApply,
+        update: {
+          kind: "ensure-agent",
+          agentId: "openclaw",
+          policy: { security: "full", ask: "off" },
+        },
       });
     },
     (error) =>
@@ -553,6 +548,8 @@ export async function applySystemAgentSetup(
         if (gateway.status === "failed") {
           lines.push(`Gateway service: ${gateway.error}`);
         } else if (gateway.status === "ready") {
+          const { gatewayAuthUsesLocalPassword, resolveGatewayLocalPassword } =
+            await import("../wizard/setup.finalize-gateway-auth.js");
           const probeLinks = onboardHelpers.resolveLocalControlUiProbeLinks({
             bind: settings.bind,
             port: settings.port,
@@ -563,17 +560,12 @@ export async function applySystemAgentSetup(
           const probe = await onboardHelpers.waitForGatewayReachable({
             url: probeLinks.wsUrl,
             token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-            password:
-              settings.authMode === "password"
-                ? await (
-                    await import("../wizard/setup.secret-input.js")
-                  ).resolveSetupSecretInputString({
-                    config: nextConfig,
-                    value: nextConfig.gateway?.auth?.password,
-                    path: "gateway.auth.password",
-                    env: process.env,
-                  })
-                : undefined,
+            password: gatewayAuthUsesLocalPassword(settings.authMode)
+              ? await resolveGatewayLocalPassword({
+                  nextConfig,
+                  env: process.env,
+                })
+              : undefined,
             ...(gateway.action === "reused"
               ? { deadlineMs: 15_000 }
               : resolveGatewayStartupTiming()),

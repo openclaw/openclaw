@@ -3,6 +3,11 @@ import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/r
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
+import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -13,9 +18,63 @@ import type {
   RestartRecoveryTerminalDeliveryEvidenceResult,
   SessionRestartRecoveryState,
 } from "./restart-recovery-types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, RestartRecoveryRun, SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
+
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
+    (left, right) => left.runId.localeCompare(right.runId),
+  );
+}
+
+export function recordLifecycleFence(
+  entry: Pick<InternalSessionEntry, "restartRecoveryRuns">,
+  run: RestartRecoveryRun,
+): void {
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
+}
+
+export function isMainRestartRecoveryCandidate(
+  entry: { spawnDepth?: unknown; subagentRole?: unknown },
+  sessionKey: string,
+): boolean {
+  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
+    return false;
+  }
+  if (entry.subagentRole != null) {
+    return false;
+  }
+  return (
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey)
+  );
+}
+
+/** A final intent can acknowledge only its admitted source on the same captured route. */
+export function getRestartRecoveryPendingFinalSourceRunId(
+  entry: SessionEntry,
+  context: DeliveryContext | undefined,
+): string | undefined {
+  const sourceRunId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const original = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  return normalizeRunId(entry.restartRecoveryDeliveryRunId) &&
+    sourceRunId &&
+    original?.channel &&
+    original.to &&
+    isDeepStrictEqual(original, normalizeDeliveryContext(context))
+    ? sourceRunId
+    : undefined;
+}
 
 type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
@@ -28,8 +87,8 @@ export function resolveRestartRecoveryChannelAuthority(
 ): RestartRecoveryChannelAuthority | undefined {
   const sourceTurnId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
   const deliveryContext = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
-  const channel = normalizeRunId(deliveryContext?.channel);
-  const to = normalizeRunId(deliveryContext?.to);
+  const channel = deliveryContext?.channel;
+  const to = deliveryContext?.to;
   if (
     entry.restartRecoverySourceIngress !== "channel" ||
     !sourceTurnId ||
@@ -107,6 +166,18 @@ function normalizeTerminalDeliveryEvidenceResult(
     return undefined;
   }
   const captured = record.captured === true ? (true as const) : undefined;
+  const rawMeta = asOptionalObjectRecord(record.meta);
+  const meta: RestartRecoveryTerminalDeliveryEvidenceResult["meta"] = {
+    ...(asOptionalObjectRecord(rawMeta?.terminalReply)?.disposition === "silent"
+      ? { terminalReply: { disposition: "silent" as const } }
+      : {}),
+    ...(rawMeta?.yielded === true ? { yielded: true as const } : {}),
+    ...(rawMeta?.continuationPending === true ? { continuationPending: true as const } : {}),
+    ...(rawMeta?.aborted === true ? { aborted: true as const } : {}),
+    ...(rawMeta?.error === true ? { error: true as const } : {}),
+  };
+  const requesterContinuationSettled =
+    record.requesterContinuationSettled === true ? (true as const) : undefined;
   const rawPayloads = Array.isArray(record.payloads) ? record.payloads : undefined;
   const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
     ? rawPayloads.slice(0, 64).map((payload) => {
@@ -158,10 +229,12 @@ function normalizeTerminalDeliveryEvidenceResult(
         ) {
           return [];
         }
+        const reason = normalizeRunId(outcome.reason)?.slice(0, 256);
         return [
           {
             index: outcome.index,
             status: outcomeStatus,
+            ...(reason ? { reason } : {}),
             ...(typeof outcome.sentBeforeError === "boolean"
               ? { sentBeforeError: outcome.sentBeforeError }
               : {}),
@@ -170,6 +243,7 @@ function normalizeTerminalDeliveryEvidenceResult(
       })
     : undefined;
   const errorMessage = normalizeRunId(rawStatus?.errorMessage);
+  const reason = normalizeRunId(rawStatus?.reason)?.slice(0, 256);
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
@@ -179,6 +253,7 @@ function normalizeTerminalDeliveryEvidenceResult(
           ? { resultCount: rawStatus.resultCount }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(reason ? { reason } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
     : undefined;
@@ -228,6 +303,8 @@ function normalizeTerminalDeliveryEvidenceResult(
     record.restartUnsafeSideEffectsDetected === true ? (true as const) : undefined;
   if (
     !captured &&
+    Object.keys(meta).length === 0 &&
+    !requesterContinuationSettled &&
     !payloads?.length &&
     !payloadsTruncated &&
     !deliveryStatus &&
@@ -240,6 +317,8 @@ function normalizeTerminalDeliveryEvidenceResult(
   }
   return {
     ...(captured ? { captured } : {}),
+    ...(Object.keys(meta).length ? { meta } : {}),
+    ...(requesterContinuationSettled ? { requesterContinuationSettled } : {}),
     ...(payloads?.length ? { payloads } : {}),
     ...(payloadsTruncated ? { payloadsTruncated } : {}),
     ...(deliveryStatus ? { deliveryStatus } : {}),
@@ -269,7 +348,12 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       continue;
     }
     const previousIndex = evidence.findIndex((entry) => entry.runId === runId);
+    // Queue receipts are immutable facts. Later terminal cleanup can carry an
+    // older capture, but cannot erase a send or reassign it to another route.
     if (previousIndex >= 0) {
+      if (evidence[previousIndex]?.durableFinalReceipt) {
+        continue;
+      }
       evidence.splice(previousIndex, 1);
     }
     const transcriptRunId = normalizeRunId(item.transcriptRunId);
@@ -294,8 +378,14 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       runId,
       ...result,
       ...(transcriptRunId ? { transcriptRunId } : {}),
-      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
-      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion } : {}),
+      ...(deliveryContext ? { deliveryContext } : {}),
+      ...((item.harnessCompletion === undefined || harnessCompletion?.sourceRunId === runId) &&
+      deliveryContext?.channel &&
+      deliveryContext.to &&
+      intentId &&
+      deliveryId &&
+      platformMessageId
         ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
         : {}),
     });
@@ -465,7 +555,8 @@ export function mergeRestartRecoveryTerminalRunIds(
   const appendedRunIds = (normalizeRestartRecoveryTerminalRunIds(appended) ?? []).filter(
     (runId) => !currentSet.has(runId),
   );
-  return normalizeRestartRecoveryTerminalRunIds([...currentRunIds, ...appendedRunIds]);
+  const bounded = [...currentRunIds, ...appendedRunIds].slice(-MAX_TERMINAL_RUN_IDS);
+  return bounded.length > 0 ? bounded : undefined;
 }
 
 export function hasRestartRecoveryTerminalRun(
@@ -476,6 +567,55 @@ export function hasRestartRecoveryTerminalRun(
     normalizeRestartRecoveryTerminalRunIds(entry?.restartRecoveryTerminalRunIds)?.includes(
       runId,
     ) === true
+  );
+}
+
+/** An unadopted input retains same-ID retry custody until execution claims it. */
+export function isRetryableUnadoptedChatClaim(
+  entry: InternalSessionEntry | undefined,
+  clientRunId = entry?.restartRecoveryDeliveryRunId,
+): entry is InternalSessionEntry & { restartRecoveryDeliveryRequestFingerprint: string } {
+  return Boolean(
+    entry &&
+    clientRunId !== undefined &&
+    entry.abortedLastRun !== true &&
+    (entry.status === "failed" || entry.status === "killed") &&
+    entry.restartRecoveryDeliveryContext === undefined &&
+    entry.restartRecoveryDeliveryRunId === clientRunId &&
+    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+    entry.restartRecoveryDeliveryRequestFingerprint &&
+    !entry.mainRestartRecovery &&
+    !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)),
+  );
+}
+
+/** Recovery custody survives process loss independently of the last run's outcome. */
+export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefined): boolean {
+  return Boolean(
+    entry?.mainRestartRecovery ||
+    entry?.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)) ||
+    entry?.restartRecoveryDeliveryRunId ||
+    entry?.pendingFinalDelivery,
+  );
+}
+
+export function hasOrphanedMainSessionWork(
+  entry: InternalSessionEntry,
+  sessionKey: string,
+): boolean {
+  const settledInterruption =
+    entry.abortedLastRun === false &&
+    !entry.lifecycleRunId &&
+    !entry.activeWriterRunId &&
+    entry.lastRunId !== undefined &&
+    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
+  return (
+    entry.archivedAt === undefined &&
+    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    (hasMainSessionRecoveryClaim(entry) ||
+      entry.abortedLastRun === true ||
+      (entry.status === "interrupted" && !settledInterruption))
   );
 }
 
@@ -492,13 +632,6 @@ export function hasRestartRecoverySourceClaim(
   );
 }
 
-export function hasActiveRestartRecoverySourceClaim(
-  entry: SessionEntry | null | undefined,
-  sourceTurnId: string,
-): entry is SessionEntry {
-  return entry?.status === "running" && hasRestartRecoverySourceClaim(entry, sourceTurnId);
-}
-
 /** Clears exact active ownership and optionally records its client source as terminal. */
 export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
@@ -506,7 +639,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
   terminalRunId?: string;
   terminalSourceRunId?: string;
-}): Partial<SessionEntry> {
+}): Partial<InternalSessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
@@ -549,6 +682,8 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
+    restartRecoveryRequesterSource: undefined,
     restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,

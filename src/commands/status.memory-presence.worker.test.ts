@@ -4,13 +4,13 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildMemoryIndexStrictSchema } from "../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OutputRuntimeEnv } from "../runtime.js";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchManager,
   createStatusScanSharedMocks,
   loadStatusScanModuleForTest,
 } from "./status.scan.test-helpers.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -33,16 +33,10 @@ const mocks = {
   resolveMemorySearchConfig: vi.fn(),
 };
 const writeJson = vi.fn<(value: unknown, space?: number) => void>();
-const runtime: OutputRuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-  writeStdout: vi.fn(),
-  writeJson,
-};
+const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson };
 let statusJsonCommand: typeof import("./status-json.js").statusJsonCommand;
 let sqliteOwner: typeof import("../infra/node-sqlite.js");
-let poolRun: Awaited<ReturnType<typeof observeWorkerPools>> | undefined;
+let poolRun: Awaited<ReturnType<typeof observeWorkerPools>>;
 
 async function observeWorkerPools() {
   const { resolveBundledPublicSurfaceLocation } = await import("../plugin-sdk/facade-loader.js");
@@ -75,26 +69,21 @@ async function observeWorkerPools() {
   const { WorkerTaskPool } = loader(sdkPath) as typeof import("../plugin-sdk/process-runtime.js");
   type Pool = InstanceType<typeof WorkerTaskPool>;
   const pools = new Set<Pool>();
-  let nextFailure: Error | undefined;
   // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the actual pool receiver via apply.
   const originalRun = WorkerTaskPool.prototype.run;
+  const dispatch = vi.fn(originalRun);
   const run = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
     this: Pool,
     ...args: Parameters<typeof originalRun>
   ) {
     pools.add(this);
-    if (nextFailure) {
-      const failure = nextFailure;
-      nextFailure = undefined;
-      return Promise.reject(failure);
-    }
-    return originalRun.apply(this, args);
+    return dispatch.apply(this, args);
   });
   return {
     run,
     pools,
     rejectNextInspection(error: Error) {
-      nextFailure = error;
+      dispatch.mockRejectedValueOnce(error);
     },
   };
 }
@@ -122,6 +111,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({ statusJsonCommand } = await import("./status-json.js"));
   sqliteOwner = await import("../infra/node-sqlite.js");
+  poolRun = await observeWorkerPools();
 });
 
 beforeEach(() => {
@@ -151,31 +141,26 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
     const databasePath = resolveDefaultMemoryDatabasePath("main");
     if (kind !== "missing") {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      const database = new DatabaseSync(databasePath);
-      try {
+      using database = new DatabaseSync(databasePath);
+      database.exec(
+        kind === "unrelated"
+          ? "CREATE TABLE unrelated_feature (id INTEGER PRIMARY KEY) STRICT"
+          : buildMemoryIndexStrictSchema({
+              embeddingCacheTable: "memory_embedding_cache",
+              includeEmbeddingCache: false,
+            }),
+      );
+      if (kind === "populated" || kind === "unavailable") {
         database.exec(
-          kind === "unrelated"
-            ? "CREATE TABLE unrelated_feature (id INTEGER PRIMARY KEY) STRICT"
-            : buildMemoryIndexStrictSchema({
-                embeddingCacheTable: "memory_embedding_cache",
-                includeEmbeddingCache: false,
-              }),
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES ('MEMORY.md', 'memory', 'synthetic', 1, 10)",
         );
-        if (kind === "populated" || kind === "unavailable") {
-          database.exec(
-            "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES ('MEMORY.md', 'memory', 'synthetic', 1, 10)",
-          );
-        }
-      } finally {
-        database.close();
       }
     }
     const before = kind === "missing" ? undefined : fs.readFileSync(databasePath);
     mocks.resolveMemorySearchConfig.mockReturnValue({ store: { databasePath } });
-    const observer = (poolRun ??= await observeWorkerPools());
     if (kind === "unavailable") {
       // Exercise dispatch rejection without creating a failed native worker.
-      observer.rejectNextInspection(new Error("Synthetic inspection unavailable"));
+      poolRun.rejectNextInspection(new Error("Synthetic inspection unavailable"));
     }
     const nativeCalls = [
       vi.spyOn(sqliteOwner, "openNodeSqliteDatabase"),
@@ -187,22 +172,19 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
       vi.spyOn(StatementSync.prototype, "run"),
     ];
     try {
-      const samples = [];
       for (let attempt = 0; attempt < (kind === "populated" ? 4 : 1); attempt++) {
         writeJson.mockClear();
         mocks.getMemorySearchManager.mockClear();
-        observer.run.mockClear();
+        poolRun.run.mockClear();
         for (const call of nativeCalls) {
           call.mockClear();
         }
-        const started = performance.now();
         await statusJsonCommand({ all: true }, runtime);
-        const durationMs = performance.now() - started;
         if (kind === "missing") {
-          expect(observer.run).not.toHaveBeenCalled();
+          expect(poolRun.run).not.toHaveBeenCalled();
         } else {
-          expect(observer.run).toHaveBeenCalled();
-          expect(observer.pools.size).toBeGreaterThan(0);
+          expect(poolRun.run).toHaveBeenCalled();
+          expect(poolRun.pools.size).toBeGreaterThan(0);
         }
         expect(writeJson).toHaveBeenCalledOnce();
         expect(writeJson).toHaveBeenCalledWith(
@@ -214,18 +196,8 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
           2,
         );
         expect(mocks.getMemorySearchManager).toHaveBeenCalledTimes(kind === "populated" ? 1 : 0);
-        const parentSqlCalls = nativeCalls.map((call) => call.mock.calls.length);
-        expect(parentSqlCalls).toEqual([0, 0, 0, 0, 0, 0, 0]);
-        samples.push({ attempt, durationMs, parentSqlCalls });
+        expect(nativeCalls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
       }
-      console.info(
-        JSON.stringify({
-          fixture: kind,
-          timingScope: "handler after same-loader SDK observer setup",
-          samples,
-          json: writeJson.mock.calls[0]?.[0],
-        }),
-      );
       if (before) {
         expect(fs.readFileSync(databasePath)).toEqual(before);
       } else {

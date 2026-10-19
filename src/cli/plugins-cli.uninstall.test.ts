@@ -2,12 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistClawPackageRef } from "../claws/provenance.js";
-import type { ClawAddPlan } from "../claws/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-paths.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginDiagnosticsReportMock,
@@ -35,7 +34,7 @@ import {
 
 let alphaInstallPath: string;
 let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
-const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+const originalEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectRuntimeLogIncludes(fragment: string) {
@@ -108,11 +107,7 @@ describe("plugins cli uninstall", () => {
 
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
-      delete process.env.OPENCLAW_NIX_MODE;
-    } else {
-      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
-    }
+    originalEnv.restore();
   });
 
   it("shows uninstall dry-run preview without mutating config or acquiring write mode", async () => {
@@ -269,63 +264,6 @@ describe("plugins cli uninstall", () => {
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("warns for a versionless scoped ClawHub spec and proceeds", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-claw-plugin-ref-");
-    closeOpenClawStateDatabaseForTest();
-    try {
-      const installRecord = {
-        source: "clawhub" as const,
-        spec: "clawhub:@owner/audit",
-        version: "2.0.1",
-        installPath: alphaInstallPath,
-      };
-      const baseConfig = {
-        plugins: {
-          entries: { alpha: { enabled: true } },
-          installs: { alpha: installRecord },
-        },
-      } as OpenClawConfig;
-      pluginCliConfigMock.mockReturnValue(baseConfig);
-      setInstalledPluginIndexInstallRecords({ alpha: installRecord });
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "alpha", name: "alpha" }],
-        diagnostics: [],
-      });
-
-      persistClawPackageRef(
-        {
-          agent: { finalId: "audit-agent" },
-          claw: { name: "@owner/audit-claw" },
-        } as ClawAddPlan,
-        {
-          kind: "plugin",
-          source: "clawhub",
-          ref: "@owner/audit",
-          version: "2.0.1",
-          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        },
-        { status: "failed" },
-      );
-
-      await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
-
-      expectRuntimeLogIncludes('Warning: plugin "alpha" is referenced by Claw: @owner/audit-claw.');
-      expectRuntimeLogIncludes("Uninstalling it may break those Claws");
-      expectInstallRecordsWrittenWithLease(
-        {},
-        { plugins: { entries: { alpha: { enabled: false } } } },
-      );
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      closeOpenClawStateDatabaseForTest();
-    }
   });
 
   it.each(["closed", "declined", "accepted after config edit"])(

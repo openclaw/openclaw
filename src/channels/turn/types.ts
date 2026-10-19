@@ -1,4 +1,3 @@
-import type { SessionConversationLink } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type {
   GetReplyOptions,
@@ -30,6 +29,7 @@ import type {
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
+import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
@@ -71,7 +71,7 @@ export type SenderFacts = {
 };
 
 export type ConversationFacts = {
-  kind: "direct" | "group" | "channel";
+  kind: ChatType;
   id: string;
   label?: string;
   spaceId?: string;
@@ -79,10 +79,8 @@ export type ConversationFacts = {
   threadId?: string;
   nativeChannelId?: string;
   avatar?: string;
-  /** Canonical external destination, resolved by the channel after thread creation. */
-  link?: SessionConversationLink;
   routePeer?: {
-    kind: "direct" | "group" | "channel";
+    kind: ChatType;
     id: string;
   };
 };
@@ -166,8 +164,17 @@ export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-o
 
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+  | "deps"
+  | "formatting"
+  | "identity"
+  | "mediaAccess"
+  | "replyToMode"
+  | "retryAmbiguousFinalText"
+  | "silent"
+  | "threadId"
 > & {
+  /** Validate the admitted sender or restore its account view from current Gateway config. */
+  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
@@ -291,6 +298,8 @@ type ChannelTurnContext = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  /** Current channel authority at record and dispatch initiation, after awaited preparation. */
+  assertAuthority?: () => void;
   afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;

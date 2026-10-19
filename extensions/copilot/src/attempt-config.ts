@@ -15,7 +15,6 @@ import {
   type AttemptParamsLike,
   type AttemptResultWithSdkSessionId,
   type CopilotAttemptOperation,
-  type CopilotSessionConfig,
   type ModelRef,
   type ModelRefInputObject,
 } from "./attempt-types.js";
@@ -159,7 +158,7 @@ export function createSessionConfig(
     includeAskUser: boolean;
     operation: CopilotAttemptOperation;
   },
-): CopilotSessionConfig {
+): SessionConfig {
   const settledToolFinalization = options.operation === "settled-tool-finalization";
   const permissionPolicy = settledToolFinalization
     ? rejectAllPolicy
@@ -173,7 +172,7 @@ export function createSessionConfig(
     ...(onUserInputRequest ? { onUserInputRequest } : {}),
     ...(resolvedProvider.provider ? { provider: resolvedProvider.provider } : {}),
     ...(hooks ? { hooks } : {}),
-    ...(typeof params.enableSessionTelemetry === "boolean"
+    ...(params.enableSessionTelemetry !== undefined
       ? { enableSessionTelemetry: params.enableSessionTelemetry }
       : {}),
     ...(settledToolFinalization
@@ -238,7 +237,7 @@ export async function createMessageOptions(
   }));
   const providerHeaders = context.provider.provider?.headers;
   const requestHeaders =
-    providerHeaders && Object.keys(providerHeaders).length > 0 ? { ...providerHeaders } : undefined;
+    providerHeaders && Object.keys(providerHeaders).length > 0 ? providerHeaders : undefined;
   return {
     prompt: params.prompt,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -270,9 +269,9 @@ async function resolvePromptImages(
     prompt: params.prompt,
     workspaceDir,
     model: resolveImageCapabilityModel(params),
-    existingImages: Array.isArray(params.images) ? params.images : undefined,
-    imageOrder: Array.isArray(params.imageOrder) ? params.imageOrder : undefined,
-    media: Array.isArray(params.media) ? params.media : undefined,
+    existingImages: params.images,
+    imageOrder: params.imageOrder,
+    media: params.media,
     config: params.config,
     workspaceOnly: context.workspaceOnly,
     localRoots,
@@ -285,10 +284,7 @@ async function resolvePromptImages(
 }
 function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: string[] } {
   const model = params.model;
-  if (model && typeof model === "object" && Array.isArray((model as { input?: unknown }).input)) {
-    return { input: (model as { input: string[] }).input };
-  }
-  return { input: ["image"] };
+  return { input: typeof model === "object" ? (model.input ?? ["image"]) : ["image"] };
 }
 export { readNonEmptyString };
 export function readResolvedAttemptPath(value: unknown): string | undefined {
@@ -354,7 +350,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
   const authContext = {
     agentId: readNonEmptyString(params.agentId),
     agentDir: readNonEmptyString(params.agentDir),
-    workspaceDir: readNonEmptyString(params.workspaceDir),
     copilotHome: readNonEmptyString(params.copilotHome),
   };
   const auth =

@@ -1,7 +1,11 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import {
+  attachmentParams,
+  prepareAttachmentFixture,
+} from "./chat-send-attachments.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   ensureSandboxWorkspaceForSession: vi.fn(),
@@ -23,6 +27,7 @@ it.each(["existing", "admitted new"] as const)(
   "uses %s session's private skill identity for both pre-ACK staging calls",
   async (sessionKind) => {
     await withOpenClawTestState({ label: "private-preack-stage" }, async (state) => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const selection = {
         skillId: "00000000-0000-0000-0000-000000000001",
         revision: "0".repeat(64),
@@ -38,25 +43,6 @@ it.each(["existing", "admitted new"] as const)(
         ctx.media[0].path = "media/inbound/private.txt";
         return { staged: new Map([[0, "media/inbound/private.txt"]]) };
       });
-      const request = normalizeChatSendRequest({
-        client: null,
-        params: {
-          sessionKey: "agent:main:private",
-          message: "read this",
-          idempotencyKey: `private-${sessionKind}`,
-          attachments: [
-            {
-              fileName: "private.txt",
-              mimeType: "text/plain",
-              content: Buffer.from("private input").toString("base64"),
-            },
-          ],
-        },
-      });
-      expect(request.ok).toBe(true);
-      if (!request.ok) {
-        throw new Error(request.error);
-      }
       const cfg = {
         agents: {
           defaults: {
@@ -65,47 +51,51 @@ it.each(["existing", "admitted new"] as const)(
           },
         },
       };
-      const entry = { skillLibrarySelections: [selection] };
+      const entry = {
+        skillLibrarySelections: [selection],
+        spawnedCwd: state.path("session-workspace"),
+      };
       const staleEntry = {
         skillLibrarySelections: [{ ...selection, revision: "1".repeat(64) }],
       };
-      const controller = new AbortController();
-      const result = await prepareChatSendAttachments({
-        request: request.value,
+      const { result } = await prepareAttachmentFixture({
+        params: attachmentParams(`private-${sessionKind}`, "private.txt", "private input", {
+          sessionKey: "agent:main:private",
+          message: "read this",
+        }),
         session: {
           cfg,
-          sessionKey: "agent:main:private",
-          agentId: "main",
           entry: sessionKind === "existing" ? staleEntry : undefined,
-          resolvedSessionModel: { provider: "fixture", model: "fixture" },
-          clientRunId: `private-${sessionKind}`,
         },
         admission: {
-          activeRunAbort: { controller },
           initialSessionEntry: sessionKind === "admitted new" ? entry : undefined,
           admittedSessionEntry: sessionKind === "existing" ? entry : undefined,
-          assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
-          cleanupAdmittedRun() {},
         },
         context: {},
-        respond: vi.fn(),
-      } as unknown as Parameters<typeof prepareChatSendAttachments>[0]);
-      expect(result.ok).toBe(true);
+      });
+      assert(result.ok, "private skill attachment preparation failed");
       expect(mocks.resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ librarySelections: [selection] }),
+        expect.objectContaining({
+          librarySelections: [selection],
+          workspaceDir: state.workspaceDir,
+        }),
       );
       expect(mocks.ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
-        expect.objectContaining({ skillsSnapshot: snapshot }),
+        expect.objectContaining({
+          skillsSnapshot: snapshot,
+          workspaceDir: state.path("session-workspace"),
+        }),
       );
       expect(mocks.stageSandboxMedia).toHaveBeenCalledWith(
-        expect.objectContaining({ skillsSnapshot: snapshot }),
+        expect.objectContaining({
+          skillsSnapshot: snapshot,
+          workspaceDir: state.path("session-workspace"),
+        }),
       );
-      if (result.ok) {
-        expect(result.value.mediaPathOffloads[0]).toMatchObject({
-          path: "media/inbound/private.txt",
-          workspaceDir: state.path("isolated-runtime"),
-        });
-      }
+      expect(result.value.mediaPathOffloads[0]).toMatchObject({
+        path: "media/inbound/private.txt",
+        workspaceDir: state.path("isolated-runtime"),
+      });
     });
   },
 );

@@ -1,4 +1,4 @@
-// Parses provider batch output lines into the custom-id embedding map.
+import { getBatchResponseError } from "./batch-response-error.js";
 
 const DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES = 4 * 1024 * 1024;
 const INITIAL_BATCH_OUTPUT_RECORD_BYTES = 64 * 1024;
@@ -152,14 +152,7 @@ export function applyEmbeddingBatchOutputLine(params: {
   const response = params.line.response;
   const statusCode = response?.status_code ?? 0;
   if (statusCode >= 400) {
-    const messageFromObject =
-      response?.body && typeof response.body === "object"
-        ? response.body.error?.message
-        : undefined;
-    const messageFromString = typeof response?.body === "string" ? response.body : undefined;
-    params.errors.push(
-      `${customId}: ${messageFromObject || messageFromString || response?.message || "unknown error"}`,
-    );
+    params.errors.push(`${customId}: ${getBatchResponseError(response) || "unknown error"}`);
     return;
   }
 

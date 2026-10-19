@@ -1,4 +1,3 @@
-// Channel outbound contracts define plugin send results, media handling, and delivery metadata.
 import type {
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
@@ -216,6 +215,7 @@ export {
   deliverWithFinalizableLivePreviewAdapter,
 } from "../channels/message/live.js";
 export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
+export { createChannelDeliveryAccumulator } from "../channels/turn/delivery-result.js";
 export {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,

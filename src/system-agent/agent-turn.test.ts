@@ -4,21 +4,23 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import * as authStore from "../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import * as cliRunner from "../agents/cli-runner.js";
 import { prepareEmbeddedSkills } from "../agents/embedded-agent-runner/skill-runtime.js";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import * as modelAuth from "../agents/model-auth.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
+import * as configModule from "../config/config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
+  runSystemAgentTurn as runSystemAgentTurnImpl,
   type SystemAgentSession,
 } from "./agent-turn.js";
-import {
-  runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl,
-  type SystemAgentTurnDeps,
-} from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import {
@@ -42,17 +44,27 @@ vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
   ),
 }));
 
-type RunCliAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runCliAgent"]>>[0];
-type RunEmbeddedAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
+type RunCliAgentParams = Parameters<typeof cliRunner.runCliAgent>[0] & {
+  systemAgentTool?: import("../agents/tools/system-agent-tool.js").SystemAgentToolOptions;
+};
+type RunEmbeddedAgentParams = Parameters<typeof embeddedAgent.runEmbeddedAgent>[0] & {
+  systemAgentTool?: import("../agents/tools/system-agent-tool.js").SystemAgentToolOptions;
+};
 
 const mocks = vi.hoisted(() => ({
   runEmbeddedAgent: vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-    meta: { finalAssistantVisibleText: "ready" },
+    meta: { durationMs: 0, finalAssistantVisibleText: "ready" },
   })),
 }));
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   runEmbeddedAgent: mocks.runEmbeddedAgent,
+}));
+
+vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
+  runCliAgent: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -73,8 +85,8 @@ const tempDirs = createTempDirTracker();
 let restoreCliBackendFixture: (() => void) | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
-  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+const runSystemAgentTurn: typeof runSystemAgentTurnImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnImpl(...args));
 
 const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVerifiedInferenceTestFixtureImpl =
   (...args) =>
@@ -96,10 +108,9 @@ const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifie
 
 function turnParams(
   session: SystemAgentSession,
-  overview: Parameters<typeof runSystemAgentTurnWithDeps>[0]["overview"],
   input = "hello",
-): Parameters<typeof runSystemAgentTurnWithDeps>[0] {
-  return { input, overview, surface: "gateway", approvalArmed: false, session };
+): Parameters<typeof runSystemAgentTurn>[0] {
+  return { input, surface: "gateway", approvalArmed: false, session };
 }
 
 function useTempStateDir(): string {
@@ -149,6 +160,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  mocks.runEmbeddedAgent.mockImplementation(async () => ({
+    meta: { durationMs: 0, finalAssistantVisibleText: "ready" },
+  }));
   tempDirs.cleanup();
 });
 
@@ -179,15 +194,13 @@ describe("runSystemAgentTurn", () => {
       source: "profile:openai:p2",
       mode: "api-key" as const,
     };
-    const authDeps = {
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
-        version: 1,
-        profiles: {
-          "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },
-        },
-      })) as never,
-      resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
-    };
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockResolvedValue({
+      version: 1,
+      profiles: {
+        "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },
+      },
+    });
+    vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
     const executionRoute = { ...configuredRoute, authProfileId: "openai:p2" };
     const authFingerprint = fingerprintResolvedProviderAuth(resolvedAuth);
     if (!authFingerprint) {
@@ -203,22 +216,17 @@ describe("runSystemAgentTurn", () => {
         modelId: executionRoute.model,
         modelApi: "openai-responses",
       },
-      deps: authDeps,
     });
     const session = createSystemAgentSession(binding);
     let currentConfig: OpenClawConfig = verifiedConfig;
     const runEmbeddedAgent = vi.fn(async () => ({
-      meta: { finalAssistantVisibleText: "ready" },
+      meta: { durationMs: 0, finalAssistantVisibleText: "ready" },
     }));
-    const turn = async () =>
-      await runSystemAgentTurnWithDeps(
-        turnParams(session, { defaultModel: "openai/gpt-5.5" } as never, "continue setup"),
-        {
-          ...authDeps,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-        },
-      );
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+      configSnapshot(currentConfig),
+    );
+    const turn = async () => await runSystemAgentTurn(turnParams(session, "continue setup"));
 
     await turn();
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
@@ -234,7 +242,9 @@ describe("runSystemAgentTurn", () => {
     currentConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     };
-    await expect(turn()).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    await expect(turn()).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(session.verifiedInference).toBe(binding);
     expect(session.cliSession).toBeUndefined();
@@ -255,20 +265,18 @@ describe("runSystemAgentTurn", () => {
               : { model: { primary: "openai/gpt-5.5" } },
         },
       } satisfies OpenClawConfig;
-      const overview = { defaultModel: "openai/gpt-5.5" } as never;
       const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
       const first = createSystemAgentSession(fixture.binding);
       const second = createSystemAgentSession(fixture.binding);
-      const deps = {
-        ...fixture.deps,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      };
+      vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue(configSnapshot(config));
 
       for (const session of [first, second, first]) {
-        await runSystemAgentTurnWithDeps(
-          { input: "hello", overview, surface: "gateway", approvalArmed: false, session },
-          deps,
-        );
+        await runSystemAgentTurn({
+          input: "hello",
+          surface: "gateway",
+          approvalArmed: false,
+          session,
+        });
       }
 
       const [firstCall, secondCall, resumedCall] = mocks.runEmbeddedAgent.mock.calls.map(
@@ -314,7 +322,7 @@ describe("runSystemAgentTurn", () => {
     const config = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     } satisfies OpenClawConfig;
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
     const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
       const prepared = await prepareEmbeddedSkills({
         attempt: params,
@@ -332,21 +340,17 @@ describe("runSystemAgentTurn", () => {
       return { payloads: [{ text: "ready" }], meta: { durationMs: 0 } };
     });
 
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+      configSnapshot(config),
+    );
     await expect(
-      runSystemAgentTurnWithDeps(
-        {
-          input: "check the gateway",
-          overview: { defaultModel: "openai/gpt-5.5" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
-        {
-          ...deps,
-          runEmbeddedAgent,
-          readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)),
-        },
-      ),
+      runSystemAgentTurn({
+        input: "check the gateway",
+        surface: "gateway",
+        approvalArmed: false,
+        session,
+      }),
     ).resolves.toMatchObject({ text: "ready" });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
@@ -360,33 +364,30 @@ describe("runSystemAgentTurn", () => {
           model: { primary: "openai/gpt-global" },
           timeoutSeconds: 900,
         },
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir,
             model: { primary: "claude-cli/claude-opus-4-8@claude-cli:ops" },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "ready" }],
+      meta: { durationMs: 0 },
     }));
     const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [],
+      meta: { durationMs: 0 },
     }));
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
 
-    await runSystemAgentTurnWithDeps(
-      turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never),
-      {
-        ...deps,
-        runCliAgent: runCliAgent as never,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      },
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+      configSnapshot(config),
     );
+    await runSystemAgentTurn(turnParams(session));
 
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -440,28 +441,23 @@ describe("runSystemAgentTurn", () => {
     } as OpenClawConfig;
     const runCliAgent = vi.fn();
     const runEmbeddedAgent = vi.fn();
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
     let failure: unknown;
 
     try {
-      await runSystemAgentTurnWithDeps(
-        turnParams(
-          session,
-          { defaultModel: "google-gemini-cli/gemini-3.1-pro-preview" } as never,
-          "set up my workspace",
-        ),
-        {
-          ...deps,
-          runCliAgent: runCliAgent as never,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        },
+      vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+      vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+        configSnapshot(config),
       );
+      await runSystemAgentTurn(turnParams(session, "set up my workspace"));
     } catch (error) {
       failure = error;
     }
 
     expect(failure).toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    expect((failure as Error).message).toContain("Select a compatible model/runtime route");
+    expect((failure as Error).message).not.toContain("openclaw onboard");
     expect((failure as SystemAgentInferenceUnavailableError).failures).toEqual([
       expect.objectContaining({
         message: expect.stringContaining(
@@ -491,18 +487,22 @@ describe("runSystemAgentTurn", () => {
       };
       const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
         payloads: [{ text: "ready" }],
-        meta: { agentMeta: { cliSessionBinding: binding } },
-      }));
-      const { session, deps } = await createVerifiedSession(config);
-      const turn = async (input: string) =>
-        await runSystemAgentTurnWithDeps(
-          turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never, input),
-          {
-            ...deps,
-            runCliAgent: runCliAgent as never,
-            readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+        meta: {
+          durationMs: 0,
+          agentMeta: {
+            sessionId: binding.sessionId,
+            provider: "claude-cli",
+            model: "claude-opus-4-8",
+            cliSessionBinding: binding,
           },
-        );
+        },
+      }));
+      const { session } = await createVerifiedSession(config);
+      vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+      vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+        configSnapshot(config),
+      );
+      const turn = async (input: string) => await runSystemAgentTurn(turnParams(session, input));
 
       await turn("propose setup");
       await turn("yes");
@@ -525,7 +525,13 @@ describe("runSystemAgentTurn", () => {
         return {
           payloads: [{ text: "I'll check the gateway." }],
           meta: {
-            agentMeta: { cliSessionBinding: binding },
+            durationMs: 0,
+            agentMeta: {
+              sessionId: binding.sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-8",
+              cliSessionBinding: binding,
+            },
             aborted: true,
             providerStarted: true,
             stopReason,
@@ -554,35 +560,34 @@ describe("runSystemAgentTurn", () => {
     const config = {
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir,
             model: { primary: "anthropic/claude-opus-4-8@anthropic:claude-cli" },
             models: {
               "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "ready" }],
+      meta: { durationMs: 0 },
     }));
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
 
-    await runSystemAgentTurnWithDeps(
-      turnParams(session, { defaultModel: "anthropic/claude-opus-4-8" } as never),
-      {
-        ...deps,
-        runCliAgent: runCliAgent as never,
-        runEmbeddedAgent: vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-          payloads: [],
-        })) as never,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      },
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(
+      async (_params: RunEmbeddedAgentParams) => ({
+        payloads: [],
+        meta: { durationMs: 0 },
+      }),
     );
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+      configSnapshot(config),
+    );
+    await runSystemAgentTurn(turnParams(session));
 
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
@@ -600,14 +605,12 @@ describe("runSystemAgentTurn", () => {
     const config = {
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir,
             model: "claude-cli/claude-opus-4-8@claude-cli:ops",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const binding = {
@@ -620,31 +623,30 @@ describe("runSystemAgentTurn", () => {
     };
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "ready" }],
-      meta: { agentMeta: { cliSessionBinding: binding } },
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: binding.sessionId,
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: binding,
+        },
+      },
     }));
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
     const readConfigFileSnapshot = vi.fn(async () => configSnapshot(config)) as never;
 
-    await runSystemAgentTurnWithDeps(
-      turnParams(
-        session,
-        { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-        "set the default model",
-      ),
-      { ...deps, runCliAgent: runCliAgent as never, readConfigFileSnapshot },
-    );
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+    await runSystemAgentTurn(turnParams(session, "set the default model"));
     // Mirrors the denied tool result that arms the exact-operation hash.
     session.proposalRef.current = "proposal-sha256";
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "yes",
-        overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-        surface: "gateway",
-        approvalArmed: true,
-        session,
-      },
-      { ...deps, runCliAgent: runCliAgent as never, readConfigFileSnapshot },
-    );
+    await runSystemAgentTurn({
+      input: "yes",
+      surface: "gateway",
+      approvalArmed: true,
+      session,
+    });
 
     expect(runCliAgent).toHaveBeenCalledTimes(2);
     const firstCall = expectDefined(runCliAgent.mock.calls[0]?.[0], "missing first CLI call");
@@ -674,23 +676,25 @@ describe("runSystemAgentTurn", () => {
     const binding = { sessionId: "native-claude-session", authEpochVersion: 1 };
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "ready" }],
-      meta: { agentMeta: { cliSessionBinding: binding } },
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: binding.sessionId,
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: binding,
+        },
+      },
     }));
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(configForProfile("claude-cli:ops")))
       .mockResolvedValueOnce(configSnapshot(configForProfile("claude-cli:ops")))
       .mockResolvedValueOnce(configSnapshot(configForProfile("claude-cli:other")));
-    const { session, deps } = await createVerifiedSession(configForProfile("claude-cli:ops"));
-    const turn = async () =>
-      await runSystemAgentTurnWithDeps(
-        turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never),
-        {
-          ...deps,
-          runCliAgent: runCliAgent as never,
-          readConfigFileSnapshot: readConfigFileSnapshot as never,
-        },
-      );
+    const { session } = await createVerifiedSession(configForProfile("claude-cli:ops"));
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+    const turn = async () => await runSystemAgentTurn(turnParams(session));
 
     await turn();
     await expect(turn()).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
@@ -708,15 +712,13 @@ describe("runSystemAgentTurn", () => {
           defaults: {
             model: "claude-cli/claude-opus-4-8@claude-cli:ops",
           },
-          list: [
-            {
-              id: "ops",
-              default: true,
+          entries: {
+            ops: {
               // Keep the model owner's policy stable. OpenClaw executes with
               // its own identity and therefore follows the changing global policy.
               tools: { exec: { mode: "ask" } },
             },
-          ],
+          },
         },
       }) as OpenClawConfig;
     const binding = {
@@ -726,23 +728,25 @@ describe("runSystemAgentTurn", () => {
     };
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "ready" }],
-      meta: { agentMeta: { cliSessionBinding: binding } },
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: binding.sessionId,
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: binding,
+        },
+      },
     }));
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full")))
       .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full")))
       .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("deny")));
-    const { session, deps } = await createVerifiedSession(configForGlobalPolicy("full"));
-    const turn = async () =>
-      await runSystemAgentTurnWithDeps(
-        turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never),
-        {
-          ...deps,
-          runCliAgent: runCliAgent as never,
-          readConfigFileSnapshot: readConfigFileSnapshot as never,
-        },
-      );
+    const { session } = await createVerifiedSession(configForGlobalPolicy("full"));
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+    const turn = async () => await runSystemAgentTurn(turnParams(session));
 
     await turn();
     await expect(turn()).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
@@ -757,53 +761,52 @@ describe("runSystemAgentTurn", () => {
     const cliConfig = {
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir,
             model: "claude-cli/claude-opus-4-8@claude-cli:ops",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const embeddedConfig = {
       agents: {
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir,
             model: "openai/gpt-5.4@openai:ops",
             models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const binding = { sessionId: "native-claude-session", authEpochVersion: 1 };
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "cli" }],
-      meta: { agentMeta: { cliSessionBinding: binding } },
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: binding.sessionId,
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: binding,
+        },
+      },
     }));
     const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [{ text: "embedded" }],
+      meta: { durationMs: 0 },
     }));
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(cliConfig))
       .mockResolvedValueOnce(configSnapshot(cliConfig))
       .mockResolvedValueOnce(configSnapshot(embeddedConfig));
-    const { session, deps } = await createVerifiedSession(cliConfig);
-    const turn = async (input: string) =>
-      await runSystemAgentTurnWithDeps(
-        turnParams(session, { defaultModel: "configured" } as never, input),
-        {
-          ...deps,
-          runCliAgent: runCliAgent as never,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: readConfigFileSnapshot as never,
-        },
-      );
+    const { session } = await createVerifiedSession(cliConfig);
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+    const turn = async (input: string) => await runSystemAgentTurn(turnParams(session, input));
 
     await turn("first CLI turn");
     expect(session.cliSession?.binding.sessionId).toBe(binding.sessionId);
@@ -828,10 +831,8 @@ describe("runSystemAgentTurn", () => {
             "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
           },
         },
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir,
             model: { primary: "openai/gpt-5.4@openai:ops" },
             params: { temperature: 0.2 },
@@ -840,29 +841,29 @@ describe("runSystemAgentTurn", () => {
               "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
             },
           },
-          {
-            id: "openclaw",
+          openclaw: {
             params: { temperature: 1.7 },
             tools: { allow: ["exec"] },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
-    const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({ payloads: [] }));
+    const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
+      payloads: [],
+      meta: { durationMs: 0 },
+    }));
     const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [{ text: "ready" }],
+      meta: { durationMs: 0 },
     }));
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
 
-    await runSystemAgentTurnWithDeps(
-      turnParams(session, { defaultModel: "openai/gpt-5.4" } as never),
-      {
-        ...deps,
-        runCliAgent: runCliAgent as never,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      },
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+      configSnapshot(config),
     );
+    await runSystemAgentTurn(turnParams(session));
 
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -904,7 +905,7 @@ describe("runSystemAgentTurn", () => {
     const config = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     } satisfies OpenClawConfig;
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
     const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
       const options = params.systemAgentTool;
       if (!options) {
@@ -921,24 +922,20 @@ describe("runSystemAgentTurn", () => {
         .map((block) => block.text ?? "")
         .filter(Boolean)
         .join("\n");
-      return { meta: { finalAssistantVisibleText: text } };
+      return { meta: { durationMs: 0, finalAssistantVisibleText: text } };
     });
 
-    const reply = await runSystemAgentTurnWithDeps(
-      {
-        input: "switch the thinking level",
-        overview: { defaultModel: "openai/gpt-5.5" } as never,
-        surface: "gateway",
-        approvalArmed: false,
-        operatorApprovalOnly: true,
-        session,
-      },
-      {
-        ...deps,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      },
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () =>
+      configSnapshot(config),
     );
+    const reply = await runSystemAgentTurn({
+      input: "switch the thinking level",
+      surface: "gateway",
+      approvalArmed: false,
+      operatorApprovalOnly: true,
+      session,
+    });
 
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -965,16 +962,12 @@ describe("runSystemAgentTurn", () => {
       proposalRef: {},
     } as unknown as SystemAgentSession;
 
-    await expect(
-      runSystemAgentTurnWithDeps(
-        turnParams(unverifiedSession, { defaultModel: "openai/stale-overview-model" } as never),
-        {
-          runCliAgent: runCliAgent as never,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: readConfigFileSnapshot as never,
-        },
-      ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+    await expect(runSystemAgentTurn(turnParams(unverifiedSession))).rejects.toMatchObject({
+      message: expect.stringContaining("openclaw onboard"),
+    });
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -985,21 +978,19 @@ describe("runSystemAgentTurn", () => {
     const config = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     } satisfies OpenClawConfig;
-    const { session, deps } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession(config);
     session.proposalRef.current = "partial-proposal";
     session.cliSession = {
       routeKey: "stale-route",
       binding: { sessionId: "uncertain-cli-session" },
     };
 
-    await expect(
-      runSystemAgentTurnWithDeps(turnParams(session, { defaultModel: "openai/gpt-5.5" } as never), {
-        ...deps,
-        readConfigFileSnapshot: vi.fn(async () => {
-          throw new Error("config read failed");
-        }) as never,
-      }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () => {
+      throw new Error("config read failed");
+    });
+    await expect(runSystemAgentTurn(turnParams(session))).rejects.toBeInstanceOf(
+      SystemAgentInferenceUnavailableError,
+    );
     expect(session.proposalRef.current).toBeUndefined();
     expect(session.cliSession).toBeUndefined();
   });

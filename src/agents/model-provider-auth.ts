@@ -2,7 +2,7 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles.js";
 import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
@@ -31,31 +31,34 @@ export function createProviderAuthChecker(params: {
   env?: NodeJS.ProcessEnv;
 }): ProviderModelAuthChecker {
   const authCache = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
-  let modelAuthResolver: ModelAuthAvailabilityResolver | undefined;
+  let modelAuthResolver: Promise<ModelAuthAvailabilityResolver> | undefined;
   const resolveModelAuthResolver = () => {
     if (modelAuthResolver) {
       return modelAuthResolver;
     }
-    const authStore = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-      allowKeychainPrompt: false,
-    });
-    const runtimeAuthLookup = createRuntimeProviderAuthLookup({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      includePluginSyntheticAuth: true,
-    });
-    modelAuthResolver = createModelAuthAvailabilityResolver({
-      cfg: params.cfg ?? {},
-      agentId: params.agentId,
-      authStore,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      skipSetupProviderFallback: true,
-      allowPreparedRuntimeAuth: true,
-      syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
-      externalCliProviderIds: ["openai"],
+    modelAuthResolver = (async () => {
+      const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
+        allowKeychainPrompt: false,
+      });
+      const runtimeAuthLookup = createRuntimeProviderAuthLookup({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        includePluginSyntheticAuth: true,
+      });
+      return createModelAuthAvailabilityResolver({
+        cfg: params.cfg ?? {},
+        agentId: params.agentId,
+        authStore,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
+        externalCliProviderIds: ["openai"],
+      });
+    })().catch((error: unknown) => {
+      modelAuthResolver = undefined;
+      throw error;
     });
     return modelAuthResolver;
   };
@@ -68,7 +71,7 @@ export function createProviderAuthChecker(params: {
     return getOrCreatePromise(
       authCache,
       cacheKey,
-      () => Promise.resolve().then(() => resolveModelAuthResolver().evaluateModelAuth(key, ref)),
+      async () => (await resolveModelAuthResolver()).evaluateModelAuth(key, ref),
       { cacheRejections: false },
     );
   };

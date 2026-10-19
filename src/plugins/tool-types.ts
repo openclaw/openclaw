@@ -5,6 +5,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { MemoryAudience } from "./memory-provider-types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -15,6 +16,36 @@ export type OpenClawPluginActiveModelContext = {
 /** Current-turn outbound delivery capability bound to the host-selected route and media policy. */
 export type OpenClawPluginToolDelivery = {
   send: (params: { text?: string; mediaUrl?: string }) => Promise<void>;
+};
+
+/** Commands stay in the calling run's sandbox; paths are sandbox paths, never host paths. */
+export type OpenClawPluginToolSandbox = {
+  workspaceDir: string;
+  /** Only selected, host-installed skills protected by the sandbox owner are exposed. */
+  installedSkillRoots: Readonly<Record<string, string>>;
+  run: (params: {
+    argv: readonly string[];
+    input?: string;
+    signal?: AbortSignal;
+    /** Complete captured bytes per stream, at most the sandbox command buffer limit. */
+    maxOutputBytes?: number;
+  }) => Promise<{ stdout: string; stderr: string; code: number }>;
+};
+
+export type OpenClawPluginToolModelExecution = {
+  /** Published CLI entry in the running host installation, never resolved from guest input. */
+  readonly cliEntryPath: string;
+  /** Admits explicit choices or permitted defaults, retaining the caller through execution. */
+  run: <T>(
+    selection: { model: string | null; explicit: boolean },
+    action: (scope: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+      model: string;
+      agentId: string;
+    }) => Promise<T>,
+    signal?: AbortSignal,
+  ) => Promise<T>;
 };
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
@@ -30,6 +61,8 @@ type OpenClawPluginToolContextBase = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Host-selected reviewer devices for an approval request; not an approval grant. */
+  approvalReviewerDeviceIds?: readonly string[];
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
@@ -64,6 +97,12 @@ type OpenClawPluginToolContextBase = {
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
+  memoryAudience?: MemoryAudience;
+  /** Stable identity for one provider-owned pre-compaction flush cycle. */
+  memoryFlush?: { flushId: string };
+  /** Rejects a retained audience after any captured session incarnation changes. */
+  assertMemoryAudienceCurrent?: () => void;
   /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
   assertInvocationCurrent?: () => void;
   /**
@@ -78,6 +117,12 @@ type OpenClawPluginToolContextBase = {
    */
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   sandboxed?: boolean;
+  /** Refuses a complete result that the current direct/full-value route cannot deliver. */
+  assertCompleteResult?: (text: string) => void;
+  /** Invocation-bound execution, present only for an actual prepared sandbox. */
+  sandbox?: OpenClawPluginToolSandbox;
+  /** Model authorization scope; does not execute inference or grant tool permissions. */
+  modelExecution?: OpenClawPluginToolModelExecution;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned
    * process resources before the command exits.
@@ -102,6 +147,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
+  workspaceAccess?: boolean | "execute";
 };
 
 export type OpenClawPluginHookOptions = {

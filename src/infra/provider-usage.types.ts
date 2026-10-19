@@ -1,4 +1,3 @@
-/** One quota window reported by a provider usage endpoint. */
 export type UsageWindow = {
   label: string;
   groupLabel?: string;
@@ -44,19 +43,17 @@ export type ProviderUsageCostDaily = {
   totalTokens: number;
 };
 
-/** Aggregate model activity for the provider history window. */
 export type ProviderUsageModelBreakdown = Omit<ProviderUsageCostDaily, "date" | "amount"> & {
   name: string;
 };
 
-/** Aggregate provider billing category for the history window. */
-export type ProviderUsageCostBreakdown = {
+type ProviderUsageCostBreakdown = {
   name: string;
   amount: number;
 };
 
 /** Provider-reported cost history and attribution for one bounded UTC window. */
-export type ProviderUsageCostHistory = {
+type ProviderUsageCostHistory = {
   unit: string;
   periodDays: number;
   scope?: string;

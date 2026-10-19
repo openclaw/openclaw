@@ -1,7 +1,7 @@
 import type { CompactionSummaryPrompt, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { summarizeInStages } from "./compaction.js";
+import { summarizeCompactionHistory } from "./compaction.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const model: Model = {
@@ -13,7 +13,7 @@ const model: Model = {
   reasoning: false,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 2_000,
+  contextWindow: 128_000,
   maxTokens: 1_000,
 };
 
@@ -36,14 +36,12 @@ describe("compaction summary format propagation", () => {
     };
 
     await expect(
-      summarizeInStages({
+      summarizeCompactionHistory({
         messages: [{ role: "user", content: "Preserve the deployment decision.", timestamp: 1 }],
         model: { ...model, reasoning: true },
         apiKey: "test-key", // pragma: allowlist secret
         signal: new AbortController().signal,
         reserveTokens: 1_000,
-        maxChunkTokens: 1_000,
-        contextWindow: 2_000,
         streamFn,
       }),
     ).rejects.toThrow("summary output budget (800 tokens) was exhausted");
@@ -57,7 +55,7 @@ describe("compaction summary format propagation", () => {
     },
     { kind: "turn-prefix" },
   ] satisfies CompactionSummaryPrompt[])(
-    "retains $kind format through chunk updates and stage merge",
+    "retains $kind format and caller instructions in one summary request",
     async (summaryPrompt) => {
       const requests: string[] = [];
       const streamFn: StreamFn = (_model, context, options) => {
@@ -68,13 +66,13 @@ describe("compaction summary format propagation", () => {
           type: "done",
           reason: "stop",
           message: makeAgentAssistantMessage({
-            content: [{ type: "text", text: `summary-${requests.length}` }],
+            content: [{ type: "text", text: "summary" }],
           }),
         });
         stream.end();
         return stream;
       };
-      const result = await summarizeInStages({
+      const result = await summarizeCompactionHistory({
         messages: Array.from({ length: 4 }, (_, index) => ({
           role: "user" as const,
           content: `receipt_${index}: ${"Keep the deployment decision. ".repeat(20)}`,
@@ -84,34 +82,28 @@ describe("compaction summary format propagation", () => {
         apiKey: "test-key",
         signal: new AbortController().signal,
         reserveTokens: 1_000,
-        maxChunkTokens: 200,
-        contextWindow: 2_000,
         summaryPrompt,
         customInstructions: "Preserve the canary decision.",
         streamFn,
       });
-      expect(result).toBe(`summary-${requests.length}`);
-      expect(requests.some((request) => request.includes("<previous-summary>"))).toBe(true);
-      expect(requests.at(-1)).toContain("Merge these partial summaries");
-      for (const request of requests) {
-        expect(request).toContain(
-          summaryPrompt.kind === "turn-prefix" ? "## Original Request" : "## Pending user asks",
-        );
-        expect(request).not.toContain("## Goal");
-        expect(request).not.toContain("UPDATE the Progress section");
-        expect(request).toContain("Preserve the canary decision.");
-        expect(request).toContain("Preserve all opaque identifiers exactly");
-      }
+      expect(result).toBe("summary");
+      expect(requests).toHaveLength(1);
+      const [request] = requests;
+      expect(request).toContain(
+        summaryPrompt.kind === "turn-prefix" ? "## Original Request" : "## Pending user asks",
+      );
+      expect(request).not.toContain("## Goal");
+      expect(request).not.toContain("UPDATE the Progress section");
+      expect(request).toContain("Preserve the canary decision.");
+      expect(request).toContain("Preserve all opaque identifiers exactly");
+      expect(request).not.toContain("<previous-summary>");
     },
   );
 
-  it("retains caller format and previous summary when oversized history needs fallback", async () => {
+  it("sends the previous summary with the caller format in the same request", async () => {
     const requests: string[] = [];
     const streamFn: StreamFn = (_model, context) => {
       requests.push(JSON.stringify(context));
-      if (requests.length === 1) {
-        throw new Error("request timed out");
-      }
       const stream = createAssistantMessageEventStream();
       stream.push({
         type: "done",
@@ -123,31 +115,23 @@ describe("compaction summary format propagation", () => {
       stream.end();
       return stream;
     };
-    const result = await summarizeInStages({
-      messages: [
-        { role: "user", content: "x".repeat(6_000), timestamp: 1 },
-        { role: "user", content: "Keep receipt_90210", timestamp: 2 },
-      ],
+    const result = await summarizeCompactionHistory({
+      messages: [{ role: "user", content: "Keep receipt_90210", timestamp: 1 }],
       model,
       apiKey: "test-key",
       signal: new AbortController().signal,
       reserveTokens: 1_000,
-      maxChunkTokens: 10_000,
-      contextWindow: 2_000,
-      parts: 1,
       summaryPrompt: { kind: "custom", instructions: "Use ## Decisions and ## Pending user asks." },
       previousSummary: "Earlier canary decision.",
       streamFn,
     });
-    expect(result).toContain("retained summary");
-    expect(requests).toHaveLength(2);
-    expect(requests[1]).not.toContain("x".repeat(6_000));
-    expect(requests[1]).toContain("Keep receipt_90210");
-    for (const request of requests) {
-      expect(request).toContain("## Pending user asks");
-      expect(request).not.toContain("## Goal");
-      expect(request).toContain("Earlier canary decision.");
-      expect(request).toContain("<previous-summary>");
-    }
+    expect(result).toBe("retained summary");
+    expect(requests).toHaveLength(1);
+    const [request] = requests;
+    expect(request).toContain("## Pending user asks");
+    expect(request).not.toContain("## Goal");
+    expect(request).toContain("Keep receipt_90210");
+    expect(request).toContain("<previous-summary>");
+    expect(request).toContain("Earlier canary decision.");
   });
 });

@@ -1,11 +1,13 @@
-import { html, nothing } from "lit";
-import { guard } from "lit/directives/guard.js";
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import {
+  hasOperatorApprovalsAccess,
+  hasOperatorReadAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
-import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import {
@@ -17,6 +19,7 @@ import {
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import { updateBoardSessionView } from "../../lib/board/settings.ts";
+import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
@@ -33,11 +36,11 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { ensureLazySidebarElement } from "./chat-pane-sidebar-layout.ts";
+import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -52,7 +55,10 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
-  private dashboardDefaultWrite?: { owner: string };
+  private boardView: HTMLElementTagNameMap["openclaw-board-view"] | null = null;
+  readonly dashboardPresentation: { defaultWrite: { owner: string } | undefined } = {
+    defaultWrite: undefined,
+  };
 
   private get dashboardDefaultWriteOwner(): string {
     return JSON.stringify([
@@ -105,7 +111,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!this.canSaveDashboardDefault(row)) {
       return undefined;
     }
-    const saving = this.dashboardDefaultWrite?.owner === this.dashboardDefaultWriteOwner;
+    const saving =
+      this.dashboardPresentation.defaultWrite?.owner === this.dashboardDefaultWriteOwner;
     const agentId = this.resolveBoardConversation().agentId;
     return {
       label: t(saving ? "chat.sidePanel.savingDefault" : "chat.sidePanel.useViewAsDefault"),
@@ -133,19 +140,18 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       !presentation ||
       !this.canSaveDashboardDefault(currentRow) ||
       this.isDashboardDefault(currentRow, presentation) ||
-      this.dashboardDefaultWrite?.owner === this.dashboardDefaultWriteOwner
+      this.dashboardPresentation.defaultWrite?.owner === this.dashboardDefaultWriteOwner
     ) {
       return;
     }
     const operation = { owner: this.dashboardDefaultWriteOwner };
-    this.dashboardDefaultWrite = operation;
+    this.dashboardPresentation.defaultWrite = operation;
     const isCurrent = () =>
       this.ownsHeaderOutcomeScope(scope) &&
-      this.dashboardDefaultWrite === operation &&
+      this.dashboardPresentation.defaultWrite === operation &&
       this.context.sessions === scope.sessions &&
       this.dashboardDefaultWriteOwner === operation.owner &&
       selectedChatSessionRow(scope.state)?.sessionId === row.sessionId;
-    this.requestUpdate();
     try {
       const result = await scope.sessions.patch(
         row.key,
@@ -163,19 +169,18 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }
       // The session capability publishes the acknowledged metadata. Never turn
       // its value into a personal override or rearrange any active viewer.
-      showToast({ message: t("chat.sidePanel.defaultSaved"), anchor: this });
+      showToast({ message: t("chat.sidePanel.defaultSaved"), anchor: this.element });
     } catch (error) {
       if (isCurrent()) {
         this.publishHeaderError(error, scope.headerOutcomeOwner);
         showToast({
           message: t("chat.sidePanel.defaultSaveError", { error: formatUiError(error) }),
-          anchor: this,
+          anchor: this.element,
         });
       }
     } finally {
-      if (this.dashboardDefaultWrite === operation) {
-        this.dashboardDefaultWrite = undefined;
-        this.requestUpdate();
+      if (this.dashboardPresentation.defaultWrite === operation) {
+        this.dashboardPresentation.defaultWrite = undefined;
       }
     }
   }
@@ -189,19 +194,21 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const initialized = this.initializeBrowserSidebarLayout(layout);
-    const fitted =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(initialized, this.paneWidth) ?? initialized)
-        : initialized;
-    state.updateSidebarLayout(fitted, options);
+    state.updateSidebarLayout(this.fitPaneSidebarLayout(initialized), options);
+  }
+
+  private fitPaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    return this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+      ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
+      : layout;
   }
 
   protected initializeBrowserSidebarLayout(layout: SidebarLayout): SidebarLayout {
     if (!layout.columns[0]?.browserWidthPending || !isSidebarSlotVisible(layout, "browser")) {
       return layout;
     }
-    const composer = this.querySelector<HTMLElement>(".agent-chat__composer-shell");
-    if (!composer) {
+    const composer = this.composerShell;
+    if (!composer?.isConnected) {
       return layout;
     }
     const inset = Number.parseFloat(
@@ -209,7 +216,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     );
     return initializeBrowserSidebarWidth(
       layout,
-      this.querySelector(".sidebar-region")?.getBoundingClientRect().width ?? this.paneWidth,
+      this.sidebarRegionElement?.getBoundingClientRect().width ?? this.paneWidth,
       composer.getBoundingClientRect().width + (Number.isFinite(inset) ? inset : 0),
     );
   }
@@ -224,10 +231,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
-    const fittedProjection =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
-        : resizedProjection;
+    const fittedProjection = this.fitPaneSidebarLayout(resizedProjection);
     const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
     const fittedSize =
       sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
@@ -261,7 +265,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return this.boardProvider;
     }
     const gateway = this.context?.gateway.snapshot;
-    const available = !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false;
+    const available =
+      !gateway ||
+      (hasOperatorReadAccess(gateway.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(gateway, "board.get") !== false);
     const canMutate = !gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null);
     const canGrant = !gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null);
     const canPinWidgets =
@@ -276,7 +283,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
     const client = gateway?.client;
     if (this.boardProviderLifecycleConnected && client && available) {
-      const key = boardProviderCacheKey(session);
+      const presentationScope = this.context
+        ? gatewayPresentationScope(this.context.gateway)
+        : undefined;
+      const key = JSON.stringify([presentationScope?.key, boardProviderCacheKey(session)]);
       if (this.boardProviderLease?.cacheKey !== key) {
         this.releaseBoardProviderLease();
         this.boardProviderLease = {
@@ -288,6 +298,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             canPinMcpApps,
             canMutate,
             canGrant,
+            presentationScope,
           ),
           cacheKey: key,
         };
@@ -405,16 +416,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }
     }
     if (
+      this.presented &&
+      this.presentation.documentVisible &&
       board.available &&
       this.state &&
       isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
       !customElements.get("openclaw-board-view")
     ) {
-      void ensureBoardViewElement().then((loaded) => {
-        if (loaded) {
-          this.requestUpdate();
-        }
-      });
+      ensureLazySidebarElement("dashboard");
     }
   }
 
@@ -429,40 +438,41 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const context = this.context;
-    let retry = false;
-    void context.connectionBootstrap
-      .run(
-        this,
-        async () => {
-          if (this.context === context) {
-            retry = await this.hydrateSwarmRoster();
-          }
-        },
-        { background: true },
+    // Load before admission so mounting cannot retire the state captured by a held import.
+    void import("../../lib/sessions/swarm-roster.ts")
+      .then((swarm) =>
+        context.connectionBootstrap.run(
+          this,
+          async () => {
+            if (this.context === context) {
+              this.hydrateSwarmRoster(swarm);
+            }
+          },
+          { background: true },
+        ),
       )
-      .then(() => {
-        if (retry && this.context === context && this.presented && this.isConnected) {
-          this.refreshSwarmRoster();
-        }
-      });
+      .catch(() => undefined);
   }
 
-  private async hydrateSwarmRoster(): Promise<boolean> {
+  private hydrateSwarmRoster({
+    isSwarmEnabledInConfig,
+    SwarmRosterHydrator,
+  }: typeof import("../../lib/sessions/swarm-roster.ts")): void {
     const state = this.state;
     const context = this.context;
     if (!state || !this.presented || !this.isConnected) {
-      return false;
+      return;
     }
     const target = this.resolveChatReadTarget();
     if (!target) {
-      this.swarmHydrator?.dispose();
-      this.swarmHydrator = null;
-      return false;
+      this.swarm.hydrator?.dispose();
+      this.swarm.hydrator = null;
+      return;
     }
     const { sessionKey: parentKey, agentId } = target;
     const client = state.client;
     if (!client) {
-      return false;
+      return;
     }
     const sourceEpoch = state.connectionEpoch;
     const isCurrent = () =>
@@ -474,51 +484,38 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       state.connectionEpoch === sourceEpoch &&
       parentKey === this.resolveChatReadTarget()?.sessionKey &&
       agentId === this.resolveChatReadTarget()?.agentId;
-    let retry = false;
-    await import("../../lib/sessions/swarm-roster.ts").then(
-      ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
-        if (!isCurrent()) {
-          // The latest target must pass admission again after this import's task settles.
-          retry = true;
-          return;
-        }
-        const enabled =
-          state.connected &&
-          isSwarmEnabledInConfig(context.runtimeConfig?.state.configSnapshot?.config, agentId);
-        if (!enabled) {
-          if (this.swarmHydrator) {
-            this.swarmHydrator.dispose();
-            this.swarmHydrator = null;
-            requestChatPageUpdate(state, "animation-frame");
-          }
-          return;
-        }
-        this.swarmHydrator ??= new SwarmRosterHydrator();
-        this.swarmHydrator.update({
-          sessions: context.sessions,
-          parentKey,
-          agentId,
-          sourceEpoch,
-          readParent: (refresh) =>
-            context.sessions
-              .describe(
-                {
-                  key: parentKey,
-                  ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
-                },
-                { client, refresh },
-              )
-              .then((result) => result.session ?? null),
-          currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
-          onRows: () => {
-            if (isCurrent()) {
-              requestChatPageUpdate(state, "animation-frame");
-            }
-          },
-        });
-      },
+    const swarmEnabled = isSwarmEnabledInConfig(
+      context.runtimeConfig ? currentDisplayConfig(context.runtimeConfig.state) : null,
+      agentId,
     );
-    return retry;
+    this.swarm.enabled = swarmEnabled;
+    // The child roster also owns ordinary subagent waits, launch rows, and
+    // attention. Disabling swarm must not hide those recorded outcomes.
+    if (!state.connected) {
+      if (this.swarm.hydrator) {
+        this.swarm.hydrator.dispose();
+        this.swarm.hydrator = null;
+      }
+      return;
+    }
+    this.swarm.hydrator ??= new SwarmRosterHydrator();
+    this.swarm.hydrator.update({
+      sessions: context.sessions,
+      parentKey,
+      agentId,
+      sourceEpoch,
+      readParent: (refresh) =>
+        context.sessions
+          .describe(
+            {
+              key: parentKey,
+              ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
+            },
+            { client, refresh },
+          )
+          .then((result) => result.session ?? null),
+      currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
+    });
   }
 
   protected resolveBoardView(): ResolvedBoardView {
@@ -536,7 +533,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       snapshot,
       available:
         Boolean(this.boardProvider) ||
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false,
+        (hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+          isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false),
       hasBoard,
       face: this.routeFace ?? "chat",
       activeTabId,
@@ -556,7 +554,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (this.state) {
       this.state.settings = next;
     }
-    this.requestUpdate();
   }
 
   protected isBoardPanelAvailable(board = this.resolveBoardView()): boolean {
@@ -603,9 +600,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           return;
         }
         // The retained board owns actions and errors; the header only relocates its menu.
-        const view = this.querySelector("openclaw-board-view");
+        const view = this.boardView;
         if (
-          view?.snapshot?.sessionKey === board.snapshot.sessionKey &&
+          view?.isConnected &&
+          view.snapshot?.sessionKey === board.snapshot.sessionKey &&
           view.session.agentId === session.agentId &&
           view.session.sessionKey === session.sessionKey
         ) {
@@ -615,37 +613,38 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     };
   }
 
-  protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
+  protected renderBoardPanel(
+    board: ResolvedBoardView,
+    layout: SidebarLayout,
+  ): Parameters<typeof ChatBoardPanel>[0] | null {
     const session = this.resolveBoardConversation();
-    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!this.isBoardPanelAvailable(board)) {
-      return nothing;
+      return null;
     }
-    if (!board.provider.hasLoadedSnapshot) {
-      const error = board.provider.loadError$.value;
-      return error
-        ? html`<div
-            class="board-session-surface__state board-session-surface__state--error"
-            role="alert"
-          >
-            ${t("dashboardDocument.loadFailed", { error })}
-          </div>`
-        : renderPanelLoadingSkeleton("board", t("common.loading"));
-    }
+    const error = !board.provider.hasLoadedSnapshot && board.provider.loadError$.value;
     // Only the loaded board acknowledgment supplies a missing owner; its display key
     // must not replace the original session target (notably global versus a literal key).
     session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
-    const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const connectionGeneration = this.connectionGeneration;
-    const renderSurface = () =>
-      renderBoardSessionSurface({
+    return {
+      error: error || undefined,
+      elementReady: Boolean(customElements.get("openclaw-board-view")),
+      surface: {
+        onViewRef: (element) => {
+          this.boardView = element;
+          return () => {
+            if (this.boardView === element) {
+              this.boardView = null;
+            }
+          };
+        },
         active: {
-          owner: this,
+          owner: this.element,
           isPresented: () => isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented,
           preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
         },
         session,
-        snapshot: board.snapshot,
+        snapshot: board.provider.hasLoadedSnapshot ? board.snapshot : undefined,
         activeTabId: board.activeTabId,
         pageWidgetName: this.pageBoardWidget(layout, board)?.name,
         canMutate: board.provider.canMutate,
@@ -664,11 +663,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             board.provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks,
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-      });
-    // Keep one template boundary so hiding the panel does not remount app iframes.
-    return html`${
-      boardActive ? renderSurface() : guard([sessionKey, session.agentId], renderSurface)
-    }`;
+      },
+    };
   }
 
   protected showDashboard(expanded: boolean): void {

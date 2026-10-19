@@ -4,13 +4,15 @@ import { formatBoundedChildOutput } from "./bounded-child-output.js";
 
 describe("bounded child output", () => {
   it("keeps a bounded tail and records truncation", () => {
-    expect(formatBoundedChildOutput("short", 5)).toBe("short");
-    expect(formatBoundedChildOutput("abcdefghij", 5)).toBe("[output truncated]\nfghij");
+    expect(formatBoundedChildOutput("short")).toBe("short");
+    const tail = "a".repeat(16_384);
+    expect(formatBoundedChildOutput(`discarded${tail}`)).toBe(`[output truncated]\n${tail}`);
   });
 
   it("does not split a surrogate pair at the tail cap boundary", () => {
-    // The five-code-unit tail starts on the emoji's low surrogate.
-    const chunk = `${"p".repeat(10)}🤖kept`;
-    expect(formatBoundedChildOutput(chunk, 5)).toBe("[output truncated]\nkept");
+    // The bounded tail starts on the emoji's low surrogate.
+    const tail = "a".repeat(16_383);
+    const chunk = `discarded🤖${tail}`;
+    expect(formatBoundedChildOutput(chunk)).toBe(`[output truncated]\n${tail}`);
   });
 });

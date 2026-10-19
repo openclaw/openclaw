@@ -46,17 +46,47 @@ claim or cancellation boundary. Do not implement V2 by checking only before
 calling an SDK method that itself awaits before dispatch. If the sink cannot
 enforce the assertion, leave V2 unsupported.
 
-The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
-`setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Register a session-keyed native run from the host-provided `runAttempt` callback.
+The host admits that attempt through the session controller and binds its
+authority before invoking the harness. `setActiveEmbeddedRun` inherits that
+binding; plugins must not manufacture a controller operation or substitute a
+session key for admission. A standalone session-keyed call now throws
+`AgentHarnessPreflightError`, exported from
+`openclaw/plugin-sdk/agent-harness-runtime`, with code
+`SESSION_CONTROLLER_ADMISSION_REQUIRED`. Move such calls into the host-admitted
+attempt. This runtime requirement applies immediately, including to V1 harnesses.
+
+A retained `replyOperation` keeps its published observations: a native yield
+remains `phase: "running"` with `result: null` until settlement, then reports
+`completed`. Direct attempts report `turnKind: "visible"`. Failure and Stop
+retain their existing result codes.
+
 Pass the resolved agent ID as the fifth `setActiveEmbeddedRun` argument so raw
-`global` and `unknown` keys retain their owner. Legacy calls inside a matching
-live host binding inherit its validated agent; an ambient caller alone does not
-supply ownership. Outside that binding, omitted ownership uses the qualified
-session key or the configured default agent for session activity.
-Unscoped V1 injection retains its existing behavior. Source-bound controls
+`global` and `unknown` keys retain their owner. Calls inside a matching live host
+binding inherit its validated agent. The returned cleanup function retains this
+exact registration; call it with an optional reason or pass it as the sixth
+`clearActiveEmbeddedRun` argument so an old callback cannot detach a successor
+run. A stale registration returns `undefined`.
+
+Sessionless detached native work does not own a session turn. A host-admitted
+detached attempt may retain a session key for policy context, but it cannot
+schedule or Stop that session; the host's detached authority must remain current.
+Do not mark ordinary session work detached to bypass admission.
+
+The V1 `messageInjection` and queue options remain supported within an admitted
+attempt.
+`queueAgentHarnessMessage` steers session-keyed turns through the session
+controller. Sessionless native work accepts input through its exact native
+registration instead. The helper returns `true` only when that active turn or
+native sink can take the input now (for example, it refuses images for a
+text-only model), and it never retries a later refusal. Once controller injection
+is attempted, `onQueueAccepted` reports the outcome, including `false` for a
+refusal. Backends that accept `waitForTranscriptCommit: true` must set
+`supportsTranscriptCommitWait`; otherwise core refuses that wait.
+Ordinary V1 injection retains its existing behavior within that admitted turn. Source-bound controls
 require V2 and reject visibly before queue or I/O when only V1 is available;
 they never fall back to an unchecked V1 callback. Existing deprecation windows
-are unchanged.
+for injection capabilities are unchanged.
 
 Copilot remains V1-only: `@github/copilot-sdk` 1.0.11 awaits trace-context and
 JSON-RPC writer preparation after `send` entry without a final-dispatch guard.
@@ -73,14 +103,14 @@ Bundled plugins and explicitly enabled installed plugins with matching
 manifest contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before the selected
+interface is for async tool-result transforms that must run before the selected
 harness feeds tool output back into the model. Supported runtime ids are
 `agentsapi`, `codex`, and `openclaw`.
 
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
-canonical OpenClaw tool ids; omit `matcher` to match all tools.
+standard OpenClaw tool ids; omit `matcher` to match all tools.
 
 Omitting `runtimes` uses every supported runtime declared in the plugin's
 `contracts.agentToolResultMiddleware`, including `agentsapi` when declared.
@@ -124,6 +154,11 @@ absolute path; the host maps that alias to the logical workspace before checking
 policy. Supply `assertCurrent` when native session or transport ownership can be
 revoked independently of the host attempt. The host retains this additional check
 through the final media write and publication. Keep the reader alive until preparation finishes.
+
+Raw file paths in these replies belong to the remote workspace. Paths outside
+that workspace fail with a labeled remote-file notice, even if a Gateway-local
+file exists at the same path. HTTP references and securely validated Gateway
+managed media, including `media://` attachments, remain available.
 
 For artifacts whose bytes the provider has already admitted, use `kind: "artifact"`
 with `buffer`, `fileName`, `assertCurrent`, and an optional `signal`. The host
@@ -195,6 +230,18 @@ and freezes admission at the terminal boundary. `emitAgentHarnessAttemptEvent`
 isolates observer failures, and `createAgentHarnessAttemptLifecycle` gates
 lifecycle events and deduplicates execution phases. Native interruption,
 completion decisions, output flushing, and cleanup remain backend-owned.
+
+Assistant event `data.itemId` identifies the native text item for cumulative
+snapshots and delta merging. A harness that persists part of an item while it
+continues streaming also supplies `data.occurrenceId`, an opaque string identifying
+the exact live interval. Freeze that occurrence when capturing the transcript
+candidate, before awaiting persistence, and allocate a new occurrence for later
+bytes without changing the native item ID or delta text. Successful transcript
+publication supplies the captured IDs in `assistantItemIds`; failed writes do not
+retire them. Retries retain every occurrence actually included in the candidate.
+Without `occurrenceId`, retirement uses `itemId` or the host's source receipt.
+Text without either identity stays live until terminal settlement; matching
+durable text alone never proves ownership.
 
 The private `openclaw/plugin-sdk/agent-harness-tool-runtime` provides correlated
 execution promises and argument/start snapshots through
@@ -280,12 +327,15 @@ snapshots and persisted billing usage separate from this live counter.
 
 ## Agent-end side effects
 
-Native harnesses must call `runAgentEndSideEffects(...)` from
+Native harnesses must await `runAgentEndSideEffectsAsync(...)` from
 `openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
-dispatches the portable `agent_end` hook and OpenClaw's research capture
-without delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for
-local, non-interactive runs where the attempt must not resolve until those
-side effects finish. Both helpers accept the same `{ event, ctx }` payload as
+prepares transcript anchors through the history reader before releasing the
+turn lease, then starts the portable `agent_end` hook without waiting for it.
+Use `awaitAgentEndSideEffects(...)` for local, non-interactive runs that must
+also wait for plugin hooks. The synchronous `runAgentEndSideEffects(...)`
+remains deprecated through 2026-12-31, with removal in the first January 2027
+stable release. These helpers accept the
+same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 

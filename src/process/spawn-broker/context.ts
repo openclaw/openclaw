@@ -39,7 +39,7 @@ export async function startGatewaySpawnBroker(options: {
 }
 
 export function runWithSpawnBroker<T>(host: SpawnBrokerHost | undefined, run: () => T): T {
-  return context.run(host, run);
+  return context.getStore() === host ? run() : context.run(host, run);
 }
 
 export function getSpawnBroker(): SpawnBrokerHost | undefined {

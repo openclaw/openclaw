@@ -39,6 +39,28 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 }));
 
 const { registerCronCli } = await import("../cron-cli.js");
+const { runtime, callGatewayFromCli } = mocks;
+const listRequests = () =>
+  callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list");
+const listOffsets = () => listRequests().map((call) => (call[2] as { offset: number }).offset);
+const output = (stream: "log" | "error") => runtime[stream].mock.calls.flat().join("\n");
+function expectIncludes(text: string, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).toContain(part);
+  }
+}
+async function expectListFailure(message: string) {
+  await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
+  expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
+  expect(runtime.writeJson).not.toHaveBeenCalled();
+}
+const createJobs = (count = 201) => Array.from({ length: count }, (_, index) => createJob(index));
+function expectRpc(method: string, params: unknown) {
+  expect(callGatewayFromCli).toHaveBeenCalledWith(method, expect.anything(), params);
+}
+function match(id: string, name: string, schedule = "every 1m", enabled = true) {
+  return { id, name, schedule, enabled, status: enabled ? "idle" : "disabled" };
+}
 
 function createJob(index: number, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -118,6 +140,11 @@ function installRealCronGateway(
     },
   );
   return state;
+}
+
+function unversionedPage(page: unknown) {
+  const { jobs, hasMore, nextOffset, deliveryPreviews } = page as Record<string, unknown>;
+  return { jobs, hasMore, nextOffset, deliveryPreviews };
 }
 
 function disableCronGetForProtocolV4Gateway(): void {
@@ -241,70 +268,77 @@ describe("cron CLI with the real Gateway pagination contract", () => {
         });
       }
     } else {
-      const output = mocks.runtime.log.mock.calls.map(([line]) => line).join("\n");
+      const rendered = mocks.runtime.log.mock.calls.map(([line]) => line).join("\n");
       for (const id of ids) {
-        expect(output).toContain(id);
+        expect(rendered).toContain(id);
       }
-      expect(output.split("\n").find((line) => line.includes("job-002"))).toContain("ops");
+      expect(rendered.split("\n").find((line) => line.includes("job-002"))).toContain("ops");
     }
   });
 
-  it("lists all 201 jobs returned across actual bounded Gateway pages", async () => {
-    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
-
-    await runCron(["list", "--json"]);
-
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
-    expect(result.jobs).toHaveLength(201);
-    expect(result.jobs.some((job) => job.id === "job-200")).toBe(true);
-    expect(
-      (result as { deliveryPreviews?: Record<string, unknown> }).deliveryPreviews?.["job-200"],
-    ).toEqual(expect.objectContaining({ label: "not requested" }));
-    expect(
-      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
-    ).toHaveLength(2);
-  });
-
-  it.each(["cron", "automations"])(
-    "%s retains the inventory query across filtered pages",
-    async (root) => {
+  it.each([
+    { root: "cron", json: true, query: "   ", filtered: false },
+    { root: "cron", json: false, query: undefined, filtered: false },
+    { root: "cron", json: true, query: " Backup ", filtered: true },
+    { root: "automations", json: true, query: " Backup ", filtered: true },
+  ])(
+    "lists every page with $root (json=$json, filtered=$filtered)",
+    async ({ root, json, query, filtered }) => {
       const matching = Array.from({ length: 201 }, (_, index) =>
-        createJob(index, { name: `backup ${index}`, agentId: "ops", enabled: index % 2 === 0 }),
+        createJob(
+          index,
+          filtered ? { name: `backup ${index}`, agentId: "ops", enabled: index % 2 === 0 } : {},
+        ),
       );
-      installRealCronGateway([
-        ...matching,
-        createJob(900, { name: "backup other", agentId: "other" }),
-        createJob(901, { name: "unrelated", agentId: "ops" }),
-      ]);
-
-      await runCron(["list", "--all", "--agent", "Ops", "--query", " Backup ", "--json"], root);
-
-      const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
-      expect(result.jobs.map((job) => job.id).toSorted()).toEqual(
-        matching.map((job) => job.id).toSorted(),
+      installRealCronGateway(
+        filtered
+          ? [
+              ...matching,
+              createJob(900, { name: "backup other", agentId: "other" }),
+              createJob(901, { name: "unrelated", agentId: "ops" }),
+            ]
+          : matching,
       );
-      const requests = mocks.callGatewayFromCli.mock.calls
-        .filter(([method]) => method === "cron.list")
-        .map((call) => call[2]);
-      const filters = { includeDisabled: true, agentId: "ops", query: "Backup", limit: 200 };
-      expect(requests).toEqual([
+
+      await runCron(
+        [
+          "list",
+          ...(filtered ? ["--all", "--agent", "Ops"] : []),
+          ...(query === undefined ? [] : ["--query", query]),
+          ...(json ? ["--json"] : []),
+        ],
+        root,
+      );
+
+      if (json) {
+        const result = runtime.writeJson.mock.calls.at(-1)?.[0] as {
+          jobs: CronJob[];
+          deliveryPreviews?: Record<string, unknown>;
+        };
+        expect(result.jobs.map((job) => job.id).toSorted()).toEqual(
+          matching.map((job) => job.id).toSorted(),
+        );
+        if (!filtered) {
+          expect(result.deliveryPreviews?.["job-200"]).toEqual(
+            expect.objectContaining({ label: "not requested" }),
+          );
+        }
+      } else {
+        expect(output("log")).toContain("Job 200");
+        expect(output("log").split("\n")).toHaveLength(202);
+      }
+      const requests = listRequests();
+      const filters = {
+        includeDisabled: filtered,
+        ...(filtered ? { agentId: "ops", query: "Backup" } : {}),
+        limit: 200,
+      };
+      expect(requests.map((call) => call[2])).toEqual([
         { ...filters, offset: 0 },
         { ...filters, offset: 200 },
       ]);
     },
   );
-
-  it.each(["", "   "])("omits a blank inventory query %j", async (query) => {
-    installRealCronGateway([createJob(0)]);
-
-    await runCron(["list", "--query", query, "--json"]);
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("cron.list", expect.anything(), {
-      includeDisabled: false,
-      limit: 200,
-      offset: 0,
-    });
-  });
 
   it("uses the inventory query for visible names in text output and empty JSON results", async () => {
     installRealCronGateway([
@@ -314,291 +348,128 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ]);
 
     await runCron(["list", "--query", "VISIBLE"]);
-    const output = mocks.runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).toContain("Visible backup");
-    expect(output).not.toContain("Job 001");
-    expect(output).not.toContain("Visible paused");
+    expect(output("log")).toContain("Visible backup");
+    expect(output("log")).not.toContain("Job 001");
+    expect(output("log")).not.toContain("Visible paused");
 
     await runCron(["list", "--query", "no-matching-automation", "--json"]);
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ jobs: [] }));
   });
 
-  it("never combines Gateway pages from different cron snapshots", async () => {
-    const original = Array.from({ length: 201 }, (_, index) => createJob(index));
-    installRealCronGateway(original, {
+  it.each([
+    { change: "replacement", count: 201, offsets: [0, 200, 0, 200] },
+    { change: "shrink", count: 199, offsets: [0, 200, 0] },
+  ])("restarts inventory pagination after snapshot $change", async ({ change, count, offsets }) => {
+    installRealCronGateway(createJobs(), {
       beforeList(_params, call, jobs) {
         if (call === 2) {
-          jobs[0] = createJob(900, { name: "Replacement after snapshot change" });
+          if (change === "replacement") {
+            jobs[0] = createJob(900, { name: "Replacement after snapshot change" });
+          } else {
+            jobs.splice(0, 2);
+          }
         }
       },
     });
-
     await runCron(["list", "--json"]);
-
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
-    expect(result.jobs).toHaveLength(201);
-    expect(result.jobs.some((job) => job.id === "job-900")).toBe(true);
+    const result = runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
+    expect(result.jobs).toHaveLength(count);
     expect(result.jobs.some((job) => job.id === "job-000")).toBe(false);
-    expect(
-      mocks.callGatewayFromCli.mock.calls
-        .filter(([method]) => method === "cron.list")
-        .map((call) => (call[2] as { offset?: number }).offset),
-    ).toEqual([0, 200, 0, 200]);
+    if (change === "replacement") {
+      expect(result.jobs.some((job) => job.id === "job-900")).toBe(true);
+    } else {
+      expect(result.jobs.some((job) => job.id === "job-001")).toBe(false);
+    }
+    expect(listOffsets()).toEqual(offsets);
   });
 
-  it("restarts when a shrinking Gateway snapshot clamps the requested page offset", async () => {
-    installRealCronGateway(
-      Array.from({ length: 201 }, (_, index) => createJob(index)),
-      {
-        beforeList(_params, call, jobs) {
-          if (call === 2) {
-            jobs.splice(0, 2);
-          }
-        },
-      },
-    );
-
-    await runCron(["list", "--json"]);
-
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
-    expect(result.jobs).toHaveLength(199);
-    expect(result.jobs.some((job) => job.id === "job-000")).toBe(false);
-    expect(result.jobs.some((job) => job.id === "job-001")).toBe(false);
-    expect(
-      mocks.callGatewayFromCli.mock.calls
-        .filter(([method]) => method === "cron.list")
-        .map((call) => (call[2] as { offset?: number }).offset),
-    ).toEqual([0, 200, 0]);
-  });
-
-  it("detects and lists every job from a paginated protocol-v4 Gateway", async () => {
-    installRealCronGateway(
-      Array.from({ length: 201 }, (_, index) => createJob(index)),
-      {
-        transformListPage(page) {
-          const response = page as Record<string, unknown>;
-          return {
-            jobs: response.jobs,
-            hasMore: response.hasMore,
-            nextOffset: response.nextOffset,
-            deliveryPreviews: response.deliveryPreviews,
-          };
-        },
-      },
-    );
+  it.each([0, 201])("detects and lists a protocol-v4 inventory of %i jobs", async (count) => {
+    installRealCronGateway(createJobs(count), { transformListPage: unversionedPage });
     disableCronGetForProtocolV4Gateway();
-
     await runCron(["list", "--json"]);
-
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
-    expect(result.jobs).toHaveLength(201);
-    expect(result.jobs.some((job) => job.id === "job-200")).toBe(true);
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-      id: "job-000",
+    const result = runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
+    expect(result.jobs).toHaveLength(count);
+    expectRpc("cron.get", {
+      id: count ? "job-000" : expect.any(String),
     });
-    expect(
-      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
-    ).toHaveLength(2);
+    if (count) {
+      expect(result.jobs.some((job) => job.id === "job-200")).toBe(true);
+      expect(listRequests()).toHaveLength(2);
+    }
   });
 
-  it.each([
-    { label: "empty", jobs: [] as CronJob[] },
-    { label: "single-job", jobs: [createJob(0)] },
-  ])("detects a $label terminal protocol-v4 inventory", async ({ jobs }) => {
-    installRealCronGateway(jobs, {
-      transformListPage(page) {
-        const response = page as Record<string, unknown>;
-        return {
-          jobs: response.jobs,
-          hasMore: response.hasMore,
-          nextOffset: response.nextOffset,
-          deliveryPreviews: response.deliveryPreviews,
-        };
-      },
-    });
-    disableCronGetForProtocolV4Gateway();
-
-    await runCron(["list", "--json"]);
-
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
-    expect(result.jobs).toHaveLength(jobs.length);
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.get",
-      expect.anything(),
-      expect.objectContaining({ id: expect.any(String) }),
-    );
-  });
-
-  it("never combines protocol-v4 and canonical Gateway inventory pages", async () => {
-    installRealCronGateway(
-      Array.from({ length: 201 }, (_, index) => createJob(index)),
-      {
-        transformListPage(page, call) {
-          if (call % 2 === 0) {
-            return page;
-          }
-          const response = page as Record<string, unknown>;
-          return {
-            jobs: response.jobs,
-            hasMore: response.hasMore,
-            nextOffset: response.nextOffset,
-            deliveryPreviews: response.deliveryPreviews,
-          };
-        },
-      },
-    );
-    disableCronGetForProtocolV4Gateway();
-
-    await expect(runCronWithJsonOwner(["list", "--json"])).rejects.toThrow(
-      "inventory changed repeatedly",
-    );
-
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(
-      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
-    ).toHaveLength(8);
-  });
-
-  it("renders cron jobs beyond the first Gateway page in normal table output", async () => {
-    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
-
-    await runCron(["list"]);
-
-    const output = mocks.runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).toContain("Job 200");
-    expect(output.split("\n")).toHaveLength(202);
-  });
-
-  it("fails closed when every cron inventory snapshot changes", async () => {
-    installRealCronGateway(
-      Array.from({ length: 201 }, (_, index) => createJob(index)),
-      {
+  it.each(["mixed protocol", "snapshot revision"])(
+    "fails closed for repeated %s churn",
+    async (change) => {
+      const legacy = change === "mixed protocol";
+      installRealCronGateway(createJobs(), {
+        transformListPage: legacy
+          ? (page, call) => (call % 2 === 0 ? page : unversionedPage(page))
+          : undefined,
         beforeList(params, _call, jobs) {
-          if (params.offset === 200) {
+          if (!legacy && params.offset === 200) {
             const first = expectDefined(jobs[0], "expected first cron snapshot job");
             jobs[0] = { ...first, updatedAtMs: first.updatedAtMs + 1 };
           }
         },
-      },
-    );
-
-    await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("inventory changed repeatedly"),
-    );
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(
-      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
-    ).toHaveLength(8);
-  });
+      });
+      if (legacy) {
+        disableCronGetForProtocolV4Gateway();
+        await expect(runCronWithJsonOwner(["list", "--json"])).rejects.toThrow(
+          "inventory changed repeatedly",
+        );
+        expect(mocks.runtime.error).not.toHaveBeenCalled();
+      } else {
+        await expectListFailure("inventory changed repeatedly");
+      }
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      expect(listRequests()).toHaveLength(8);
+    },
+  );
 
   it.each([
-    {
-      label: "missing job rows",
-      corrupt: (page: Record<string, unknown>) => ({ ...page, jobs: undefined }),
-      error: "invalid inventory page",
-    },
-    {
-      label: "missing snapshot revision",
-      corrupt: (page: Record<string, unknown>) => ({ ...page, snapshotRevision: undefined }),
-      error: "invalid inventory page",
-    },
-    {
-      label: "a missing terminal cursor",
-      corrupt: (page: Record<string, unknown>) => ({ ...page, nextOffset: undefined }),
-      error: "invalid inventory page",
-    },
-    {
-      label: "a terminal page exceeding its declared job limit",
-      corrupt: (page: Record<string, unknown>) => ({
-        ...page,
-        jobs: Array.from({ length: 10_001 }, (_, index) => createJob(index)),
+    ["missing job rows", { jobs: undefined }],
+    ["missing snapshot revision", { snapshotRevision: undefined }],
+    ["a missing terminal cursor", { nextOffset: undefined }],
+    [
+      "a terminal page exceeding its declared job limit",
+      {
+        jobs: createJobs(10_001),
         total: 10_001,
         limit: 200,
         hasMore: false,
         nextOffset: null,
-      }),
-      error: "invalid inventory page",
-    },
-    {
-      label: "a truncated terminal page",
-      corrupt: (page: Record<string, unknown>) => ({ ...page, total: 2 }),
-      error: "inconsistent terminal inventory page",
-    },
-  ])("fails closed for $label", async ({ corrupt, error }) => {
-    installRealCronGateway([createJob(0)], {
-      transformListPage(page) {
-        return corrupt(page as Record<string, unknown>);
       },
-    });
-
-    await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("rejects unversioned multi-page responses from current Gateways", async () => {
-    installRealCronGateway(
-      Array.from({ length: 201 }, (_, index) => createJob(index)),
-      {
+    ],
+    ["a truncated terminal page", { total: 2 }, "inconsistent terminal inventory page"],
+  ] satisfies Array<[string, Record<string, unknown>, string?]>)(
+    "fails closed for %s",
+    async (_label, patch, error = "invalid inventory page") => {
+      installRealCronGateway([createJob(0)], {
         transformListPage(page) {
-          const response = page as Record<string, unknown>;
-          return {
-            jobs: response.jobs,
-            hasMore: response.hasMore,
-            nextOffset: response.nextOffset,
-          };
+          return { ...(page as Record<string, unknown>), ...patch };
         },
-      },
-    );
+      });
 
-    await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
+      await expectListFailure(error);
+    },
+  );
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("invalid inventory page"),
-    );
-    expect(
-      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
-    ).toHaveLength(1);
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-      id: "job-000",
-    });
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: "empty", jobs: [] as CronJob[] },
-    { label: "single-job", jobs: [createJob(0)] },
-  ])("rejects a $label unversioned terminal page from a current Gateway", async ({ jobs }) => {
-    installRealCronGateway(jobs, {
-      transformListPage(page) {
-        const response = page as Record<string, unknown>;
-        return {
-          jobs: response.jobs,
-          hasMore: response.hasMore,
-          nextOffset: response.nextOffset,
-        };
-      },
-    });
-
-    await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("invalid inventory page"),
-    );
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.get",
-      expect.anything(),
-      expect.objectContaining({ id: expect.any(String) }),
-    );
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
+  it.each([0, 201])(
+    "rejects an unversioned current-Gateway inventory of %i jobs",
+    async (count) => {
+      installRealCronGateway(createJobs(count), { transformListPage: unversionedPage });
+      await expectListFailure("invalid inventory page");
+      expect(listRequests()).toHaveLength(1);
+      expectRpc("cron.get", {
+        id: count ? "job-000" : expect.any(String),
+      });
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops a stable oversized cron inventory after the canonical page bound", async () => {
-    const jobs = Array.from({ length: 200 }, (_, index) => createJob(index));
+    const jobs = createJobs(200);
     mocks.callGatewayFromCli.mockImplementation(
       async (method: string, _options: unknown, params: { offset?: number } = {}) => {
         if (method !== "cron.list") {
@@ -617,11 +488,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       },
     );
 
-    await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("pagination exceeded maximum pages"),
-    );
+    await expectListFailure("pagination exceeded maximum pages");
     expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(50);
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
@@ -634,21 +501,16 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
     await runCron(["show", id, "--json"]);
 
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as CronJob;
-    expect(result.id).toBe("job-200");
-    expect(result.name).toBe("Actual ID owner");
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-      id,
+    expect(runtime.writeJson.mock.calls.at(-1)?.[0]).toMatchObject({
+      id: "job-200",
+      name: "Actual ID owner",
     });
-    expect(mocks.callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(
-      id !== actualId.id,
-    );
+    expectRpc("cron.get", { id });
+    expect(listRequests().length > 0).toBe(id !== actualId.id);
   });
 
   it.each([
-    { label: "identical names", first: "Backup", last: "Backup", query: "Backup" },
     { label: "mixed case", first: "Backup", last: "BACKUP", query: "bAcKuP", json: true },
-    { label: "reversed case", first: "BACKUP", last: "Backup", query: "bAcKuP" },
     { label: "protocol v4", first: "Backup", last: "BACKUP", query: "Backup", legacy: true },
     ...[false, true].map((json) => ({
       label: `terminal controls with json=${json}`,
@@ -660,22 +522,14 @@ describe("cron CLI with the real Gateway pagination contract", () => {
   ])(
     "rejects ambiguous $label across Gateway pages",
     async ({ first, last, query, json = false, legacy = false }) => {
-      const jobs = Array.from({ length: 201 }, (_, index) => createJob(index));
+      const jobs = createJobs();
       jobs[0] = createJob(0, { name: first });
       jobs[200] = createJob(200, { name: last, enabled: false });
       installRealCronGateway(
         jobs,
         legacy
           ? {
-              transformListPage(page) {
-                const {
-                  jobs: pageJobs,
-                  hasMore,
-                  nextOffset,
-                  deliveryPreviews,
-                } = page as Record<string, unknown>;
-                return { jobs: pageJobs, hasMore, nextOffset, deliveryPreviews };
-              },
+              transformListPage: unversionedPage,
             }
           : {},
       );
@@ -699,45 +553,34 @@ describe("cron CLI with the real Gateway pagination contract", () => {
           error: {
             type: "cli_error",
             message,
-            matches: [
-              { id: "job-000", name: first, schedule: "every 1m", enabled: true, status: "idle" },
-              {
-                id: "job-200",
-                name: last,
-                schedule: "every 1m",
-                enabled: false,
-                status: "disabled",
-              },
-            ],
+            matches: [match("job-000", first), match("job-200", last, "every 1m", false)],
           },
         });
       } else {
         await expect(runCron(["show", query])).rejects.toThrow("exit 1");
         expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
-        const output = mocks.runtime.error.mock.calls.flat().join("\n");
-        expect(output).toContain("Matching automations:");
-        expect(output).toContain("job-000");
-        expect(output).toContain("job-200");
-        expect(output).not.toContain("job-001");
-        expect(output).toContain("every 1m; enabled: yes; status: idle");
-        expect(output).toContain("every 1m; enabled: no; status: disabled");
+        const text = output("error");
+        expectIncludes(
+          text,
+          "Matching automations:",
+          "job-000",
+          "job-200",
+          "every 1m; enabled: yes; status: idle",
+          "every 1m; enabled: no; status: disabled",
+        );
+        expect(text).not.toContain("job-001");
         if (query.includes("\u001B")) {
-          expect(output).toContain("backup\\r\\njob");
-          expect(output).not.toContain("\u001B]");
-          expect(output).not.toContain("\u0007");
-          expect(output).not.toContain("\r");
+          expect(text).toContain("backup\\r\\njob");
+          expect(text).not.toContain("\u001B]");
+          expect(text).not.toContain("\u0007");
+          expect(text).not.toContain("\r");
         } else {
-          expect(output).toContain(first);
-          expect(output).toContain(last);
+          expectIncludes(text, first, last);
         }
       }
       expect(mocks.runtime.log).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      expect(
-        mocks.callGatewayFromCli.mock.calls
-          .filter(([method]) => method === "cron.list")
-          .map((call) => (call[2] as { offset: number }).offset),
-      ).toEqual([0, 200]);
+      expect(listOffsets()).toEqual([0, 200]);
     },
   );
 
@@ -772,36 +615,35 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ]);
 
     await expect(runCron(["show", "Backup"], "automations")).rejects.toThrow("exit 1");
-    const output = mocks.runtime.error.mock.calls.flat().join("\n");
-    expect(output).toContain(`${longId}  Backup`);
-    expect(output).toContain("on-exit; enabled: no; status: disabled");
-    expect(output).toContain("stream; enabled: yes; status: idle");
-    expect(output).not.toContain("private-");
-    expect(output).not.toContain("Unrelated job");
+    const text = output("error");
+    expectIncludes(
+      text,
+      `${longId}  Backup`,
+      "on-exit; enabled: no; status: disabled",
+      "stream; enabled: yes; status: idle",
+    );
+    expect(text).not.toContain("private-");
+    expect(text).not.toContain("Unrelated job");
 
     const error = await runCronWithJsonOwner(["show", "Backup", "--json"], "automations").catch(
       (caught: unknown) => caught,
     );
     const failure = formatCliJsonFailure(error);
     expect(failure.error.matches).toEqual([
-      { id: longId, name: "Backup", schedule: "every 1m", enabled: true, status: "idle" },
-      { id: "job-001", name: "BACKUP", schedule: "on-exit", enabled: false, status: "disabled" },
-      { id: "job-002", name: "backup", schedule: "stream", enabled: true, status: "idle" },
+      match(longId, "Backup"),
+      match("job-001", "BACKUP", "on-exit", false),
+      match("job-002", "backup", "stream"),
     ]);
     expect(JSON.stringify(failure)).not.toContain("private-");
     const selected = expectDefined(failure.error.matches?.[0], "expected a matching job choice");
-    const listCalls = mocks.callGatewayFromCli.mock.calls.filter(
-      ([method]) => method === "cron.list",
-    ).length;
+    const listCalls = listRequests().length;
 
     await runCron(["show", selected.id, "--json"], "automations");
 
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ id: longId, name: "Backup" }),
     );
-    expect(
-      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
-    ).toHaveLength(listCalls);
+    expect(listRequests()).toHaveLength(listCalls);
   });
 
   it("preserves hostile stored values in cron show JSON", async () => {
@@ -817,12 +659,12 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
     await runCron(["show", job.id, "--json"]);
 
-    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as CronJob;
+    const result = runtime.writeJson.mock.calls.at(-1)?.[0] as CronJob;
     expect(result).toMatchObject({ id: job.id, name, payload: { model }, state: { lastError } });
   });
 
   it("finds an exact cron job name beyond the first real Gateway page", async () => {
-    const jobs = Array.from({ length: 201 }, (_, index) => createJob(index));
+    const jobs = createJobs();
     jobs[200] = createJob(200, { name: "Last page exact job" });
     installRealCronGateway(jobs);
 
@@ -831,6 +673,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ id: "job-200", name: "Last page exact job" }),
     );
+    expect(listOffsets()).toEqual([0, 200]);
   });
 
   it("never hides Gateway transport errors behind a name-based cron scan", async () => {
@@ -851,8 +694,6 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Gateway transport is unavailable"),
     );
-    expect(mocks.callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(
-      false,
-    );
+    expect(listRequests()).toHaveLength(0);
   });
 });

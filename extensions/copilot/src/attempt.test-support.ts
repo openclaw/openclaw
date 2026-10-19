@@ -1,6 +1,8 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptResult as AgentHarnessAttemptResultContract } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
+import { runCopilotAttempt as runCopilotAttemptImpl } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
@@ -17,6 +19,13 @@ export function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResu
     timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
     timedOutDuringCompaction: terminal.kind === "timeout" && terminal.phase === "compaction",
   };
+}
+
+/** Runs a Copilot attempt inside an admitted session turn, the way Gateway runs reach it. */
+export function runCopilotAttempt(...[params, deps]: Parameters<typeof runCopilotAttemptImpl>) {
+  return runInHarnessToolAuthorityForTest(params, "copilot", (admitted) =>
+    runCopilotAttemptImpl(admitted, deps),
+  );
 }
 
 export type SessionEventShape = {
@@ -75,6 +84,13 @@ export function makeAssistantMessageEvent(
 
 function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEventShape) => void>>();
+  const off = vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
+    const handlers = listeners.get(eventType) ?? [];
+    listeners.set(
+      eventType,
+      handlers.filter((existing) => existing !== handler),
+    );
+  });
   return {
     abort: vi.fn<() => Promise<void>>(async () => undefined),
     cfg,
@@ -90,17 +106,12 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
       }
     },
     id,
-    off: vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
-      const handlers = listeners.get(eventType) ?? [];
-      listeners.set(
-        eventType,
-        handlers.filter((existing) => existing !== handler),
-      );
-    }),
+    off,
     on: vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
       const handlers = listeners.get(eventType) ?? [];
       handlers.push(handler);
       listeners.set(eventType, handlers);
+      return () => off(eventType, handler);
     }),
     rpc: {
       history: {

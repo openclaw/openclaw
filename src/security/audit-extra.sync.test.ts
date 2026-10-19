@@ -40,9 +40,9 @@ describe("collectAttackSurfaceSummaryFindings", () => {
       cfg: {} satisfies OpenClawConfig,
       expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
     },
-  ])("$name", ({ cfg, expectedDetail }) => {
+  ])("$name", async ({ cfg, expectedDetail }) => {
     const finding = expectDefined(
-      collectAttackSurfaceSummaryFindings(cfg).at(0),
+      (await collectAttackSurfaceSummaryFindings(cfg)).at(0),
       "attack surface summary finding",
     );
     expect(finding.checkId).toBe("summary.attack_surface");

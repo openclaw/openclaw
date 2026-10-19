@@ -9,12 +9,14 @@ export function copyMarkdownText(
   text: string,
   ownsPayload: () => boolean,
   feedback: (copied: boolean | undefined) => void,
+  // A dismissed control can revoke a second transport while retaining settled feedback.
+  canFallback: () => boolean = () => true,
 ): void {
   const attempt = (copyAttempts.get(button) ?? 0) + 1;
   copyAttempts.set(button, attempt);
   const isCurrent = () =>
     button.isConnected && copyAttempts.get(button) === attempt && ownsPayload();
-  void copyToClipboard(text, isCurrent).then((copied) => {
+  void copyToClipboard(text, () => isCurrent() && canFallback()).then((copied) => {
     if (!isCurrent()) {
       return;
     }

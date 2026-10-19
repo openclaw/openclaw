@@ -1,7 +1,6 @@
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
@@ -33,11 +32,7 @@ import { createMattermostReactionHandler } from "./monitor-reactions.js";
 import { createMattermostMonitorResources } from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  createMattermostConnectOnce,
-  type MattermostEventPayload,
-  type MattermostWebSocketFactory,
-} from "./monitor-websocket.js";
+import { createMattermostConnectOnce, type MattermostEventPayload } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import type { ChannelAccountSnapshot, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 import {
@@ -58,7 +53,6 @@ type MonitorMattermostOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
-  webSocketFactory?: MattermostWebSocketFactory;
 };
 
 function publishMattermostRecoveringStatus(
@@ -112,7 +106,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
 
   // Wait for the Mattermost API to accept our bot token before proceeding.
@@ -127,7 +121,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     {
       abortSignal: opts.abortSignal,
       jitterRatio: 0.2,
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      reconnectAfterClose: false,
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
         publishMattermostRecoveringStatus(opts.statusSink, err);
@@ -289,24 +283,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             return;
           }
           try {
-            if (entries.length === 1) {
-              await handlePost(last.post, last.payload, admissionLifecycle);
-              await settle();
-              return;
-            }
-            const mergedPost: MattermostIngressPost = {
-              ...last.post,
-              message: entries
-                .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
-                .filter(Boolean)
-                .join("\n"),
-              file_ids: [],
-            };
+            const mergedPost =
+              entries.length === 1
+                ? last.post
+                : {
+                    ...last.post,
+                    message: entries
+                      .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
+                      .filter(Boolean)
+                      .join("\n"),
+                    file_ids: [],
+                  };
             await handlePost(
               mergedPost,
               last.payload,
               admissionLifecycle,
-              entries.map((entry) => entry.post.id),
+              entries.length > 1 ? entries.map((entry) => entry.post.id) : undefined,
             );
             await settle();
           } catch (error) {
@@ -338,7 +330,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     abortSignal: opts.abortSignal,
     statusSink: opts.statusSink,
     runtime,
-    webSocketFactory: opts.webSocketFactory,
     nextSeq: () => sequence++,
     getBotUpdateAt: async () => (await fetchMattermostMe(client)).update_at ?? 0,
     onPosted: ingress.receive,
@@ -386,8 +377,5 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     await ingress.stop();
     unregisterInteractions();
   }
-  const slashShutdownCleanupPromise = slashShutdownCleanup;
-  if (slashShutdownCleanupPromise) {
-    await Promise.resolve(slashShutdownCleanupPromise);
-  }
+  await Promise.resolve(slashShutdownCleanup);
 }

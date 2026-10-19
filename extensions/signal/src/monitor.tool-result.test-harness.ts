@@ -144,30 +144,13 @@ export function createSignalToolResultConfig(
   const base = config as { channels?: Record<string, unknown> };
   const channels = base.channels ?? {};
   const signal = (channels.signal ?? {}) as Record<string, unknown>;
-  const {
-    autoStart,
-    cliPath,
-    configPath,
-    httpHost,
-    httpPort,
-    startupTimeoutMs,
-    receiveMode,
-    ignoreAttachments,
-    ignoreStories,
-    ...accountOverrides
-  } = overrides;
+  const { autoStart, httpPort, ...accountOverrides } = overrides;
   const transport =
     autoStart === false
       ? { kind: "external-native", url: "http://127.0.0.1:8080" }
       : {
           kind: "managed-native",
-          ...(typeof cliPath === "string" ? { cliPath } : {}),
-          ...(typeof configPath === "string" ? { configPath } : {}),
-          ...(typeof httpHost === "string" ? { httpHost } : {}),
           ...(typeof httpPort === "number" ? { httpPort } : {}),
-          ...(typeof startupTimeoutMs === "number" ? { startupTimeoutMs } : {}),
-          ...(receiveMode === "on-start" || receiveMode === "manual" ? { receiveMode } : {}),
-          ...(typeof ignoreStories === "boolean" ? { ignoreStories } : {}),
         };
   return {
     ...base,
@@ -176,7 +159,6 @@ export function createSignalToolResultConfig(
       signal: {
         ...signal,
         transport,
-        ...(typeof ignoreAttachments === "boolean" ? { ignoreAttachments } : {}),
         dmPolicy: "open",
         allowFrom: ["*"],
         ...accountOverrides,
@@ -189,16 +171,13 @@ export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;
     exited?: Promise<SignalDaemonExitEvent>;
-    isExited?: () => boolean;
   } = {},
 ): SignalDaemonHandle {
   const stop = overrides.stop ?? (vi.fn() as unknown as MockFn);
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
-  const isExited = overrides.isExited ?? (() => false);
   return {
     stop: stop as unknown as () => Promise<void>,
     exited,
-    isExited,
   };
 }
 
@@ -210,7 +189,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: () => config,
+    captureRuntimeConfigAsyncReader: () => async () => config,
   };
 });
 
@@ -222,7 +201,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     ...actual,
     resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -233,6 +211,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
+    resolveInboundSessionEnvelopeContextAsync: vi.fn(
+      async ({ cfg }: Parameters<typeof actual.resolveInboundSessionEnvelopeContextAsync>[0]) => ({
+        storePath: signalToolResultSessionStore.path,
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      }),
+    ),
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({

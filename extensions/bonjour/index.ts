@@ -1,7 +1,3 @@
-/**
- * Bonjour gateway-discovery plugin entry. It advertises the local gateway over
- * mDNS and lazily loads the ciao-based advertiser.
- */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 function formatBonjourInstanceName(displayName: string) {
@@ -15,7 +11,6 @@ function formatBonjourInstanceName(displayName: string) {
   return `${trimmed} (OpenClaw)`;
 }
 
-/** Plugin entry for Bonjour/mDNS gateway discovery. */
 export default definePluginEntry({
   id: "bonjour",
   name: "Bonjour Gateway Discovery",
@@ -24,14 +19,8 @@ export default definePluginEntry({
     api.registerGatewayDiscoveryService({
       id: "bonjour",
       advertise: async (ctx) => {
-        const [
-          { startGatewayBonjourAdvertiser },
-          { registerUncaughtExceptionHandler, registerUnhandledRejectionHandler },
-        ] = await Promise.all([
-          import("./src/advertiser.js"),
-          import("openclaw/plugin-sdk/runtime"),
-        ]);
-        return await startGatewayBonjourAdvertiser(
+        const { startGatewayBonjourAdvertiser } = await import("./src/advertiser.js");
+        return startGatewayBonjourAdvertiser(
           {
             instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
             gatewayPort: ctx.gatewayPort,
@@ -43,11 +32,7 @@ export default definePluginEntry({
             cliPath: ctx.cliPath,
             minimal: ctx.minimal,
           },
-          {
-            logger: api.logger,
-            registerUncaughtExceptionHandler,
-            registerUnhandledRejectionHandler,
-          },
+          api.logger,
         );
       },
     });

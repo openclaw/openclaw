@@ -15,8 +15,8 @@ import type { FeishuProbeResult } from "./types.js";
  * Successful bot info is effectively static, while failures are cached briefly
  * to avoid hammering the API during transient outages. */
 const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: number }>();
-const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const PROBE_ERROR_TTL_MS = 60 * 1000; // 1 minute
+const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000;
+const PROBE_ERROR_TTL_MS = 60 * 1000;
 const MAX_PROBE_CACHE_SIZE = 64;
 const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
 type ProbeFeishuOptions = {
@@ -78,7 +78,7 @@ export async function probeFeishu(
     return {
       ok: false,
       appId: creds.appId,
-      error: "probe aborted",
+      error: "check aborted",
     };
   }
 
@@ -116,11 +116,11 @@ export async function probeFeishu(
       return {
         ok: false,
         appId: creds.appId,
-        error: "probe aborted",
+        error: "check aborted",
       };
     }
     if (responseResult.status === "timeout") {
-      return cacheError(`probe timed out after ${timeoutMs}ms`);
+      return cacheError(`check timed out after ${timeoutMs}ms`);
     }
 
     const response = responseResult.value;
@@ -128,7 +128,7 @@ export async function probeFeishu(
       return {
         ok: false,
         appId: creds.appId,
-        error: "probe aborted",
+        error: "check aborted",
       };
     }
 

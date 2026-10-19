@@ -74,12 +74,15 @@ export function createDispatchTestHarness(
   const close = vi.fn();
   const setCloseCause = vi.fn();
   const logGateway = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const config = {};
+  const context = { broadcast: vi.fn(), getRuntimeConfig: () => config };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
+      socket: { acceptsDeflatedSegments: false },
       clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
-      buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
+      buildRequestContext: () => (options.buildRequestContext?.() ?? context) as never,
       send: sendForDispatcher,
       close,
       isClosed: options.isClosed ?? (() => false),
@@ -105,8 +108,19 @@ export function createDispatchTestHarness(
     awaitResponseFrame,
     close,
     dispatcher: {
-      dispatch: (frame: unknown, client: GatewayWsClient) =>
-        dispatcher.dispatch(frame, client, Buffer.byteLength(JSON.stringify(frame))),
+      dispatch: (
+        frame: unknown,
+        client: GatewayWsClient,
+        admission?: "continuation",
+        sendResponse?: GatewayWsMessageHandlerParams["send"],
+      ) =>
+        dispatcher.dispatch(
+          frame,
+          client,
+          Buffer.byteLength(JSON.stringify(frame)),
+          admission,
+          sendResponse,
+        ),
     },
     logGateway,
     send,

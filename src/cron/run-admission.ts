@@ -1,5 +1,6 @@
 import {
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -7,6 +8,11 @@ import {
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import {
@@ -14,6 +20,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
+import { drainAgentRunTerminalWrites } from "../infra/agent-run-terminal-writes.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -21,6 +28,7 @@ import {
 import {
   captureCronJobMessageActionAuthority,
   captureCronJobMessageSourceAuthority,
+  captureCronJobStandingGrantAuthority,
 } from "./active-jobs.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
@@ -39,6 +47,7 @@ export function prepareCronRunAdmission(params: {
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   executionIdentity?: CronExecutionIdentityAdmission;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   ingressBoundary?: "cron.isolated-agent" | "cron.script";
   resolveGatewayContext?: GatewayContextResolver;
 }) {
@@ -46,10 +55,17 @@ export function prepareCronRunAdmission(params: {
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   const resolveGatewayContext =
     params.resolveGatewayContext ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  let assertAdmitted: (() => void) | undefined;
+  let assertAdmitted: SessionSourceAssertion | undefined;
+  const readAdmittedSource = () => {
+    if (!assertAdmitted) {
+      throw new Error("cron message delivery requires its admitted run");
+    }
+    return assertAdmitted;
+  };
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
+    operatorAuthority: params.operatorAuthority,
     cfg: params.cfg,
     facts: {
       runId,
@@ -98,13 +114,12 @@ export function prepareCronRunAdmission(params: {
             : undefined,
         deliveryAttempt: {
           beforeAttempt: () => deliveryAttemptFence.beforeAttempt(),
-          assertCurrent: () => {
-            if (!assertAdmitted) {
-              throw new Error("cron message delivery requires its admitted run");
-            }
-            assertAdmitted();
-            deliveryAttemptFence.assertCurrent();
-          },
+          assertCurrent: composeSessionSourceAssertion([
+            Object.assign(() => readAdmittedSource()(), {
+              prepareSessionSource: () => prepareSessionSourceAuthority(readAdmittedSource()),
+            }),
+            deliveryAttemptFence.assertCurrent,
+          ]),
         },
         ...(scheduledMessageAuthority && scheduledToolPolicy
           ? {
@@ -121,12 +136,20 @@ export function prepareCronRunAdmission(params: {
         expiresWithRun: true,
       })
     : undefined;
+  const close = () => {
+    revokeMessageActionTurnCapability(messageActionTurnCapability);
+    preparedRunAdmission.close();
+  };
   return {
     preparedRunAdmission,
+    standingGrantAuthority: captureCronJobStandingGrantAuthority({
+      jobId: params.jobId,
+      operationalRunInstance,
+    }),
     messageActionTurnCapability,
-    close: () => {
-      revokeMessageActionTurnCapability(messageActionTurnCapability);
-      preparedRunAdmission.close();
+    close,
+    finish: async () => {
+      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(close);
     },
   };
 }

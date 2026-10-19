@@ -1,12 +1,5 @@
-// Mattermost delivery trace goldens: replayable wire-level lifecycle recordings.
-//
-// Wires the real draft-stream path the monitor uses (createMattermostDraftStream,
-// preview boundary controller, deliverMattermostReplyWithDraftPreview,
-// deliverMattermostReplyPayload) against a recording MattermostClient, so OUT
-// events are the raw REST calls (POST/PUT/DELETE /posts). The monitor's
-// per-activity glue (partial dedupe, boundary rotation) is replicated inline in
-// block-preview mode; the scripted steps stand in for the dispatcher callbacks.
-// Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
+// Real draft/delivery owners with recording REST I/O; the driver mirrors the
+// monitor's block-preview callbacks. Refresh with OPENCLAW_TRACE_UPDATE=1.
 import {
   deliveryTraceScenarios,
   expectDeliveryTraceMatchesGolden,
@@ -29,13 +22,9 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { describe, it, vi } from "vitest";
+import { it, vi } from "vitest";
 import { createMattermostPost, type MattermostClient } from "./mattermost/client.js";
-import {
-  createMattermostDraftPreviewBoundaryController,
-  createMattermostDraftStream,
-} from "./mattermost/draft-stream.js";
-import { resolveMattermostReplyRootId } from "./mattermost/monitor-context.js";
+import { createMattermostDraftStream } from "./mattermost/draft-stream.js";
 import { deliverMattermostReplyWithDraftPreview } from "./mattermost/monitor-draft-delivery.js";
 import {
   deliverMattermostReplyPayload,
@@ -48,10 +37,12 @@ const ACCOUNT_ID = "main";
 // Matches the monitor's draft stream wiring (throttleMs: 1200).
 const DRAFT_THROTTLE_MS = 1200;
 
-const cfg = {} as OpenClawConfig;
+const cfg: OpenClawConfig = {};
 const tableMode = resolveMarkdownTableMode({ cfg, channel: "mattermost" });
 const chunkMode = resolveChunkMode(cfg, "mattermost", ACCOUNT_ID);
 const textLimit = resolveTextChunkLimit(cfg, "mattermost", ACCOUNT_ID, { fallbackLimit: 4000 });
+const chunkText = (text: string) =>
+  chunkMarkdownTextWithMode(convertMarkdownTables(text, tableMode), textLimit, chunkMode);
 
 // deliverMattermostReplyPayload only touches channel.text helpers; bind the
 // real implementations the plugin runtime would provide.
@@ -69,35 +60,24 @@ function createRecordingMattermostClient(recorder: WireRecorder): MattermostClie
       typeof init?.body === "string"
         ? (JSON.parse(init.body) as Record<string, unknown>)
         : undefined;
-    if (method === "POST" && path === "/posts") {
-      postCount += 1;
-      const result = { id: `post-${postCount}` };
-      recorder.recordWireCall({
-        method: "POST /posts",
-        target: typeof payload?.channel_id === "string" ? payload.channel_id : "",
-        payload,
-        result,
-      });
-      return result as T;
+    const create = method === "POST" && path === "/posts";
+    const route = /^\/posts\/([^/]+)(\/patch)?$/.exec(path);
+    const patch = method === "PUT" && route?.[2] === "/patch";
+    if (!create && !patch) {
+      throw new Error("Unexpected Mattermost request: " + method + " " + path);
     }
-    const postRoute = /^\/posts\/([^/]+)(\/patch)?$/.exec(path);
-    const postId = postRoute?.[1];
-    if (postId) {
-      if (method === "DELETE" && !postRoute?.[2]) {
-        recorder.recordWireCall({
-          method: `DELETE ${path}`,
-          target: postId,
-          result: { status: "OK" },
-        });
-        return { status: "OK" } as T;
-      }
-      if (method === "PUT" && postRoute?.[2] === "/patch") {
-        const result = { id: postId };
-        recorder.recordWireCall({ method: `${method} ${path}`, target: postId, payload, result });
-        return result as T;
-      }
-    }
-    throw new Error(`Unexpected Mattermost request: ${method} ${path}`);
+    const result = { id: create ? "post-" + ++postCount : route![1] };
+    recorder.recordWireCall({
+      method: method + " " + path,
+      target: create
+        ? typeof payload?.channel_id === "string"
+          ? payload.channel_id
+          : ""
+        : route![1]!,
+      payload,
+      result,
+    });
+    return result as T;
   };
   return {
     baseUrl: "https://chat.example.com",
@@ -108,6 +88,18 @@ function createRecordingMattermostClient(recorder: WireRecorder): MattermostClie
   };
 }
 
+function receiptFor(messageIds: string[], kind: "text" | "preview", replyToId?: string) {
+  return createMessageReceiptFromOutboundResults({
+    results: messageIds.map((messageId) => ({
+      channel: "mattermost",
+      messageId,
+      channelId: CHANNEL_ID,
+    })),
+    kind,
+    ...(replyToId ? { replyToId } : {}),
+  });
+}
+
 function setupMattermostTrace(recorder: WireRecorder) {
   const client = createRecordingMattermostClient(recorder);
   const draftStream = createMattermostDraftStream({
@@ -115,61 +107,32 @@ function setupMattermostTrace(recorder: WireRecorder) {
     channelId: CHANNEL_ID,
     rootId: ROOT_ID,
     throttleMs: DRAFT_THROTTLE_MS,
-    chunkText: (value) =>
-      chunkMarkdownTextWithMode(convertMarkdownTables(value, tableMode), textLimit, chunkMode),
-  });
-  const previewBoundary = createMattermostDraftPreviewBoundaryController({
-    enabled: true,
-    forceNewMessage: async () => {
-      await draftStream.forceNewMessage();
-    },
+    chunkText,
   });
   const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
     draft: { ...draftStream, id: draftStream.postId },
   });
-  let lastPartialText = "";
 
-  // Replicas of the monitor's inline final-text resolution glue
-  // (extensions/mattermost/src/mattermost/monitor.ts deliver wiring).
   const resolvePreviewFinalText = (text?: string) => {
     const resolution = draftStream.resolveFinalText(typeof text === "string" ? text : "");
-    const confirmedDelivery =
-      resolution.publishedParts.length > 0
-        ? (() => {
-            const receipt = createMessageReceiptFromOutboundResults({
-              results: resolution.publishedParts.map((part) => ({
-                channel: "mattermost",
-                messageId: part.messageId,
-                channelId: CHANNEL_ID,
-              })),
-              kind: "preview",
-              replyToId: ROOT_ID,
-            });
-            return {
-              outcome: "text" as const,
-              messageIds: listMessageReceiptPlatformIds(receipt),
-              receipt,
-              visibleReplySent: true,
-              content: joinMattermostVisibleContent(
-                resolution.publishedParts.map((part) => part.content),
-              ),
-            };
-          })()
-        : undefined;
+    const parts = resolution.publishedParts;
+    const receipt = parts.length
+      ? receiptFor(
+          parts.map((part) => part.messageId),
+          "preview",
+          ROOT_ID,
+        )
+      : undefined;
+    const confirmedDelivery = receipt && {
+      outcome: "text" as const,
+      messageIds: listMessageReceiptPlatformIds(receipt),
+      receipt,
+      visibleReplySent: true,
+      content: joinMattermostVisibleContent(parts.map((part) => part.content)),
+    };
     const deliveryText = resolution.kind === "already-delivered" ? "" : resolution.text;
-    const formatted = convertMarkdownTables(deliveryText, tableMode);
-    const chunks = chunkMarkdownTextWithMode(formatted, textLimit, chunkMode);
-    if (!chunks.length && formatted) {
-      chunks.push(formatted);
-    }
-    if (chunks.length !== 1) {
-      return {
-        deliveryText,
-        confirmedDelivery,
-        alreadyDelivered: resolution.kind === "already-delivered",
-      };
-    }
-    const trimmed = chunks[0]?.trim();
+    const chunks = chunkText(deliveryText);
+    const trimmed = chunks.length === 1 ? chunks[0]?.trim() : undefined;
     if (!trimmed) {
       return {
         deliveryText,
@@ -177,27 +140,15 @@ function setupMattermostTrace(recorder: WireRecorder) {
         alreadyDelivered: resolution.kind === "already-delivered",
       };
     }
-    if (
-      lastPartialText &&
-      lastPartialText.startsWith(trimmed) &&
-      trimmed.length < lastPartialText.length
-    ) {
-      return { deliveryText, confirmedDelivery, alreadyDelivered: false };
-    }
     return { editText: trimmed, deliveryText, confirmedDelivery, alreadyDelivered: false };
   };
 
   const deliverPayload = async (payloadToDeliver: ReplyPayload) => {
-    const finalTextResolution =
-      !payloadToDeliver.isError && typeof payloadToDeliver.text === "string"
-        ? draftStream.resolveFinalText(payloadToDeliver.text)
-        : undefined;
-    const resolvedPayload = finalTextResolution
-      ? {
-          ...payloadToDeliver,
-          text: finalTextResolution.kind === "already-delivered" ? "" : finalTextResolution.text,
-        }
-      : payloadToDeliver;
+    const resolvedPayload = { ...payloadToDeliver };
+    if (!resolvedPayload.isError && typeof resolvedPayload.text === "string") {
+      const resolution = draftStream.resolveFinalText(resolvedPayload.text);
+      resolvedPayload.text = resolution.kind === "already-delivered" ? "" : resolution.text;
+    }
     return await deliverMattermostReplyPayload({
       core,
       cfg,
@@ -205,11 +156,7 @@ function setupMattermostTrace(recorder: WireRecorder) {
       channelId: CHANNEL_ID,
       accountId: ACCOUNT_ID,
       agentId: "agent",
-      replyToId: resolveMattermostReplyRootId({
-        kind: "channel",
-        threadRootId: ROOT_ID,
-        replyToId: payloadToDeliver.replyToId,
-      }),
+      replyToId: ROOT_ID,
       textLimit,
       tableMode,
       sendMessage: async (_to, text, opts) => {
@@ -221,11 +168,7 @@ function setupMattermostTrace(recorder: WireRecorder) {
         return {
           messageId: post.id,
           channelId: CHANNEL_ID,
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [{ channel: "mattermost", messageId: post.id, channelId: CHANNEL_ID }],
-            kind: "text",
-            ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
-          }),
+          receipt: receiptFor([post.id], "text", opts.replyToId),
           content: post.message ?? text,
         };
       },
@@ -237,36 +180,16 @@ function setupMattermostTrace(recorder: WireRecorder) {
       case "reply-start":
       case "tool-progress":
       case "cancel":
-        // Typing travels over the websocket (not the REST client), tool
-        // progress is not adopted here, and an aborted run stops emitting
-        // payloads; closeout happens on idle.
         break;
-      case "partial": {
-        const cleaned = step.text.trim();
-        if (!cleaned || cleaned === lastPartialText) {
-          break;
-        }
-        if (
-          lastPartialText &&
-          lastPartialText.startsWith(cleaned) &&
-          cleaned.length < lastPartialText.length
-        ) {
-          break;
-        }
-        lastPartialText = cleaned;
-        draftStream.updateAssistantText(cleaned);
-        previewBoundary.noteUpdate();
+      case "partial":
+        // These scripts contain only advancing nonempty partials.
+        draftStream.updateAssistantText(step.text.trim());
         break;
-      }
       case "block-final":
-        // Block boundary = assistant message boundary: partial snapshots reset
-        // and the block-mode preview rotates to a fresh post.
-        lastPartialText = "";
-        await previewBoundary.noteBoundary();
+        await draftStream.forceNewMessage();
         break;
       case "final":
-        // Final resolution may edit the confirmed preview post in place; join
-        // outstanding boundary work first, like the monitor deliver wiring.
+        // Join boundary work before potentially editing the preview in place.
         await draftStream.settleBoundaries();
         await deliverMattermostReplyWithDraftPreview({
           payload: {
@@ -285,8 +208,6 @@ function setupMattermostTrace(recorder: WireRecorder) {
         });
         break;
       case "idle":
-        // Mirrors the monitor's finally block: stop flushes the last pending
-        // preview text and keeps the post.
         await draftStream.stop();
         await previewLifecycle.cleanup();
         break;
@@ -313,17 +234,10 @@ const MATTERMOST_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
   },
 ];
 
-describe("mattermost delivery trace goldens", () => {
-  for (const scenario of MATTERMOST_TRACE_SCENARIOS) {
-    it(`records ${scenario.name}`, async () => {
-      const events = await runDeliveryTraceScenario({
-        scenario,
-        setup: setupMattermostTrace,
-      });
-      expectDeliveryTraceMatchesGolden({
-        goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
-        events,
-      });
-    });
-  }
+it.each(MATTERMOST_TRACE_SCENARIOS)("records $name", async (scenario) => {
+  const events = await runDeliveryTraceScenario({ scenario, setup: setupMattermostTrace });
+  expectDeliveryTraceMatchesGolden({
+    goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
+    events,
+  });
 });

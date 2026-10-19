@@ -17,11 +17,8 @@ export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
 
 export type ZaiDetectedEndpoint = {
   endpoint: ZaiEndpointId;
-  /** Provider baseUrl to store in config. */
   baseUrl: string;
-  /** Recommended default model id for that endpoint. */
   modelId: string;
-  /** Human-readable note explaining the choice. */
   note: string;
 };
 
@@ -77,7 +74,7 @@ async function probeZaiChatCompletions(params: {
 }): Promise<ProbeResult> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
-    label: "Z.AI endpoint probe",
+    label: "Z.AI endpoint check",
   });
   const resolveTimeoutMs = createProviderOperationTimeoutResolver({
     deadline,
@@ -117,7 +114,7 @@ async function probeZaiChatCompletions(params: {
         code?: unknown;
         msg?: unknown;
         message?: unknown;
-      }>(res, "Z.AI endpoint probe", {
+      }>(res, "Z.AI endpoint check", {
         maxBytes: ZAI_DETECT_ERROR_BODY_MAX_BYTES,
         // Resolve immediately before body consumption so headers and every
         // body shape share one operation budget, including slow-drip streams.
@@ -125,9 +122,9 @@ async function probeZaiChatCompletions(params: {
         // The probe's deadline owns the budget, including caller timeouts over 30s.
         chunkTimeoutMs: 0,
         onTimeout: ({ timeoutMs }) =>
-          new Error(`Z.AI probe error body timed out after ${timeoutMs}ms`),
+          new Error(`Z.AI check error body timed out after ${timeoutMs}ms`),
         onOverflow: ({ maxBytes }) =>
-          new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
+          new Error(`Z.AI check error body exceeded size limit (${maxBytes} bytes)`),
       });
       const code = json?.error?.code ?? json?.code;
       const msg = json?.error?.message ?? json?.msg ?? json?.message;

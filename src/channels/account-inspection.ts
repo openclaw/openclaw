@@ -11,7 +11,7 @@ import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "./account-summary.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "./read-only-account-inspect.js";
 import { resolveUnavailableChannelAccountSnapshot } from "./status/account-state.js";
@@ -59,15 +59,10 @@ export async function resolveInspectedChannelAccount(params: {
     };
   }
   const sourceInspectedAccount = await inspectChannelAccount({
-    plugin: params.plugin,
+    ...params,
     cfg: params.sourceConfig,
-    accountId: params.accountId,
   });
-  const resolvedInspectedAccount = await inspectChannelAccount({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  const resolvedInspectedAccount = await inspectChannelAccount(params);
   const resolvedInspection = asNullableRecord(resolvedInspectedAccount);
   const sourceInspection = asNullableRecord(sourceInspectedAccount);
   // When a source config says a credential exists but this process cannot resolve it, keep the
@@ -100,6 +95,6 @@ export async function resolveInspectedChannelAccount(params: {
     cfg: params.cfg,
     readAccountConfiguredField: true,
   });
-  const snapshot = buildChannelAccountSummary({ ...params, account, enabled, configured });
+  const snapshot = await buildChannelAccountSummary({ ...params, account, enabled, configured });
   return { kind: "resolved", account, enabled, configured, snapshot };
 }

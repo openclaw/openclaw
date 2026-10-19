@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 import { classifyWorktreeRemovalError, WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
@@ -16,6 +17,9 @@ export class WorktreeGcProgress {
     outcome: "completed",
     issues: [],
     issueCount: 0,
+    eligibleCount: 0,
+    deferredCount: 0,
+    failedCount: 0,
     protectedCount: 0,
     protectionReasons: {},
     limitsSatisfied: null,
@@ -49,11 +53,12 @@ export class WorktreeGcProgress {
       });
     }
     if (outcome === "failed") {
-      this.result.outcome = "partial";
-    } else if (this.result.outcome === "completed") {
-      // Retired checkout files still need manual recovery.
-      this.result.outcome = "deferred";
+      this.result.failedCount += 1;
+    } else if (outcome === "deferred") {
+      this.result.deferredCount += 1;
     }
+    // Retired checkout files still need manual recovery.
+    this.result.outcome = this.result.failedCount > 0 ? "partial" : "deferred";
   }
 
   protect(stage: "idle" | "limits", id: string, reason: string, detail = reason): void {
@@ -63,15 +68,25 @@ export class WorktreeGcProgress {
     this.record(stage, "deferred", detail, id);
   }
 
-  recordLimitState(satisfied: boolean, inventoryComplete = true): void {
-    this.result.limitsSatisfied = satisfied ? (inventoryComplete ? true : null) : false;
-  }
-
   error(
     stage: ManagedWorktreeGcResult["issues"][number]["stage"],
     error: unknown,
     id?: string,
   ): void {
+    if (
+      stage === "limits" &&
+      id &&
+      error instanceof WorktreeRemovalContentionError &&
+      error.blockedByRun
+    ) {
+      this.protect(
+        stage,
+        id,
+        "live-refused",
+        `Worktree ${error.blockedByRun.worktreeId} has an active run in pid ${error.blockedByRun.pid}`,
+      );
+      return;
+    }
     if (
       error instanceof WorktreeBranchMovedError &&
       id &&

@@ -1,26 +1,170 @@
-// Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
 import { Option, type Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import type { ChannelSetupFieldMetadata } from "../channels/plugins/setup-contract.js";
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { danger } from "../globals.js";
+import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
-import {
-  getChannelSetupOptionSwitches,
-  loadChannelSetupCliOptions,
-  resolveChannelsAddChannelFromArgv,
-  resolveChannelsAddOptions,
-  type ChannelSetupCliOption,
-} from "./channels-cli-add-args.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions, inheritOptionFromParent } from "./command-options.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
+
+type ChannelSetupFlagArity = "boolean" | "value" | "conflict";
+
+type ChannelSetupCliOption = ChannelSetupFieldMetadata["cli"];
+
+const CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS = new Set(["--help", "-h"]);
+const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--agent", "--channel", "--account", "--name"]);
+
+function getChannelSetupOptionSwitches(option: Option): string[] {
+  return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
+}
+
+function resolveChannelSetupFlagArity(flags: string): Exclude<ChannelSetupFlagArity, "conflict"> {
+  return /<[^>]+>|\[[^\]]+\]/u.test(flags) ? "value" : "boolean";
+}
+
+function buildChannelSetupFlagArityMap(
+  options: readonly ChannelSetupCliOption[],
+): Map<string, ChannelSetupFlagArity> {
+  const arityBySwitch = new Map<string, ChannelSetupFlagArity>();
+  const addSwitch = (flag: string, arity: Exclude<ChannelSetupFlagArity, "conflict">) => {
+    const existing = arityBySwitch.get(flag);
+    arityBySwitch.set(flag, existing === undefined || existing === arity ? arity : "conflict");
+  };
+  for (const option of options) {
+    const arity = resolveChannelSetupFlagArity(option.flags);
+    for (const flag of getChannelSetupOptionSwitches(new Option(option.flags))) {
+      addSwitch(flag, arity);
+    }
+    if (option.negatedFlags) {
+      for (const flag of getChannelSetupOptionSwitches(new Option(option.negatedFlags))) {
+        addSwitch(flag, "boolean");
+      }
+    }
+  }
+  return arityBySwitch;
+}
+
+async function resolveChannelsAddChannelFromArgv(argv: string[]): Promise<string | undefined> {
+  const normalizedArgv = normalizeWindowsArgv(argv);
+  const args = getCommandArgsWithRootOptions(normalizedArgv, {
+    commandPath: ["channels", "add"],
+    valueFlags: ["--agent"],
+    mode: "command-path",
+  });
+  if (!args) {
+    return undefined;
+  }
+  let explicitChannel: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (arg === "--channel") {
+      const value = args[index + 1]?.trim();
+      explicitChannel = value || explicitChannel;
+      index += 1;
+      continue;
+    }
+    if (CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--channel=")) {
+      const value = arg.slice("--channel=".length).trim();
+      explicitChannel = value || explicitChannel;
+    }
+  }
+  if (explicitChannel) {
+    return explicitChannel;
+  }
+
+  let channelFlagArities: Map<string, ChannelSetupFlagArity> | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.includes("=") && CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg.slice(0, arg.indexOf("=")))) {
+      continue;
+    }
+    if (CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      // Shipped `channels add` accepted channel flags before a positional id by registering every
+      // channel option. Lazily inspect serialized all-channel metadata for arity only; actual
+      // option registration remains scoped to the selected channel.
+      if (!channelFlagArities) {
+        const { resolveChannelSetupCliOptionMetadata } =
+          await import("../channels/plugins/cli-add-options.js");
+        const { optionCandidates } = resolveChannelSetupCliOptionMetadata(undefined, {
+          includeAll: true,
+        });
+        channelFlagArities = buildChannelSetupFlagArityMap(optionCandidates);
+      }
+      const equalsIndex = arg.indexOf("=");
+      const optionSwitch = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+      const arity = channelFlagArities.get(optionSwitch);
+      if (!arity || arity === "conflict") {
+        return undefined;
+      }
+      if (equalsIndex === -1 && arity === "value") {
+        index += 1;
+      }
+      continue;
+    }
+    return arg;
+  }
+  return undefined;
+}
+
+function resolveChannelsAddOptions(
+  channelArg: string | undefined,
+  opts: Record<string, unknown>,
+  command: Pick<Command, "getOptionValueSource">,
+  params?: {
+    preserveLegacyDefaults?: boolean;
+    /** Attribute names whose empty Commander defaults should be dropped (legacy int options). */
+    dropEmptyLegacyDefaultsForAttributeNames?: ReadonlySet<string>;
+  },
+): Record<string, unknown> {
+  const forwardedOpts = Object.fromEntries(
+    Object.entries(opts).filter(([key, value]) => {
+      const source = command.getOptionValueSource(key);
+      if (source === "cli") {
+        return true;
+      }
+      // Legacy plugins still install manifest defaults through Commander.
+      // Keep those values. Drop empty-string defaults only for int options so
+      // omitted ints are not treated as explicitly blank user input, while
+      // empty text defaults remain valid plugin metadata.
+      if (params?.preserveLegacyDefaults !== true || source !== "default" || value === undefined) {
+        return false;
+      }
+      if (value === "") {
+        return !params.dropEmptyLegacyDefaultsForAttributeNames?.has(key);
+      }
+      return true;
+    }),
+  );
+  return {
+    ...forwardedOpts,
+    channel: forwardedOpts.channel ?? channelArg,
+  };
+}
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["agent", "channel"]);
@@ -34,12 +178,7 @@ type AddChannelSetupOptionsParams = {
   includeAll?: boolean;
 };
 
-type ChannelSetupOptionMode = "none" | "modern" | "legacy";
-
-type ChannelSetupOptionRegistration = {
-  mode: ChannelSetupOptionMode;
-  legacyIntDefaultAttributeNames: ReadonlySet<string>;
-};
+type ChannelSetupOptionRegistration = Awaited<ReturnType<typeof addChannelSetupOptions>>;
 
 const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   { flags: "--token <token>", description: "Channel token or credential payload" },
@@ -62,8 +201,6 @@ const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
     defaultValue: false,
   },
 ];
-
-const loadChannelsCommands = createLazyPromise(() => import("../commands/channels.js"));
 
 function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -111,26 +248,19 @@ function shouldRegisterChannelSetupOptions(
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
-async function addChannelSetupOptions(
-  command: Command,
-  params: AddChannelSetupOptionsParams = {},
-): Promise<ChannelSetupOptionRegistration> {
-  const { resolveChannelSetupCliOptionMetadata } = await loadChannelSetupCliOptions();
+async function addChannelSetupOptions(command: Command, params: AddChannelSetupOptionsParams = {}) {
+  const { resolveChannelSetupCliOptionMetadata } =
+    await import("../channels/plugins/cli-add-options.js");
   const selected = params.channelId?.trim().toLowerCase();
   const { options, selectedChannel, valueMetadataByAttributeName } =
     resolveChannelSetupCliOptionMetadata(selected, {
       includeAll: params.includeAll,
     });
-  const mode: ChannelSetupOptionMode = selected
-    ? selectedChannel?.setup
-      ? "modern"
-      : "legacy"
-    : "none";
   const seenFlags = new Set(command.options.flatMap(getChannelSetupOptionSwitches));
   for (const option of options) {
     addChannelSetupOption(command, option, seenFlags);
   }
-  if (params.includeAll || (mode === "legacy" && selectedChannel?.setup === undefined)) {
+  if (params.includeAll || (selected && selectedChannel?.setup === undefined)) {
     for (const option of LEGACY_CHANNEL_SETUP_OPTIONS) {
       addChannelSetupOption(command, option, seenFlags);
     }
@@ -141,7 +271,10 @@ async function addChannelSetupOptions(
       legacyIntDefaultAttributeNames.add(attributeName);
     }
   }
-  return { mode, legacyIntDefaultAttributeNames };
+  return {
+    preserveLegacyDefaults: !selected || !selectedChannel?.setup,
+    dropEmptyLegacyDefaultsForAttributeNames: legacyIntDefaultAttributeNames,
+  };
 }
 
 export async function registerChannelsCli(
@@ -161,7 +294,7 @@ export async function registerChannelsCli(
           ["openclaw channels list", "List configured channels."],
           ["openclaw channels list --all", "Show configured, bundled, and installable channels."],
           ["openclaw channels add", "Open guided channel setup."],
-          ["openclaw channels status --probe", "Run channel status checks and probes."],
+          ["openclaw channels status --probe", "Check channel status and connectivity."],
           [
             "openclaw channels add --channel telegram --token <token>",
             "Add or update a channel account non-interactively.",
@@ -186,7 +319,7 @@ export async function registerChannelsCli(
     .command("status")
     .description("Show channel status (use openclaw status --deep for a full connection check)")
     .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
-    .option("--probe", "Probe channel credentials", false)
+    .option("--probe", "Check channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -207,7 +340,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsCapabilitiesCommand } = await loadChannelsCommands();
+        const { channelsCapabilitiesCommand } = await import("../commands/channels.js");
         await channelsCapabilitiesCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },
           defaultRuntime,
@@ -230,7 +363,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (entries, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsResolveCommand } = await loadChannelsCommands();
+        const { channelsResolveCommand } = await import("../commands/channels.js");
         await channelsResolveCommand(
           {
             agent: resolveStringOption(command, "agent"),
@@ -253,7 +386,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsLogsCommand } = await loadChannelsCommands();
+        const { channelsLogsCommand } = await import("../commands/channels.js");
         await channelsLogsCommand(opts, defaultRuntime);
       });
     });
@@ -324,8 +457,8 @@ export async function registerChannelsCli(
     .option("--name <name>", "Display name for this account");
 
   let channelSetupRegistration: ChannelSetupOptionRegistration = {
-    mode: "none",
-    legacyIntDefaultAttributeNames: new Set(),
+    preserveLegacyDefaults: true,
+    dropEmptyLegacyDefaultsForAttributeNames: new Set(),
   };
   const selectedChannelId = await resolveChannelsAddChannelFromArgv(argv);
   if (
@@ -340,7 +473,7 @@ export async function registerChannelsCli(
 
   addCommand.action(async (channelArg: string | undefined, opts, command: Command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const { channelsAddCommand } = await loadChannelsCommands();
+      const { channelsAddCommand } = await import("../commands/channels.js");
       const hasFlags = hasExplicitOptions(
         command,
         command.options
@@ -349,18 +482,7 @@ export async function registerChannelsCli(
       );
       await channelsAddCommand(
         {
-          ...resolveChannelsAddOptions(
-            channelArg,
-            opts,
-            command,
-            channelSetupRegistration.mode === "modern"
-              ? undefined
-              : {
-                  preserveLegacyDefaults: true,
-                  dropEmptyLegacyDefaultsForAttributeNames:
-                    channelSetupRegistration.legacyIntDefaultAttributeNames,
-                },
-          ),
+          ...resolveChannelsAddOptions(channelArg, opts, command, channelSetupRegistration),
           agent: resolveStringOption(command, "agent"),
         },
         defaultRuntime,
@@ -380,7 +502,7 @@ export async function registerChannelsCli(
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsRemoveCommand } = await loadChannelsCommands();
+        const { channelsRemoveCommand } = await import("../commands/channels.js");
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },

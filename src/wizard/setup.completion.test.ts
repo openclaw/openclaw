@@ -1,13 +1,15 @@
 // Setup completion tests cover final onboarding instructions and paths.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   formatCompletionReloadCommand,
   resolveCompletionCachePath,
   resolveCompletionProfilePath,
 } from "../cli/completion-runtime.js";
+import * as completionRuntime from "../cli/completion-runtime.js";
+import * as doctorCompletion from "../commands/doctor-completion.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 
@@ -20,20 +22,26 @@ function createPrompter(confirmValue = false) {
   };
 }
 
+beforeEach(() => vi.restoreAllMocks());
+
 function createDeps(shell: "zsh" | "bash" | "fish" | "powershell" = "zsh") {
-  const deps: NonNullable<Parameters<typeof setupWizardShellCompletion>[0]["deps"]> = {
-    resolveCliName: () => "openclaw",
-    checkShellCompletionStatus: vi.fn(async (_binName: string) => ({
-      shell,
-      profileInstalled: false,
-      cacheExists: false,
-      cachePath: `/tmp/openclaw.${shell === "powershell" ? "ps1" : shell}`,
-      usesSlowPattern: false,
-    })),
-    ensureCompletionCacheExists: vi.fn(async (_binName: string) => true),
-    installCompletion: vi.fn(async () => {}),
+  return {
+    checkShellCompletionStatus: vi
+      .spyOn(doctorCompletion, "checkShellCompletionStatus")
+      .mockResolvedValue({
+        shell,
+        profileInstalled: false,
+        cacheExists: false,
+        cachePath: `/tmp/openclaw.${shell === "powershell" ? "ps1" : shell}`,
+        usesSlowPattern: false,
+      }),
+    ensureCompletionCacheExists: vi
+      .spyOn(doctorCompletion, "ensureCompletionCacheExists")
+      .mockResolvedValue(true),
+    installCompletion: vi
+      .spyOn(completionRuntime, "installCompletion")
+      .mockResolvedValue(undefined),
   };
-  return deps;
 }
 
 function wrappedFsError(code: string, profilePath: string): Error {
@@ -49,7 +57,7 @@ describe("setupWizardShellCompletion", () => {
     const prompter = createPrompter();
     const deps = createDeps();
 
-    await setupWizardShellCompletion({ flow: "advanced", prompter, deps });
+    await setupWizardShellCompletion({ flow: "advanced", prompter });
 
     expect(prompter.confirm).toHaveBeenCalledTimes(1);
     expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();
@@ -77,7 +85,7 @@ describe("setupWizardShellCompletion", () => {
         vi.mocked(deps.installCompletion!).mockRejectedValue(wrappedFsError("EACCES", failedPath));
 
         await expect(
-          setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+          setupWizardShellCompletion({ flow: "quickstart", prompter }),
         ).resolves.not.toThrow();
 
         expect(prompter.note).toHaveBeenCalledTimes(1);
@@ -100,9 +108,9 @@ describe("setupWizardShellCompletion", () => {
       wrappedFsError("ENOSPC", "/tmp/full/.zshrc"),
     );
 
-    await expect(
-      setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
-    ).rejects.toThrow("ENOSPC");
+    await expect(setupWizardShellCompletion({ flow: "quickstart", prompter })).rejects.toThrow(
+      "ENOSPC",
+    );
   });
 
   it.each([
@@ -130,7 +138,7 @@ describe("setupWizardShellCompletion", () => {
       });
       vi.mocked(deps.ensureCompletionCacheExists!).mockResolvedValue(false);
 
-      await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
+      await setupWizardShellCompletion({ flow: "quickstart", prompter });
 
       expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw", {
         generationMode: "full",
@@ -147,9 +155,9 @@ describe("setupWizardShellCompletion", () => {
   it("localizes advanced prompts and install notes", async () => {
     await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       const prompter = createPrompter(true);
-      const deps = createDeps();
+      createDeps();
 
-      await setupWizardShellCompletion({ flow: "advanced", prompter, deps });
+      await setupWizardShellCompletion({ flow: "advanced", prompter });
 
       expect(prompter.confirm).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -186,10 +194,10 @@ describe("setupWizardShellCompletion", () => {
           await fs.writeFile(cachePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf8");
           const prompter = createPrompter();
 
+          vi.spyOn(doctorCompletion, "ensureCompletionCacheExists").mockResolvedValue(true);
           await setupWizardShellCompletion({
             flow: "quickstart",
             prompter,
-            deps: { ensureCompletionCacheExists: async () => true },
           });
 
           const profilePath = path.join(profileRoot, testCase.profileName);
@@ -209,7 +217,7 @@ describe("setupWizardShellCompletion", () => {
       const prompter = createPrompter();
       const deps = createDeps("powershell");
 
-      await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
+      await setupWizardShellCompletion({ flow: "quickstart", prompter });
 
       expect(deps.installCompletion).toHaveBeenCalledWith("powershell", true, "openclaw");
       expect(prompter.note).toHaveBeenCalledWith(

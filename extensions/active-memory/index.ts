@@ -7,6 +7,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   applyCliRuntimeRecallTimeoutDefault,
   hasDeprecatedModelFallbackPolicy,
@@ -17,7 +18,6 @@ import { resolveRecallEscalationDecision } from "./escalation.js";
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import { forgetActiveRecallRun, toSingleLineErrorMessage } from "./recall-state.js";
-import { maybeResolveActiveRecall } from "./recall.js";
 import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
@@ -36,11 +36,16 @@ import {
 } from "./session-policy.js";
 import {
   persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
+  prepareActiveMemorySession,
   resolveStatusUpdateAgentId,
+  type ActiveMemorySessionSnapshot,
 } from "./session.js";
 import { createActiveMemoryHookDeadline } from "./transcript.js";
-import { forgetTriggerRecallRun, resolveTriggerRecall } from "./trigger-recall.js";
+import {
+  forgetTriggerRecallRun,
+  resolveTriggerRecall,
+  type TriggerRecallSource,
+} from "./trigger-recall.js";
 import {
   ACTIVE_MEMORY_STATUS_PREFIX,
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
@@ -56,7 +61,20 @@ export default definePluginEntry({
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
     const readCurrentConfig = () => readActiveMemoryConfig(api);
-    let config = normalizePluginConfig(api.pluginConfig, readCurrentConfig());
+    const resolveSelectedRecallToolNames = (cfg: OpenClawConfig) => {
+      const selectedPluginId = normalizePluginsConfig(cfg.plugins).slots.memory;
+      const registration = getMemoryCapabilityRegistration();
+      if (!registration || registration.pluginId !== selectedPluginId) {
+        return undefined;
+      }
+      return registration.capability.recallToolNames;
+    };
+    const initialConfig = readCurrentConfig();
+    let config = normalizePluginConfig(
+      api.pluginConfig,
+      initialConfig,
+      resolveSelectedRecallToolNames(initialConfig),
+    );
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
         // modelFallback is a last model-selection candidate, never runtime failover.
@@ -71,9 +89,7 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        () => api.runtime.config.current() as OpenClawConfig,
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -81,7 +97,11 @@ export default definePluginEntry({
       const effectivePluginConfig = !isActiveMemoryPluginEnabled(liveConfig)
         ? { enabled: false }
         : (livePluginConfig ?? {});
-      config = normalizePluginConfig(effectivePluginConfig, liveConfig);
+      config = normalizePluginConfig(
+        effectivePluginConfig,
+        liveConfig,
+        resolveSelectedRecallToolNames(liveConfig),
+      );
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
       }
@@ -138,7 +158,7 @@ export default definePluginEntry({
             return { text: `Active Memory: ${enabled ? "on" : "off"} globally.` };
           }
         }
-        const sessionKey = resolveCommandSessionKey({
+        const sessionKey = await resolveCommandSessionKey({
           api,
           config,
           sessionKey: ctx.sessionKey,
@@ -151,16 +171,20 @@ export default definePluginEntry({
         }
         const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
         const liveConfig = readCurrentConfig();
-        const commandRecallEnabled =
-          isEnabledForAgent(config, commandAgentId) ||
-          (config.enabled && resolveRememberAcrossConversations(liveConfig, commandAgentId));
-        if (!commandRecallEnabled) {
+        const triggerRecallConfigured = isEnabledForAgent(config, commandAgentId);
+        const rememberEnabled =
+          config.enabled && resolveRememberAcrossConversations(liveConfig, commandAgentId);
+        if (!triggerRecallConfigured && !rememberEnabled) {
           return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
           return {
-            text: `Active Memory: ${disabled ? "off" : "on"} for this session.`,
+            text: [
+              `Active Memory: ${disabled ? "off" : "on"} for this session.`,
+              `Trigger recall configuration: ${triggerRecallConfigured ? "on" : "off"} for agent ${commandAgentId}.`,
+              `Remember across conversations setting: ${rememberEnabled ? "on" : "off"}.`,
+            ].join("\n"),
           };
         }
         if (enabled !== undefined) {
@@ -208,18 +232,19 @@ export default definePluginEntry({
                 modelId: ctx.modelId,
               })
             : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
-        const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
-          provider: timeoutModelRef.provider,
-          model: timeoutModelRef.model,
-          config: liveConfig,
-          ...(timeoutAgentId
-            ? {
-                agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
-              }
-            : {}),
-        });
+        const cliDispatchEligibility =
+          await api.runtime.agent.resolveCliBackendDispatchEligibilityAsync({
+            provider: timeoutModelRef.provider,
+            model: timeoutModelRef.model,
+            config: liveConfig,
+            ...(timeoutAgentId
+              ? {
+                  agentId: timeoutAgentId,
+                  agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
+                  workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
+                }
+              : {}),
+          });
         const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
           config,
           cliDispatchEligibility !== undefined,
@@ -247,24 +272,37 @@ export default definePluginEntry({
         const handlerPromise = (async () => {
           try {
             const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-            const resolvedSessionKey =
-              ctx.sessionKey?.trim() ||
-              (resolvedAgentId
-                ? resolveCanonicalSessionKeyFromSessionId({
-                    api,
-                    agentId: resolvedAgentId,
-                    sessionId: ctx.sessionId,
-                  })
-                : undefined);
+            const storePath = api.runtime.agent.session.resolveStorePath(
+              liveConfig.session?.store,
+              {
+                agentId: resolvedAgentId || undefined,
+              },
+            );
+            let preparedSession: ActiveMemorySessionSnapshot | undefined;
+            let resolvedSessionKey = ctx.sessionKey?.trim() || undefined;
+            if (!resolvedSessionKey && resolvedAgentId) {
+              preparedSession = await prepareActiveMemorySession({
+                api,
+                agentId: resolvedAgentId,
+                sessionId: ctx.sessionId,
+                storePath,
+              });
+              resolvedSessionKey = preparedSession.sessionKey;
+            }
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
-            const skipRecall = async (reason: string) => {
-              logRecallSkipped(reason);
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
+            // Publication is the final boundary: recall that settled after its deadline,
+            // tool authority, hook lifetime, or memory audience lapsed is never injected.
+            const publishPrependContext = (parts: Array<string | undefined>) => {
+              const prependContext = parts.filter(Boolean).join("\n");
+              if (!prependContext) {
+                return undefined;
+              }
+              deadlineController.signal.throwIfAborted();
+              toolAuthority.assertActive();
+              ctx.hookInvocation?.assertActive();
+              ctx.assertMemoryAudienceCurrent?.();
+              return { prependContext };
             };
             if (authorityAllowedRecallTools.length === 0) {
               await persistPluginStatusLines({
@@ -277,16 +315,26 @@ export default definePluginEntry({
               toolAuthority.assertActive();
               return undefined;
             }
-            if (
-              shouldSkipActiveMemoryForHarnessSession({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              })
-            ) {
+            preparedSession ??= resolvedSessionKey
+              ? await prepareActiveMemorySession({
+                  api,
+                  agentId: effectiveAgentId,
+                  sessionKey: resolvedSessionKey,
+                  storePath,
+                })
+              : { entry: undefined, readFailed: false };
+            if (shouldSkipActiveMemoryForHarnessSession(preparedSession)) {
               logRecallSkipped("harness-session");
               return undefined;
             }
+            // Status describes this turn. Clear it after the side-effect-free harness
+            // guard, before preflight can fail or time out without a replacement.
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            toolAuthority.assertActive();
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -294,7 +342,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
-              await skipRecall("session-disabled");
+              logRecallSkipped("session-disabled");
               return undefined;
             }
             const sessionContext = {
@@ -302,7 +350,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
-              await skipRecall("session-ineligible");
+              logRecallSkipped("session-ineligible");
               return undefined;
             }
             const destinationContext = {
@@ -346,11 +394,43 @@ export default definePluginEntry({
               hasStrongHit: false,
               injectedCount: 0,
             };
+            // Tool policy gates lane one on the slot owner's own recall tools: every recall
+            // tool a native provider declares, or a legacy owner's deterministic recall tool.
+            const nativeRecallToolNames = memoryCapability?.providerRuntime
+              ? (memoryCapability.recallToolNames ?? [])
+              : undefined;
+            const laneOneSource: TriggerRecallSource | undefined = nativeRecallToolNames
+              ? resolvedSessionKey &&
+                nativeRecallToolNames.length > 0 &&
+                nativeRecallToolNames.every((toolName) => toolAuthority.allows(toolName))
+                ? {
+                    kind: "native",
+                    context: {
+                      authority: {
+                        kind: "session",
+                        sessionKey: resolvedSessionKey,
+                        sessionId: ctx.sessionId,
+                        sandboxed: ctx.sandboxed === true,
+                        audience: ctx.memoryAudience,
+                      },
+                      signal: deadlineController.signal,
+                      assertCurrent() {
+                        deadlineController.signal.throwIfAborted();
+                        toolAuthority.assertActive();
+                        ctx.hookInvocation?.assertActive();
+                        ctx.assertMemoryAudienceCurrent?.();
+                      },
+                    },
+                  }
+                : undefined
+              : deterministicRecallToolName &&
+                  authorityAllowedRecallTools.includes(deterministicRecallToolName)
+                ? { kind: "legacy" }
+                : undefined;
             if (
               activeMemoryConfigured &&
               effectiveAgentId &&
-              deterministicRecallToolName &&
-              authorityAllowedRecallTools.includes(deterministicRecallToolName) &&
+              laneOneSource &&
               privateDestination &&
               chatIdAllowed
             ) {
@@ -363,6 +443,7 @@ export default definePluginEntry({
                 laneOne = await resolveTriggerRecall({
                   cfg: liveConfig,
                   agentId: effectiveAgentId,
+                  source: laneOneSource,
                   query: searchQuery,
                   message: currentUserMessage,
                   activeProjectKeys: ctx.activeProjectKeys,
@@ -370,7 +451,9 @@ export default definePluginEntry({
                   runId: ctx.runId,
                   requestKey,
                   authorityFingerprint: toolAuthority.fingerprint,
+                  debug: (message) => api.logger.debug?.(message),
                 }).catch((error: unknown) => {
+                  rethrowIncognitoSessionError(error);
                   api.logger.debug?.(
                     `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
                   );
@@ -386,6 +469,12 @@ export default definePluginEntry({
                 api.logger.debug?.(
                   "active-memory: lane-1 trigger recall skipped: preflight budget exhausted",
                 );
+              }
+            } else if (invocationConfig.enabled && effectiveAgentId && !activeMemoryConfigured) {
+              const line = `active-memory: lane-1 skipped reason=agent-not-configured agent=${effectiveAgentId}`;
+              api.logger.debug?.(line);
+              if (invocationConfig.logging) {
+                api.logger.info?.(line);
               }
             }
             const laneOneContext = laneOne.context;
@@ -417,12 +506,12 @@ export default definePluginEntry({
             const productRecallAllowed = Boolean(productRecallToolName);
             if (productRecallEligible && !productRecallAllowed) {
               api.logger.warn?.(
-                `active-memory: ${deterministicRecallToolName ?? "the provider's deterministic recall tool"} is unavailable; skipping Remember across conversations private transcript recall`,
+                `active-memory: ${deterministicRecallToolName ?? "the provider's direct recall tool"} is unavailable; skipping Remember across conversations private transcript recall`,
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
-              await skipRecall("destination-not-allowed");
-              return laneOneContext ? { prependContext: laneOneContext } : undefined;
+              logRecallSkipped("destination-not-allowed");
+              return publishPrependContext([laneOneContext]);
             }
             const escalationDecision = resolveRecallEscalationDecision({
               mode: invocationConfig.mode,
@@ -436,8 +525,7 @@ export default definePluginEntry({
                 escalationDecision === "no-recall-intent"
                   ? buildRecallOutcomePrefix("skipped-no-recall-intent")
                   : undefined;
-              const prependContext = [laneOneContext, outcomeContext].filter(Boolean).join("\n");
-              return prependContext ? { prependContext } : undefined;
+              return publishPrependContext([laneOneContext, outcomeContext]);
             }
             const conversationRecall: ConversationRecallContext | undefined =
               productRecallAllowed && resolvedSessionKey
@@ -459,6 +547,8 @@ export default definePluginEntry({
             // Start recall with its full configured budget. The preceding
             // session/config checks must not consume abort-settlement time.
             armHookDeadline(liveRecallTimeoutMs, "recall");
+            const { maybeResolveActiveRecall } = await import("./recall.js");
+            deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             const result = await maybeResolveActiveRecall({
               api,
@@ -467,6 +557,8 @@ export default definePluginEntry({
               agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
               sessionId: ctx.sessionId,
+              sessionEntry: preparedSession.entry,
+              storePath,
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,
@@ -480,17 +572,17 @@ export default definePluginEntry({
               authorityFingerprint: toolAuthority.fingerprint,
               memorySlot: memorySlot ?? undefined,
               activeProjectKeys: ctx.activeProjectKeys,
+              memoryAudience: ctx.memoryAudience,
+              assertMemoryAudienceCurrent: ctx.assertMemoryAudienceCurrent,
             });
-            deadlineController.signal.throwIfAborted();
-            toolAuthority.assertActive();
             const recallContext = result.summary
               ? buildPromptPrefix(result.summary)
               : result.status === "unavailable"
                 ? buildRecallOutcomePrefix(result.status)
                 : undefined;
-            const prependContext = [laneOneContext, recallContext].filter(Boolean).join("\n");
-            return prependContext ? { prependContext } : undefined;
+            return publishPrependContext([laneOneContext, recallContext]);
           } catch (error) {
+            rethrowIncognitoSessionError(error);
             if (deadlineController.signal.aborted) {
               return undefined;
             }

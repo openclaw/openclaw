@@ -4,7 +4,9 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
   ManagedRunStdin,
@@ -12,6 +14,8 @@ import type {
   TerminationReason,
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
@@ -63,6 +67,12 @@ export interface ProcessSession {
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
+  notifyFromConversationTurn?: boolean;
+  notifySessionTarget?: SessionEventTarget;
+  assertExitNotificationAcceptanceCurrent?: () => void;
+  persistExitNotification?: () => Promise<void>;
+  exitNotificationPersistence?: Promise<void>;
+  clearExitNotification?: () => Promise<void>;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -100,6 +110,8 @@ export interface ProcessSession {
   exitReason?: TerminationReason;
   /** Explicit process/task stop intent; the terminal reason still owns confirmation. */
   cancellationRequested?: boolean;
+  requestCancelled?: boolean;
+  cleanupUncertain?: boolean;
   /** Cleanup failure prevents an intentional stop from being treated as successful observation. */
   finalizationFailed?: boolean;
   /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
@@ -119,6 +131,7 @@ const finishedSessions = new Map<string, ProcessSession & { endedAt: number; exp
 // Display uses start chronology; retained records are evicted in completion order.
 let processSessionStartOrders = new WeakMap<object, number>();
 let nextProcessSessionStartOrder = 0;
+const processInstanceIds = new WeakMap<ProcessSession, string>();
 // Promotion stays live when process removal clears its presentation state.
 const activeExecSessions = new Map<
   string,
@@ -127,6 +140,45 @@ const activeExecSessions = new Map<
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
+type ProcessChange = { sessionKey: string; agentId?: string };
+const changeListeners = new Set<(target: ProcessChange) => void>();
+const pendingChanges = new Map<string, ProcessChange>();
+let changeTimer: NodeJS.Timeout | undefined;
+
+/** Process observation is independent of the creating turn's lifetime. */
+export function onBackgroundProcessesChanged(listener: (target: ProcessChange) => void) {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+    if (changeListeners.size === 0) {
+      clearTimeout(changeTimer);
+      changeTimer = undefined;
+      pendingChanges.clear();
+    }
+  };
+}
+
+function queueProcessChange(session: ProcessSession) {
+  const sessionKey = session.scopeKey ?? session.sessionKey;
+  if (!sessionKey || changeListeners.size === 0) {
+    return;
+  }
+  const target = { sessionKey, agentId: session.agentId };
+  pendingChanges.set(JSON.stringify([sessionKey, session.agentId]), target);
+  // Bound chatty output to the former five-second polling cadence. Later writes
+  // never postpone the signal, and no command text or output crosses this bus.
+  changeTimer ??= runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      changeTimer = undefined;
+      const changes = [...pendingChanges.values()];
+      pendingChanges.clear();
+      for (const change of changes) {
+        notifyListeners(changeListeners, change);
+      }
+    }, 5_000),
+  );
+  changeTimer.unref?.();
+}
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
 export function isProcessSessionIdTaken(id: string): boolean {
@@ -136,8 +188,12 @@ export function isProcessSessionIdTaken(id: string): boolean {
 /** Adds a running session; retention starts only after background completion. */
 export function addSession(session: ProcessSession) {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
+  processInstanceIds.set(session, randomUUID());
   runningSessions.set(session.id, session);
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -149,6 +205,15 @@ export function compareProcessSessionStartOrder(
     right.startedAt - left.startedAt ||
     processSessionStartOrders.get(right)! - processSessionStartOrders.get(left)!
   );
+}
+
+/** Stable while this exact process is retained, including after its friendly ID is reused. */
+export function processSessionInstanceId(session: ProcessSession): string {
+  const id = processInstanceIds.get(session);
+  if (!id) {
+    throw new Error("Process is not registered");
+  }
+  return id;
 }
 
 /** Returns a running session by id. */
@@ -168,12 +233,17 @@ function deleteFinishedSession(id: string): boolean {
   }
   finishedSessions.delete(id);
   finishedSessionOutputChars -= session.aggregated.length;
+  queueProcessChange(session);
   return true;
 }
 
 /** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
+  const session = runningSessions.get(id);
   runningSessions.delete(id);
+  if (session && (session.backgrounded || activeExecSessions.get(id)?.promoted)) {
+    queueProcessChange(session);
+  }
   deleteFinishedSession(id);
   scheduleSweeper();
 }
@@ -208,7 +278,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
   );
-  session.pendingOutput.push({ stream, text: chunk });
+  // Producer chunks may themselves be slices of a much larger decoded callback.
+  const ownedChunk = copyOutputText(chunk);
+  session.pendingOutput.push({ stream, text: ownedChunk });
   let pendingChars = streamChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
@@ -221,11 +293,14 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = tail(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + ownedChunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
 }
 
 /** Drains pending chunks in producer callback order for a process poll. */
@@ -304,6 +379,9 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
   if (!session.finalizing) {
     settleExecSessionFinalization(session);
   }
@@ -319,13 +397,28 @@ export function settleExecSessionFinalization(session: ProcessSession): void {
   }
 }
 
+/** Publish accepted Stop while cleanup still owns the terminal transition. */
+export function markCancellationRequested(session: ProcessSession) {
+  if (session.cancellationRequested) {
+    return;
+  }
+  session.cancellationRequested = true;
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
+}
+
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
+  if (!session.backgrounded) {
+    queueProcessChange(session);
+  }
   session.backgrounded = true;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     active.promoted = true;
   }
+  session.exitNotificationPersistence ??= session.persistExitNotification?.();
 }
 
 /** Retains the precise completion-event removal handle on its process owner. */
@@ -333,7 +426,7 @@ export function recordNotifyOnExitRemoval(
   session: ProcessSession,
   remove: NotifyOnExitRemoval,
 ): void {
-  if (session.terminalPollObserved) {
+  if (session.terminalPollObserved || session.requestCancelled) {
     remove();
     return;
   }
@@ -346,6 +439,15 @@ export function acknowledgeNotifyOnExit(record: {
   terminalPollObserved?: boolean;
 }): void {
   record.terminalPollObserved = true;
+  removeNotifyOnExit(record);
+}
+
+/** Retire notification custody without claiming that retained output was observed. */
+export function removeNotifyOnExit(record: {
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
+  clearExitNotification?: () => Promise<void>;
+}): void {
+  void record.clearExitNotification?.();
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
@@ -378,6 +480,24 @@ export async function waitForExecScope(scopeKey: string): Promise<void> {
   }
 }
 
+/** Cancellation captures exact records, including startup, hidden work and queued completions. */
+export function listExecSessionsForCancellation(): ProcessSession[] {
+  return [
+    ...new Set(
+      [...activeExecSessions.values()]
+        .map(({ session }) => session)
+        .concat([...finishedSessions.values()]),
+    ),
+  ];
+}
+
+export async function waitForExecSession(session: ProcessSession): Promise<void> {
+  const active = activeExecSessions.get(session.id);
+  if (active?.session === session) {
+    await (active.settled ??= createDeferredCore()).promise;
+  }
+}
+
 function moveToFinished(session: ProcessSession) {
   runningSessions.delete(session.id);
 
@@ -387,7 +507,7 @@ function moveToFinished(session: ProcessSession) {
   if (stdin) {
     if (typeof stdin.destroy === "function") {
       stdin.destroy();
-    } else if (typeof stdin.end === "function") {
+    } else {
       stdin.end();
     }
     delete session.stdin;
@@ -418,12 +538,17 @@ function moveToFinished(session: ProcessSession) {
   scheduleSweeper();
 }
 
+function copyOutputText(text: string): string {
+  // Own code units without replacing lone surrogates as UTF-8 would.
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
 /** Returns the last `max` characters of text without adding ellipses. */
 export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return sliceUtf16Safe(text, text.length - max);
+  return copyOutputText(sliceUtf16Safe(text, text.length - max));
 }
 
 function capPendingStream(
@@ -450,7 +575,7 @@ function capPendingStream(
       pendingChars -= chunk.text.length;
       continue;
     }
-    const trimmed = sliceUtf16Safe(chunk.text, overflow);
+    const trimmed = tail(chunk.text, chunk.text.length - overflow);
     const removedChars = chunk.text.length - trimmed.length;
     pendingChars -= removedChars;
     chunk.text = trimmed;
@@ -474,6 +599,9 @@ export function listFinishedSessions() {
 
 /** Test-only reset for in-memory registry state and retention timers. */
 function resetProcessRegistryForTests() {
+  clearTimeout(changeTimer);
+  changeTimer = undefined;
+  pendingChanges.clear();
   runningSessions.clear();
   finishedSessions.clear();
   processSessionStartOrders = new WeakMap();

@@ -6,42 +6,25 @@ import type * as Sdk from "@github/copilot-sdk";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import copilotPluginPackage from "../package.json" with { type: "json" };
 
-function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "npm-runtime", "copilot");
-}
-
 const COPILOT_SDK_SPEC = `@github/copilot-sdk@${copilotPluginPackage.dependencies["@github/copilot-sdk"]}`;
 
 let cached: Promise<typeof Sdk> | undefined;
 
-interface LoadCopilotSdkOptions {
-  readonly fallbackDir?: string;
-  readonly primaryImport?: () => Promise<typeof Sdk>;
-  readonly fallbackImport?: (absolutePath: string) => Promise<typeof Sdk>;
-  readonly cache?: boolean;
-}
-
-export async function loadCopilotSdk(options: LoadCopilotSdkOptions = {}): Promise<typeof Sdk> {
-  const useCache = options.cache !== false;
-  if (useCache && cached) {
-    return cached;
-  }
-
-  const promise = doLoad(options);
-  if (useCache) {
-    cached = promise.catch((err: unknown) => {
+export async function loadCopilotSdk(
+  options: { primaryImport?: () => Promise<typeof Sdk> } = {},
+): Promise<typeof Sdk> {
+  if (!cached) {
+    cached = doLoad(options.primaryImport).catch((err: unknown) => {
       cached = undefined;
       throw err;
     });
-    return cached;
   }
-  return promise;
+  return cached;
 }
 
-async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {
-  const fallbackDir = options.fallbackDir ?? resolveCopilotSdkFallbackDir();
-  const primaryImport = options.primaryImport ?? (async () => await import("@github/copilot-sdk"));
-
+async function doLoad(
+  primaryImport: () => Promise<typeof Sdk> = () => import("@github/copilot-sdk"),
+): Promise<typeof Sdk> {
   let primaryErr: unknown;
   try {
     return await primaryImport();
@@ -49,24 +32,17 @@ async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {
     primaryErr = err;
   }
 
+  const fallbackDir = path.join(resolveStateDir(), "npm-runtime", "copilot");
   const fallbackPath = path.join(fallbackDir, "node_modules", "@github", "copilot-sdk");
   if (!existsSync(fallbackPath)) {
     throw createMissingSdkError(primaryErr, undefined, fallbackPath);
   }
 
-  const fallbackImport =
-    options.fallbackImport ??
-    (async () => {
-      // Node ESM rejects directory imports (ERR_UNSUPPORTED_DIR_IMPORT), so
-      // resolve the package's real entry through Node's module resolver
-      // anchored at fallbackDir before importing.
-      const requireFromFallback = createRequire(path.join(fallbackDir, "package.json"));
-      const entry = requireFromFallback.resolve("@github/copilot-sdk");
-      return (await import(pathToFileURL(entry).href)) as typeof Sdk;
-    });
-
   try {
-    return await fallbackImport(fallbackPath);
+    // Node ESM rejects directory imports, so resolve the installed package entry.
+    const requireFromFallback = createRequire(path.join(fallbackDir, "package.json"));
+    const entry = requireFromFallback.resolve("@github/copilot-sdk");
+    return (await import(pathToFileURL(entry).href)) as typeof Sdk;
   } catch (fallbackErr) {
     throw createMissingSdkError(primaryErr, fallbackErr, fallbackPath);
   }
@@ -90,7 +66,7 @@ function createMissingSdkError(
     "",
     `  npm install ${COPILOT_SDK_SPEC}`,
     "",
-    `The legacy fallback location is still probed at\n  ${fallbackPath}`,
+    `The legacy fallback location is still checked at\n  ${fallbackPath}`,
     "",
     "Primary resolution error:",
     `  ${summarizeError(primaryErr)}`,

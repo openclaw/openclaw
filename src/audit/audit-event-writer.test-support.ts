@@ -23,7 +23,7 @@ export function messageEvent(
     | "message.outbound.queued"
     | "message.outbound.platform-started"
     | "message.outbound.finished",
-): TrustedMessageAuditEvent {
+): Extract<TrustedMessageAuditEvent, { direction: "outbound" }> {
   const progress = action !== "message.outbound.finished";
   return {
     sourceId: `message-source:${action}`,
@@ -45,7 +45,7 @@ export function messageEvent(
     channel: "qa-channel",
     conversationKind: "direct",
     targetId: "raw-target",
-  } as TrustedMessageAuditEvent;
+  } as Extract<TrustedMessageAuditEvent, { direction: "outbound" }>;
 }
 
 export function decisionReceipt(): DecisionReceiptV1 {

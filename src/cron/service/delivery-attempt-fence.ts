@@ -22,19 +22,14 @@ export function createCronCompletionDeliveryFence(params: {
   const { state, handle, activeJobMarker, signal } = params;
   const context = captureOpenClawStateWorkerContext();
   const generation = state.lifecycleGeneration;
-  const reservation = state.queuedRunReservationsByJobId.get(handle.jobId);
   const defaultAgentId = () => state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
   const admittedDefaultAgentId = defaultAgentId();
-  let preparedAgentFacts: { deletionBlocked: boolean } | undefined;
   const allowMissingJob = () =>
     activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker);
   const assertCurrent = () => {
     context.admission.assertCurrent();
     signal.throwIfAborted();
-    if (
-      preparedAgentFacts &&
-      state.deps.isAgentAvailable?.(handle.agentId, undefined, preparedAgentFacts) === false
-    ) {
+    if (state.deps.isAgentAvailable?.(handle.agentId, { deletionBlocked: false }) === false) {
       throw new CronRunReceiptRevisionError(
         handle.receiptId,
         describeUnavailableCronAgent(handle.agentId),
@@ -43,9 +38,6 @@ export function createCronCompletionDeliveryFence(params: {
     }
     if (
       state.lifecycleGeneration !== generation ||
-      !reservation ||
-      state.queuedRunReservationsByJobId.get(handle.jobId) !== reservation ||
-      reservation.runReceipt.receiptId !== handle.receiptId ||
       !isCronActiveJobMarkerCurrent(activeJobMarker) ||
       activeJobMarker?.cancellation?.kind === "requested" ||
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||
@@ -65,38 +57,13 @@ export function createCronCompletionDeliveryFence(params: {
           type: "cron.markDeliveryStarted",
           input: { storeKey: handle.storeKey, handle: { ...handle } },
           assertCurrent,
-          prepare(facts) {
-            preparedAgentFacts = facts;
-            const missingJobAllowed = allowMissingJob();
-            const assertPreparedCurrent = () => {
-              assertCurrent();
-              if (
-                facts.deletionBlocked ||
-                state.deps.isAgentAvailable?.(handle.agentId, undefined, facts) === false
-              ) {
-                throw new CronRunReceiptRevisionError(
-                  handle.receiptId,
-                  describeUnavailableCronAgent(handle.agentId),
-                  "owner-unavailable",
-                );
-              }
-              if (allowMissingJob() !== missingJobAllowed) {
-                throw new CronRunReceiptRevisionError(handle.receiptId);
-              }
-            };
-            assertPreparedCurrent();
-            return {
-              value: { allowMissingJob: missingJobAllowed, defaultAgentId: admittedDefaultAgentId },
-              assertCurrent: assertPreparedCurrent,
-            };
-          },
+          snapshot: {},
           publish() {
             committed = true;
           },
         });
       } catch (error) {
-        // A lost ordinary reply is harmless only when the matching native commit
-        // already published; rollback and unknown outcomes never admit a send.
+        // A lost reply does not authorize delivery; the caller may inspect the recorded outcome.
         if (!committed) {
           throw error;
         }

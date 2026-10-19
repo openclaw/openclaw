@@ -1,12 +1,24 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import { scopePreparedModelRuntimeLease } from "../agents/prepared-model-runtime-generation-scope.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
+import {
+  reloadFailure,
+  firstReloaded,
+  observeSettlement,
+} from "./server-plugin-reload.fixture-tools.test-support.js";
+import {
+  expectSiblingUnchanged,
+  observeRetainedWork,
+  type RecoveryFixtureFactory,
+} from "./server-plugin-reload.recovery.test-support.js";
 
 type RecoveryFixture = Awaited<ReturnType<RecoveryFixtureFactory>>;
 
@@ -28,27 +40,19 @@ async function readResource(fixture: RecoveryFixture) {
 }
 
 function resourceConfig(mode: string): OpenClawConfig {
-  return {
-    plugins: {
-      allow: ["first", "sibling"],
-      entries: { first: { config: { mode } } },
-    },
-  };
+  return { plugins: { allow: ["first", "sibling"], entries: { first: { config: { mode } } } } };
 }
 
 export async function verifySharedResourceReplacement(
   createFixture: RecoveryFixtureFactory,
-  cleanup: "gateway_stop" | "dispose",
+  cleanup: "gateway_stop" | "runtime-lifecycle",
 ) {
   const events: string[] = [];
   let shared: { closed: boolean; mode: unknown } | undefined;
   const fixture = await createFixture({
     config: resourceConfig("old"),
     abortOnCandidateStart: false,
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
+    registerFirst(api) {
       const mode = api.config.plugins?.entries?.first?.config?.mode;
       assert(typeof mode === "string");
       events.push(`register:${mode}`);
@@ -74,8 +78,14 @@ export async function verifySharedResourceReplacement(
       if (cleanup === "gateway_stop") {
         api.on("gateway_stop", close);
       } else {
-        assert(api.lifecycle.onDispose);
-        api.lifecycle.onDispose(close);
+        api.lifecycle.registerRuntimeLifecycle({
+          id: "shared-resource",
+          cleanup({ reason }) {
+            if (reason === "restart" || reason === "disable") {
+              close();
+            }
+          },
+        });
       }
     },
   });
@@ -89,78 +99,7 @@ export async function verifySharedResourceReplacement(
   expect(fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling")).toBe(
     sibling,
   );
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
-}
-
-export async function verifyFreshRegistrationRecovery(createFixture: RecoveryFixtureFactory) {
-  const events: string[] = [];
-  const signals: AbortSignal[] = [];
-  const fixture = await createFixture({
-    config: resourceConfig("old"),
-    abortOnCandidateStart: false,
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
-      const mode = api.config.plugins?.entries?.first?.config?.mode;
-      assert(typeof mode === "string");
-      const controller = new AbortController();
-      signals.push(controller.signal);
-      events.push(`register:${mode}`);
-      assert(api.lifecycle.onDispose);
-      api.lifecycle.onDispose(() => {
-        controller.abort();
-        events.push(`dispose:${mode}`);
-      });
-      if (mode === "bad") {
-        throw new Error("candidate registration refused");
-      }
-      api.registerService({
-        id: "non-restartable-resource",
-        start() {
-          // Like Visitor Access, this registration cannot restart after its
-          // controller has been aborted; rollback must create a fresh owner.
-          if (controller.signal.aborted) {
-            throw new Error("cannot restart an aborted registration");
-          }
-          events.push(`start:${mode}`);
-        },
-      });
-      api.on("gateway_stop", () => {
-        controller.abort();
-        events.push(`stop:${mode}`);
-      });
-      api.registerGatewayMethod("first.resource", ({ respond }) => {
-        if (controller.signal.aborted) {
-          throw new Error("registration is stopped");
-        }
-        respond(true, { mode });
-      });
-    },
-  });
-  const sibling = fixture.previousRegistry.plugins.find((record) => record.id === "sibling");
-  expect(await readResource(fixture)).toEqual({ mode: "old" });
-
-  await expect(fixture.reload(resourceConfig("bad"))).rejects.toThrow(
-    "candidate registration refused",
-  );
-
-  expect(await readResource(fixture)).toEqual({ mode: "old" });
-  expect(fixture.getConfig()).toEqual(resourceConfig("old"));
-  expect(events.filter((event) => event.startsWith("register:"))).toEqual([
-    "register:old",
-    "register:bad",
-    "register:old",
-  ]);
-  expect(events.indexOf("stop:old")).toBeLessThan(events.indexOf("register:bad"));
-  expect(events.indexOf("dispose:bad")).toBeLessThan(events.lastIndexOf("register:old"));
-  expect(signals.map((signal) => signal.aborted)).toEqual([true, true, false]);
-  expect(fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling")).toBe(
-    sibling,
-  );
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
+  expectSiblingUnchanged(fixture);
 }
 
 export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixtureFactory) {
@@ -170,10 +109,7 @@ export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixt
     beforePublish: async () => {
       throw new Error("candidate publication refused");
     },
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
+    registerFirst(api) {
       const resource = { closed: false, flushed: false };
       resources.push(resource);
       api.registerService({
@@ -203,40 +139,7 @@ export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixt
     { closed: false, flushed: false },
   ]);
   expect(fixture.firstStart).toHaveBeenCalledTimes(2);
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
-}
-
-export async function verifyFailedRecoveryCleanup(createFixture: RecoveryFixtureFactory) {
-  const resources: Array<{ closed: boolean }> = [];
-  const fixture = await createFixture({
-    abortOnCandidateStart: false,
-    candidateStart() {
-      throw new Error("candidate startup refused");
-    },
-    prepareAttached: async () => {
-      if (resources.length === 3) {
-        throw new Error("recovery attachment refused");
-      }
-    },
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
-      const resource = { closed: false };
-      resources.push(resource);
-      assert(api.lifecycle.onDispose);
-      api.lifecycle.onDispose(() => {
-        resource.closed = true;
-      });
-    },
-  });
-
-  await expect(fixture.reload()).rejects.toThrow("recovery attachment refused");
-
-  expect(resources).toEqual([{ closed: true }, { closed: true }, { closed: true }]);
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
+  expectSiblingUnchanged(fixture);
 }
 
 async function verifySelfConsumerReload(
@@ -265,17 +168,8 @@ async function verifySelfConsumerReload(
     },
   });
   const pluginIds = caller === "later replacement target" ? ["first", "sibling"] : ["first"];
-  const record = fixture.previousRegistry.plugins.find((plugin) => plugin.id === pluginIds.at(-1));
-  assert(record);
-  const instance = getPluginInstance(record);
-  assert(instance);
-  const drainEntered = createDeferredCore();
-  const waitForWork = instance.waitForRetainedWork.bind(instance);
-  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-    const draining = waitForWork(...args);
-    drainEntered.resolve();
-    return draining;
-  });
+  const instance = fixture.instance(pluginIds.at(-1));
+  const observation = observeRetainedWork(instance);
   if (caller !== "final checkpoint") {
     consumer = instance.retainConsumer();
   }
@@ -289,14 +183,13 @@ async function verifySelfConsumerReload(
         : fixture.reload(undefined, pluginIds)
     ).catch((error: unknown) => error);
     // Observe the original bounded failure without releasing the work reload depends on.
-    await Promise.race([drainEntered.promise, reloading]);
+    await Promise.race([observation.entered, reloading]);
     await vi.advanceTimersByTimeAsync(70_000);
-    expect(await reloading).toMatchObject({
-      details: { phase: caller === "own invocation" ? "prepare" : "drain", committed: false },
-    });
+    expect(await reloading).toMatchObject(
+      reloadFailure(caller === "own invocation" ? "prepare" : "drain"),
+    );
     expect(prepareConfigEffects).toHaveBeenCalledTimes(caller === "own invocation" ? 0 : 1);
-    expect(fixture.firstStop).not.toHaveBeenCalled();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    fixture.expectServices({ firstStop: 0, siblingStop: 0 });
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(instance.run(() => "still serving")).toBe("still serving");
@@ -304,7 +197,7 @@ async function verifySelfConsumerReload(
     await closing;
     assert(consumer);
     consumer.release();
-    // A refusal on a later instance must unwind reservations already acquired for earlier ones.
+    // A refusal leaves each previous instance available for ordinary work.
     for (const previous of fixture.previousRegistry.plugins) {
       getPluginInstance(previous)?.retainWork()();
     }
@@ -312,7 +205,7 @@ async function verifySelfConsumerReload(
       runtime: { pluginIds },
     });
   } finally {
-    observation.mockRestore();
+    observation.restore();
     cleanup.resolve();
     await closing;
     consumer?.release();
@@ -330,32 +223,15 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
       reserved.resolve();
       return { retire: () => {}, rollback: async () => {} };
     },
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
+    registerFirst(api) {
       const generation = ++registrations;
       api.lifecycle.onDispose?.(() => void disposed.push(generation));
-      api.registerGatewayMethod("first.generation", ({ respond }) => {
-        respond(true, { generation });
-      });
     },
   });
   const old = fixture.previousRegistry;
-  const record = old.plugins.find((entry) => entry.id === "first");
-  assert(record);
-  const instance = getPluginInstance(record);
-  assert(instance);
+  const instance = fixture.instance();
   const consumer = instance.retainConsumer();
-  const consumerDrainEntered = createDeferredCore();
-  const waitForWork = instance.waitForRetainedWork.bind(instance);
-  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-    const draining = waitForWork(...args);
-    if (args[1]) {
-      consumerDrainEntered.resolve();
-    }
-    return draining;
-  });
+  const observation = observeRetainedWork(instance, true);
   const first = retainRuntimePluginWork([old]);
   const second = retainRuntimePluginWork([old]);
   const reloading = fixture.reload();
@@ -364,13 +240,11 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     // A refusal is observed immediately instead of waiting for a fixture timeout.
     await Promise.race([reserved.promise, reloading]);
     expect(fixture.firstStop).not.toHaveBeenCalled();
-    expect(disposed).toEqual([]);
-    expect(() => retainRuntimePluginWork([old])).toThrow("replacement is in progress");
     first();
     expect(instance.run(() => "old run finishes")).toBe("old run finishes");
     expect(fixture.candidates).toHaveLength(0);
     second();
-    await Promise.race([consumerDrainEntered.promise, reloading]);
+    await Promise.race([observation.entered, reloading]);
     expect(disposed).toEqual([]);
     consumer.release();
     const receipt = await reloading;
@@ -388,7 +262,7 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     first();
     second();
     consumer.release();
-    observation.mockRestore();
+    observation.restore();
     await reloading.catch(() => {});
   }
 }
@@ -396,7 +270,7 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
 async function verifyExplicitDrainWait(
   createFixture: RecoveryFixtureFactory,
   kind: "retained work" | "retained consumer" | "active call",
-  outcome: "complete" | "cancel",
+  outcome: "complete" | "cancel" | "time out",
 ) {
   const controller = new AbortController();
   const fixture = await createFixture({
@@ -404,8 +278,7 @@ async function verifyExplicitDrainWait(
     waitForDrain: true,
     drainSignal: controller.signal,
   });
-  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-  assert(instance);
+  const instance = fixture.instance();
   const released = createDeferredCore();
   const consumer = kind === "retained consumer" ? instance.retainConsumer() : undefined;
   const release =
@@ -415,36 +288,35 @@ async function verifyExplicitDrainWait(
         ? () => consumer.release()
         : () => released.resolve();
   const call = kind === "active call" ? instance.run(() => released.promise) : undefined;
-  const drainEntered = createDeferredCore();
-  const waitForWork = instance.waitForRetainedWork.bind(instance);
-  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-    const pending = waitForWork(...args);
-    drainEntered.resolve();
-    return pending;
-  });
-  let settled = false;
+  const observation = observeRetainedWork(instance);
   vi.useFakeTimers();
-  const reloading = fixture
-    .reload()
-    .catch((error: unknown) => error)
-    .then((result) => {
-      settled = true;
-      return result;
-    });
+  const operation = observeSettlement(fixture.reload());
+  const reloading = operation.result;
   try {
-    await Promise.race([drainEntered.promise, reloading]);
-    expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy();
+    await Promise.race([observation.entered, reloading]);
+    expect(fixture.owner.getReloadStatus()).toMatchObject({
+      deadlineAtMs: Date.now() + 600_000,
+      reason: expect.stringContaining("600s drain budget"),
+    });
     await vi.advanceTimersByTimeAsync(70_000);
-    expect(settled).toBe(false);
+    expect(operation.state.settled).toBe(false);
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(instance.disposing).toBe(false);
-    expect(() => instance.retainWork()).toThrow("replacement is in progress");
-    if (outcome === "cancel") {
-      controller.abort(new Error("operator cancelled reload"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(true);
-      expect(await reloading).toMatchObject({ details: { phase: "drain", committed: false } });
+    if (outcome !== "complete") {
+      if (outcome === "cancel") {
+        controller.abort(new Error("operator cancelled reload"));
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        await vi.advanceTimersByTimeAsync(530_000);
+      }
+      expect(operation.state.settled).toBe(true);
+      expect(await reloading).toMatchObject(reloadFailure("drain"));
+      if (outcome === "time out") {
+        expect(await reloading).toMatchObject({
+          cause: { message: expect.stringContaining("admitted work did not settle within 600s") },
+        });
+      }
       expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
       expect(instance.run(() => "still serving")).toBe("still serving");
       expect(instance.disposing).toBe(false);
@@ -454,20 +326,19 @@ async function verifyExplicitDrainWait(
     } else {
       release();
       await call;
-      expect(await reloading).toMatchObject({ runtime: { pluginIds: ["first"] } });
+      expect(await reloading).toMatchObject(firstReloaded);
       expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
       expect(fixture.candidates).toHaveLength(1);
       expect(instance.disposing).toBe(true);
     }
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expectSiblingUnchanged(fixture);
   } finally {
     release();
     released.resolve();
     await call;
     await reloading;
-    observation.mockRestore();
+    observation.restore();
     vi.useRealTimers();
   }
 }
@@ -475,13 +346,61 @@ async function verifyExplicitDrainWait(
 export function registerPluginRetainedWorkReloadTests(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
+  it("refuses a live borrowed turn before effects and permits its closed context to reload", async () => {
+    // #151706: the requesting turn holds the plugin even between its callbacks.
+    let allowEffects = false;
+    const prepareConfigEffects = vi.fn(() => {
+      if (!allowEffects) {
+        throw new Error("Self-reload reached config effects");
+      }
+      return { retire: () => {}, rollback: async () => {} };
+    });
+    const fixture = await createRecoveryFixture({
+      abortOnCandidateStart: false,
+      prepareConfigEffects,
+    });
+    const registry = fixture.previousRegistry;
+    const instance = fixture.instance();
+    const snapshot = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+      pluginRegistry: registry,
+    });
+    const releaseWork = retainRuntimePluginWork([registry]);
+    const lease = scopePreparedModelRuntimeLease({
+      snapshot,
+      pluginGeneration: {
+        pluginRegistry: registry,
+        pluginMetadataSnapshot: snapshot.metadataSnapshot,
+        remoteCatalog: null,
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      },
+      [Symbol.asyncDispose]: async () => releaseWork(),
+    });
+    const runInTurn = lease.run(() => AsyncLocalStorage.snapshot());
+    try {
+      expect(runInTurn(() => instance.hasActiveCall)).toBe(false);
+      await expect(runInTurn(() => fixture.reload())).rejects.toThrow("own active turn");
+      expect(prepareConfigEffects).not.toHaveBeenCalled();
+      fixture.expectServices({ firstStop: 0, siblingStop: 0 });
+      expect(fixture.registryOwner.registry).toBe(registry);
+      expect(instance.run(() => "still serving")).toBe("still serving");
+
+      await lease[Symbol.asyncDispose]();
+      allowEffects = true;
+      await expect(runInTurn(() => fixture.reload())).resolves.toMatchObject(firstReloaded);
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
   it.each([
     ["retained work", "complete"],
     ["retained work", "cancel"],
+    ["retained work", "time out"],
     ["retained consumer", "complete"],
     ["retained consumer", "cancel"],
     ["active call", "complete"],
     ["active call", "cancel"],
+    ["active call", "time out"],
   ] as const)("explicit drain wait preserves %s beyond 60s and can %s", (kind, outcome) =>
     verifyExplicitDrainWait(createRecoveryFixture, kind, outcome),
   );
@@ -503,9 +422,7 @@ export function registerPluginRetainedWorkReloadTests(
         expect(fixture.firstStart).toHaveBeenCalledTimes(2);
         expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
       } else {
-        await expect(fixture.reload()).resolves.toMatchObject({
-          runtime: { pluginIds: ["first"] },
-        });
+        await expect(fixture.reload()).resolves.toMatchObject(firstReloaded);
         expect(fixture.firstStart).toHaveBeenCalledOnce();
         expect(fixture.rollbackConfigEffects).not.toHaveBeenCalled();
       }

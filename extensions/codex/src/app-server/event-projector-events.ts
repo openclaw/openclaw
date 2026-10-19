@@ -304,7 +304,6 @@ export class CodexEventProjection {
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
       if (reason === "highRiskCyberActivity") {
-        this.cyberNoticeState = "fallback";
         this.emitCyberNotice("fallback", { model: fromModel, fallbackModel: toModel });
       }
     }
@@ -325,7 +324,6 @@ export class CodexEventProjection {
     ) {
       return;
     }
-    this.cyberNoticeState = "buffering";
     const model = readString(params, "model");
     const fallbackModel = readString(params, "fasterModel");
     this.emitCyberNotice("buffering", {
@@ -338,7 +336,6 @@ export class CodexEventProjection {
     if (codexErrorInfo !== "cyberPolicy" || this.cyberNoticeState === "blocked") {
       return;
     }
-    this.cyberNoticeState = "blocked";
     this.emitCyberNotice("blocked", { model: this.responseModel ?? model });
   }
 
@@ -357,7 +354,6 @@ export class CodexEventProjection {
     if (this.cyberNoticeState !== "buffering") {
       return;
     }
-    this.cyberNoticeState = undefined;
     this.emitCyberNotice("cleared");
   }
 
@@ -365,6 +361,7 @@ export class CodexEventProjection {
     state: "buffering" | "blocked" | "fallback" | "cleared",
     models: { model?: string; fallbackModel?: string } = {},
   ): void {
+    this.cyberNoticeState = state === "cleared" ? undefined : state;
     if (this.provider !== "openai") {
       return;
     }

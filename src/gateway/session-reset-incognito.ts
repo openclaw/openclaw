@@ -1,16 +1,14 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
+import { unavailableSessionRequest } from "./session-request-error.js";
 
 /** The caller retains the reset lifecycle fence through deletion and its notifications. */
-export async function deleteIncognitoSessionForReset(params: {
+type IncognitoResetParams = {
   key: string;
   agentId: string;
   storePath: string;
@@ -18,7 +16,26 @@ export async function deleteIncognitoSessionForReset(params: {
   entry: SessionEntry;
   commitGuard: () => void;
   beforeDelete: () => Promise<void>;
-}): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
+};
+
+export async function deleteIncognitoSessionForReset(
+  params: IncognitoResetParams,
+): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
+  const assertCurrent = params.commitGuard;
+  const deleted = await withSessionActorStorage(
+    { ...params, sessionKey: params.target.canonicalKey },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    () => deleteIncognitoSessionForResetInScope(params),
+  );
+  return deleted ?? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
+}
+
+async function deleteIncognitoSessionForResetInScope(
+  params: IncognitoResetParams,
+): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
   const terminalDrain =
     getInProcessGatewayRequestContext()?.terminalSessions?.beginAgentSessionDrain({
       kind: "agent",
@@ -31,17 +48,13 @@ export async function deleteIncognitoSessionForReset(params: {
       try {
         await withTimeout(
           terminalDrain.drained,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
           "agent terminal lifecycle drain",
         );
       } catch {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Session ${params.key} terminals are still active; try again in a moment.`,
-          ),
-        };
+        return unavailableSessionRequest(
+          `Session ${params.key} terminals are still active; try again in a moment.`,
+        );
       }
     }
     await params.beforeDelete();
@@ -51,20 +64,12 @@ export async function deleteIncognitoSessionForReset(params: {
       archiveTranscript: false,
       deleteDeliveryArtifacts: true,
       deleteTranscriptWithoutArchive: true,
-      expectedEntry: params.entry,
       expectedSessionId: params.entry.sessionId,
-      expectedUpdatedAt: params.entry.updatedAt,
       storePath: params.storePath,
       target: params.target,
     });
     if (!deleted.deleted) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Session ${params.key} changed before reset. Retry.`,
-        ),
-      };
+      return unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
     }
     return { ok: true, value: { deletedSessionId: deleted.deletedSessionId } };
   } finally {

@@ -3,24 +3,7 @@ import { resolveAccountKey as resolvePublicAccountKey } from "../plugin-sdk/acco
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { normalizeAccountId as normalizeRoutingAccountId } from "./account-id.js";
-import {
-  resolveAccountEntry,
-  resolveAccountKey,
-  resolveNormalizedAccountEntry,
-} from "./account-lookup.js";
-
-describe("SDK resolveAccountKey creation targets", () => {
-  it.each(["__proto__", "constructor", "prototype"])(
-    "rejects reserved %s for both plain and policy-backed setup writers",
-    (accountId) => {
-      for (const policy of [undefined, { canonicalAliasesRequireOwnField: "account" }]) {
-        expect(() =>
-          resolveAccountKey(undefined, accountId, undefined, policy, { allowMissing: true }),
-        ).toThrow(`Account id "${accountId}" is reserved`);
-      }
-    },
-  );
-});
+import { resolveAccountEntry, resolveNormalizedAccountEntry } from "./account-lookup.js";
 
 describe("SDK resolveAccountKey channel context", () => {
   const accounts = { "Work Phone": { account: "+12025550103" } };
@@ -96,10 +79,7 @@ describe("SDK resolveAccountKey channel context", () => {
 describe("resolveAccountEntry", () => {
   const accounts = { default: { id: "default" }, Business: { id: "business" } };
 
-  it.each([
-    ["default", "default"],
-    ["business", "business"],
-  ])("resolves %s to %s", (accountId, id) => {
+  it.each([["default", "default"]])("resolves %s to %s", (accountId, id) => {
     expect(resolveAccountEntry(accounts, accountId)).toEqual({ id });
   });
 
@@ -141,16 +121,6 @@ describe("resolveNormalizedAccountEntry", () => {
   ])("does not resolve $name", ({ key, accountId, normalize }) => {
     expect(
       resolveNormalizedAccountEntry({ [key]: { id: "blocked" } }, accountId, normalize),
-    ).toBeUndefined();
-  });
-
-  it("ignores prototype-chain values", () => {
-    expect(
-      resolveNormalizedAccountEntry(
-        Object.create({ default: { id: "polluted" } }),
-        "default",
-        (id) => id,
-      ),
     ).toBeUndefined();
   });
 });

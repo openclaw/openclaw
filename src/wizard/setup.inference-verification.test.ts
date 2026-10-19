@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -13,7 +14,6 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ActivateSetupInferenceDeps } from "../system-agent/setup-inference-core.js";
 import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -22,7 +22,7 @@ import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
 const mocks = vi.hoisted(() => ({
   repair: vi.fn(),
   verify: vi.fn(),
-  runEmbedded: vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(),
+  runEmbedded: vi.fn<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>(),
 }));
 
 vi.mock("../system-agent/setup-inference.js", () => ({
@@ -35,32 +35,54 @@ vi.mock("./setup.model-auth.js", () => ({
 
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
 
-function verifyWithMemoryConfig(
-  params: Omit<Parameters<typeof offerLiveModelVerification>[0], "configTarget"> & {
-    writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
-  },
-) {
-  let current = structuredClone(params.config);
+type VerificationOptions = Partial<
+  Omit<
+    Parameters<typeof offerLiveModelVerification>[0],
+    "config" | "configTarget" | "runtime" | "prompter"
+  >
+>;
+
+function authCandidate(config: OpenClawConfig) {
+  return { config, authProfiles: [], persistAuthProfiles: vi.fn(async () => {}) };
+}
+
+function verificationFixture(config: OpenClawConfig, options: VerificationOptions = {}) {
+  const prompter = createPrompter();
+  const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
+  let current = structuredClone(config);
   const target: SetupInferenceConfigTarget = {
-    write: async (config, options) => {
+    write: async (next, writeOptions) => {
       const before = current;
-      options.captureUndo(async () => {
+      writeOptions.captureUndo(async () => {
         current = before;
         return { config: current, written: true };
       });
-      current = await params.writeConfig(config);
+      current = await writeConfig(next);
       return current;
     },
     read: async () => ({ config: current, write: target.write }),
   };
-  return offerLiveModelVerification({ ...params, configTarget: target });
+  return {
+    prompter,
+    writeConfig,
+    run: () =>
+      offerLiveModelVerification({
+        config,
+        opts: {},
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        ...options,
+        assertCurrent: options.assertCurrent ?? (() => {}),
+        configTarget: target,
+      }),
+  };
 }
 
 const tempRoots = createTempDirTracker();
 afterEach(() => tempRoots.cleanup());
 
 function createPrompter(): WizardPrompter {
-  return {
+  return createWizardPrompter({
     intro: vi.fn(),
     outro: vi.fn(),
     note: vi.fn(),
@@ -68,9 +90,27 @@ function createPrompter(): WizardPrompter {
     select: vi.fn(),
     multiselect: vi.fn(),
     text: vi.fn(),
-    progress: vi.fn(() => ({ stop: vi.fn(), update: vi.fn() })),
-  } as WizardPrompter;
+  });
 }
+
+function expectNotCalled(...functions: ReturnType<typeof vi.fn>[]) {
+  for (const fn of functions) {
+    expect(fn).not.toHaveBeenCalled();
+  }
+}
+
+const managedConfig: OpenClawConfig = {
+  agents: { defaults: { model: "local-fixture/model" } },
+  models: {
+    providers: {
+      "local-fixture": {
+        baseUrl: "http://127.0.0.1:12345/v1",
+        models: [],
+        localService: { command: "/fixture/server" },
+      },
+    },
+  },
+};
 
 describe("offerLiveModelVerification", () => {
   beforeEach(() => {
@@ -91,7 +131,7 @@ describe("offerLiveModelVerification", () => {
       browser: { enabled: false },
       agents: {
         ownership: "explicit",
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: "openai/test-model@openai:working" },
       },
       auth: { profiles: { "openai:working": { provider: "openai", mode: "api_key" } } },
@@ -135,186 +175,133 @@ describe("offerLiveModelVerification", () => {
       expect(tested.browser).toEqual({ enabled: false });
       return { ok: false, status: "auth", error: "credential rejected" };
     });
-    const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
-    const params = {
-      config,
+    const { run, writeConfig, prompter } = verificationFixture(config, {
       initialCandidate: candidate,
       opts: { nonInteractive: true },
-      prompter: createPrompter(),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: stateDir,
       stateDir,
       agentDir,
-      writeConfig,
       required: true,
-    };
+    });
     try {
-      await expect(verifyWithMemoryConfig(params)).resolves.toMatchObject({
-        verified: false,
-        persisted: false,
-      });
-      await expect(verifyWithMemoryConfig(params)).resolves.toMatchObject({
-        verified: false,
-        persisted: false,
-      });
+      const rejected = { verified: false, persisted: false };
+      await expect(run()).resolves.toMatchObject(rejected);
+      await expect(run()).resolves.toMatchObject(rejected);
       expect(attemptedProfiles).toHaveLength(2);
       expect(attemptedProfiles[1]).toBe(attemptedProfiles[0]);
       expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
       expect(persistAuthProfiles).toHaveBeenCalledOnce();
-      expect(writeConfig).not.toHaveBeenCalled();
-      expect(mocks.repair).not.toHaveBeenCalled();
-      expect(params.prompter.select).not.toHaveBeenCalled();
+      expectNotCalled(writeConfig, mocks.repair, vi.mocked(prompter.select));
       expect(config).toEqual(before);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
   });
 
-  it.each<{
-    label: string;
-    roster: NonNullable<OpenClawConfig["agents"]>;
-    owner: string | undefined;
-    harness: "codex" | "openclaw" | undefined;
-  }>([
-    {
-      label: "named explicit owner",
-      roster: { ownership: "explicit", entries: { research: {} } },
-      owner: "research",
-      harness: "codex",
-    },
-    {
-      label: "empty explicit roster",
-      roster: { ownership: "explicit", entries: {} },
-      owner: undefined,
-      harness: undefined,
-    },
-  ])("keeps $label runtime-only during verification", async ({ roster, owner, harness }) => {
-    const root = await fs.realpath(tempRoots.make("openclaw-staged-verification-"));
-    const config: OpenClawConfig = {
-      agents: {
-        ...roster,
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          ...(harness
-            ? { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: harness } } } }
-            : {}),
-        },
-      },
-    };
-    const before = structuredClone(config);
-    const agentDir = path.join(root, "agents", owner ?? "main", "agent");
-    const runEmbeddedAgent = mocks.runEmbedded.mockImplementation(async (params) => {
-      expect(params.agentDir).toBe(agentDir);
-      expect(params.provider).toBe("openai");
-      expect(params.model).toBe("gpt-5.6-luna");
-      expect(params.agentHarnessRuntimeOverride).toBe(harness);
-      expect(params.authProfileStateMode).toBe("read-only");
-      expect(params.sessionKey).toMatch(new RegExp(`^agent:${owner}:setup-inference:`));
-      expect(resolveRunWorkspaceDir(params).agentId).toBe(owner);
-      return {
-        payloads: [{ text: "OK" }],
-        meta: {
-          durationMs: 1,
-          executionTrace: { winnerProvider: params.provider, winnerModel: params.model },
+  it.each(["research", undefined])(
+    "keeps explicit owner %s runtime-only during verification",
+    async (owner) => {
+      const harness = owner ? "codex" : undefined;
+      const root = await fs.realpath(tempRoots.make("openclaw-staged-verification-"));
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: owner ? { [owner]: {} } : {},
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            ...(harness
+              ? { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: harness } } } }
+              : {}),
+          },
         },
       };
-    });
-    mocks.verify.mockImplementation((params: Parameters<typeof verifySetupInferenceConfig>[0]) =>
-      verifySetupInferenceConfig({ ...params, deps: { ...params.deps, runEmbeddedAgent } }),
-    );
-    const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
-    const persistAuthProfiles = vi.fn(async () => {});
-    const verification = verifyWithMemoryConfig({
-      config,
-      initialCandidate: { config, authProfiles: [], persistAuthProfiles },
-      opts: { nonInteractive: true },
-      prompter: createPrompter(),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: root,
-      agentDir,
-      stateDir: root,
-      writeConfig,
-      required: true,
-    });
-    if (owner) {
-      await expect(verification).resolves.toMatchObject({
-        verified: true,
-        persisted: true,
-        config: before,
+      const before = structuredClone(config);
+      const agentDir = path.join(root, "agents", owner ?? "main", "agent");
+      const runEmbeddedAgent = mocks.runEmbedded.mockImplementation(async (params) => {
+        expect(params).toMatchObject({
+          agentDir,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          agentHarnessRuntimeOverride: harness,
+          authProfileStateMode: "read-only",
+          sessionKey: expect.stringMatching(new RegExp(`^agent:${owner}:setup-inference:`)),
+        });
+        expect(resolveRunWorkspaceDir(params).agentId).toBe(owner);
+        return {
+          payloads: [{ text: "OK" }],
+          meta: {
+            durationMs: 1,
+            executionTrace: { winnerProvider: params.provider, winnerModel: params.model },
+          },
+        };
       });
-      expect(writeConfig).toHaveBeenCalledOnce();
-      expect(writeConfig.mock.calls[0]?.[0]).toEqual(before);
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    } else {
-      await expect(verification).rejects.toThrow("No agents configured");
-      expect(writeConfig).not.toHaveBeenCalled();
-      expect(persistAuthProfiles).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    }
-    expect(config).toEqual(before);
-  });
+      mocks.verify.mockImplementation((params: Parameters<typeof verifySetupInferenceConfig>[0]) =>
+        verifySetupInferenceConfig(params),
+      );
+      const initialCandidate = authCandidate(config);
+      const { run, writeConfig } = verificationFixture(config, {
+        initialCandidate,
+        opts: { nonInteractive: true },
+        agentDir,
+        stateDir: root,
+        required: true,
+      });
+      const verification = run();
+      if (owner) {
+        await expect(verification).resolves.toMatchObject({
+          verified: true,
+          persisted: true,
+          config: before,
+        });
+        expect(writeConfig).toHaveBeenCalledOnce();
+        expect(writeConfig.mock.calls[0]?.[0]).toEqual(before);
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      } else {
+        await expect(verification).rejects.toThrow("No agents configured");
+        expectNotCalled(writeConfig, initialCandidate.persistAuthProfiles, runEmbeddedAgent);
+      }
+      expect(config).toEqual(before);
+    },
+  );
 
   it("stops verification progress when the provider check rejects", async () => {
     const verificationError = new Error("provider network dropped");
     mocks.verify.mockRejectedValue(verificationError);
-    const stop = vi.fn();
-    const prompter = {
-      ...createPrompter(),
-      progress: vi.fn(() => ({ stop, update: vi.fn() })),
-    };
-
-    await expect(
-      verifyWithMemoryConfig({
-        config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
+    const { run, prompter } = verificationFixture(
+      {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+      },
+      {
         opts: { nonInteractive: true },
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
-        writeConfig: async (config) => config,
         required: true,
-      }),
-    ).rejects.toBe(verificationError);
-
+      },
+    );
+    const stop = vi.fn();
+    vi.mocked(prompter.progress).mockReturnValue({ stop, update: vi.fn() });
+    await expect(run()).rejects.toBe(verificationError);
     expect(stop).toHaveBeenCalledOnce();
-    expect(prompter.note).not.toHaveBeenCalled();
-    expect(mocks.repair).not.toHaveBeenCalled();
+    expectNotCalled(vi.mocked(prompter.note), mocks.repair);
   });
 
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       models: {
         providers: {
           openai: { apiKey: "test-key", baseUrl: "https://api.openai.com/v1", models: [] },
         },
       },
     };
-    const persistAuthProfiles = vi.fn(async () => {});
-    const writeConfig = vi.fn(async () => repairedConfig);
     mocks.verify
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "credential expired" })
       .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.6", latencyMs: 10 });
-    mocks.repair.mockResolvedValue({
-      config: repairedConfig,
-      authProfiles: [],
-      persistAuthProfiles,
+    mocks.repair.mockResolvedValue(authCandidate(repairedConfig));
+    const { run, prompter, writeConfig } = verificationFixture({
+      agents: { entries: { main: {} } },
     });
-    const prompter = {
-      ...createPrompter(),
-      confirm: vi.fn(async () => true),
-      select: vi.fn(async () => "fix") as WizardPrompter["select"],
-    };
-
-    await expect(
-      verifyWithMemoryConfig({
-        config: { agents: { entries: { main: { default: true } } } },
-        opts: {},
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
-        writeConfig,
-      }),
-    ).resolves.toEqual({
+    writeConfig.mockResolvedValue(repairedConfig);
+    vi.mocked(prompter.confirm).mockResolvedValue(true);
+    vi.mocked(prompter.select).mockResolvedValue("fix");
+    await expect(run()).resolves.toEqual({
       config: repairedConfig,
       attempted: true,
       persisted: true,
@@ -325,72 +312,27 @@ describe("offerLiveModelVerification", () => {
   });
 
   it("requires managed local model verification and keeps a failed candidate uncommitted", async () => {
-    const config: OpenClawConfig = {
-      agents: { defaults: { model: "local-fixture/model" } },
-      models: {
-        providers: {
-          "local-fixture": {
-            baseUrl: "http://127.0.0.1:12345/v1",
-            models: [],
-            localService: { command: "/fixture/server" },
-          },
-        },
-      },
-    };
-    const persistAuthProfiles = vi.fn(async () => {});
-    const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
-    const prompter = createPrompter();
+    const config = structuredClone(managedConfig);
+    const { run, writeConfig, prompter } = verificationFixture(config, {
+      initialCandidate: authCandidate(config),
+    });
     mocks.verify.mockResolvedValue({
       ok: false,
       status: "format",
       error: "inference request failed",
     });
     mocks.repair.mockRejectedValue(new Error("repair cancelled"));
-    await expect(
-      verifyWithMemoryConfig({
-        config,
-        initialCandidate: { config, authProfiles: [], persistAuthProfiles },
-        opts: {},
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
-        writeConfig,
-      }),
-    ).rejects.toThrow("repair cancelled");
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(prompter.select).not.toHaveBeenCalled();
+    await expect(run()).rejects.toThrow("repair cancelled");
+    expectNotCalled(vi.mocked(prompter.confirm), vi.mocked(prompter.select), writeConfig);
     expect(mocks.verify).toHaveBeenCalledOnce();
-    expect(writeConfig).not.toHaveBeenCalled();
   });
 
   it("leaves verification of an existing managed route optional", async () => {
-    const config: OpenClawConfig = {
-      agents: { defaults: { model: "local-fixture/model" } },
-      models: {
-        providers: {
-          "local-fixture": {
-            baseUrl: "http://127.0.0.1:12345/v1",
-            models: [],
-            localService: { command: "/fixture/server" },
-          },
-        },
-      },
-    };
-    const prompter = createPrompter();
+    const config = structuredClone(managedConfig);
+    const { run, prompter, writeConfig } = verificationFixture(config);
     vi.mocked(prompter.confirm).mockResolvedValue(false);
-    const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
-    expect(
-      await verifyWithMemoryConfig({
-        config,
-        opts: {},
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
-        writeConfig,
-      }),
-    ).toMatchObject({ attempted: false, verified: false, persisted: false });
+    expect(await run()).toMatchObject({ attempted: false, verified: false, persisted: false });
     expect(prompter.confirm).toHaveBeenCalledOnce();
-    expect(mocks.verify).not.toHaveBeenCalled();
-    expect(writeConfig).not.toHaveBeenCalled();
+    expectNotCalled(mocks.verify, writeConfig);
   });
 });

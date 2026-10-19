@@ -1,5 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -13,6 +12,7 @@ import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
 import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
@@ -55,7 +55,7 @@ export async function startSessionsSendFollowup(
         start: {
           ...start,
           result: jsonResult({
-            ...(isRecord(start.result.details) ? start.result.details : {}),
+            ...start.result.details,
             sentBeforeError: true,
           }),
         },
@@ -92,7 +92,11 @@ export async function dispatchSessionsSendFollowup(
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const completionChild = options.watch
-    ? getLatestLiveSubagentRunByChildSessionKey(params.sessionStoreTarget.canonicalKey)
+    ? getLatestLiveSubagentRunByChildSessionKey(
+        params.sessionStoreTarget.canonicalKey,
+        undefined,
+        params.sessionStoreTarget.agentId,
+      )
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
   const requesterTurn =
@@ -148,6 +152,7 @@ export async function dispatchSessionsSendFollowup(
                       throw new Error("Child followup admission was closed.");
                     }
                     assertCurrent();
+                    params.assertDispatchCurrent?.();
                   },
                 }
               : {}),
@@ -170,6 +175,7 @@ export async function dispatchSessionsSendFollowup(
             ? getLatestLiveSubagentRunByChildSessionKey(
                 childSessionKey,
                 (entry) => entry.runId === start.steeredRunId,
+                params.sessionStoreTarget.agentId,
               )
             : undefined;
           if (expected) {
@@ -210,7 +216,7 @@ export async function dispatchSessionsSendFollowup(
             {
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
-              persistence: "worker",
+              acceptedRunReplay: true,
             },
           );
           accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };
@@ -271,23 +277,38 @@ export async function dispatchSessionsSendFollowup(
   const targetSessionKey = start.ok
     ? (start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey)
     : undefined;
-  const watched =
+  let watched = false;
+  if (
     start.ok &&
     options.watch &&
     !params.expectedSessionId &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey
-      ? registerSessionStateWatch({
-          watcherSessionKey: replyContext.requesterSessionKey,
-          targetSessionKey,
-          targetAgentId: params.sendParams.agentId,
-        })
-      : false;
+  ) {
+    watched = await registerSessionStateWatch(
+      {
+        watcherSessionKey: replyContext.requesterSessionKey,
+        targetSessionKey,
+        targetAgentId: params.sendParams.agentId,
+      },
+      { prepareCurrent: prepareGatewayToolCallerAssertion },
+    );
+  }
   return {
     start,
     completion,
     registryCompletion: Boolean(start.ok && completionTurn),
-    watchField: options.watch ? { watched } : {},
+    watchField: options.watch
+      ? {
+          watched,
+          ...(!watched && start.ok
+            ? {
+                watchError:
+                  "The send was accepted, but no proactive state watch was registered. Watches require distinct, valid agent-qualified session keys and current session authority. Use owner-scoped session_status changesSince to reconcile state.",
+              }
+            : {}),
+        }
+      : {},
   };
 }

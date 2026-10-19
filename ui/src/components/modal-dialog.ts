@@ -1,461 +1,569 @@
-// Control UI adapter for Web Awesome's accessible modal dialog.
-import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-import { css, html, type PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import { createComponent, onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import { composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { activeElement, isHtmlElement, tabbableElements } from "./focus-navigation.ts";
+import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
+import { containsComposed } from "./overlay-registry.ts";
+import { ModalDialogContent } from "./solid/modal-dialog.tsx";
+import { retainShadowStyles } from "./solid/shadow-styles.ts";
+import modalStyles from "./solid/modal-dialog.css?inline";
+import modalScrollLockStyles from "./solid/modal-scroll-lock.css?inline";
+import overlayStyles from "./solid/overlay.css?inline";
 
-const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
+export type ModalDialogProperties = {
+  open: boolean;
+  manual: boolean;
+  label: string;
+  description: string;
+  initialFocus?: () => HTMLElement | null;
+  onOpenChange: ((open: boolean) => void) | undefined;
+};
 
-function restoreFocus(target: HTMLElement): void {
-  target.focus({ preventScroll: true });
-  // Cross-origin frame adapters finish the return inside their own document.
-  target.dispatchEvent(new Event("openclaw:restore-focus"));
+type ModalDialogMethods = {
+  show(): void;
+  hide(): void;
+  setReturnFocusTarget(target: HTMLElement | null): void;
+  getOverlayContainer(): HTMLElement | null;
+};
+
+export type OpenClawModalDialog = SolidBridgeElement<ModalDialogProperties, ModalDialogMethods>;
+
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
+  label: string;
+  manual?: boolean;
+  description?: string;
+  "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
+  "prop:initialFocus"?: ModalDialogProperties["initialFocus"];
+  "onModal-cancel"?: (event: Event) => void;
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-modal-dialog": ModalDialogAttributes;
+    }
+  }
 }
 
-function setModalLayer(modal: HTMLElement, open: boolean) {
-  const wasOpen = modalLayers.size > 0;
-  modalLayers.delete(modal);
-  if (open) {
-    modalLayers.add(modal);
+type ModalState = {
+  policy?: ModalPolicy;
+  returnTarget?: { value: HTMLElement | null };
+};
+const states = new WeakMap<OpenClawModalDialog, ModalState>();
+function stateFor(host: OpenClawModalDialog): ModalState {
+  let state = states.get(host);
+  if (!state) {
+    state = {};
+    states.set(host, state);
   }
-  const isOpen = modalLayers.size > 0;
-  if (wasOpen !== isOpen) {
-    window.dispatchEvent(
-      new CustomEvent("openclaw:native-modal-state", { detail: { open: isOpen } }),
+  return state;
+}
+
+const scrollLocks = new WeakMap<Document, Set<HTMLElement>>();
+
+function setModalLayer(host: HTMLElement, open: boolean) {
+  const doc = host.ownerDocument;
+  const layers = (doc.openClawModalLayers ??= new Set<HTMLElement>());
+  const wasOpen = layers.size > 0;
+  layers.delete(host);
+  if (open) {
+    layers.add(host);
+  }
+  if (wasOpen !== layers.size > 0) {
+    doc.defaultView?.dispatchEvent(
+      new CustomEvent("openclaw:native-modal-state", { detail: { open: layers.size > 0 } }),
     );
   }
 }
 
-export class OpenClawModalDialog extends OpenClawLitElement {
-  @property({ type: Boolean }) open = true;
-  @property({ type: Boolean, reflect: true }) manual = false;
-  @property() label = "";
-  @property() description = "";
-
-  get #webAwesomeDialog() {
-    return this.renderRoot?.querySelector<WaDialog>("wa-dialog");
+function acquirePresentation(host: HTMLElement): () => void {
+  const doc = host.ownerDocument;
+  const releaseScrollLockStyles = retainShadowStyles(doc, [modalScrollLockStyles]);
+  let locks = scrollLocks.get(doc);
+  if (!locks) {
+    locks = new Set();
+    scrollLocks.set(doc, locks);
   }
-
-  #returnFocus: HTMLElement | null = null;
-  #returnFocusOverride: HTMLElement | null | undefined;
-  #syncGeneration = 0;
-  #suppressNextCancel = false;
-  #initialFocusPending = false;
-  #openingInteraction = false;
-  #releaseNativeOcclusion?: () => void;
-
-  static override styles = css`
-    :host {
-      /* Slotted document panels share the standard/fullscreen shell height limit. */
-      --openclaw-modal-height-limit: var(--openclaw-modal-max-height, calc(100dvh - 48px));
-      display: contents;
-    }
-
-    wa-dialog {
-      --width: min(var(--openclaw-modal-width, 540px), calc(100vw - 48px));
-      --spacing: 0;
-      --backdrop-filter: var(--openclaw-modal-backdrop-filter, blur(4px));
-    }
-
-    wa-dialog::part(dialog) {
-      max-width: var(--openclaw-modal-max-width, calc(100vw - 48px));
-      max-height: var(--openclaw-modal-height-limit);
-      padding: 0;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-      overflow: visible;
-    }
-
-    wa-dialog::part(body) {
-      padding: 0;
-      overflow: visible;
-    }
-
-    :host(.fullscreen) {
-      --openclaw-modal-height-limit: calc(100dvh - 20px);
-    }
-
-    :host(.fullscreen) wa-dialog {
-      --width: calc(100vw - 20px);
-    }
-
-    :host(.fullscreen) wa-dialog::part(dialog) {
-      max-width: calc(100vw - 20px);
-    }
-
-    :host(.viewport-edge-to-edge) wa-dialog {
-      --width: 100vw;
-    }
-
-    :host(.viewport-edge-to-edge) wa-dialog::part(dialog) {
-      width: 100vw;
-      height: 100dvh;
-      max-width: none;
-      max-height: none;
-      margin: 0;
-      border-radius: 0;
-    }
-
-    /* Slotted scroll containers need the body's definite viewport height. */
-    :host(.viewport-edge-to-edge) wa-dialog::part(body),
-    :host(.drawer) wa-dialog::part(body) {
-      height: 100%;
-    }
-
-    :host(.palette) wa-dialog::part(dialog) {
-      margin-block-start: min(20dvh, 160px);
-      margin-block-end: auto;
-    }
-
-    :host(.palette) wa-dialog {
-      --openclaw-modal-backdrop-filter: none;
-      --wa-color-overlay-modal: color-mix(in oklab, black 12%, transparent);
-      --show-duration: 0ms;
-      --hide-duration: 0ms;
-    }
-
-    :host(.drawer) wa-dialog {
-      --width: min(var(--openclaw-modal-width, 100vw), 100vw);
-      --show-duration: 200ms;
-      --hide-duration: 0ms;
-    }
-
-    :host(.drawer) wa-dialog::part(dialog) {
-      height: 100dvh;
-      max-width: 100vw;
-      max-height: 100dvh;
-      margin: 0 0 0 auto;
-      border-radius: 0;
-    }
-
-    :host(.drawer) wa-dialog[open]::part(dialog) {
-      animation: openclaw-drawer-in 200ms cubic-bezier(0.32, 0.72, 0, 1);
-    }
-
-    :host(.drawer--floating) {
-      --openclaw-drawer-inset: 20px;
-      --openclaw-modal-height-limit: calc(100dvh - var(--openclaw-drawer-inset) * 2);
-    }
-
-    :host(.drawer--floating) wa-dialog {
-      --width: min(
-        var(--openclaw-modal-width, 620px),
-        calc(100vw - var(--openclaw-drawer-inset) * 2)
-      );
-    }
-
-    :host(.drawer--floating) wa-dialog::part(body) {
-      height: 100%;
-    }
-
-    :host(.drawer--floating) wa-dialog::part(dialog) {
-      height: calc(100dvh - var(--openclaw-drawer-inset) * 2);
-      max-width: calc(100vw - var(--openclaw-drawer-inset) * 2);
-      max-height: calc(100dvh - var(--openclaw-drawer-inset) * 2);
-      margin: var(--openclaw-drawer-inset) var(--openclaw-drawer-inset) auto auto;
-      border-radius: var(--radius-xl);
-    }
-
-    @keyframes openclaw-drawer-in {
-      from {
-        transform: translateX(calc(100% + var(--openclaw-drawer-inset, 0px)));
-      }
-      to {
-        transform: translateX(0);
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      :host(.drawer) wa-dialog {
-        --show-duration: 0ms;
-      }
-
-      :host(.drawer) wa-dialog[open]::part(dialog) {
-        animation: none;
-      }
-    }
-    @media (max-width: 640px) {
-      :host(.drawer--floating) {
-        --openclaw-drawer-inset: 12px;
-      }
-
-      :host {
-        --openclaw-modal-height-limit: 90dvh;
-      }
-
-      wa-dialog {
-        --width: min(var(--openclaw-modal-width, 540px), calc(100vw - 24px));
-      }
-
-      wa-dialog::part(dialog) {
-        max-width: var(--openclaw-modal-max-width, calc(100vw - 24px));
-      }
-    }
-
-    @media (max-width: 768px),
-      (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-      :host(.mobile-edge-to-edge) wa-dialog {
-        --width: 100vw;
-      }
-
-      :host(.mobile-edge-to-edge) wa-dialog::part(dialog) {
-        width: 100vw;
-        height: 100dvh;
-        max-width: none;
-        max-height: none;
-        margin: 0;
-        border-radius: 0;
-      }
-
-      :host(.mobile-edge-to-edge) wa-dialog::part(body) {
-        height: 100%;
-      }
-    }
-  `;
-
-  override connectedCallback() {
-    if (this.manual) {
-      this.open = false;
-    }
-    super.connectedCallback();
-    if (this.open) {
-      setModalLayer(this, true);
-      this.#releaseNativeOcclusion ??= acquireNativeOverlayOcclusion();
-    }
-    void this.updateComplete.then(() => this.#syncDialogOpen());
+  locks.add(host);
+  if (locks.size === 1) {
+    const gutter = (doc.defaultView?.innerWidth ?? 0) - doc.documentElement.clientWidth;
+    doc.documentElement.classList.toggle("oc-modal-scroll-gutter", gutter > 1);
   }
-
-  override disconnectedCallback() {
-    setModalLayer(this, false);
-    this.#clearNativeOcclusion();
-    this.#syncGeneration += 1;
-    this.#initialFocusPending = false;
-    const webAwesomeDialog = this.#webAwesomeDialog;
-    const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
-    if (dialog?.open) {
-      dialog.close();
+  doc.documentElement.classList.add("oc-modal-scroll-lock");
+  const releaseOcclusion = acquireNativeOverlayOcclusion();
+  return () => {
+    releaseOcclusion();
+    locks.delete(host);
+    if (locks.size === 0) {
+      doc.documentElement.classList.remove("oc-modal-scroll-lock");
+      doc.documentElement.classList.remove("oc-modal-scroll-gutter");
     }
-    if (webAwesomeDialog) {
-      webAwesomeDialog.open = false;
-    }
-    const returnFocus =
-      this.#returnFocusOverride === undefined ? this.#returnFocus : this.#returnFocusOverride;
-    this.#returnFocus = null;
-    this.#returnFocusOverride = undefined;
-    if (returnFocus?.isConnected) {
-      restoreFocus(returnFocus);
-    }
-    super.disconnectedCallback();
-  }
-
-  override render() {
-    return html`
-      <wa-dialog
-        without-header
-        light-dismiss
-        .label=${this.label}
-        @pointerdown=${{ handleEvent: this.#handleOpeningInteraction, capture: true }}
-        @keydown=${{ handleEvent: this.#handleOpeningInteraction, capture: true }}
-        @focusin=${this.#handleInitialFocus}
-        @wa-after-show=${this.#handleInitialFocus}
-        @wa-after-hide=${this.#handleAfterHide}
-        @wa-hide=${this.#handleHide}
-      >
-        <slot></slot>
-      </wa-dialog>
-    `;
-  }
-
-  protected override updated(changed: PropertyValues<this>) {
-    if (changed.has("open")) {
-      // Lit can finish an already-queued update after the modal disconnects.
-      setModalLayer(this, this.open && this.isConnected);
-      if (this.open && this.isConnected) {
-        this.#releaseNativeOcclusion ??= acquireNativeOverlayOcclusion();
-      }
-    }
-    void this.#syncDialogOpen();
-  }
-
-  async #syncDialogOpen() {
-    const generation = ++this.#syncGeneration;
-    const webAwesomeDialog = this.#webAwesomeDialog;
-    if (!webAwesomeDialog) {
-      return;
-    }
-    await webAwesomeDialog.updateComplete;
-    if (generation !== this.#syncGeneration || !this.isConnected) {
-      return;
-    }
-    const dialog = webAwesomeDialog.shadowRoot?.querySelector("dialog");
-    if (!dialog) {
-      return;
-    }
-    dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("aria-modal", "true");
-    for (const [attribute, value] of Object.entries({
-      "aria-label": this.label,
-      "aria-description": this.description,
-    })) {
-      if (value) {
-        dialog.setAttribute(attribute, value);
-      } else {
-        dialog.removeAttribute(attribute);
-      }
-    }
-    if (this.open) {
-      if (!dialog?.open) {
-        this.#returnFocus =
-          document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        this.#initialFocusPending = true;
-        this.#openingInteraction = false;
-        webAwesomeDialog.open = true;
-        // Web Awesome defers initial focus to a frame. Finish that custody
-        // gap as soon as its opening update makes the content focusable.
-        await webAwesomeDialog.updateComplete;
-      }
-      if (
-        generation === this.#syncGeneration &&
-        this.isConnected &&
-        this.open &&
-        dialog?.open &&
-        this.#initialFocusPending
-      ) {
-        this.#initialFocusPending = false;
-        this.#focusInitialContent(null, dialog, !this.#openingInteraction);
-      }
-      return;
-    }
-    this.#initialFocusPending = false;
-    if (webAwesomeDialog.open || dialog?.open) {
-      this.#suppressNextCancel = true;
-      webAwesomeDialog.open = false;
-    } else {
-      this.#clearNativeOcclusion();
-    }
-  }
-
-  #clearNativeOcclusion() {
-    this.#releaseNativeOcclusion?.();
-    this.#releaseNativeOcclusion = undefined;
-  }
-
-  #handleOpeningInteraction = () => {
-    if (this.#initialFocusPending) {
-      this.#openingInteraction = true;
-    }
+    releaseScrollLockStyles();
   };
+}
 
-  #handleInitialFocus = (event: Event) => {
-    if (event.target === event.currentTarget) {
-      this.#focusInitialContent(event instanceof FocusEvent ? event.relatedTarget : null);
+function restoreFocus(target: HTMLElement) {
+  target.focus({ preventScroll: true });
+  target.dispatchEvent(new Event("openclaw:restore-focus"));
+}
+
+function isInert(target: Element): boolean {
+  for (let element: Element | null = target; element; element = composedParent(element)) {
+    if (element.hasAttribute("inert")) {
+      return true;
     }
-  };
+  }
+  return false;
+}
 
-  #focusInitialContent(
-    previous: EventTarget | null = null,
-    fallback?: HTMLElement | null,
-    initial = false,
-  ) {
-    if (!this.isConnected) {
+type ModalPolicy = {
+  request(open: boolean): void;
+  setReturnFocusTarget(target: HTMLElement | null): void;
+  getOverlayContainer(): HTMLElement | null;
+  bindDialog: (element: HTMLDialogElement) => void;
+  bindOverlayContainer: (element: HTMLElement) => void;
+  connect(): void;
+  disconnect(): void;
+};
+
+function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
+  let dialog!: HTMLDialogElement;
+  let mounted = false;
+  let disposed = false;
+  let detaching = false;
+  let overlayContainer: HTMLElement | null = null;
+  let programmatic = false;
+  let dismissing = false;
+  let returnFocus: HTMLElement | null = null;
+  let returnFocusCaptured = false;
+  let returnOverride: HTMLElement | null | undefined;
+  let returnFocusPending = false;
+  let openingInteraction = false;
+  let initialFocusPending = false;
+  let focusBeforeChrome: HTMLElement | null = null;
+  let reportedOpen = false;
+  let publication = 0;
+  let focusReturnVersion = 0;
+
+  const isFocusGuard = (element: HTMLElement) =>
+    element.parentElement === dialog && element.hasAttribute("data-modal-focus-edge");
+
+  const focusInitialContent = (initial = false) => {
+    if (!host.isConnected || !dialog.open) {
       return;
     }
-    // Late animation completion must not replace focus already inside the form.
-    const root = this.getRootNode();
-    const active =
-      root instanceof ShadowRoot ? root.activeElement : this.ownerDocument.activeElement;
-    const autofocus = this.querySelector<HTMLElement>("[autofocus]");
-    // showModal can focus native media through nested slots before the declared
-    // autofocus target. Correct only initial browser focus, never a user choice.
+    const active = activeElement(host);
+    const autofocus = host.initialFocus?.();
     if (
-      active instanceof HTMLElement &&
-      active !== this &&
-      this.contains(active) &&
-      (!initial || !autofocus || active === autofocus)
+      active &&
+      active !== dialog &&
+      !isFocusGuard(active) &&
+      containsComposed(dialog, active) &&
+      (!initial || active === autofocus)
     ) {
       return;
     }
-    // The later Web Awesome frame can still focus the native dialog; restore
-    // the slotted field it displaced without resetting that field's selection.
     const target =
-      previous instanceof HTMLElement && this.contains(previous)
-        ? previous
-        : (autofocus ?? fallback);
-    target?.focus({ preventScroll: true });
-  }
-
-  #handleAfterHide = (event: Event) => {
-    if (event.target !== event.currentTarget) {
-      return;
-    }
-    this.#clearNativeOcclusion();
-    const returnFocus = this.#returnFocusOverride;
-    const originalReturnFocus = this.#returnFocus;
-    this.#returnFocusOverride = undefined;
-    this.open = false;
-    this.#returnFocus = null;
-    if (returnFocus === undefined) {
-      return;
-    }
-    // Web Awesome queues its original-trigger restoration immediately before
-    // wa-after-hide; apply the owner's restoration or suppression after it.
-    setTimeout(() => {
-      if (returnFocus === null) {
-        if (originalReturnFocus && document.activeElement === originalReturnFocus) {
-          originalReturnFocus.blur();
-        }
-      } else if (returnFocus.isConnected) {
-        restoreFocus(returnFocus);
-      }
-    }, 0);
+      focusBeforeChrome?.isConnected && containsComposed(dialog, focusBeforeChrome)
+        ? focusBeforeChrome
+        : (autofocus ?? dialog);
+    target.focus({ preventScroll: true });
   };
 
-  #handleHide = (event: Event) => {
-    // Nested overlay lifecycle events bubble through the slot; only the
-    // dialog's own hide may dismiss or steal focus from its owner.
-    if (event.target !== event.currentTarget) {
+  const clearReturnFocus = () => {
+    returnFocus = null;
+    returnFocusCaptured = false;
+    returnOverride = undefined;
+    returnFocusPending = false;
+  };
+
+  const restoreReturnFocus = () => {
+    if (dialog.open || !returnFocusCaptured) {
       return;
     }
-    if (this.#suppressNextCancel) {
-      this.#suppressNextCancel = false;
+    const target = returnOverride === undefined ? returnFocus : returnOverride;
+    const original = returnFocus;
+    const suppressed = returnOverride === null;
+    const active = activeElement(host);
+    const mayRestore =
+      !active ||
+      active === host.ownerDocument.body ||
+      active === host.ownerDocument.documentElement ||
+      active === returnFocus ||
+      containsComposed(dialog, active);
+    if (suppressed && active === original) {
+      original?.blur();
+    }
+    if (!target?.isConnected || !mayRestore) {
+      clearReturnFocus();
       return;
     }
-    const cancelEvent = new CustomEvent("modal-cancel", {
-      bubbles: true,
-      composed: true,
-      cancelable: true,
+    if (!isInert(target) && !target.matches(":disabled")) {
+      clearReturnFocus();
+      restoreFocus(target);
+      return;
+    }
+    // Teardown can take over before the containing render makes the target focusable.
+    returnFocusPending = true;
+    const version = ++focusReturnVersion;
+    const connected = host.isConnected;
+    // A containing render may enable the target or release inertness after removal.
+    queueMicrotask(() => {
+      if (version !== focusReturnVersion || host.isConnected !== connected || dialog.open) {
+        return;
+      }
+      if (!target.isConnected || activeElement(host) !== active) {
+        clearReturnFocus();
+        return;
+      }
+      if (!isInert(target) && !target.matches(":disabled")) {
+        clearReturnFocus();
+        restoreFocus(target);
+      }
     });
-    this.dispatchEvent(cancelEvent);
-    if (cancelEvent.defaultPrevented) {
+  };
+
+  const finishInitialFocus = () => {
+    if (initialFocusPending) {
+      focusInitialContent(!openingInteraction);
+      initialFocusPending = false;
+    }
+  };
+
+  const dispatch = (type: string, cancelable = false) =>
+    host.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true, cancelable }));
+
+  const overlay = createOverlay("modal-dialog", undefined, {
+    dispatchLifecycleEvent(type, cancelable) {
+      if (type === "overlay-hide") {
+        dismissing = true;
+        try {
+          let accepted = true;
+          if (!programmatic && !detaching && cancelable) {
+            accepted = host.dispatchEvent(
+              new CustomEvent("modal-cancel", {
+                bubbles: true,
+                composed: true,
+                cancelable: true,
+              }),
+            );
+          }
+          return dispatch(type, cancelable) && accepted;
+        } finally {
+          dismissing = false;
+        }
+      }
+      if (type === "overlay-after-show") {
+        focusInitialContent();
+      } else if (type === "overlay-after-hide") {
+        restoreReturnFocus();
+      }
+      return dispatch(type, cancelable);
+    },
+    onRootChange: (root) => retainShadowStyles(root, [overlayStyles, modalStyles]),
+    native: {
+      isOpen: () => dialog.open,
+      show: () => {
+        focusReturnVersion += 1;
+        // Reversing a pending close preserves the native dialog's original opener.
+        if (!dialog.open) {
+          if (returnFocusPending) {
+            clearReturnFocus();
+          }
+          returnFocus = activeElement(host);
+          returnFocusCaptured = true;
+          if (returnFocus) {
+            overlay.setReturnTarget(returnFocus);
+          }
+        }
+        openingInteraction = false;
+        initialFocusPending = true;
+        focusBeforeChrome = null;
+        dialog.showModal();
+        // Native focus can reconcile this opening before request() resumes.
+        if (overlay.open) {
+          finishInitialFocus();
+        }
+      },
+      hide: () => dialog.close(),
+    },
+    dismissOutsidePointer: false,
+    dismissOutsideFocus: false,
+    dismissEscape: false,
+    onInitialFocus: finishInitialFocus,
+    acquireOcclusion: () => acquirePresentation(host),
+  });
+
+  const publishOpen = (open: boolean, force = false) => {
+    if (detaching || disposed || !host.isConnected) {
+      return;
+    }
+    const changed = force || reportedOpen !== open;
+    if (changed) {
+      reportedOpen = open;
+      publication += 1;
+    }
+    // Host writes reenter request(); commit the publication before that callback.
+    host.open = open;
+    if (changed) {
+      host.onOpenChange?.(open);
+    }
+  };
+
+  const request = (next: boolean, controlled = true) => {
+    if (disposed || (!next && dismissing)) {
+      return;
+    }
+    if (!mounted || !host.isConnected) {
+      host.open = next;
+      return;
+    }
+    if (next) {
+      overlay.setParent(findOverlayParent(host));
+    }
+    const previousProgrammatic = programmatic;
+    programmatic = controlled;
+    const beforePublication = publication;
+    try {
+      const accepted = overlay.request(next, next ? "first" : "none");
+      if (beforePublication === publication) {
+        publishOpen(overlay.open, !accepted && overlay.open !== next);
+      }
+    } finally {
+      programmatic = previousProgrammatic;
+    }
+  };
+  const policy: ModalPolicy = {
+    request,
+    setReturnFocusTarget(target) {
+      if (returnFocusPending) {
+        focusReturnVersion += 1;
+        clearReturnFocus();
+      }
+      returnOverride = target;
+    },
+    getOverlayContainer: () => overlayContainer,
+    bindDialog(element) {
+      dialog = element;
+    },
+    bindOverlayContainer(element) {
+      overlayContainer = element;
+    },
+    connect() {
+      focusReturnVersion += 1;
+      if (returnFocusPending) {
+        clearReturnFocus();
+      }
+      request(host.open);
+    },
+    disconnect() {
+      focusReturnVersion += 1;
+      detaching = true;
+      try {
+        overlay.retire();
+        setModalLayer(host, false);
+        restoreReturnFocus();
+      } finally {
+        detaching = false;
+      }
+    },
+  };
+  const state = stateFor(host);
+  state.policy = policy;
+
+  const cancel = (event: Event) => {
+    if (event.target === dialog) {
+      event.preventDefault();
+      event.stopPropagation();
+      request(false, false);
+    }
+  };
+  const pointerdown = () => {
+    if (initialFocusPending) {
+      openingInteraction = true;
+    }
+  };
+  const mousedown = (event: MouseEvent) => {
+    // A second press can land on the backdrop of the modal the first press opened.
+    if (event.target === dialog && event.button === 0 && event.detail === 1) {
+      // A caller can remove the modal synchronously; native focus must not overwrite its return.
+      event.preventDefault();
+      request(false, false);
+    }
+  };
+  const keydown = (event: KeyboardEvent) => {
+    if (initialFocusPending) {
+      openingInteraction = true;
+    }
+    if (
+      event.key === "Tab" &&
+      !event.defaultPrevented &&
+      event.target === dialog &&
+      tabbableElements(dialog.children).next().done
+    ) {
       event.preventDefault();
     }
   };
+  const focusin = (event: FocusEvent) => {
+    if (isHtmlElement(event.target) && isFocusGuard(event.target)) {
+      const eligible = [...tabbableElements(dialog.children)];
+      const tabbable = eligible.filter((element) => {
+        if (!(element instanceof HTMLInputElement) || element.type !== "radio" || !element.name) {
+          return true;
+        }
+        const group = eligible.filter(
+          (candidate): candidate is HTMLInputElement =>
+            candidate instanceof HTMLInputElement &&
+            candidate.type === "radio" &&
+            candidate.name === element.name &&
+            candidate.form === element.form &&
+            candidate.getRootNode() === element.getRootNode(),
+        );
+        return element === (group.find((radio) => radio.checked) ?? group[0]);
+      });
+      const backwards =
+        event.target.dataset.modalFocusEdge === "start" &&
+        (!initialFocusPending || openingInteraction);
+      const target = backwards ? tabbable.at(-1) : tabbable[0];
+      (target ?? dialog).focus({ preventScroll: true });
+      return;
+    }
+    if (event.target === dialog) {
+      if (initialFocusPending && !openingInteraction) {
+        return;
+      }
+      focusBeforeChrome =
+        isHtmlElement(event.relatedTarget) &&
+        !isFocusGuard(event.relatedTarget) &&
+        containsComposed(dialog, event.relatedTarget)
+          ? event.relatedTarget
+          : null;
+      focusInitialContent();
+    }
+  };
+  onSettled(() => {
+    mounted = true;
+    const stopListeners = [
+      listen(dialog, "cancel", cancel),
+      listen(dialog, "pointerdown", pointerdown, true),
+      listen(dialog, "mousedown", { handleEvent: mousedown }, true),
+      listen(dialog, "keydown", { handleEvent: keydown }, true),
+      listen(dialog, "focusin", { handleEvent: focusin }),
+    ];
+    overlay.bindSurface(dialog);
+    overlay.setParent(findOverlayParent(host));
+    overlay.subscribe((open) => {
+      setModalLayer(host, open && host.isConnected);
+      if (!open) {
+        initialFocusPending = false;
+        restoreReturnFocus();
+      }
+      publishOpen(open);
+    });
+    if (state.returnTarget) {
+      returnOverride = state.returnTarget.value;
+      state.returnTarget = undefined;
+    }
+    request(host.open);
+    return () => {
+      disposed = true;
+      detaching = true;
+      mounted = false;
+      overlay.dispose();
+      setModalLayer(host, false);
+      restoreReturnFocus();
+      stopListeners.forEach((stop) => stop());
+      if (state.policy === policy) {
+        state.policy = undefined;
+      }
+    };
+  });
 
-  show() {
-    this.open = true;
-  }
-
-  setReturnFocusTarget(target: HTMLElement | null) {
-    this.#returnFocusOverride = target;
-  }
-
-  hide() {
-    this.open = false;
-  }
+  return policy;
 }
 
-if (!customElements.get("openclaw-modal-dialog")) {
-  customElements.define("openclaw-modal-dialog", OpenClawModalDialog);
-}
+export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogMethods>(
+  "openclaw-modal-dialog",
+  (props, host) => {
+    const policy = createModalPolicy(host);
+    return createComponent(ModalDialogContent, {
+      bindDialog: policy.bindDialog,
+      bindOverlayContainer: policy.bindOverlayContainer,
+      get label() {
+        return props.label;
+      },
+      get description() {
+        return props.description;
+      },
+      get children() {
+        return props.children;
+      },
+    });
+  },
+  {
+    properties: {
+      open: { default: true, type: Boolean },
+      manual: { default: false, type: Boolean, reflect: true },
+      label: { default: "", type: String },
+      description: { default: "", type: String },
+      initialFocus: { default: undefined, attribute: false },
+      onOpenChange: { default: undefined, attribute: false },
+    },
+    propertyChanged(host, key) {
+      if (key === "open") {
+        states.get(host)?.policy?.request(host.open);
+      }
+    },
+    connected(host) {
+      if (host.manual) {
+        host.open = false;
+      }
+      states.get(host)?.policy?.connect();
+    },
+    disconnected(host) {
+      states.get(host)?.policy?.disconnect();
+    },
+    methods: {
+      show(host) {
+        const policy = states.get(host)?.policy;
+        if (policy) {
+          policy.request(true);
+        } else {
+          host.open = true;
+        }
+      },
+      hide(host) {
+        const policy = states.get(host)?.policy;
+        if (policy) {
+          policy.request(false);
+        } else {
+          host.open = false;
+        }
+      },
+      setReturnFocusTarget(host, target) {
+        const state = stateFor(host);
+        if (state.policy) {
+          state.policy.setReturnFocusTarget(target);
+        } else {
+          state.returnTarget = { value: target };
+        }
+      },
+      getOverlayContainer(host) {
+        return states.get(host)?.policy?.getOverlayContainer() ?? null;
+      },
+    },
+  },
+);
+
+export const OpenClawModalDialog = ModalDialog.Element;
 
 declare global {
   interface Document {
     openClawModalLayers?: Set<HTMLElement>;
   }
-
   interface HTMLElementTagNameMap {
     "openclaw-modal-dialog": OpenClawModalDialog;
   }

@@ -1,40 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  createComposerContainer,
+  createComposerQuestionPrompt as questionPrompt,
+  createComposerControlsFixture,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
-
-function questionPrompt(id: string, question: string): QuestionPrompt {
-  return {
-    id,
-    questions: [
-      {
-        questionId: "choice",
-        header: "Choice",
-        question,
-        options: [{ label: "Yes" }, { label: "No" }],
-        isOther: false,
-      },
-    ],
-    sessionKey: "queue-test",
-    createdAtMs: 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    status: "pending",
-    answeredElsewhere: false,
-    localResolutionConfirmed: false,
-    locallyExpired: false,
-    submitting: false,
-    error: null,
-    drafts: new Map(),
-    revision: 1,
-  };
-}
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -42,7 +18,7 @@ describe("composer question takeover", () => {
   it.each([true, false])(
     "swaps the expanded question with the composer and restores its draft, focus, and progress (open=%s)",
     async (progressOpen) => {
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       document.body.append(container);
       const prompt = questionPrompt("question-swap", "Choose a release target");
       const composerProps = props({
@@ -58,13 +34,12 @@ describe("composer question takeover", () => {
         sessionKey: "queue-test",
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
-        composerControls: html`<button type="button">Model</button>`,
-        onRequestUpdate: vi.fn(),
+        composerControls: createComposerControlsFixture(),
       });
       composerProps.onDraftChange = (next) => {
         composerProps.draft = next;
       };
-      const draw = () => render(renderChatComposer(composerProps), container);
+      const draw = () => renderComposerInto(container, composerProps);
 
       draw();
       const progress = container.querySelector<HTMLDetailsElement>(
@@ -72,7 +47,7 @@ describe("composer question takeover", () => {
       )!;
       progress.querySelector("summary")!.click();
       expect(progress.open).toBe(progressOpen);
-      const progressWrapper = progress.parentElement!;
+      const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
       expect(progressWrapper.hidden).toBe(false);
       const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       initialTextarea.focus();
@@ -85,11 +60,7 @@ describe("composer question takeover", () => {
 
       composerProps.gatewayQuestionPrompts = [prompt];
       draw();
-      let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
-        updateComplete: Promise<unknown>;
-        props: { onCollapsedChange: (collapsed: boolean) => void };
-      };
-      await panel.updateComplete;
+      let panel = await questionPanelIn(container);
       expect(container.querySelector(".agent-chat__input")).toBeNull();
       expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
       expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
@@ -100,7 +71,7 @@ describe("composer question takeover", () => {
 
       composerProps.draft = "Host updated this draft while the question was open";
 
-      panel.props.onCollapsedChange(true);
+      panel.props!.onCollapsedChange!(true);
       draw();
       await Promise.resolve();
       let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -110,10 +81,10 @@ describe("composer question takeover", () => {
       expect(textarea.value).toBe("Host updated this draft while the question was open");
       expect(document.activeElement).toBe(textarea);
 
-      panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
-      panel.props.onCollapsedChange(false);
+      panel = await questionPanelIn(container);
+      panel.props!.onCollapsedChange!(false);
       draw();
-      await panel.updateComplete;
+      await questionPanelIn(container);
       expect(container.querySelector(".agent-chat__input")).toBeNull();
       expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
 

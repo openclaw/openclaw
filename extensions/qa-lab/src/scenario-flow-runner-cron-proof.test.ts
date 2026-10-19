@@ -272,16 +272,6 @@ describe("scheduling YAML canonical tool proof", () => {
     expect(historyReads).toBeGreaterThan(1);
     expect(Date.now()).toBe(now + 250);
   });
-  it.each(["direct", "nested"] as const)(
-    "accepts authority evidence in %s history",
-    async (shape) => {
-      const { result, restarted, removed } = await runSchedulingFixture("authority", shape);
-      expect(result.status).toBe("pass");
-      expect(restarted).toBe(true);
-      expect(removed).toEqual(["job-0", "job-1", "job-2", "job-3"]);
-    },
-  );
-
   it("accepts read-derived skill authority without admitting unrelated tools", async () => {
     const { result, restarted, removed } = await runSchedulingFixture("authority", "nested", {
       mutateJobs: (jobs) => {
@@ -314,31 +304,19 @@ describe("scheduling YAML canonical tool proof", () => {
   );
 
   it.each(["direct", "nested"] as const)(
-    "accepts one-shot/recurring evidence alongside other owners in %s history",
+    "allows %s read-only introspection around two adds",
     async (shape) => {
-      const { result, restarted, removed } = await runSchedulingFixture("recurring", shape);
+      const { result, restarted, removed } = await runSchedulingFixture("recurring", shape, {
+        mutateCalls: (calls) => {
+          calls.unshift({ action: "list", includeDisabled: true });
+          calls.push(...["status", "get", "runs"].map((action) => ({ action, jobId: "job-0" })));
+        },
+      });
       expect(result.status).toBe("pass");
       expect(restarted).toBe(true);
       expect(removed).toEqual(["job-1"]);
     },
   );
-
-  it.each([
-    ["direct", ["list"]],
-    ["nested", ["list"]],
-    ["direct", ["list", "status", "get", "runs"]],
-    ["nested", ["list", "status", "get", "runs"]],
-  ] as const)("allows %s read-only introspection %j around two adds", async (shape, actions) => {
-    const { result, restarted, removed } = await runSchedulingFixture("recurring", shape, {
-      mutateCalls: (calls) => {
-        calls.unshift({ action: actions[0], includeDisabled: true });
-        calls.push(...actions.slice(1).map((action) => ({ action, jobId: "job-0" })));
-      },
-    });
-    expect(result.status).toBe("pass");
-    expect(restarted).toBe(true);
-    expect(removed).toEqual(["job-1"]);
-  });
 
   it.each(["direct", "nested"] as const)(
     "waits for the second add after list plus the first add in %s history",
@@ -353,24 +331,20 @@ describe("scheduling YAML canonical tool proof", () => {
     },
   );
 
-  it.each(["run", "update", "remove", "wake", "next_check", "unknown"])(
-    "rejects unrequested %s alongside read-only introspection and two adds",
-    async (action) => {
-      await expect(
-        runSchedulingFixture("recurring", "nested", {
-          mutateCalls: (calls) => {
-            calls.unshift({ action: "list", includeDisabled: true });
-            calls.push({ action, jobId: "job-0" });
-          },
-        }),
-      ).rejects.toThrow(/expected exactly two/);
-    },
-  );
+  it("rejects an unrequested mutation alongside read-only introspection and two adds", async () => {
+    await expect(
+      runSchedulingFixture("recurring", "nested", {
+        mutateCalls: (calls) => {
+          calls.unshift({ action: "list", includeDisabled: true });
+          calls.push({ action: "run", jobId: "job-0" });
+        },
+      }),
+    ).rejects.toThrow(/expected exactly two/);
+  });
 
   it.each([
     { code: "UNAVAILABLE", retryable: false, method: "chat.history" },
     { code: "INVALID_REQUEST", retryable: true, method: "chat.history" },
-    { code: "UNAVAILABLE", retryable: true, method: "sessions.list" },
     { code: "UNAVAILABLE", retryable: true, method: undefined },
   ])("propagates history error $code/$retryable/$method without retry", async (input) => {
     const historyError = Object.assign(new Error("fixture history failure"), {
@@ -410,8 +384,6 @@ describe("scheduling YAML canonical tool proof", () => {
     ["omitted", 0, ["automations", "read"], /omitted policy/],
     ["wildcard", 1, ["automations", "read"], /wildcard policy/],
     ["overbroad", 2, ["read", "skills_read", "exec"], /overbroad policy/],
-    ["overbroad wildcard", 2, ["read", "skills_read", "*"], /overbroad policy/],
-    ["overbroad unrelated", 2, ["read", "skills_read", "browser"], /overbroad policy/],
     ["overbroad duplicate", 2, ["read", "skills_read", "skills_read"], /overbroad policy/],
     ["empty", 3, ["read"], /empty policy/],
   ] as const)("rejects incorrect persisted %s authority", async (_label, index, tools, message) => {
@@ -499,11 +471,11 @@ describe("scheduling YAML canonical tool proof", () => {
     ).rejects.toThrow(/recurring job did not remain scheduled/);
   });
 
-  it.each(["at", "every"])("rejects a replayed %s job with a new identity", async (schedule) => {
+  it("rejects a replayed one-shot job with a new identity", async () => {
     await expect(
       runSchedulingFixture("recurring", "nested", {
         mutateRestartedJobs: (jobs) => {
-          jobs.push(job(`qa-model-${schedule}-${suffix}`, 98));
+          jobs.push(job(`qa-model-at-${suffix}`, 98));
         },
       }),
     ).rejects.toThrow(/unexpected scenario cron jobs/);

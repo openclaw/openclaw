@@ -13,7 +13,7 @@ import {
   parseTargetedGatewayRestartIntent,
 } from "./restart-request.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function normalizeReason(value: unknown): string | undefined {
   // Restart reasons are operator-visible log context, not payload storage.
@@ -23,16 +23,16 @@ function normalizeReason(value: unknown): string | undefined {
     : undefined;
 }
 
+function rejectRestartRequest(respond: RespondFn, message: string): void {
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+}
+
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.stop.request": async (options) => {
     const { params, respond, context } = options;
     const target = isRecord(params) ? parseTargetedGatewayRestart(params.target) : null;
     if (!target) {
-      return respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway stop"),
-      );
+      return rejectRestartRequest(respond, "invalid targeted gateway stop");
     }
     const { assertCurrent } = readGatewayRequestMutationAuthority(options);
     try {
@@ -45,11 +45,7 @@ export const restartHandlers: GatewayRequestHandlers = {
         activeLock.ownerId !== target.ownerId ||
         activeLock.port !== target.port
       ) {
-        return respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "target gateway no longer owns the active lock"),
-        );
+        return rejectRestartRequest(respond, "target gateway no longer owns the active lock");
       }
       const result = await context.hostLifecycle?.request("stop", assertCurrent);
       if (!result?.ok) {
@@ -62,71 +58,37 @@ export const restartHandlers: GatewayRequestHandlers = {
   },
   "gateway.restart.request": async ({ respond, params }) => {
     if (!isRecord(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid gateway.restart.request params"),
-      );
+      rejectRestartRequest(respond, "invalid gateway.restart.request params");
       return;
     }
     const reason = normalizeReason(params.reason);
     const target = parseTargetedGatewayRestart(params.target);
     if (target === null) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway restart"),
-      );
+      rejectRestartRequest(respond, "invalid targeted gateway restart");
       return;
     }
-    if (target) {
-      if (params.safe !== undefined && typeof params.safe !== "boolean") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid safe targeted restart mode"),
-        );
-        return;
-      }
-      if (params.safe === true) {
-        if (params.restartIntent !== undefined) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "safe targeted restart does not accept intent"),
-          );
-          return;
-        }
-        const result = scheduleSafeGatewayRestart({
-          reason,
-          delayMs: 0,
-          skipDeferral: params.skipDeferral === true,
-        });
-        respond(true, result);
-        return;
-      }
+    if (target && params.safe !== undefined && typeof params.safe !== "boolean") {
+      rejectRestartRequest(respond, "invalid safe targeted restart mode");
+      return;
+    }
+    if (target && params.safe === true && params.restartIntent !== undefined) {
+      rejectRestartRequest(respond, "safe targeted restart does not accept intent");
+      return;
+    }
+    if (target && params.safe !== true) {
       const intent = parseTargetedGatewayRestartIntent(params.restartIntent, reason);
       if (!intent) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway restart intent"),
-        );
+        rejectRestartRequest(respond, "invalid targeted gateway restart intent");
         return;
       }
       const activeLock = await readActiveGatewayLockIdentity().catch(() => undefined);
       if (
-        !activeLock ||
-        activeLock.pid !== process.pid ||
+        activeLock?.pid !== process.pid ||
         activeLock.pid !== target.pid ||
         activeLock.ownerId !== target.ownerId ||
         activeLock.port !== target.port
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "target gateway no longer owns the active lock"),
-        );
+        rejectRestartRequest(respond, "target gateway no longer owns the active lock");
         return;
       }
       const result = requestGatewayRestartWithSignalAdmission(reason, intent);

@@ -4,7 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
 import * as futureConfig from "../../daemon/future-config-guard.js";
@@ -81,16 +86,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 function revoke(root: string) {
-  const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-  try {
-    expect(
-      db
-        .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
-        .run("replacement", root).changes,
-    ).toBe(1);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+  expect(
+    db
+      .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+      .run("replacement", root).changes,
+  ).toBe(1);
 }
 function request(run: NonNullable<UpdateCommandOptions["run"]>, root = a) {
   return {
@@ -102,140 +103,159 @@ function request(run: NonNullable<UpdateCommandOptions["run"]>, root = a) {
     revalidate: async () => undefined,
   };
 }
-function owned(
-  operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>,
+function owned<T>(
+  operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<T>,
   retained = true,
 ) {
   const run: NonNullable<UpdateCommandOptions["run"]> = { runId: randomUUID(), env };
   return withUpdateCommandExecutor(run.runId, async (executor) => {
     run.executorFence = await executor.enter(b, retained ? { serviceRoot: a } : undefined);
-    await operation(run);
+    return await operation(run);
   });
+}
+function expectOwners(kind: "busy" | "absent") {
+  const store = createManagedHandoffLeaseStore();
+  for (const root of [a, b]) {
+    if (kind === "busy") {
+      expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe(kind);
+    } else {
+      expect(store.read(root)).toEqual({ kind });
+    }
+  }
+}
+function restartOwned() {
+  return owned((run) => commands.restartRetainedUpdateGatewayService(request(run)));
 }
 
 describe.skipIf(process.platform === "win32")("retained POSIX native restart", () => {
-  it.each(["native drain", "readiness failure"] as const)(
+  it.for(["native drain", "readiness failure"] as const)(
     "restarts retained A with a real child and keeps both owners until %s",
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const effect = path.join(a, "effect");
-      const proceed = path.join(a, "proceed");
-      const started = createDeferred();
+      const receipts = await openFixtureReceiptChannel();
       const definition = path.join(a, "unit");
       fs.writeFileSync(definition, "original Node A and service definition");
       let pid = 0;
-      const readinessError = new Error("fixture readiness observer failed");
-      // Observe outside native custody so a readiness failure can release the child
-      // before the authority owner joins its still-pending command.
-      const observer = fs.watch(a, () => {
-        try {
-          if (!fs.existsSync(effect)) {
-            return;
-          }
-          pid = Number(fs.readFileSync(effect, "utf8"));
-          observer.close();
-          if (outcome === "readiness failure") {
-            started.reject(readinessError);
-          } else {
-            started.resolve();
-          }
-        } catch (error) {
-          started.reject(error);
-        }
-      });
-      observer.on("error", started.reject);
-      const native = vi
-        .spyOn(systemdExec, "execSystemctlUser")
-        .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
-          assertCurrent?.();
-          assertGatewayServiceUpdateCurrent();
-          if (args[0] === "reset-failed") {
-            return success;
-          }
-          expect(args).toEqual(["restart", "fixture-A.service"]);
-          return await execFileUtf8(process.execPath, [
-            "-e",
-            `
-      const fs = require("node:fs");
-      let drained = false;
-      const finish = () => {
-        if (drained || !fs.existsSync(${JSON.stringify(proceed)})) return;
-        drained = true;
-        watcher.close();
-        process.stdout.write("drained");
-      };
-      const watcher = fs.watch(${JSON.stringify(a)}, finish);
-      fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
-      fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
-      finish();
-    `,
-          ]);
-        });
       let complete = false;
-      const work = owned(async (run) => {
-        const onGatewayStartAttempted = vi.fn();
-        await expect(
-          commands.restartRetainedUpdateGatewayService({
-            ...request(run),
-            onGatewayStartAttempted,
-          }),
-        ).resolves.toEqual({
-          outcome: "completed",
-        });
-        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
-      }).then(() => {
-        complete = true;
-      });
-      const exercise = async () => {
-        try {
-          await Promise.race([started.promise, work]);
-          expect(pid).toBeGreaterThan(0);
-          expect(pid).not.toBe(process.pid);
-          expect(complete).toBe(false);
-          const store = createManagedHandoffLeaseStore();
-          for (const root of [a, b]) {
-            expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
-          }
-          expect(store.read(c)).toEqual({ kind: "absent" });
-          fs.writeFileSync(proceed, "");
-          await work;
-        } finally {
-          observer.close();
-          fs.writeFileSync(proceed, "");
-          await work.catch(() => undefined);
+      let work: Promise<void> | undefined;
+      const readinessError = new Error("fixture readiness observer failed");
+      const releaseChild = () => receipts.release("native", "release");
+      // Directory notifications can coalesce. Keep readiness and release outside
+      // native custody so a failed observer can still unblock the owned child.
+      const started = receipts.waitFor("native", "pid:").then(async () => {
+        pid = Number(fs.readFileSync(effect, "utf8"));
+        await receipts.waitFor("native", `pid:${pid}:`);
+        expect(pid).toBeGreaterThan(0);
+        expect(pid).not.toBe(process.pid);
+        if (outcome === "readiness failure") {
+          throw readinessError;
         }
-      };
-      if (outcome === "readiness failure") {
-        await expect(exercise()).rejects.toBe(readinessError);
-      } else {
-        await exercise();
-      }
-      expect(pid).toBeGreaterThan(0);
-      expect(complete).toBe(true);
-      expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
-      expect(fs.readFileSync(definition, "utf8")).toBe("original Node A and service definition");
-      const store = createManagedHandoffLeaseStore();
-      for (const root of [a, b]) {
-        expect(store.read(root)).toEqual({ kind: "absent" });
-      }
+      });
+      await runQaGatewayFixture(
+        async () => {
+          const native = vi
+            .spyOn(systemdExec, "execSystemctlUser")
+            .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
+              assertCurrent?.();
+              assertGatewayServiceUpdateCurrent();
+              if (args[0] === "reset-failed") {
+                return success;
+              }
+              expect(args).toEqual(["restart", "fixture-A.service"]);
+              return await execFileUtf8(process.execPath, [
+                "--input-type=module",
+                "-e",
+                `
+      import fs from "node:fs";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
+        fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
+        fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
+        sendReceipt("native", "pid:" + process.pid + ":");
+        await awaitRelease("native", "release");
+        process.stdout.write("drained");
+    `,
+              ]);
+            });
+          const running = owned(async (run) => {
+            const onGatewayStartAttempted = vi.fn();
+            expect(
+              await commands.restartRetainedUpdateGatewayService({
+                ...request(run),
+                onGatewayStartAttempted,
+                signal,
+              }),
+            ).toEqual({ outcome: "completed" });
+            expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
+          }).then(() => {
+            complete = true;
+          });
+          work = running;
+          const observe = async () => {
+            await withinTest(Promise.race([started, running]), signal);
+            expect(complete).toBe(false);
+            expectOwners("busy");
+            expect(createManagedHandoffLeaseStore().read(c)).toEqual({ kind: "absent" });
+          };
+          try {
+            if (outcome === "readiness failure") {
+              await expect(observe()).rejects.toBe(readinessError);
+            } else {
+              await observe();
+            }
+          } finally {
+            releaseChild();
+            await running.catch(() => undefined);
+          }
+          await running;
+          expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
+          expect(fs.readFileSync(definition, "utf8")).toBe(
+            "original Node A and service definition",
+          );
+          expectOwners("absent");
+        },
+        async () => {
+          releaseChild();
+          await work?.catch(() => undefined);
+        },
+        () => receipts.close(),
+      );
     },
   );
 
-  it.each(["A", "B", "caller", "executor", "abort", "binding", "unavailable", "scope"] as const)(
-    "refuses after the native lock/config await changes %s",
-    async (fault) => {
-      const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
-      const controller = new AbortController();
-      let callerCurrent = true;
-      const onGatewayStartAttempted = vi.fn();
-      let revalidations = 0;
-      if (fault === "unavailable") {
-        vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
-      } else if (fault === "scope") {
-        vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
-          new Error("scope"),
-        );
-      }
-      const work = owned(async (run) => {
+  it.each([
+    "A",
+    "B",
+    "caller",
+    "executor",
+    "abort",
+    "binding",
+    "unavailable",
+    "scope",
+    "A after reset-failed",
+    "B after reset-failed",
+  ] as const)("rechecks retained authority before restart: %s", async (fault) => {
+    const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
+    const afterReset = fault.endsWith("after reset-failed");
+    if (afterReset) {
+      native.mockImplementation(async () => {
+        await Promise.resolve();
+        revoke(fault.startsWith("A") ? a : b);
+        return success;
+      });
+    }
+    const controller = new AbortController();
+    let callerCurrent = true;
+    const onGatewayStartAttempted = vi.fn();
+    let revalidations = 0;
+    if (fault === "unavailable") {
+      vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
+    } else if (fault === "scope") {
+      vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
+        new Error("scope"),
+      );
+    }
+    const work = owned(async (run) => {
+      if (!afterReset) {
         vi.spyOn(futureConfig, "assertFutureConfigActionAllowed").mockImplementation(async () => {
           await Promise.resolve();
           if (fault === "A" || fault === "B") {
@@ -248,53 +268,32 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
             callerCurrent = false;
           }
         });
-        await commands.restartRetainedUpdateGatewayService({
-          ...request(run),
-          onGatewayStartAttempted,
-          revalidate: async () => {
-            if (++revalidations === 2 && fault === "binding") {
-              throw new Error("changed original service binding");
-            }
-          },
-          signal: controller.signal,
-          assertCurrent() {
-            if (!callerCurrent) {
-              throw new Error("changed original service");
-            }
-          },
-        });
+      }
+      await commands.restartRetainedUpdateGatewayService({
+        ...request(run),
+        onGatewayStartAttempted,
+        revalidate: async () => {
+          if (++revalidations === 2 && fault === "binding") {
+            throw new Error("changed original service binding");
+          }
+        },
+        signal: controller.signal,
+        assertCurrent() {
+          if (!callerCurrent) {
+            throw new Error("changed original service");
+          }
+        },
       });
-      await expect(work).rejects.toThrow(
-        /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
-      );
+    });
+    await expect(work).rejects.toThrow(
+      /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
+    );
+    expect(native.mock.calls.map((call) => call[1][0])).toEqual(afterReset ? ["reset-failed"] : []);
+    if (!afterReset) {
       expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
-      expect(native).not.toHaveBeenCalled();
-      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["A", "B"] as const)(
-    "checks %s again after reset-failed and before restart",
-    async (root) => {
-      const onGatewayStartAttempted = vi.fn();
-      const native = vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async () => {
-        await Promise.resolve();
-        revoke(root === "A" ? a : b);
-        return success;
-      });
-      await expect(
-        owned(async (run) => {
-          await commands.restartRetainedUpdateGatewayService({
-            ...request(run),
-            onGatewayStartAttempted,
-          });
-        }),
-      ).rejects.toThrow();
-      expect(native).toHaveBeenCalledOnce();
-      expect(native.mock.calls[0]?.[1][0]).toBe("reset-failed");
-      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
-    },
-  );
+    }
+    expect(onGatewayStartAttempted).not.toHaveBeenCalled();
+  });
 
   it.each(["same-root", "unretained", "forged"] as const)(
     "rejects a %s recovery before native inspection",
@@ -330,14 +329,10 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       code: 1,
       stderr: "native failed",
     });
-    await expect(
-      owned(async (run) => {
-        await commands.restartRetainedUpdateGatewayService(request(run));
-      }),
-    ).rejects.toThrow("native failed");
+    await expect(restartOwned()).rejects.toThrow("native failed");
   });
 
-  it("does not release native operation lock while a nested native borrower is pending", async () => {
+  it("holds the native lock until its nested borrower settles", async () => {
     const release = createDeferred();
     const entered = createDeferred();
     let borrower: Promise<void> | undefined;
@@ -353,20 +348,14 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       return success;
     });
     let done = false;
-    const work = owned(async (run) => {
-      await commands.restartRetainedUpdateGatewayService(request(run));
-    }).then(() => {
+    const work = restartOwned().then(() => {
       done = true;
     });
     try {
       await Promise.race([entered.promise, work]);
       await Promise.resolve();
       expect(done).toBe(false);
-      for (const root of [a, b]) {
-        expect(
-          createManagedHandoffLeaseStore().acquire(root, randomUUID(), { kind: "update" }).kind,
-        ).toBe("busy");
-      }
+      expectOwners("busy");
       release.resolve();
       await work;
       await borrower;

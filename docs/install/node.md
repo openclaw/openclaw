@@ -17,6 +17,12 @@ node -v
 
 `v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
 
+Node 27 is accepted, including well-formed development labels such as
+`v27.0.0-head` and `27.0.0-nightly20261018f88a1d25e9`. Prereleases on majors
+newer than Node 26 use their numeric version for installation and update checks;
+Node 24 and 26 prereleases remain unsupported. Development builds must pass the
+same SQLite safety checks as releases. Node 26 remains the recommended default.
+
 Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
 
 ### Update from the CLI
@@ -27,9 +33,11 @@ recorded in the managed Gateway service, Node on PATH, then nvm, fnm, Volta, and
 Homebrew defaults. Each candidate must pass the same SQLite capability checks as
 normal startup. The first passing runtime retries the original command without
 prompting, including non-interactive Doctor commands launched by older updaters.
-Arguments, working directory, environment, standard streams, and exit status are
-preserved. Commands with an exact process-identity requirement cannot use this
-recovery.
+Arguments, working directory, standard streams, and exit status are preserved.
+The selected Node directory is prepended to the child process's PATH so package
+managers and lifecycle scripts use the compatible runtime too. Other environment
+settings, including `npm_config_node`, are preserved. Commands with an exact
+process-identity requirement cannot use this recovery.
 
 Runtime discovery uses the environment inherited when the CLI starts, before
 OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
@@ -50,7 +58,7 @@ byte-order marks. If the current Node build cannot decode a service script safel
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
-case probes the service executable; recovery continues with PATH and the other
+case checks the service executable; recovery continues with PATH and the other
 available runtime sources.
 
 If none is available and you are in an interactive terminal, the CLI offers:
@@ -157,6 +165,15 @@ fnm use 26
 </Accordion>
 
 ## Troubleshooting
+
+### Homebrew upgrades while the Gateway is running
+
+If Homebrew removes the running Gateway's Node executable, command relays and
+their process-group anchors use the formula's available stable Homebrew path for
+new launches. They keep using the original executable while it exists. Workers
+that share native modules or V8 messages, including the spawn broker, keep the
+exact runtime and report a restart action if it is gone. Restart the Gateway
+after upgrading Node to move the Gateway itself onto the new runtime.
 
 ### `openclaw: command not found`
 

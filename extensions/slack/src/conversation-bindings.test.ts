@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { inspectConversationBindingAsync } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
   createTestRegistry,
   setActivePluginRegistry,
@@ -12,10 +12,16 @@ import {
   getSessionBindingService,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { slackConversationRouteOwners } from "./conversation-route-owner.js";
+import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { setSlackRuntime } from "./runtime.js";
+
+const { prepareConversationRouteOwnersAsync: prepareSlackConversationRouteOwners } =
+  slackConversationRouteOwners;
 
 type SlackInstallationStateRegistration = ReturnType<typeof registerSlackInstallationState>;
 
@@ -47,7 +53,7 @@ describe("Slack runtime conversation bindings", () => {
   afterEach(async () => {
     installationState.release();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     setSlackRuntime(null as never);
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -71,8 +77,10 @@ describe("Slack runtime conversation bindings", () => {
       targetKind: "session",
       conversation: CONVERSATION,
     });
-    service.touch(first.bindingId, 1234);
-    expect(service.resolveByConversation(CONVERSATION)?.metadata?.lastActivityAt).toBe(1234);
+    await service.touchAsync(first.bindingId, 1234);
+    expect((await service.resolveByConversationAsync(CONVERSATION))?.metadata?.lastActivityAt).toBe(
+      1234,
+    );
 
     const reassigned = await service.bind({
       targetSessionKey: "agent:main:second",
@@ -83,6 +91,47 @@ describe("Slack runtime conversation bindings", () => {
     await expect(
       service.unbind({ bindingId: reassigned.bindingId, reason: "workspace cleanup" }),
     ).resolves.toEqual([reassigned]);
+  });
+
+  it("prepares thread, parent, and configured owners from supplied binding inspection", async () => {
+    cfg = { channels: { slack: { accounts: { default: {} } } } };
+    const service = getSessionBindingService();
+    for (const [conversationId, parentConversationId, agentId] of [
+      ["C111", undefined, "main"],
+      ["thread-1", "C111", "finance"],
+      ["C222", undefined, "ops"],
+    ] as const) {
+      await service.bind({
+        targetSessionKey: `agent:${agentId}:bound`,
+        targetKind: "session",
+        conversation: {
+          channel: "slack",
+          accountId: "default",
+          conversationId,
+          ...(parentConversationId ? { parentConversationId } : {}),
+        },
+      });
+    }
+    const inputs = [
+      {
+        cfg,
+        accountId: "default",
+        conversation: { kind: "channel" as const, peerId: "C111", threadId: "thread-1" },
+      },
+      {
+        cfg,
+        accountId: "default",
+        conversation: { kind: "channel" as const, peerId: "C222", threadId: "thread-missing" },
+      },
+      { cfg, accountId: "default", conversation: { kind: "channel" as const, peerId: "C333" } },
+    ];
+    const expected = ["finance", "ops", "main"].map((agentId) => ({ kind: "agent", agentId }));
+    expect(await Promise.all(inputs.map(inspectSlackConversationRouteOwner))).toEqual(expected);
+    const prepared = await prepareSlackConversationRouteOwners(inputs, async (refs) => {
+      const inspections = await Promise.all(refs.map(inspectConversationBindingAsync));
+      return () => inspections;
+    });
+    expect(prepared.map((resolve) => resolve())).toEqual(expected);
   });
 
   it("does not advertise, select, or mutate bindings for a detected org install", async () => {
@@ -102,10 +151,10 @@ describe("Slack runtime conversation bindings", () => {
       unbindSupported: false,
       placements: [],
     });
-    expect(service.resolveByConversation(CONVERSATION)).toBeNull();
-    expect(service.listBySession(existing.targetSessionKey)).toEqual([]);
+    expect(await service.resolveByConversationAsync(CONVERSATION)).toBeNull();
+    expect(await service.listBySessionAsync(existing.targetSessionKey)).toEqual([]);
 
-    service.touch(existing.bindingId, 9999);
+    await service.touchAsync(existing.bindingId, 9999);
     await expect(
       service.bind({
         targetSessionKey: "agent:main:enterprise",
@@ -118,7 +167,7 @@ describe("Slack runtime conversation bindings", () => {
     ).resolves.toEqual([]);
 
     installationState.update("workspace");
-    expect(service.resolveByConversation(CONVERSATION)).toMatchObject({
+    expect(await service.resolveByConversationAsync(CONVERSATION)).toMatchObject({
       bindingId: existing.bindingId,
       targetSessionKey: existing.targetSessionKey,
       metadata: { lastActivityAt: originalActivityAt },

@@ -50,6 +50,7 @@ describe("check-script-erasability", () => {
       for (const relativePath of [
         "scripts/check-script-erasability.mjs",
         "scripts/lib/tsx-cli-shim.mjs",
+        "scripts/lib/managed-cleanup-handoff.mts",
         "scripts/lib/local-check-runtime.mts",
         "src/infra/node-runtime-executable.ts",
       ]) {
@@ -73,7 +74,7 @@ describe("check-script-erasability", () => {
       expect(result.error).toBeUndefined();
       if (status === 0) {
         expect(result.stdout).toBe(
-          "[script-erasability] checked 2 TypeScript implementation files\n",
+          "[script-erasability] checked 3 TypeScript implementation files\n",
         );
         expect(result.stderr).toBe("");
       } else {

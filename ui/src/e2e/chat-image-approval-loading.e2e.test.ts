@@ -107,7 +107,24 @@ suite.define(() => {
             animations: "disabled",
           });
           const blocked = page.locator(".chat-image-frame--compact").filter({ has: allow });
-          expect((await blocked.boundingBox())?.height).toBe(74);
+          const reason = blocked.locator(".chat-assistant-attachment-card__status-reason");
+          expect((await reason.textContent())?.trim()).not.toBe("");
+          expect(
+            await reason.evaluate((element) => ({
+              wrapped: getComputedStyle(element).whiteSpace === "normal",
+              clipped:
+                element.scrollHeight > element.clientHeight + 1 ||
+                element.scrollWidth > element.clientWidth + 1,
+            })),
+          ).toEqual({ wrapped: true, clipped: false });
+          const actionBounds = await allow.boundingBox();
+          expect(actionBounds?.width).toBeGreaterThanOrEqual(44);
+          expect(actionBounds?.height).toBeGreaterThanOrEqual(44);
+          const cardBounds = await blocked.boundingBox();
+          expect(cardBounds!.height).toBeGreaterThan(actionBounds!.height);
+          expect(actionBounds!.y + actionBounds!.height).toBeLessThanOrEqual(
+            cardBounds!.y + cardBounds!.height,
+          );
           expect(
             requests.some((request) => request.source === protectedSource && !request.meta),
           ).toBe(false);

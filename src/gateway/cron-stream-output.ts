@@ -6,7 +6,9 @@ import {
 } from "../cron/stream-schedule.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { matchCronStreamLines } from "./cron-stream-matcher.js";
 import {
@@ -26,7 +28,6 @@ const INTAKE_CAP_MULTIPLIER = 4;
 
 type InFlightBatch = {
   batch: string;
-  sourceIdentity: string;
   promise: Promise<CronStreamFireDisposition>;
   handled: boolean;
 };
@@ -59,7 +60,7 @@ type CronStreamOutputParams = {
   sourceIdentity: string;
   minIntervalMs: number;
   settleTimeoutMs: number;
-  nowMs: () => number;
+  scheduler: GatewaySchedulerScope;
   fireBatch: (
     job: CronJob,
     batch: string,
@@ -70,10 +71,8 @@ type CronStreamOutputParams = {
   enqueue: (label: string, operation: () => Promise<void>) => Promise<void>;
   requestTriggerDisabledStop: () => void;
   requestMatchFailureStop: (error: string) => void;
-  getGeneration: () => number;
   getState: () => CronStreamOwnerState;
   isDesiredRunning: () => boolean;
-  isRetired: () => boolean;
   logger: CronStreamLogger;
 };
 
@@ -85,41 +84,33 @@ async function waitForInFlightBatch(
   promise: Promise<CronStreamFireDisposition>,
   timeoutMs: number,
 ) {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise.then(
-        (disposition) => ({ settled: true as const, disposition }),
-        (error: unknown) => ({ settled: true as const, error }),
-      ),
-      new Promise<{ settled: false }>((resolve) => {
-        timeout = setTimeout(() => resolve({ settled: false }), timeoutMs);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
+  const outcome = promise.then(
+    (disposition) => ({ settled: true as const, disposition }),
+    (error: unknown) => ({ settled: true as const, error }),
+  );
+  return (await settlesWithin(outcome, timeoutMs)) ? await outcome : { settled: false as const };
 }
 
 /** Owns one stream source's bounded output and dispatch cadence. */
 export class CronStreamOutput {
-  private readonly params: Omit<CronStreamOutputParams, "job" | "scheduleKey" | "sourceIdentity">;
+  private readonly params: Omit<
+    CronStreamOutputParams,
+    "job" | "scheduleKey" | "sourceIdentity" | "scheduler"
+  >;
   private job: CronStreamJob;
   private scheduleKey: string;
   private sourceIdentity: string;
+  private scheduler: GatewaySchedulerScope;
   private matcher?: RegExp;
   private matching = new AbortController();
   private matchFailed = false;
-  private quietTimer?: NodeJS.Timeout;
-  private rateTimer?: NodeJS.Timeout;
-  private quietEpoch = 0;
-  private rateEpoch = 0;
+  private quietTimer?: GatewayScheduledJob;
+  private rateTimer?: GatewayScheduledJob;
   private bufferedOutput: BufferedOutput[] = [];
   private interruptedOutput: BufferedOutput[] = [];
   private bufferedOutputBytes = 0;
-  private readonly queuedOutputDrainGenerations = new Set<number>();
-  private readonly outputOverflowGenerations = new Set<number>();
+  private outputDrainQueued = false;
+  private outputOverflowed = false;
   private droppedChunkTail: Record<StreamOutputChannel, DroppedTail> = {
     stdout: false,
     stderr: false,
@@ -134,11 +125,12 @@ export class CronStreamOutput {
   private firing?: InFlightBatch;
   private nextEligibleAttemptAtMs: number;
 
-  constructor({ job, scheduleKey, sourceIdentity, ...params }: CronStreamOutputParams) {
+  constructor({ job, scheduleKey, sourceIdentity, scheduler, ...params }: CronStreamOutputParams) {
     this.params = params;
     this.job = job;
     this.scheduleKey = scheduleKey;
     this.sourceIdentity = sourceIdentity;
+    this.scheduler = scheduler;
     this.matcher = this.compileMatcher(job.schedule);
     this.nextEligibleAttemptAtMs = (job.state.lastRunAtMs ?? 0) + params.minIntervalMs;
   }
@@ -157,19 +149,15 @@ export class CronStreamOutput {
     };
   }
 
-  enqueueChunk(channel: StreamOutputChannel, chunk: string, generation: number): void {
+  enqueueChunk(channel: StreamOutputChannel, chunk: string, signal: AbortSignal): void {
     const state = this.params.getState();
-    if (
-      !chunk ||
-      generation !== this.params.getGeneration() ||
-      (state !== "starting" && state !== "running")
-    ) {
+    if (!chunk || signal.aborted || (state !== "starting" && state !== "running")) {
       return;
     }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
     const remaining = maxBatchBytes * INTAKE_CAP_MULTIPLIER - this.bufferedOutputBytes;
     const accepted =
-      this.outputOverflowGenerations.has(generation) ||
+      this.outputOverflowed ||
       remaining <= 0 ||
       this.bufferedOutput.length >= MAX_BUFFERED_OUTPUT_SEGMENTS
         ? ""
@@ -178,8 +166,8 @@ export class CronStreamOutput {
       // The last drop wins: a terminal newline in the dropped data closes the
       // broken line, so the next accepted fragment starts a clean line.
       this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
-      this.outputOverflowGenerations.add(generation);
-      this.queueOutputDrain(generation);
+      this.outputOverflowed = true;
+      this.queueOutputDrain();
       return;
     }
     const truncatedTail = accepted !== chunk;
@@ -189,7 +177,7 @@ export class CronStreamOutput {
     this.droppedChunkTail[channel] = false;
     const last = this.bufferedOutput.at(-1);
     // Never merge across a dropped gap: the gap severed the line boundary.
-    if (last?.channel === channel && last.generation === generation && !precededByDrop) {
+    if (last?.channel === channel && !precededByDrop) {
       last.chunk += accepted;
       last.truncatedTail ||= truncatedTail;
       last.truncatedTailContinuesLine ||= truncatedTailContinuesLine;
@@ -197,7 +185,6 @@ export class CronStreamOutput {
       this.bufferedOutput.push({
         channel,
         chunk: accepted,
-        generation,
         truncatedTail,
         truncatedTailContinuesLine,
         precededByDrop,
@@ -205,19 +192,17 @@ export class CronStreamOutput {
     }
     this.bufferedOutputBytes += acceptedBytes;
     if (truncatedTail) {
-      this.outputOverflowGenerations.add(generation);
+      this.outputOverflowed = true;
     }
-    this.queueOutputDrain(generation);
+    this.queueOutputDrain();
   }
 
-  async drainBufferedOutput(generation: number): Promise<void> {
-    if (generation !== this.params.getGeneration()) {
-      return;
-    }
+  async drainBufferedOutput(): Promise<void> {
     const buffered = this.bufferedOutput;
     this.bufferedOutput = [];
     this.bufferedOutputBytes = 0;
-    const overflowed = this.outputOverflowGenerations.delete(generation);
+    const overflowed = this.outputOverflowed;
+    this.outputOverflowed = false;
     for (const entry of buffered) {
       if (!this.params.isDesiredRunning()) {
         this.interruptedOutput.push(entry);
@@ -236,7 +221,7 @@ export class CronStreamOutput {
     }
   }
 
-  async flushSourceOutput(generation: number): Promise<void> {
+  async flushSourceOutput(): Promise<void> {
     for (const channel of ["stdout", "stderr"] as const) {
       const partialLine = this.partialLines[channel];
       // A dropped continuation makes the retained EOF prefix indeterminate;
@@ -244,7 +229,6 @@ export class CronStreamOutput {
       if (!this.discardUntilNewline[channel] && !this.droppedChunkTail[channel] && partialLine) {
         const processed = await this.acceptLine(
           partialLine.endsWith("\r") ? partialLine.slice(0, -1) : partialLine,
-          generation,
           false,
         );
         if (!processed) {
@@ -255,13 +239,12 @@ export class CronStreamOutput {
       this.discardUntilNewline[channel] = false;
       this.droppedChunkTail[channel] = false;
     }
-    await this.flushBatch(generation);
+    await this.flushBatch();
   }
 
   async beginStop(): Promise<CronStreamOutputStopState> {
-    clearTimeout(this.rateTimer);
+    this.rateTimer?.cancel();
     this.rateTimer = undefined;
-    ++this.rateEpoch;
     const state = {
       sourceBatchLost: this.matchFailed
         ? this.batch !== undefined
@@ -298,9 +281,8 @@ export class CronStreamOutput {
   }
 
   async dropPendingForTerminalStop(): Promise<void> {
-    clearTimeout(this.rateTimer);
+    this.rateTimer?.cancel();
     this.rateTimer = undefined;
-    ++this.rateEpoch;
     if (this.pendingBatch === undefined) {
       return;
     }
@@ -308,16 +290,18 @@ export class CronStreamOutput {
     await this.params.recordLoss("not-running");
   }
 
-  startSource(): void {
+  startSource(scheduler: GatewaySchedulerScope): AbortSignal {
+    this.scheduler = scheduler;
+    this.matching.abort();
     this.matching = new AbortController();
     this.matchFailed = false;
     this.resetSourceBuffers();
+    return this.matching.signal;
   }
 
   private resetSourceBuffers(): void {
-    clearTimeout(this.quietTimer);
+    this.quietTimer?.cancel();
     this.quietTimer = undefined;
-    ++this.quietEpoch;
     this.partialLines = { stdout: "", stderr: "" };
     this.discardUntilNewline = { stdout: false, stderr: false };
     this.droppedChunkTail = { stdout: false, stderr: false };
@@ -325,36 +309,28 @@ export class CronStreamOutput {
     this.bufferedOutput = [];
     this.interruptedOutput = [];
     this.bufferedOutputBytes = 0;
-    this.queuedOutputDrainGenerations.clear();
-    this.outputOverflowGenerations.clear();
+    this.outputOverflowed = false;
   }
 
-  schedulePendingIfNeeded(generation: number): void {
+  schedulePendingIfNeeded(): void {
     if (this.pendingBatch === undefined || this.params.getState() !== "running") {
       return;
     }
-    this.schedulePendingFire(
-      Math.max(0, this.nextEligibleAttemptAtMs - this.params.nowMs()),
-      generation,
-    );
+    this.schedulePendingFire(Math.max(0, this.nextEligibleAttemptAtMs - this.scheduler.now()));
   }
 
-  private queueOutputDrain(generation: number): void {
-    if (this.queuedOutputDrainGenerations.has(generation)) {
+  private queueOutputDrain(): void {
+    if (this.outputDrainQueued) {
       return;
     }
-    this.queuedOutputDrainGenerations.add(generation);
+    this.outputDrainQueued = true;
     void this.params.enqueue("output", async () => {
       try {
-        await this.drainBufferedOutput(generation);
+        await this.drainBufferedOutput();
       } finally {
-        this.queuedOutputDrainGenerations.delete(generation);
-        const currentGeneration = this.params.getGeneration();
-        if (
-          this.bufferedOutput.some((entry) => entry.generation === currentGeneration) ||
-          this.outputOverflowGenerations.has(currentGeneration)
-        ) {
-          this.queueOutputDrain(currentGeneration);
+        this.outputDrainQueued = false;
+        if (this.bufferedOutput.length || this.outputOverflowed) {
+          this.queueOutputDrain();
         }
       }
     });
@@ -370,7 +346,7 @@ export class CronStreamOutput {
       maxBatchBytes * INTAKE_CAP_MULTIPLIER,
     );
     for (const { line, truncated, replay } of lines) {
-      const processed = await this.acceptLine(line, entry.generation, truncated);
+      const processed = await this.acceptLine(line, truncated);
       if (replay && !this.params.isDesiredRunning()) {
         this.interruptedOutput.push({
           ...entry,
@@ -382,7 +358,7 @@ export class CronStreamOutput {
     }
   }
 
-  private async acceptLine(line: string, generation: number, truncated: boolean): Promise<boolean> {
+  private async acceptLine(line: string, truncated: boolean): Promise<boolean> {
     if (truncated && this.matcher) {
       // A truncated prefix cannot prove the full oversized line matches: an
       // end-anchored or length-sensitive pattern would false-fire on the cut.
@@ -407,11 +383,7 @@ export class CronStreamOutput {
     if (!matched) {
       return true;
     }
-    if (
-      signal.aborted ||
-      generation !== this.params.getGeneration() ||
-      !this.params.isDesiredRunning()
-    ) {
+    if (signal.aborted || !this.params.isDesiredRunning()) {
       return false;
     }
     const { batchMs, maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
@@ -419,57 +391,47 @@ export class CronStreamOutput {
     const candidate = this.batch === undefined ? renderedLine : `${this.batch}\n${renderedLine}`;
     const capped = truncateCronStreamBatch(candidate, maxBatchBytes);
     this.batch = capped;
-    ++this.quietEpoch;
     if (capped !== candidate || Buffer.byteLength(capped, "utf8") >= maxBatchBytes) {
-      await this.flushBatch(generation);
+      await this.flushBatch();
       return true;
     }
-    if (this.quietTimer) {
-      this.quietTimer.refresh();
-    } else {
-      this.quietTimer = setTimeout(() => {
-        void this.closeQuietBatch(generation, this.quietEpoch);
-      }, batchMs);
-      this.quietTimer.unref?.();
-    }
+    const quietTimer: GatewayScheduledJob = this.scheduler.schedule({
+      id: `cron-stream:${this.job.id}:${this.sourceIdentity}:quiet`,
+      delayMs: batchMs,
+      run: () => this.closeQuietBatch(quietTimer),
+    });
+    this.quietTimer = quietTimer;
     return true;
   }
 
-  private closeQuietBatch(generation: number, epoch: number): Promise<void> {
+  private closeQuietBatch(quietTimer: GatewayScheduledJob): Promise<void> {
     return this.params.enqueue("batch-closed", async () => {
-      if (generation !== this.params.getGeneration()) {
+      // A match can replace a quiet deadline already queued behind it.
+      if (this.quietTimer !== quietTimer) {
         return;
       }
-      if (this.params.getState() !== "running" || epoch !== this.quietEpoch) {
-        if (
-          this.params.getState() !== "stopped" &&
-          epoch === this.quietEpoch &&
-          this.batch !== undefined
-        ) {
+      if (this.params.getState() !== "running") {
+        if (this.params.getState() !== "stopped" && this.batch !== undefined) {
           this.batch = undefined;
           await this.params.recordLoss("not-running");
         }
         return;
       }
-      await this.flushBatch(generation);
+      await this.flushBatch();
     });
   }
 
-  private async flushBatch(generation: number): Promise<void> {
-    clearTimeout(this.quietTimer);
+  private async flushBatch(): Promise<void> {
+    this.quietTimer?.cancel();
     this.quietTimer = undefined;
     const batch = this.batch;
     this.batch = undefined;
     if (batch !== undefined) {
-      await this.handleClosedBatch(batch, generation);
+      await this.handleClosedBatch(batch);
     }
   }
 
-  private async handleClosedBatch(batch: string, generation: number): Promise<void> {
-    // Child callbacks are generation-scoped; pending logical batches are not.
-    if (generation !== this.params.getGeneration()) {
-      return;
-    }
+  private async handleClosedBatch(batch: string): Promise<void> {
     if (!this.params.isDesiredRunning() || this.params.getState() !== "running") {
       if (this.params.getState() !== "stopped") {
         await this.params.recordLoss("not-running");
@@ -478,31 +440,27 @@ export class CronStreamOutput {
     }
 
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
-    const spacingRemaining = this.nextEligibleAttemptAtMs - this.params.nowMs();
+    const spacingRemaining = this.nextEligibleAttemptAtMs - this.scheduler.now();
     if (this.firing || spacingRemaining > 0 || this.pendingBatch !== undefined) {
       this.pendingBatch = appendBatch(this.pendingBatch, batch, maxBatchBytes);
       await this.params.recordLoss("coalesced");
       if (!this.firing) {
-        this.schedulePendingFire(Math.max(0, spacingRemaining), generation);
+        this.schedulePendingFire(Math.max(0, spacingRemaining));
       }
       return;
     }
-    this.startFire(batch, generation);
+    this.startFire(batch);
   }
 
-  private startFire(batch: string, generation: number): void {
-    if (generation !== this.params.getGeneration()) {
-      return;
-    }
-    if (!this.params.isDesiredRunning() || this.params.isRetired()) {
+  private startFire(batch: string): void {
+    if (!this.params.isDesiredRunning()) {
       void this.params.recordLoss("not-running");
       return;
     }
-    const attemptStartedAtMs = this.params.nowMs();
+    const attemptStartedAtMs = this.scheduler.now();
     this.nextEligibleAttemptAtMs = attemptStartedAtMs + this.params.minIntervalMs;
     const firing: InFlightBatch = {
       batch,
-      sourceIdentity: this.sourceIdentity,
       promise: this.params.fireBatch(this.job, batch, this.scheduleKey, this.sourceIdentity),
       handled: false,
     };
@@ -513,30 +471,16 @@ export class CronStreamOutput {
     );
   }
 
-  private ownsFiring(firing: InFlightBatch): boolean {
-    if (firing.handled) {
-      return false;
-    }
-    if (this.firing === firing && firing.sourceIdentity === this.sourceIdentity) {
-      return true;
-    }
-    firing.handled = true;
-    if (this.firing === firing) {
-      this.firing = undefined;
-    }
-    return false;
-  }
-
   private fireSettled(firing: InFlightBatch, outcome: FireOutcome): Promise<void> {
     return this.params.enqueue(
       "error" in outcome ? "fire-rejected" : "fire-completed",
       async () => {
-        if (!this.ownsFiring(firing)) {
+        if (firing.handled) {
           return;
         }
         await this.classifyFireOutcome(firing, outcome, false);
         this.firing = undefined;
-        this.schedulePendingIfNeeded(this.params.getGeneration());
+        this.schedulePendingIfNeeded();
       },
     );
   }
@@ -587,28 +531,18 @@ export class CronStreamOutput {
     await this.params.recordLoss("not-running");
   }
 
-  private schedulePendingFire(delayMs: number, generation: number): void {
-    clearTimeout(this.rateTimer);
-    const rateEpoch = ++this.rateEpoch;
-    this.rateTimer = setTimeout(() => {
-      void this.attemptPendingFire(generation, rateEpoch);
-    }, delayMs);
-    this.rateTimer.unref?.();
+  private schedulePendingFire(delayMs: number): void {
+    this.rateTimer = this.scheduler.schedule({
+      id: `cron-stream:${this.job.id}:${this.sourceIdentity}:retry`,
+      delayMs,
+      run: () => this.attemptPendingFire(),
+    });
   }
 
-  private attemptPendingFire(generation: number, rateEpoch: number): Promise<void> {
+  private attemptPendingFire(): Promise<void> {
     return this.params.enqueue("pending-fire", async () => {
-      if (rateEpoch !== this.rateEpoch) {
-        return;
-      }
       this.rateTimer = undefined;
       if (this.pendingBatch === undefined) {
-        return;
-      }
-      if (generation !== this.params.getGeneration()) {
-        if (this.params.isDesiredRunning() && this.params.getState() === "running") {
-          this.schedulePendingIfNeeded(this.params.getGeneration());
-        }
         return;
       }
       const state = this.params.getState();
@@ -633,14 +567,14 @@ export class CronStreamOutput {
       if (this.firing) {
         return;
       }
-      const spacingRemaining = this.nextEligibleAttemptAtMs - this.params.nowMs();
+      const spacingRemaining = this.nextEligibleAttemptAtMs - this.scheduler.now();
       if (spacingRemaining > 0) {
-        this.schedulePendingFire(spacingRemaining, generation);
+        this.schedulePendingFire(spacingRemaining);
         return;
       }
       const pending = this.pendingBatch;
       this.pendingBatch = undefined;
-      this.startFire(pending, generation);
+      this.startFire(pending);
     });
   }
 

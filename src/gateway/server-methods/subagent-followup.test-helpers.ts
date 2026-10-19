@@ -4,7 +4,6 @@ import { expect } from "vitest";
 export function expectSubagentFollowupReactivation(params: {
   replaceSubagentRunAfterSteerMock: unknown;
   broadcastToConnIds: unknown;
-  completedRun: unknown;
   childSessionKey: string;
   status: "queued" | "running";
   /**
@@ -18,7 +17,8 @@ export function expectSubagentFollowupReactivation(params: {
   expect(params.replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
     previousRunId: "run-old",
     nextRunId: "run-new",
-    fallback: params.completedRun,
+    preserveCompletedRun: true,
+    assertCurrent: expect.any(Function),
     runTimeoutSeconds: 0,
     ...(params.task ? { task: params.task } : {}),
   });
@@ -38,6 +38,7 @@ export function expectSubagentFollowupReactivation(params: {
       agentId: "main",
       dropIfSlow: true,
       sessionKeys: [params.childSessionKey],
+      sessionEventSubscriptionKeys: [params.childSessionKey],
       prepareSessionProjection: expect.any(Function),
     },
   );

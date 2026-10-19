@@ -98,26 +98,6 @@ type FeishuMessageDebounceEntry = {
   abandoned?: boolean;
 };
 
-function dedupeFeishuDebounceEntriesByDedupeKey(
-  entries: FeishuMessageDebounceEntry[],
-): FeishuMessageDebounceEntry[] {
-  const seen = new Set<string>();
-  const deduped: FeishuMessageDebounceEntry[] = [];
-  for (const entry of entries) {
-    const dedupeKey = entry.messageDedupeKey;
-    if (!dedupeKey) {
-      deduped.push(entry);
-      continue;
-    }
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    deduped.push(entry);
-  }
-  return deduped;
-}
-
 function resolveFeishuDebounceMentions(params: {
   entries: FeishuMessageEvent[];
   botOpenId?: string;
@@ -179,9 +159,7 @@ export function createFeishuMessageReceiveHandler({
   });
 
   const dispatchFeishuMessage = async (
-    event: FeishuMessageEvent,
-    messageDedupeKey?: string,
-    processingClaim?: FeishuMessageProcessingClaim,
+    { event, messageDedupeKey, processingClaim }: FeishuMessageDebounceEntry,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
     preparedContent?: string,
   ) => {
@@ -290,49 +268,35 @@ export function createFeishuMessageReceiveHandler({
             }
             try {
               if (activeEntries.length === 1) {
-                await dispatchFeishuMessage(
-                  last.event,
-                  last.messageDedupeKey,
-                  last.processingClaim,
-                  admissionLifecycle,
-                );
+                await dispatchFeishuMessage(last, admissionLifecycle);
                 await settle();
                 return;
               }
-              const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
-              const freshEntries: FeishuMessageDebounceEntry[] = [];
-              for (const entry of dedupedEntries) {
-                if (!(await hasProcessedMessage(entry.messageDedupeKey, accountId, log))) {
-                  freshEntries.push(entry);
-                }
-              }
-              const dispatchEntry = freshEntries.at(-1);
-              if (!dispatchEntry) {
-                await settle();
-                return;
-              }
+              // Admission already holds one exclusive claim for each logical message.
+              const dispatchEntry = last;
               const dispatchDedupeKey = dispatchEntry.messageDedupeKey;
               if (!lifecycle) {
-                await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
+                await recordSuppressedMessageIds(activeEntries, dispatchDedupeKey);
               }
-              const combinedText = freshEntries
+              const combinedText = activeEntries
                 .map((entry) => resolveDebounceText(entry.event))
                 .filter(Boolean)
                 .join("\n");
               const mergedMentions = resolveFeishuDebounceMentions({
-                entries: freshEntries.map((entry) => entry.event),
+                entries: activeEntries.map((entry) => entry.event),
                 botOpenId: getBotOpenId(accountId),
               });
               await dispatchFeishuMessage(
                 {
-                  ...dispatchEntry.event,
-                  message: {
-                    ...dispatchEntry.event.message,
-                    mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+                  ...dispatchEntry,
+                  event: {
+                    ...dispatchEntry.event,
+                    message: {
+                      ...dispatchEntry.event.message,
+                      mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+                    },
                   },
                 },
-                dispatchDedupeKey,
-                dispatchEntry.processingClaim,
                 admissionLifecycle,
                 combinedText,
               );
@@ -402,7 +366,6 @@ export function createFeishuMessageReceiveHandler({
     if (botOpenId && senderOpenId === botOpenId) {
       // Feishu bot receive events identify their sender by open_id. Drop this
       // account's bot before it can consume a claim or debounce slot.
-      log(`feishu[${accountId}]: dropping self-authored message ${messageId ?? "unknown"}`);
       await completeSuppressedIngress();
       return undefined;
     }
@@ -416,7 +379,6 @@ export function createFeishuMessageReceiveHandler({
       parsePostContent(event.message.content, { includeTopLevelFiles: false }).attachments
         .length === 0
     ) {
-      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       await completeSuppressedIngress();
       return undefined;
     }
@@ -434,7 +396,6 @@ export function createFeishuMessageReceiveHandler({
       return { kind: "failed-retryable", error: stoppedError };
     }
     if (claim.kind === "duplicate" || claim.kind === "inflight") {
-      log(`feishu[${accountId}]: dropping ${claim.kind} event for message ${messageId}`);
       await completeSuppressedIngress();
       return undefined;
     }
@@ -447,10 +408,10 @@ export function createFeishuMessageReceiveHandler({
     if (claim.kind === "claimed" && turnAdoptionLifecycle) {
       // The durable drain can abandon before the debounce timer flushes. Tie
       // the logical claim and queued entry to that earlier lifecycle.
-      turnAdoptionLifecycle.registerAbandonHandler?.(() => {
+      turnAdoptionLifecycle.onBeforeAbandon = () => {
         debounceEntry.abandoned = true;
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
-      });
+      };
     }
     if (turnAdoptionLifecycle) {
       try {

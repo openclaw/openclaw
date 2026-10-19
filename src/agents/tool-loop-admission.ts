@@ -4,7 +4,10 @@ import type {
   ToolLoopIntervention,
   ToolLoopWarning,
 } from "@openclaw/agent-core";
-import type { SessionState } from "../logging/diagnostic-session-state.js";
+import {
+  isIncognitoDiagnosticSession,
+  type SessionState,
+} from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
@@ -16,6 +19,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
@@ -49,7 +53,6 @@ async function evaluateToolLoopCall(
     stateOverride ?? sessionState,
     toolName,
     call.params,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
   if (!result.stuck) {
@@ -67,7 +70,9 @@ async function evaluateToolLoopCall(
     pairedToolName: result.pairedToolName,
   };
   if (result.level === "critical") {
-    log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
+    if (!isIncognitoDiagnosticSession(sessionState)) {
+      log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
+    }
     logToolLoopAction({ ...diagnostic, action: "block" });
     return {
       kind: "critical-tool-loop",
@@ -82,7 +87,9 @@ async function evaluateToolLoopCall(
   const baseWarningKey = result.warningKey ?? `${result.detector}:${toolName}`;
   const warningKey = ctx.runId ? `${ctx.runId}:${baseWarningKey}` : baseWarningKey;
   if (shouldEmitLoopWarning(sessionState, warningKey, result.count)) {
-    log.warn(`Loop warning for ${toolName}: ${result.message}`);
+    if (!isIncognitoDiagnosticSession(sessionState)) {
+      log.warn(`Loop warning for ${toolName}: ${result.message}`);
+    }
     logToolLoopAction({ ...diagnostic, action: "warn" });
     return {
       kind: "tool-loop-warning",
@@ -103,7 +110,6 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
     normalizeToolPolicyName(call.toolName || "tool"),
     call.params,
     call.toolCallId,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
 }
@@ -140,9 +146,8 @@ export async function admitToolCallBatch(
     reconcileToolCallExecutionParams,
     recordToolCall,
     recordToolCallOutcome,
-    resolveToolLoopWarningThreshold,
   } = await loadBeforeToolCallRuntime();
-  const warningThreshold = resolveToolLoopWarningThreshold();
+  const warningThreshold = TOOL_LOOP_WARNING_THRESHOLD;
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -157,7 +162,6 @@ export async function admitToolCallBatch(
       normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     const projectedCall = state.toolCallHistory?.at(-1);
@@ -238,7 +242,6 @@ export async function admitToolCallBatch(
       admitted.toolName,
       readyCall.args,
       readyCall.toolCallId,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     if (admitted.validationFailure) {
@@ -249,7 +252,6 @@ export async function admitToolCallBatch(
         toolParams: readyCall.args,
         toolCallId: readyCall.toolCallId,
         result: admitted.validationFailure,
-        config: ctx.loopDetection,
         runId: ctx.runId,
       });
       if (record) {
@@ -265,6 +267,7 @@ export async function admitToolCallBatch(
       warningThreshold,
     });
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: ctx.watchdogAttempt,
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
       runId: ctx.runId,

@@ -1,4 +1,5 @@
 // Matrix helper module supports idb persistence helpers behavior.
+import { indexedDB } from "fake-indexeddb";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 
 export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {

@@ -3,19 +3,25 @@ import type { CronAgentScope } from "./types-shared.js";
 
 export const CRON_AGENT_SELECTION_REQUIRED_MESSAGE =
   "Agent-less cron job has no resolvable owner. Pass --agent <id> when creating or editing the job, or set agents.defaults.systemAgent.agentId.";
-export const CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE =
-  'Legacy cron ownership needs repair. Run "openclaw doctor --fix" before running, editing, or removing this job.';
+
+export class CronAgentSelectionRequiredError extends Error {
+  readonly code = "AGENT_SELECTION_REQUIRED";
+
+  constructor() {
+    super(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+    this.name = "CronAgentSelectionRequiredError";
+  }
+}
 
 /** Resolves cron ownership: explicit non-blank id, scoped session key, then configured default. */
 export function tryResolveCronJobEffectiveAgentId(
   job: CronAgentScope,
   configuredDefaultAgentId?: string,
-  legacyDefaultAgentId?: string,
 ): string | undefined {
   const agentId =
     job.agentId?.trim() ||
     parseAgentSessionKey(job.sessionKey)?.agentId ||
-    (!legacyDefaultAgentId ? configuredDefaultAgentId?.trim() : undefined);
+    configuredDefaultAgentId?.trim();
   return agentId ? normalizeAgentId(agentId) : undefined;
 }
 
@@ -23,19 +29,10 @@ export function tryResolveCronJobEffectiveAgentId(
 export function resolveCronJobEffectiveAgentId(
   job: CronAgentScope,
   configuredDefaultAgentId?: string,
-  legacyDefaultAgentId?: string,
 ): string {
-  const agentId = tryResolveCronJobEffectiveAgentId(
-    job,
-    configuredDefaultAgentId,
-    legacyDefaultAgentId,
-  );
+  const agentId = tryResolveCronJobEffectiveAgentId(job, configuredDefaultAgentId);
   if (!agentId) {
-    throw new Error(
-      legacyDefaultAgentId
-        ? CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE
-        : CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-    );
+    throw new CronAgentSelectionRequiredError();
   }
   return agentId;
 }

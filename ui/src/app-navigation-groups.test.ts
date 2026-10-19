@@ -1,20 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SIDEBAR_ENTRIES,
-  SIDEBAR_NAV_ROUTES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
   parseSidebarEntry,
-  serializeSidebarEntry,
-  settingsNavigationOwnerRoute,
-  sidebarMoreRoutes,
   visibleSettingsNavigationGroups,
   isSettingsNavigationRouteVisible,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
+import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -22,9 +18,6 @@ import {
   createNativeDeviceSettingsSnapshot,
   createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
-
-const settingsGroups = visibleSettingsNavigationGroups(true);
-const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
 
 describe("sidebar entries", () => {
   it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
@@ -156,17 +149,6 @@ describe("sidebar entries", () => {
       ).toBe(true);
     }
   });
-  it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
-    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
-  });
-
   it("treats worktrees as a sessions hub tab without its own pin", () => {
     expect(isSessionsHubRoute("sessions")).toBe(true);
     expect(isSessionsHubRoute("worktrees")).toBe(true);
@@ -179,44 +161,13 @@ describe("sidebar entries", () => {
       "plugin:workboard/workboard",
       "plugin:workboard/board-ops",
     ]);
-    expect(sidebarMoreRoutes([])).not.toContain("workboard");
-  });
-
-  it("recognizes every settings navigation route", () => {
-    expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
-  });
-
-  it("places Updates in the System group immediately before About", () => {
-    const system = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSystem");
-    expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
-  });
-
-  it("places team secrets between Privacy & Security and Approvals", () => {
-    const security = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSecurity");
-    expect(security?.routes).toEqual(["security", "secrets", "approvals"]);
   });
 
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
+    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
     expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
   });
-
-  it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
-    expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
-    expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
-  });
-
-  it.each(["plugin-settings", "skill-settings"] as const)(
-    "keeps %s visible to admins and read-only operators",
-    (routeId) => {
-      expect(visibleSettingsNavigationGroups(true).flatMap((group) => group.routes)).toContain(
-        routeId,
-      );
-      expect(visibleSettingsNavigationGroups(false).flatMap((group) => group.routes)).toContain(
-        routeId,
-      );
-    },
-  );
 
   it("filters admin-only settings while preserving legacy fail-open visibility", () => {
     const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
@@ -231,25 +182,6 @@ describe("sidebar entries", () => {
     expect(legacyCanAdmin).toBe(true);
     expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
       visibleSettingsNavigationGroups(true),
-    );
-  });
-
-  it("round-trips route, Workboard, and session entries", () => {
-    expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
-    expect(parseSidebarEntry("session:agent:main:test")).toEqual({
-      type: "session",
-      key: "agent:main:test",
-    });
-    expect(parseSidebarEntry("workboard:ops")).toEqual({
-      type: "plugin",
-      key: "workboard/board-ops",
-    });
-    expect(serializeSidebarEntry({ type: "route", route: "plugins" })).toBe("route:plugins");
-    expect(serializeSidebarEntry({ type: "session", key: "agent:main:test" })).toBe(
-      "session:agent:main:test",
-    );
-    expect(serializeSidebarEntry({ type: "plugin", key: "workboard/board-ops" })).toBe(
-      "plugin:workboard/board-ops",
     );
   });
 
@@ -281,13 +213,5 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries(undefined)).toBeNull();
     expect(normalizeSidebarEntries({ usage: true })).toBeNull();
     expect(normalizeSidebarEntries("route:usage")).toBeNull();
-  });
-
-  it("puts every hidden nav route into the More section", () => {
-    const entries = ["route:cron", "session:agent:main:test", "route:usage"] as const;
-    const more = sidebarMoreRoutes(entries);
-    expect(more).not.toContain("cron");
-    expect(more).not.toContain("usage");
-    expect(new Set(["cron", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 });

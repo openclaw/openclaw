@@ -24,7 +24,30 @@ const RETAINED_STEP_NAMES = [
   "warning:finalize:plugins:deadline",
   "global update",
   "global update (omit optional)",
+  // Phase timing that explains long validating and activation windows.
+  "candidate-state-snapshot",
+  "candidate-doctor",
   "candidate-doctor-lint",
+  "updater-runtime-retention",
+  "diagnostic:updater-runtime-retention",
+  "candidate-gateway-startup",
+  "candidate-state-cleanup",
+  "post-stop-checks",
+  "git-checkout",
+  "git-runtime-activation",
+  "openclaw doctor",
+  "pre-plugin doctor",
+  "post-plugin doctor",
+  // Doctor sections lead each Doctor's diagnostics; compaction may still drop their detail.
+  "diagnostic:candidate-doctor",
+  "diagnostic:openclaw doctor",
+  "diagnostic:pre-plugin doctor",
+  "diagnostic:post-plugin doctor",
+  "managed-service-executor-check",
+  "managed-service-install",
+  "managed-service-restart",
+  "update-driver-handoff",
+  "diagnostic:update-driver-handoff",
   "notice:ack",
   "notice:activating",
   "notice:verifying",
@@ -92,11 +115,26 @@ function mapJsonText(
   return value;
 }
 
+function compactConfigWriteRefusal(value: unknown): unknown {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.keys) ||
+    !value.keys.some((key) => typeof key === "string" && key.length > 0)
+  ) {
+    return undefined;
+  }
+  return mapJsonText(value, (text, key) =>
+    key === "keys" ? truncateUtf16Safe(text, Math.floor(text.length / 2)) : text,
+  );
+}
+
 export function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
     typeof item.step === "string" &&
-    (item.step.startsWith("finalize:") || RETAINED_STEP_NAMES.some((name) => name === item.step))
+    (item.termination === "signal" ||
+      item.step.startsWith("finalize:") ||
+      RETAINED_STEP_NAMES.some((name) => name === item.step))
   );
 }
 
@@ -117,18 +155,39 @@ function boundedJson(
         // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
           isRecord(item) &&
+          item.termination !== "signal" &&
           item.step !== "task-delivery-recovery" &&
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "diagnostic:database rollback" &&
+          item.step !== "finalize:data-at-risk" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
-            ? { ...item, detail: undefined, failureFacts: undefined }
+            ? {
+                ...item,
+                detail: undefined,
+                failureFacts: undefined,
+                configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
+              }
             : item,
         );
         if (JSON.stringify(compacted) === json) {
-          throw new Error("Update run retained step metadata exceeds its byte limit");
+          // Native output is diagnostic, never a reason to refuse a recovery receipt.
+          const item = value.findLast(
+            (entry): entry is Record<string, unknown> & { stderrTail: string } =>
+              isRecord(entry) &&
+              typeof entry.stderrTail === "string" &&
+              entry.stderrTail.length > 0,
+          );
+          if (!item) {
+            throw new Error("Update run retained step metadata exceeds its byte limit");
+          }
+          value = value.with(value.indexOf(item), {
+            ...item,
+            stderrTail: truncateUtf16Safe(item.stderrTail, Math.floor(item.stderrTail.length / 2)),
+          });
+        } else {
+          value = compacted;
         }
-        value = compacted;
       }
     } else if (isRecord(value)) {
       const object = value;
@@ -162,6 +221,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    windowsUserSid,
     requester,
     sessionKey,
     deliveryContext,
@@ -170,7 +230,12 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   } = origin;
   // Operational receipts are not expendable diagnostics. Keep them exact inside
   // the existing database byte budget; oversized sets fail before replacing a row.
-  const retained = JSON.stringify({ driver, previousDrivers, updateRecoveryCapture });
+  const retained = JSON.stringify({
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    windowsUserSid,
+  });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
     throw new Error("Update run recovery receipts exceed the origin byte limit");
   }
@@ -178,7 +243,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
-    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, ...routing })
+    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...routing })
     : retained;
   const diagnostics = hasAdmission ? admissionDiagnostics : { ...admissionDiagnostics, ...routing };
   // Merging removes the diagnostic braces and needs a comma only when identities exist.
@@ -246,7 +311,8 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       : [];
   });
   // Process identities and recovery receipts are operational facts, not diagnostics.
-  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
+  const { driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...originDiagnostics } =
+    input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText(
       {
@@ -259,12 +325,12 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
             : {}),
         })),
       },
-      (value) => {
+      (value, key) => {
         let text = redactSensitiveText(value, { mode: "tools" });
         for (const [pattern, replacement] of redactPaths) {
           text = text.replace(pattern, () => replacement);
         }
-        return truncateUtf16Safe(text, UPDATE_RUN_TEXT_LIMIT);
+        return truncateUtf16Safe(text, key === "stderrTail" ? 8192 : UPDATE_RUN_TEXT_LIMIT);
       },
     ),
   );
@@ -273,7 +339,12 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    windowsUserSid,
   });
+  // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    delete record.verification.recovery.dataAtRisk;
+  }
   return {
     run_id: record.runId,
     created_at_ms: record.createdAtMs,

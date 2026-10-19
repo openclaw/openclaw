@@ -1,44 +1,37 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureContextEnginesInitialized } from "./init.js";
 import { LegacyContextEngine } from "./legacy.js";
+import { createNativeSource, createRegistryFixture } from "./registry-resources.test-support.js";
 import {
-  listContextEngineQuarantines,
-  registerContextEngineInRegistry,
+  listContextEngineQuarantines as listQuarantines,
+  registerContextEngineInRegistry as registerEngine,
   resolveContextEngine,
 } from "./registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
+import { resetContextEngineRuntimeQuarantineForTests as resetQuarantine } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
 
-beforeEach(() => resetContextEngineRuntimeQuarantineForTests());
+beforeEach(() => resetQuarantine());
 
 afterEach(async () => {
-  await resetContextEngineRuntimeQuarantineForTests();
+  await resetQuarantine();
   vi.restoreAllMocks();
 });
 
 it.each(["closed-scope", "released-source"] as const)(
   "propagates host admission failure without quarantining an uncalled factory (%s)",
   async (mode) => {
-    const registry = createEmptyPluginRegistry();
+    const { registry, resources, retired: retire } = createRegistryFixture();
     const selectedId = `admission-${mode}`;
     const configuredFactory = vi.fn(() => new LegacyContextEngine());
     const fallbackFactory = vi.fn(() => new LegacyContextEngine());
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    const retire = vi.fn();
-    resources.attach(registry);
-    resources.register("fixture", { id: "resource", dispose: retire });
-    registerContextEngineInRegistry(registry, selectedId, configuredFactory, "plugin:fixture");
-    registerContextEngineInRegistry(registry, "legacy", fallbackFactory, "core");
+    registerEngine(registry, selectedId, configuredFactory, "plugin:fixture");
+    registerEngine(registry, "legacy", fallbackFactory, "core");
     const resolve = () =>
-      withPluginRuntimeRegistryScope(registry, () =>
+      withRegistry(registry, () =>
         resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
       );
     const work = new AsyncWorkScope();
@@ -56,7 +49,7 @@ it.each(["closed-scope", "released-source"] as const)(
       );
       expect(configuredFactory).not.toHaveBeenCalled();
       expect(fallbackFactory).not.toHaveBeenCalled();
-      expect(await listContextEngineQuarantines()).toEqual([]);
+      expect(await listQuarantines()).toEqual([]);
       expect(log).not.toHaveBeenCalled();
       if (mode === "closed-scope") {
         // The same registration remains usable by a fresh caller, without reactivation.
@@ -74,35 +67,10 @@ it.each(["closed-scope", "released-source"] as const)(
   },
 );
 
-it("still quarantines a factory that itself throws the host admission error text", async () => {
-  const registry = createEmptyPluginRegistry();
-  const selectedId = "factory-admission-text";
-  const factory = vi.fn(() => {
-    throw new Error("Async work scope is closed");
-  });
-  registerContextEngineInRegistry(registry, selectedId, factory, "plugin:fixture");
-  registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  const resolve = () =>
-    withPluginRuntimeRegistryScope(registry, () =>
-      resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
-    );
-  expect((await resolve()).info.id).toBe("legacy");
-  expect((await resolve()).info.id).toBe("legacy");
-  expect(factory).toHaveBeenCalledOnce();
-  expect(await listContextEngineQuarantines()).toEqual([
-    expect.objectContaining({ engineId: selectedId, operation: "factory" }),
-  ]);
-});
-
 it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)(
   "distinguishes factory cancellation from plugin failure (%s)",
   async (mode) => {
-    const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    resources.attach(registry);
-    const retired = vi.fn();
-    resources.register("fixture", { id: "factory-resource", dispose: retired });
+    const { registry, resources, retired } = createRegistryFixture();
     const started = createDeferred();
     const fail = createDeferred();
     const cleanupGate = createDeferred();
@@ -117,8 +85,8 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
             ? new DOMException("factory interrupted", "AbortError")
             : new Error("independent factory defect");
     const fallback = vi.fn(() => new LegacyContextEngine());
-    registerContextEngineInRegistry(registry, "legacy", fallback, "core");
-    registerContextEngineInRegistry(
+    registerEngine(registry, "legacy", fallback, "core");
+    registerEngine(
       registry,
       "cancelled-factory",
       async () => {
@@ -134,7 +102,7 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
     vi.spyOn(console, "error").mockImplementation(() => {});
     const result = owner
       .run(() =>
-        withPluginRuntimeRegistryScope(registry, () =>
+        withRegistry(registry, () =>
           resolveContextEngine({ plugins: { slots: { contextEngine: "cancelled-factory" } } }),
         ),
       )
@@ -149,13 +117,13 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
       const outcome = await result;
       if (mode === "unrelated-error") {
         expect(fallback).toHaveBeenCalledOnce();
-        expect(await listContextEngineQuarantines()).toMatchObject([
+        expect(await listQuarantines()).toMatchObject([
           { engineId: "cancelled-factory", operation: "factory", reason: failure.message },
         ]);
       } else {
         expect(outcome).toEqual({ error: failure });
         expect(fallback).not.toHaveBeenCalled();
-        expect(await listContextEngineQuarantines()).toEqual([]);
+        expect(await listQuarantines()).toEqual([]);
       }
       if ("engine" in outcome) {
         await outcome.engine.dispose?.();
@@ -180,23 +148,18 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
 it.each(["success", "failure", "abort"] as const)(
   "retains the foreground source until initialization settles (%s)",
   async (mode) => {
-    const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    resources.attach(registry);
-    const database = new DatabaseSync(":memory:");
-    const retired = vi.fn(() => database.close());
-    resources.register("fixture", { id: "native", dispose: retired });
+    const { registry, resources, database, retired, read } = createNativeSource();
     const factory = vi.fn(() => {
-      expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
+      expect(read()).toBe(42);
       return new LegacyContextEngine();
     });
-    registerContextEngineInRegistry(registry, "initialized-source", factory, "plugin:fixture");
+    registerEngine(registry, "initialized-source", factory, "plugin:fixture");
     const started = createDeferred();
     const gate = createDeferred();
     const owner = new AsyncWorkScope();
     const failure = new Error("initialization rejected");
     const pending = owner.run(() =>
-      withPluginRuntimeRegistryScope(registry, () =>
+      withRegistry(registry, () =>
         resolveContextEngine(
           { plugins: { slots: { contextEngine: "initialized-source" } } },
           {
@@ -225,7 +188,7 @@ it.each(["success", "failure", "abort"] as const)(
         }
         await expect(pending).rejects.toBe(failure);
         expect(factory).not.toHaveBeenCalled();
-        expect(await listContextEngineQuarantines()).toEqual([]);
+        expect(await listQuarantines()).toEqual([]);
       } else {
         gate.resolve();
         engine = await pending;

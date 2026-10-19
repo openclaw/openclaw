@@ -1,3 +1,4 @@
+import { Value } from "typebox/value";
 import { expect, it, vi, type Mock } from "vitest";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
@@ -19,6 +20,18 @@ export function registerSessionsSpawnInputTests({
     inProcessCreationMock: Mock;
   };
 }) {
+  it.each([false, true])(
+    "keeps collector inputs within the declared spawn contract (placement=%s)",
+    (workerPlacement) => {
+      const tool = createTool({ workerPlacement });
+      finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
+      expect(Value.Check(tool.parameters, { task: "ordinary child" })).toBe(true);
+      expect(Value.Check(tool.parameters, { task: "collector child", collect: true })).toBe(
+        !workerPlacement,
+      );
+    },
+  );
+
   it.each([
     ["private ACP", { completionTarget: "parent", runtime: "acp" }, /completionTarget/],
     ["private visible", { completionTarget: "parent", visible: true }, /completionTarget/],
@@ -87,13 +100,14 @@ export function registerSessionsSpawnInputTests({
   it("gives an executable visible retry for visible-only parameters on a hidden spawn", async () => {
     const callGateway = mockGateway({
       key: "agent:main:dashboard:child",
+      sessionId: "visible-child",
       runStarted: true,
       runId: "run-visible",
     });
     const tool = createTool({
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
-      config: { agents: { list: [{ id: "main" }] }, tools: { swarm: true } },
+      config: { agents: { entries: { main: {} } }, tools: { swarm: true } },
       callGateway,
     });
     finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);

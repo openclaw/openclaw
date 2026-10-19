@@ -1,7 +1,10 @@
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { createGatewayRestartDeadline } from "../daemon-cli/restart-health-deadline.js";
 import { createUpdateProgress } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -10,10 +13,10 @@ import {
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   admitUpdateCommandRun,
-  assertUpdatePackageActivationAdmission,
   resolveUpdateCommandAdmissionRoot,
   withUpdatePreviewSignals,
   type prepareUpdateCommand,
@@ -27,11 +30,9 @@ import {
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
-type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
-
 export async function runAdmittedUpdate(
   inputOpts: UpdateCommandOptions,
-  prepared: PreparedUpdate,
+  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
   executeUpdate: (
@@ -58,7 +59,7 @@ export async function runAdmittedUpdate(
     initializedFence = fence;
     assertInitializationCurrent = () => {
       fence.assertCurrent();
-      assertUpdatePackageActivationAdmission(root, { serviceRoot });
+      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
     };
   }
   const run = await admitUpdateCommandRun({
@@ -73,6 +74,17 @@ export async function runAdmittedUpdate(
       prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     installKind: prepared.installKind,
   });
+  const deadline =
+    !inputOpts.dryRun && inputOpts.timeout !== undefined && prepared.timeoutMs !== undefined
+      ? createGatewayRestartDeadline({
+          timeoutMs: prepared.timeoutMs,
+          timeoutError: new UpdateActivationTimeoutError(
+            resolveUpdateCommandAdmissionRoot(prepared),
+            prepared.timeoutMs,
+          ),
+        })
+      : undefined;
+  run.deadline = deadline;
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
     ...prepared.controlPlaneUpdateSentinelMeta,
@@ -95,14 +107,25 @@ export async function runAdmittedUpdate(
           resolveUpdateCommandAdmissionRoot(prepared),
           serviceRoot,
         );
+        if (deadline) {
+          run.executorFence = await executor.enter(resolveUpdateCommandAdmissionRoot(prepared), {
+            preflight: true,
+            serviceRoot,
+            activationTimeoutMs: Math.max(1, deadline.remainingMs()),
+          });
+        }
         const execute = () => {
           executionStarted = true;
-          if (refusal) {
-            assertInitializationCurrent?.();
-            throw refusal;
-          }
           return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-            executeUpdate(opts, presentation, executor),
+            withCommandProcessScope(async () => {
+              if (refusal) {
+                assertInitializationCurrent?.();
+                throw refusal;
+              }
+              deadline?.signal.throwIfAborted();
+              await executeUpdate(opts, presentation, executor);
+              deadline?.signal.throwIfAborted();
+            }, deadline?.signal),
           );
         };
         if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
@@ -152,6 +175,7 @@ export async function runAdmittedUpdate(
     }
     throw error;
   } finally {
+    deadline?.dispose();
     if (!initialization) {
       disposePresentation?.();
     }

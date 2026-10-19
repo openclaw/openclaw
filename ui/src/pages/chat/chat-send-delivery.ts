@@ -1,4 +1,3 @@
-import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -8,11 +7,13 @@ import {
   sameQueuedDeliveryVersion,
 } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { chatOutboxDeliveryKey, storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
@@ -24,24 +25,16 @@ import {
   type QueuedChatSendResult,
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import {
-  admitQueuedMessageForSession,
-  excludeComposerAttachments,
-  readQueuedMessageById,
-} from "./chat-queue.ts";
+import { excludeComposerAttachments, readQueuedMessageById } from "./chat-queue.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { cancelChatDelivery, restoreRejectedChatDelivery } from "./chat-send-composer.ts";
+import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
-  captureChatConnectionOwner,
-  createPendingSendMessage,
   deliveryStateWriter,
   finishChatDeliveryAdmission,
   finishScopedChatSending,
-  reconnectSafeQueuedSendState,
   rejectOversizedQueuedChatDelivery,
   prepareQueuedChatPayload,
-  publishPendingSendMessage,
   resolveQueuedChatLeaf,
   settleDeliverySettings,
   settleQueuedChatSendFailure,
@@ -56,12 +49,6 @@ import {
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import {
-  chatSendAckServerTimingEventFields,
-  recordChatSendTiming,
-  registerChatSendTiming,
-  updateChatSendAckTiming,
-} from "./chat-send-timing.ts";
-import {
   captureChatNativeRuntimeRecovery,
   refreshChatSessionListForTarget,
 } from "./chat-session.ts";
@@ -69,7 +56,7 @@ import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
-import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
+import { controlUiNowMs } from "./performance.ts";
 import {
   adoptStartedChatRun,
   hasDirectSessionRun,
@@ -259,8 +246,6 @@ async function sendPreparedChatMessage(
     surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     return "pending";
   }
-  registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
-  recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   const scope = {
     sessionKey,
     ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
@@ -268,6 +253,20 @@ async function sendPreparedChatMessage(
   const isVisible = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   const recoverNativeRuntime =
     allowNativeRecovery && isVisible() ? captureChatNativeRuntimeRecovery(host, route) : undefined;
+  let steerSubmission: ReturnType<ChatHost["chatSubmissions"]["retain"]>;
+  const buildSubmittedUserMessage = (steerTargetRunId?: string) =>
+    buildLocalUserMessage(
+      {
+        ...prepared,
+        text: message,
+        mentions: submitted.mentions,
+        attachments,
+        createdAt: startedAt,
+        runId,
+        ...(steerTargetRunId ? { steerTargetRunId } : {}),
+      },
+      steerTargetRunId ? "complete" : undefined,
+    );
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
@@ -298,6 +297,29 @@ async function sendPreparedChatMessage(
     const deliveryLeafEntryId = prepared.intent
       ? prepared.expectedLeafEntryId
       : expectedLeafEntryId;
+    if (prepared.queueMode === "steer" && isVisible() && host.chatRunId) {
+      const steerTargetRunId = host.chatRunId;
+      const projectedMessage = buildSubmittedUserMessage(steerTargetRunId);
+      if (projectedMessage) {
+        steerSubmission = host.chatSubmissions.retain({
+          kind: "delivered",
+          deliveryKey: chatOutboxDeliveryKey(host, scope, runId),
+          owner: host.client!,
+          sessionKey,
+          agentId: prepared.agentId,
+          sessionId: prepared.sessionId ?? host.currentSessionId ?? undefined,
+          pendingRunId: runId,
+          message: projectedMessage,
+        });
+        reduceChatSessionProjection(
+          host,
+          { type: "sendPending", runId, message: projectedMessage },
+          {
+            scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
+          },
+        );
+      }
+    }
     const ack = await requestChatSend(host, {
       message,
       workContext: prepared.workContext,
@@ -317,18 +339,15 @@ async function sendPreparedChatMessage(
     if (!requestConnectionIsCurrent()) {
       return "pending";
     }
-    updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
-    recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
-      ackStatus: ack.status,
-      requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
-      ...chatSendAckServerTimingEventFields(ack),
-    });
     if (isTerminalFailureChatSendAck(ack)) {
       if (ack.stopReason === "restart" && storageMode === "durable") {
         setState("waiting-reconnect");
         return "pending";
       }
       const error = formatTerminalChatSendAckError(ack, "chat");
+      if (steerSubmission) {
+        steerSubmission.pending = false;
+      }
       // Release in-flight ownership before publishing Retry; an immediate click
       // must not see this completed send as the run that blocks its replacement.
       finishScopedChatSending(host, scope);
@@ -356,7 +375,6 @@ async function sendPreparedChatMessage(
           sessionKey,
           clearIndicators: ownsLocalRun,
           clearLocalRun: ownsLocalRun,
-          clearChatStream: ownsLocalRun,
           clearToolStream: ownsLocalRun,
           publishRunStatus: false,
           armLocalTerminalReconcile: (!host.chatRunId || ownsLocalRun) && ack.runId === runId,
@@ -364,10 +382,6 @@ async function sendPreparedChatMessage(
       }
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
         inline: storageMode === "durable" && !restoreCommand,
-      });
-      recordChatSendTiming(host, sendingItem, "failed", sendingItem.sendSubmittedAtMs, {
-        error,
-        ackStatus: ack.status,
       });
       return "failed";
     }
@@ -386,14 +400,7 @@ async function sendPreparedChatMessage(
           sessionKey,
           agentId: prepared.agentId,
         });
-        const projectedMessage = buildLocalUserMessage({
-          ...prepared,
-          text: message,
-          mentions: submitted.mentions,
-          attachments,
-          createdAt: startedAt,
-          runId,
-        });
+        const projectedMessage = buildSubmittedUserMessage();
         if (projectedMessage) {
           reduceChatSessionProjection(
             host,
@@ -416,7 +423,6 @@ async function sendPreparedChatMessage(
           runId: ack.runId,
           sessionKey,
           clearLocalRun: true,
-          clearChatStream: true,
           clearToolStream: true,
           publishRunStatus: false,
           armLocalTerminalReconcile: true,
@@ -465,16 +471,28 @@ async function sendPreparedChatMessage(
     if (!requestConnectionIsCurrent()) {
       return "pending";
     }
+    if (steerSubmission) {
+      steerSubmission.pending = false;
+    }
+    if (prepared.queueMode === "steer" && isVisible()) {
+      // The retained outbox row owns Retry and uncertain-delivery feedback.
+      reduceChatSessionProjection(
+        host,
+        { type: "sendFailed", runId },
+        {
+          scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
+        },
+      );
+    }
     const restriction =
-      err instanceof GatewayRequestError
-        ? readAgentRuntimeRestrictionErrorDetails(err.details)
+      err instanceof GatewayRequestError && isAgentRuntimeRestrictionErrorDetails(err.details)
+        ? err.details
         : undefined;
     if (restriction) {
       const error = formatConnectError(err);
       // Keep the exact outbox input through confirmation; never retry a newer draft.
       finishScopedChatSending(host, scope);
       const failed = setState("failed", error);
-      recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
       const canRetry = allowNativeRecovery ? await recoverNativeRuntime?.(restriction) : undefined;
       if (canRetry?.() && requestConnectionIsCurrent() && isVisible()) {
         const current = readQueuedMessageById(host, id);
@@ -601,14 +619,6 @@ export async function deliverChatQueueItem(
   }
   if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
     resetChatInputHistoryNavigation(host);
-    if (options.restoreDraft && options.previousDraft?.trim()) {
-      host.chatMessage = options.previousDraft;
-      host.chatMentions = options.previousMentions ?? [];
-      host.chatReplyTarget = options.previousReplyTarget ?? null;
-    }
-    if (options.restoreAttachments && options.previousAttachments?.length) {
-      host.chatAttachments = options.previousAttachments;
-    }
   }
   if (
     deliveryConnectionIsCurrent() &&
@@ -628,28 +638,4 @@ export async function deliverChatQueueItem(
 
 export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
   sendQueuedChatMessage,
-  async sendResetSlashCommand(host, message, options) {
-    const pending = createPendingSendMessage(
-      host,
-      message,
-      undefined,
-      true,
-      undefined,
-      reconnectSafeQueuedSendState(host),
-    );
-    const item = pending ? publishPendingSendMessage(host, pending.item) : undefined;
-    if (!pending || !item || !admitQueuedMessageForSession(host, pending.admission, item)) {
-      if (item) {
-        cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
-      }
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return;
-    }
-    await deliverChatQueueItem(host, item, {
-      previousDraft: options.previousDraft,
-      restoreDraft: options.restoreDraft,
-      routingSessionKey: host.sessionKey,
-      target: options.target,
-    });
-  },
 };

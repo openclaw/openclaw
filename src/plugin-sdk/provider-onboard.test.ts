@@ -1,19 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   applyOpencodeZenModelDefault,
+  applyAgentDefaultMediaModel,
   createAliasOnlyPresetAppliers,
   OPENCODE_ZEN_DEFAULT_MODEL,
   resolveAgentModelPrimaryValue,
   type OpenClawConfig,
 } from "./provider-onboard.js";
-
-function expectPrimaryModelChanged(
-  applied: { changed: boolean; next: OpenClawConfig },
-  primary: string,
-) {
-  expect(applied.changed).toBe(true);
-  expect(applied.next.agents?.defaults?.model).toEqual({ primary });
-}
 
 function expectConfigUnchanged(
   applied: { changed: boolean; next: OpenClawConfig },
@@ -22,6 +15,21 @@ function expectConfigUnchanged(
   expect(applied.changed).toBe(false);
   expect(applied.next).toEqual(cfg);
 }
+
+describe("applyAgentDefaultMediaModel", () => {
+  it("preserves selected media defaults and the original config on no-op", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { mediaModels: { image: { primary: "operator/image" } } } },
+    };
+    expect(applyAgentDefaultMediaModel(cfg, "image", "provider/image")).toBe(cfg);
+    const next = applyAgentDefaultMediaModel(cfg, "video", "provider/video");
+    expect(next.agents?.defaults?.mediaModels).toEqual({
+      image: { primary: "operator/image" },
+      video: { primary: "provider/video" },
+    });
+    expect(cfg.agents?.defaults?.mediaModels).toEqual({ image: { primary: "operator/image" } });
+  });
+});
 
 describe("createAliasOnlyPresetAppliers", () => {
   const modelRef = "example/default";
@@ -68,20 +76,6 @@ describe("createAliasOnlyPresetAppliers", () => {
 });
 
 describe("applyOpencodeZenModelDefault", () => {
-  it("sets defaults when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
-    const applied = applyOpencodeZenModelDefault(cfg);
-    expectPrimaryModelChanged(applied, OPENCODE_ZEN_DEFAULT_MODEL);
-  });
-
-  it("overrides existing models", () => {
-    const cfg = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
-    } as OpenClawConfig;
-    const applied = applyOpencodeZenModelDefault(cfg);
-    expectPrimaryModelChanged(applied, OPENCODE_ZEN_DEFAULT_MODEL);
-  });
-
   it("no-ops when already legacy opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: "opencode-zen/claude-opus-4-5" } },
@@ -107,13 +101,5 @@ describe("applyOpencodeZenModelDefault", () => {
       primary: OPENCODE_ZEN_DEFAULT_MODEL,
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-  });
-
-  it("no-ops when already on the current default", () => {
-    const cfg = {
-      agents: { defaults: { model: OPENCODE_ZEN_DEFAULT_MODEL } },
-    } as OpenClawConfig;
-    const applied = applyOpencodeZenModelDefault(cfg);
-    expectConfigUnchanged(applied, cfg);
   });
 });

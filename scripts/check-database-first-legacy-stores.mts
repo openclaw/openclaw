@@ -3,8 +3,7 @@
 // Guards database-first state ownership by blocking legacy store writes in runtime code.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import type { Checker } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
 import {
   explicitUndefinedLegacyObjectPropertyValue,
   mergeConditionalLegacyObjectPropertyValue,
@@ -15,10 +14,8 @@ import {
   type LegacyObjectPropertyValue as LegacyPropertyValue,
   type LegacyPathBranchAssignment,
 } from "./lib/legacy-store-path-domain.mts";
-import {
-  createNativeTypeScriptParser,
-  createNativeTypeScriptProject,
-} from "./lib/native-typescript.mts";
+import { createLegacyStorePreflightBindingProof } from "./lib/legacy-store-preflight.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
@@ -239,8 +236,6 @@ const legacyStorePattern = new RegExp(
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
   "src/commands/doctor-usage-cost-cache.ts",
-  "src/infra/session-state-migration.ts",
-  "src/infra/state-migrations.acp-replay.ts",
   "src/infra/state-migrations.tui-last-session.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
@@ -252,8 +247,6 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.node-host.ts",
   "src/infra/state-migrations.device-identity.ts",
   "src/infra/state-migrations.rescue-pending.ts",
-  "src/commands/session-state-migration.ts",
-  "src/commands/doctor-state-migrations.test.ts",
 ];
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
@@ -425,7 +418,7 @@ function importSource(node: ts.ImportDeclaration) {
 function isLegacyRestartSentinelPreflightDetection(
   node: ts.StringLiteralLikeNode,
   relativePath: string,
-  checker: Checker | undefined,
+  isFsImport: ((identifier: ts.Identifier) => boolean) | undefined,
 ) {
   if (
     relativePath !== legacyRestartSentinelPreflightPath ||
@@ -467,49 +460,38 @@ function isLegacyRestartSentinelPreflightDetection(
     ts.isIdentifier(someCall.arguments[0]!.expression) &&
     someCall.arguments[0]!.expression.text === "fs" &&
     someCall.arguments[0]!.name.text === "existsSync" &&
-    checker
-      ?.getSymbolAtPosition(
-        node.getSourceFile().fileName,
-        someCall.arguments[0]!.expression.getStart(),
-      )
-      ?.declarations.some((handle) => {
-        const declaration = handle.resolve();
-        return (
-          declaration !== undefined &&
-          ts.isImportClause(declaration) &&
-          declaration.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
-          ts.isImportDeclaration(declaration.parent) &&
-          ts.isStringLiteral(declaration.parent.moduleSpecifier) &&
-          declaration.parent.moduleSpecifier.text === "node:fs"
-        );
-      }) === true
+    isFsImport?.(someCall.arguments[0]!.expression) === true
   );
 }
 
-function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relativePath: string) {
-  const preflightConfig = path.join(
-    path.dirname(sourceFile.fileName),
-    ".openclaw-restart-preflight.tsconfig.json",
-  );
-  using preflightProject =
+type ExpressionSyntaxRange = {
+  callStart: number;
+  callEnd: number;
+  segmentStart: number;
+  segmentEnd: number;
+};
+
+function collectLegacyStoreSyntaxFacts(sourceFile: ts.SourceFile, relativePath: string) {
+  const isFsImport =
     relativePath === legacyRestartSentinelPreflightPath
-      ? createNativeTypeScriptProject({
-          cwd: path.dirname(sourceFile.fileName),
-          configFileName: preflightConfig,
-          files: {
-            [sourceFile.fileName]: sourceFile.getFullText(),
-            [preflightConfig]: JSON.stringify({
-              compilerOptions: { noLib: true, noResolve: true, types: [] },
-              files: [sourceFile.fileName],
-            }),
-          },
-        })
+      ? createLegacyStorePreflightBindingProof(sourceFile)
       : undefined;
   const checkRestartSentinel = relativePath !== legacyRestartSentinelMigrationPath;
   const checkExecApprovals =
     relativePath !== legacyExecApprovalsMigrationPath &&
     relativePath !== legacyExecApprovalsConfigPath &&
     relativePath !== stableExecApprovalsPolicyUriPath;
+  const calls: ts.CallExpression[] = [];
+  const segments: Array<{ text: string; identifier: boolean }> = [];
+  const expressionRanges = new WeakMap<ts.Expression, ExpressionSyntaxRange>();
+  const literalCandidates = new WeakMap<ts.Expression, string[]>();
+  const createRequireBindings = new Set<string>();
+  const bridgeNodes = new Set<ts.Node>();
+  // Type annotations can seed fs receivers too, including nested structural types.
+  let hasFilesystemSource =
+    /\btypeof\s+import\s*\(\s*["'](?:node:fs|node:fs\/promises|fs|fs\/promises)["']\s*\)/u.test(
+      sourceFile.text,
+    );
   const restartViolations: LegacyStoreViolation[] = [];
   const approvalViolations: LegacyStoreViolation[] = [];
   const seenRestartViolations = new Set<string>();
@@ -524,15 +506,50 @@ function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relative
   }
 
   function visit(node: ts.Node) {
+    const range = {
+      callStart: calls.length,
+      callEnd: 0,
+      segmentStart: segments.length,
+      segmentEnd: 0,
+    };
+    if (ts.isCallExpression(node) && node.arguments.length >= 2) {
+      calls.push(node);
+    }
+    if (ts.isStringLiteralLikeNode(node) || ts.isIdentifier(node)) {
+      segments.push({ text: node.text, identifier: ts.isIdentifier(node) });
+    }
+    if (ts.isStringLiteralLikeNode(node) && fsModuleSpecifiers.has(node.text)) {
+      hasFilesystemSource = true;
+    }
+    if (ts.isImportDeclaration(node)) {
+      const source = importSource(node);
+      hasFilesystemSource ||= isHelperWriteModuleSource(source);
+      const bindings = node.importClause?.namedBindings;
+      if (
+        (source === "node:module" || source === "module") &&
+        bindings &&
+        ts.isNamedImports(bindings)
+      ) {
+        for (const element of bindings.elements) {
+          if ((element.propertyName?.text ?? element.name.text) === "createRequire") {
+            createRequireBindings.add(element.name.text);
+          }
+        }
+      }
+    }
+    if (
+      (ts.isStringLiteralLikeNode(node) ||
+        ts.isIdentifier(node) ||
+        ts.isTemplateExpression(node)) &&
+      bridgeMarkerPattern.test(node.getText(sourceFile))
+    ) {
+      bridgeNodes.add(node);
+    }
     if (
       checkRestartSentinel &&
       ts.isStringLiteralLikeNode(node) &&
       legacyRestartSentinelFilenamePattern.test(node.text) &&
-      !isLegacyRestartSentinelPreflightDetection(
-        node,
-        relativePath,
-        preflightProject?.project.checker,
-      )
+      !isLegacyRestartSentinelPreflightDetection(node, relativePath, isFsImport)
     ) {
       addRestartViolation(node, "legacy restart sentinel reference");
     }
@@ -564,10 +581,23 @@ function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relative
       });
     }
     node.forEachChild(visit);
+    if (ts.isExpression(node)) {
+      range.callEnd = calls.length;
+      range.segmentEnd = segments.length;
+      expressionRanges.set(node, range);
+    }
   }
   visit(sourceFile);
-  // Preserve rule-family ordering and the restart rule's distinct deduplication policy.
-  return [...restartViolations, ...approvalViolations];
+  return {
+    boundaryViolations: [...restartViolations, ...approvalViolations],
+    bridgeNodes,
+    calls,
+    createRequireBindings,
+    expressionRanges,
+    hasFilesystemSource,
+    literalCandidates,
+    segments,
+  };
 }
 
 function isHelperWriteModuleSource(source: string) {
@@ -577,26 +607,6 @@ function isHelperWriteModuleSource(source: string) {
     fsSafePackageModulePattern.test(source) ||
     helperWriteModulePattern.test(source)
   );
-}
-
-function collectCreateRequireBindings(sourceFile: ts.SourceFile) {
-  const bindings = new Set<string>();
-  function visit(node: ts.Node) {
-    if (ts.isImportDeclaration(node) && ["node:module", "module"].includes(importSource(node))) {
-      const namedBindings = node.importClause?.namedBindings;
-      if (namedBindings && ts.isNamedImports(namedBindings)) {
-        for (const element of namedBindings.elements) {
-          const importedName = element.propertyName?.text ?? element.name.text;
-          if (importedName === "createRequire") {
-            bindings.add(element.name.text);
-          }
-        }
-      }
-    }
-    node.forEachChild(visit);
-  }
-  visit(sourceFile);
-  return bindings;
 }
 
 function isFsRequireExpression(
@@ -701,6 +711,23 @@ function collectFsBindings(sourceFile: ts.SourceFile) {
   return { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases };
 }
 
+function dynamicFsImportThenCallback(node: ts.CallExpression) {
+  const callee = unwrapExpression(node.expression);
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    callee.name.text !== "then" ||
+    !isFsDynamicImportExpression(callee.expression)
+  ) {
+    return null;
+  }
+  const [callback] = node.arguments;
+  return callback && ts.isFunctionLikeDeclaration(callback) ? callback : null;
+}
+
+function isTypeSyntaxNode(node: ts.Node) {
+  return node.kind >= ts.SyntaxKind.FirstTypeNode && node.kind <= ts.SyntaxKind.LastTypeNode;
+}
+
 function templateCandidateText(current: ts.TemplateExpression) {
   let text = current.head.text;
   for (const span of current.templateSpans) {
@@ -709,7 +736,15 @@ function templateCandidateText(current: ts.TemplateExpression) {
   return text || "*";
 }
 
-function legacyCandidateTexts(sourceFile: ts.SourceFile, node: ts.Expression) {
+function legacyCandidateTexts(
+  sourceFile: ts.SourceFile,
+  node: ts.Expression,
+  syntax: ReturnType<typeof collectLegacyStoreSyntaxFacts>,
+) {
+  const cached = syntax.literalCandidates.get(node);
+  if (cached) {
+    return cached;
+  }
   const candidates = node.pos >= 0 && node.end >= 0 ? [node.getText(sourceFile)] : [];
   const stringSegments: string[] = [];
 
@@ -757,17 +792,20 @@ function legacyCandidateTexts(sourceFile: ts.SourceFile, node: ts.Expression) {
     candidates.push(segments.join("/"));
   }
 
-  function visit(current: ts.Node) {
-    maybeAddCallPathCandidate(current);
-    if (ts.isStringLiteralLikeNode(current)) {
-      stringSegments.push(current.text);
-    }
-    current.forEachChild(visit);
+  const range = syntax.expressionRanges.get(node)!;
+  for (let index = range.callStart; index < range.callEnd; index++) {
+    maybeAddCallPathCandidate(syntax.calls[index]!);
   }
-  visit(node);
+  for (let index = range.segmentStart; index < range.segmentEnd; index++) {
+    const segment = syntax.segments[index]!;
+    if (!segment.identifier) {
+      stringSegments.push(segment.text);
+    }
+  }
   if (stringSegments.length > 1) {
     candidates.push(stringSegments.join("/"));
   }
+  syntax.literalCandidates.set(node, candidates);
   return candidates;
 }
 
@@ -780,18 +818,23 @@ export function collectDatabaseFirstLegacyStoreViolations(
   sourceFile: ts.SourceFile,
 ): LegacyStoreViolation[] {
   const relativePath = inputRelativePath.replaceAll("\\", "/");
-  const boundaryViolations = collectLegacyFileBoundaryViolations(sourceFile, relativePath);
+  const syntax = collectLegacyStoreSyntaxFacts(sourceFile, relativePath);
+  const { boundaryViolations, createRequireBindings } = syntax;
   if (isAllowedLegacyOwnerPath(relativePath)) {
     return boundaryViolations;
   }
 
-  const createRequireBindings = collectCreateRequireBindings(sourceFile);
-  const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
-    collectFsBindings(sourceFile);
+  // Without a filesystem source, aliases and local wrappers cannot create a
+  // writer. Marker-bearing files keep the ordered walk (including wrapper replay).
+  if (!syntax.hasFilesystemSource && syntax.bridgeNodes.size === 0) {
+    return boundaryViolations;
+  }
   const violations: LegacyStoreViolation[] = [...boundaryViolations];
   const seenViolations = new Set(
     boundaryViolations.map((violation) => `${violation.line}:${violation.kind}`),
   );
+  const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
+    collectFsBindings(sourceFile);
   const fsModuleBindingScopes = [
     new Map<string, boolean>([...fsModuleBindings].map((name) => [name, true])),
   ];
@@ -1028,28 +1071,28 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return scopeForRead(knownUndefinedScopes, name)?.get(name) === true;
   }
 
+  function combineSegmentOptions(left: string[], right: string[]) {
+    const joined = left.flatMap((leftOption) =>
+      right.map((rightOption) => `${leftOption}${rightOption}`),
+    );
+    return joined.length > 32 ? joined.slice(0, 32) : joined;
+  }
+
+  function joinPathOptions(segments: string[][]) {
+    return segments.reduce(
+      (prefixes, options) =>
+        prefixes
+          .flatMap((prefix) =>
+            options.map((option) => (prefix.length === 0 ? option : `${prefix}/${option}`)),
+          )
+          .slice(0, 32),
+      [""],
+    );
+  }
+
   function expressionLiteralCandidateTexts(node: ts.Expression) {
-    const candidates = legacyCandidateTexts(sourceFile, node);
+    const candidates = [...legacyCandidateTexts(sourceFile, node, syntax)];
     const segmentOptions: string[][] = [];
-
-    function combineSegmentOptions(left: string[], right: string[]) {
-      const joined = left.flatMap((leftOption) =>
-        right.map((rightOption) => `${leftOption}${rightOption}`),
-      );
-      return joined.length > 32 ? joined.slice(0, 32) : joined;
-    }
-
-    function joinPathOptions(segments: string[][]) {
-      return segments.reduce(
-        (prefixes, options) =>
-          prefixes
-            .flatMap((prefix) =>
-              options.map((option) => (prefix.length === 0 ? option : `${prefix}/${option}`)),
-            )
-            .slice(0, 32),
-        [""],
-      );
-    }
 
     function expressionSegmentOptions(current: ts.Expression): string[] {
       const unwrapped = unwrapExpression(current);
@@ -1093,25 +1136,25 @@ export function collectDatabaseFirstLegacyStoreViolations(
       candidates.push(...joinPathOptions(argumentOptions));
     }
 
-    function visitCandidate(current: ts.Node) {
-      maybeAddCallLiteralCandidate(current);
-      if (ts.isStringLiteralLikeNode(current)) {
-        segmentOptions.push([current.text]);
-        return;
-      }
-      if (ts.isIdentifier(current)) {
-        const texts = resolveLiteralTextIdentifier(current.text);
-        if (texts.length > 0) {
-          segmentOptions.push(texts);
-        }
-      }
-      current.forEachChild(visitCandidate);
-    }
     const expressionOptions = expressionSegmentOptions(node);
     if (expressionOptions.some((option) => option !== "*")) {
       candidates.push(...expressionOptions);
     }
-    visitCandidate(node);
+    const range = syntax.expressionRanges.get(node)!;
+    for (let index = range.callStart; index < range.callEnd; index++) {
+      maybeAddCallLiteralCandidate(syntax.calls[index]!);
+    }
+    for (let index = range.segmentStart; index < range.segmentEnd; index++) {
+      const segment = syntax.segments[index]!;
+      if (!segment.identifier) {
+        segmentOptions.push([segment.text]);
+      } else {
+        const texts = resolveLiteralTextIdentifier(segment.text);
+        if (texts.length > 0) {
+          segmentOptions.push(texts);
+        }
+      }
+    }
     if (segmentOptions.length > 1) {
       candidates.push(...joinPathOptions(segmentOptions));
     }
@@ -1410,19 +1453,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         definitionScanDepth -= 1;
       }
     });
-  }
-
-  function dynamicFsImportThenCallback(node: ts.CallExpression) {
-    const callee = unwrapExpression(node.expression);
-    if (
-      !ts.isPropertyAccessExpression(callee) ||
-      callee.name.text !== "then" ||
-      !isFsDynamicImportExpression(callee.expression)
-    ) {
-      return null;
-    }
-    const [callback] = node.arguments;
-    return callback && ts.isFunctionLikeDeclaration(callback) ? callback : null;
   }
 
   function isFsModuleExpression(expression: ts.Expression) {
@@ -1991,10 +2021,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
       current = current.parent;
     }
     return false;
-  }
-
-  function isTypeSyntaxNode(node: ts.Node) {
-    return node.kind >= ts.SyntaxKind.FirstTypeNode && node.kind <= ts.SyntaxKind.LastTypeNode;
   }
 
   function objectLiteralPropertyLegacyValue(
@@ -3999,12 +4025,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
     }
 
-    if (
-      (ts.isStringLiteralLikeNode(node) ||
-        ts.isIdentifier(node) ||
-        ts.isTemplateExpression(node)) &&
-      bridgeMarkerPattern.test(node.getText(sourceFile))
-    ) {
+    if (syntax.bridgeNodes.has(node)) {
       addViolation(node, "legacy transcript bridge marker");
     }
 

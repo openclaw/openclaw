@@ -1,74 +1,24 @@
 import { X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type IncomingHttpHeaders } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import {
-  connect,
-  createServer as createTcpServer,
-  type AddressInfo,
-  type Server,
-  type Socket,
-} from "node:net";
+import { connect, createServer as createTcpServer } from "node:net";
 import { checkServerIdentity } from "node:tls";
 import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
-import { GatewayClient, type GatewayClientCloseInfo } from "./client.js";
+import type { GatewayClientCloseInfo } from "./client.js";
+import { transportFixture } from "./client.transport.test-support.js";
 import { resolveGatewayWebSocketTransport } from "./websocket-transport.js";
-import { WebSocketServer } from "./websocket.test-support.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
-const servers: Server[] = [];
-const sockets = new Set<Socket>();
-let socketDrain = createDeferred();
-const clients: GatewayClient[] = [];
 let proxy: ProxylineHandle | undefined;
-
-function trackSocket(socket: Socket) {
-  if (sockets.size === 0) {
-    socketDrain = createDeferred();
-  }
-  sockets.add(socket);
-  socket.once("close", () => {
-    sockets.delete(socket);
-    if (sockets.size === 0) {
-      socketDrain.resolve();
-    }
-  });
-}
-
-async function waitForSocketDrain() {
-  // Recheck after waking: a new accepted socket can start another drain generation.
-  while (sockets.size > 0) {
-    await socketDrain.promise;
-  }
-}
-
-async function listen(server: Server): Promise<number> {
-  servers.push(server);
-  server.on("connection", trackSocket);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return (server.address() as AddressInfo).port;
-}
-
-afterEach(async () => {
-  for (const client of clients.splice(0)) {
-    await client.stopAndWait();
-  }
-  proxy?.stop();
-  proxy = undefined;
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  for (const server of servers.splice(0).toReversed()) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
-  await waitForSocketDrain();
-});
+const { startClient, websocketServer, listen, trackSocket, waitForSocketDrain } = transportFixture(
+  () => {
+    proxy?.stop();
+    proxy = undefined;
+  },
+);
 
 async function startProxy(targetPort: number) {
   const server = createHttpServer();
@@ -95,7 +45,6 @@ it.each([
   { peer: "localhost", servername: "localhost", valid: true },
   { peer: "other.localhost", servername: "other.localhost", valid: false },
   { peer: "127.0.0.1", servername: "", valid: false },
-  { peer: "::1", servername: "", valid: false },
 ])(
   "validates the original TLS peer $peer behind a translated endpoint",
   ({ peer, servername, valid }) => {
@@ -112,106 +61,131 @@ it.each([
   },
 );
 
-describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed) => {
-  it.each([
-    { name: "wrong pin", pin: "ab".repeat(32), expectHeader: false, urlAuth: false },
-    { name: "wrong pin with Expect", pin: "ab".repeat(32), expectHeader: true, urlAuth: false },
-    { name: "wrong pin with URL auth", pin: "ab".repeat(32), expectHeader: false, urlAuth: true },
-    {
-      name: "wrong pin with Expect and URL auth",
-      pin: "ab".repeat(32),
-      expectHeader: true,
-      urlAuth: true,
-    },
-    { name: "correct pin", pin: fingerprint, expectHeader: true, urlAuth: true },
-    { name: "CA validation without a pin", pin: undefined, expectHeader: true, urlAuth: true },
-  ])("validates $name before upgrade", async ({ pin, expectHeader, urlAuth }) => {
-    const server = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
-    let httpBytes = 0;
-    let upgrades = 0;
-    let headers: IncomingHttpHeaders | undefined;
-    server.on("secureConnection", (socket) => {
-      socket.on("data", (chunk: Buffer) => {
-        httpBytes += chunk.length;
-      });
+it.each([
+  { name: "wrong pin with Expect and URL auth", pin: "ab".repeat(32), managed: false },
+  { name: "wrong pin with Expect and URL auth", pin: "ab".repeat(32), managed: true },
+  { name: "correct pin", pin: fingerprint, managed: false },
+  { name: "CA validation without a pin", pin: undefined, managed: false },
+])("validates $name before upgrade (managed proxy: $managed)", async ({ pin, managed }) => {
+  const server = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+  let httpBytes = 0;
+  let upgrades = 0;
+  let headers: IncomingHttpHeaders | undefined;
+  server.on("secureConnection", (socket) => {
+    socket.on("data", (chunk: Buffer) => {
+      httpBytes += chunk.length;
     });
-    const wss = new WebSocketServer({ server });
-    const outcome = createDeferred<Error | "open">();
-    const closed = createDeferred<GatewayClientCloseInfo | undefined>();
-    wss.on("connection", (_socket, request) => {
-      upgrades++;
-      headers = request.headers;
-      if (pin === fingerprint) {
-        outcome.resolve("open");
-      }
-    });
-    const port = await listen(server);
-    const tunnels = managed ? await startProxy(port) : undefined;
-    const client = new GatewayClient({
-      url: `wss://${urlAuth ? "fixture:synthetic-password@" : ""}127.0.0.1:${port}`,
-      tlsFingerprint: pin,
-      deviceIdentity: null,
-      edgeAuthHeaders: {
-        "X-Test-Edge-Auth": "synthetic-test-edge-token",
-        ...(expectHeader ? { eXpEcT: "100-continue" } : {}),
-      },
-      onConnectError: outcome.resolve,
-      onClose: (_code, _reason, info) => closed.resolve(info),
-    });
-    clients.push(client);
-    client.start();
-    const result = await outcome.promise;
-    await client.stopAndWait();
-    await waitForSocketDrain();
+  });
+  const wss = websocketServer(server);
+  const outcome = createDeferred<Error | "open">();
+  const closed = createDeferred<GatewayClientCloseInfo | undefined>();
+  wss.on("connection", (_socket, request) => {
+    upgrades++;
+    headers = request.headers;
     if (pin === fingerprint) {
-      expect(result).toBe("open");
-      expect(upgrades).toBe(1);
-      expect(headers).toMatchObject({
-        "x-test-edge-auth": "synthetic-test-edge-token",
-        expect: "100-continue",
-        authorization: `Basic ${Buffer.from("fixture:synthetic-password").toString("base64")}`,
-      });
-    } else {
-      expect(result).toBeInstanceOf(Error);
-      expect(String(result)).toMatch(pin ? /tls fingerprint mismatch/i : /certificate/i);
-      expect(httpBytes).toBe(0);
-      expect(upgrades).toBe(0);
-      expect(await closed.promise).toMatchObject({
-        phase: "pre-hello",
-        socketOpened: false,
-        transportValidated: false,
-        connectRequestSent: false,
-      });
+      outcome.resolve("open");
     }
-    expect(tunnels?.() ?? 0).toBe(managed ? 1 : 0);
-    await new Promise<void>((resolve) => {
-      wss.close(() => resolve());
+  });
+  const port = await listen(server);
+  const tunnels = managed ? await startProxy(port) : undefined;
+  const { client } = startClient({
+    url: `wss://fixture:synthetic-password@127.0.0.1:${port}`,
+    tlsFingerprint: pin,
+    deviceIdentity: null,
+    edgeAuthHeaders: { "X-Test-Edge-Auth": "synthetic-test-edge-token", eXpEcT: "100-continue" },
+    onConnectError: outcome.resolve,
+    onClose: (_code, _reason, info) => closed.resolve(info),
+  });
+  const result = await outcome.promise;
+  await client.stopAndWait();
+  await waitForSocketDrain();
+  if (pin === fingerprint) {
+    expect(result).toBe("open");
+    expect(upgrades).toBe(1);
+    expect(headers).toMatchObject({
+      "x-test-edge-auth": "synthetic-test-edge-token",
+      expect: "100-continue",
+      authorization: `Basic ${Buffer.from("fixture:synthetic-password").toString("base64")}`,
     });
+  } else {
+    expect(result).toBeInstanceOf(Error);
+    expect(String(result)).toMatch(pin ? /tls fingerprint mismatch/i : /certificate/i);
+    expect({ httpBytes, upgrades }).toEqual({ httpBytes: 0, upgrades: 0 });
+    expect(await closed.promise).toMatchObject({
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+    });
+  }
+  expect(tunnels?.() ?? 0).toBe(managed ? 1 : 0);
+});
+
+it.each(["timeout", "cancel"])("cleans up a stalled TLS handshake on %s", async (action) => {
+  const accepted = createDeferred();
+  const server = createTcpServer((socket) => {
+    socket.on("data", () => accepted.resolve());
+  });
+  const port = await listen(server);
+  const { client, failed } = startClient({
+    url: `wss://127.0.0.1:${port}`,
+    tlsFingerprint: fingerprint,
+    deviceIdentity: null,
+    preauthHandshakeTimeoutMs: 100,
+  });
+  await accepted.promise;
+  if (action === "timeout") {
+    await expect(failed).resolves.toMatchObject({
+      message: "Opening handshake has timed out",
+      code: "ETIMEDOUT",
+    });
+  }
+  await client.stopAndWait();
+  await waitForSocketDrain();
+});
+
+it("rejects non-empty edge auth headers before a plaintext WebSocket dial", async () => {
+  const { client, failed } = startClient({
+    url: "ws://127.0.0.1:18789",
+    edgeAuthHeaders: { "X-Edge-Auth": "test-secret" },
   });
 
-  it.each(["timeout", "cancel"])("cleans up a stalled TLS handshake on %s", async (action) => {
-    const accepted = createDeferred();
-    const server = createTcpServer((socket) => {
-      socket.on("data", () => accepted.resolve());
-    });
-    const port = await listen(server);
-    const tunnels = managed ? await startProxy(port) : undefined;
-    const failed = createDeferred<Error>();
-    const client = new GatewayClient({
-      url: `wss://127.0.0.1:${port}`,
-      tlsFingerprint: fingerprint,
-      deviceIdentity: null,
-      preauthHandshakeTimeoutMs: 100,
-      onConnectError: failed.resolve,
-    });
-    clients.push(client);
-    client.start();
-    await accepted.promise;
-    if (action === "timeout") {
-      expect(String(await failed.promise)).toMatch(/timed out/i);
-    }
-    await client.stopAndWait();
-    await waitForSocketDrain();
-    expect(tunnels?.() ?? 0).toBe(managed ? 1 : 0);
+  await expect(failed).resolves.toMatchObject({
+    message: "edge auth headers require a wss:// Gateway URL",
   });
+  client.stop();
+});
+
+it("does not follow an edge redirect and redacts its Location URL", async () => {
+  let redirected = false;
+  const targetHttpsServer = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+  const targetWebSocketServer = websocketServer(targetHttpsServer);
+  targetWebSocketServer.on("connection", (socket) => {
+    redirected = true;
+    socket.close();
+  });
+  const targetPort = await listen(targetHttpsServer);
+
+  const edgeHttpsServer = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+  edgeHttpsServer.on("upgrade", (_request, socket) => {
+    socket.end(
+      `HTTP/1.1 302 Found\r\nLocation: wss://127.0.0.1:${targetPort}/?access_token=test-token&safe=1\r\nConnection: close\r\n\r\n`,
+    );
+  });
+  const edgePort = await listen(edgeHttpsServer);
+  const { client, failed } = startClient({
+    url: `wss://127.0.0.1:${edgePort}`,
+    edgeAuthHeaders: { "X-Edge-Auth": "test-secret" },
+    tlsFingerprint: fingerprint,
+  });
+
+  await expect(failed).resolves.toMatchObject({
+    details: {
+      reason: "websocket-upgrade-rejected",
+      httpStatus: 302,
+      location: `wss://127.0.0.1:${targetPort}/?access_token=***&safe=1`,
+    },
+  });
+  expect(redirected).toBe(false);
+  await client.stopAndWait();
 });

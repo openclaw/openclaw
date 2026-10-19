@@ -142,38 +142,41 @@ async function withSurface(
 }
 
 describe("host runtime plugin tool grant authority", () => {
-  it("materializes and executes the admitted grant even when harness options forge a different grant", async () => {
-    await withSurface(grantA(), { runtimePluginToolGrant: grantB() }, async (tools) => {
-      expect(tools.map((tool) => tool.name)).toContain(TOOL_A);
-      expect(tools.map((tool) => tool.name)).not.toContain(TOOL_B);
-      const result = await tools.find((tool) => tool.name === TOOL_A)?.execute("call-1", {});
-      expect(JSON.stringify(result)).toContain(`grant-ok:${TOOL_A}`);
-      expect(await fs.readFile(path.join(tempDir, "io-a.txt"), "utf8")).toBe("io-performed");
-    });
-  });
-
-  it("keeps the admitted grant when shared attempt authority is mutated after host capture", async () => {
-    const grant = grantA();
-    await withSurface(
-      grant,
-      {},
-      async (tools) => {
-        expect(tools.map((tool) => tool.name)).toContain(TOOL_A);
-        expect(tools.map((tool) => tool.name)).not.toContain(TOOL_B);
-        await expect(fs.stat(path.join(tempDir, "io-b.txt"))).rejects.toThrow();
-      },
-      (attempt) => {
-        grant.pluginId = PLUGIN_B;
-        grant.toolNames.push(TOOL_B);
-        attempt.runtimePluginToolGrant = grantB();
-      },
-    );
-  });
-
-  it("does not admit optional tools without a host grant", async () => {
-    await withSurface(undefined, { runtimePluginToolGrant: grantB() }, (tools) => {
-      expect(tools.map((tool) => tool.name)).not.toContain(TOOL_A);
-      expect(tools.map((tool) => tool.name)).not.toContain(TOOL_B);
-    });
-  });
+  it.each(["forged options", "mutated attempt", "absent grant"] as const)(
+    "keeps optional tools bound to the captured host grant with %s",
+    async (scenario) => {
+      const grant = grantA();
+      await withSurface(
+        scenario === "absent grant" ? undefined : grant,
+        scenario === "mutated attempt" ? {} : { runtimePluginToolGrant: grantB() },
+        async (tools) => {
+          const names = tools.map((tool) => tool.name);
+          expect(names).not.toContain(TOOL_B);
+          if (scenario === "absent grant") {
+            expect(names).not.toContain(TOOL_A);
+          } else {
+            expect(names).toContain(TOOL_A);
+            if (scenario === "forged options") {
+              const result = await tools
+                .find((tool) => tool.name === TOOL_A)
+                ?.execute("call-1", {});
+              expect(JSON.stringify(result)).toContain(`grant-ok:${TOOL_A}`);
+              expect(await fs.readFile(path.join(tempDir, "io-a.txt"), "utf8")).toBe(
+                "io-performed",
+              );
+            } else {
+              await expect(fs.stat(path.join(tempDir, "io-b.txt"))).rejects.toThrow();
+            }
+          }
+        },
+        scenario === "mutated attempt"
+          ? (attempt) => {
+              grant.pluginId = PLUGIN_B;
+              grant.toolNames.push(TOOL_B);
+              attempt.runtimePluginToolGrant = grantB();
+            }
+          : undefined,
+      );
+    },
+  );
 });

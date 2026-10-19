@@ -100,7 +100,8 @@ import { attachGatewayWsMessageHandler } from "./message-handler.js";
 const temporaryIdentityPaths: string[] = [];
 
 async function prepareSignedControlUiDevice(nonce: string) {
-  const { buildDeviceAuthPayload } = await import("../../device-auth.js");
+  const { buildDeviceAuthPayload } =
+    await import("../../../../packages/gateway-client/src/device-auth.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../../../infra/device-identity.js");
   const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);
@@ -355,6 +356,7 @@ describe("Control UI build admission over WebSocket", () => {
       );
       expect(await withDeadline(closed, "socket close")).toBe(1008);
       expect(connectedClient).toBeNull();
+      expect(await getPairedDevice(device.id)).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();
       expect(setLastFrameMetaMock).toHaveBeenCalledWith({
         type: "req",

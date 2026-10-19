@@ -5,26 +5,18 @@ import {
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import {
-  clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import {
-  createOpenClawTestState,
-  withOpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import {
-  hasUnsettledCronDescendants,
-  readDescendantExecutionState,
-} from "./run-subagent-registry.runtime.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { hasUnsettledCronDescendants } from "./run-subagent-registry.runtime.js";
 import { readDescendantSubagentFallbackReply } from "./subagent-followup.js";
 
 const sessionKey = "agent:main:cron:worker-read:run:current";
@@ -52,7 +44,11 @@ function completedChild(text = "Completed child answer") {
     childSessionKey: "agent:main:subagent:cron-worker-child",
     createdAt: 10,
     execution: { status: "terminal", endedAt: 20, outcome: { status: "ok" } },
-    completion: { required: false, terminalReply: { disposition: "visible", text } },
+    completion: {
+      required: false,
+      resultText: text,
+      terminalReply: { disposition: "visible", text },
+    },
     delivery: { status: "not_required" },
   });
 }
@@ -140,9 +136,16 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
             : {}),
           ...(change === "other requester" ? { requesterSessionKey: "agent:main:other" } : {}),
         };
-        persistSubagentRunsToDiskOrThrow(
-          change === "delete" ? new Map() : new Map([[replacement.runId, replacement]]),
-          [replacement.runId],
+        await mutateSubagentRuns(
+          [child.runId, replacement.runId],
+          () => ({
+            value: undefined,
+            postimages: new Map<string, SubagentRunRecord | null>([
+              [child.runId, null],
+              ...(change === "delete" ? [] : [[replacement.runId, replacement] as const]),
+            ]),
+          }),
+          { runs: new Map([[child.runId, child]]) },
         );
         gate.release();
         expect(await pending).toBe(
@@ -157,7 +160,7 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
   },
 );
 
-it.each(["close", "source replacement", "caller cancellation"] as const)(
+it.each(["close", "caller cancellation"] as const)(
   "refuses Cron fallback after %s during the worker read",
   async (change) => {
     await withPersistedCronRuns(async () => {
@@ -180,28 +183,13 @@ it.each(["close", "source replacement", "caller cancellation"] as const)(
           work.beginClose(reason);
           gate.release();
           expect(await outcome).toBe(reason);
-        } else if (change === "close") {
+        } else {
           const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
           gate.release();
           await closing;
           expect(await outcome).toMatchObject({
             message: expect.stringMatching(/read admission/u),
           });
-        } else {
-          const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
-          try {
-            await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-              saveSubagentRegistryToSqlite(
-                new Map([[child.runId, completedChild("Other source")]]),
-              );
-              gate.release();
-              expect(await outcome).toMatchObject({
-                message: expect.stringMatching(/database changed|read admission/u),
-              });
-            });
-          } finally {
-            await other.cleanup();
-          }
         }
       } finally {
         gate.release();
@@ -212,26 +200,6 @@ it.each(["close", "source replacement", "caller cancellation"] as const)(
     });
   },
 );
-
-it.each([
-  { createdAt: 10, startedAt: 30, fresh: true },
-  { createdAt: 30, startedAt: undefined, fresh: true },
-  { createdAt: 30, startedAt: 10, fresh: false },
-])("projects settled descendant freshness in the same read frame: %j", async (row) => {
-  await withPersistedCronRuns(async () => {
-    const child = {
-      ...completedChild(),
-      createdAt: row.createdAt,
-      execution: { status: "terminal" as const, startedAt: row.startedAt, endedAt: 40 },
-    };
-    saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
-    clearSubagentRunsReadCacheForTest();
-    expect(await readDescendantExecutionState(sessionKey, 25)).toEqual({
-      hasFreshDescendants: row.fresh,
-      hasActiveDescendants: false,
-    });
-  });
-});
 
 it.each(["running", "yielded", "queued delivery"] as const)(
   "keeps %s descendants unsettled independently of execution activity",
@@ -254,10 +222,6 @@ it.each(["running", "yielded", "queued delivery"] as const)(
       saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
       clearSubagentRunsReadCacheForTest();
       expect(await hasUnsettledCronDescendants(sessionKey)).toBe(true);
-      expect(await readDescendantExecutionState(sessionKey, 25)).toEqual({
-        hasFreshDescendants: false,
-        hasActiveDescendants: phase === "running",
-      });
     });
   },
 );

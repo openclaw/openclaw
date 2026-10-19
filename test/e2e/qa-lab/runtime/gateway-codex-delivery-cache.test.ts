@@ -70,6 +70,7 @@ describe("Codex delivery-mode prompt caching", () => {
           };
           const conversation = { id: "delivery-cache", kind: "direct" as const };
           const deliveryRequestsByTurn: MockOpenAiRequestSnapshot[] = [];
+          const instructionBytesByTurn: string[] = [];
           const fragmentBytes: number[] = [];
           for (const [index, mode] of ["automatic", "message_tool_only", undefined].entries()) {
             const cursor = (await readRequests()).at(-1)?.cursor ?? 0;
@@ -122,6 +123,13 @@ describe("Codex delivery-mode prompt caching", () => {
               content?: unknown;
             }>;
             expect(Array.isArray(input)).toBe(true);
+            // Codex 0.162 prepends base instructions as a developer input item.
+            const instructions = input[0];
+            expect(instructions).toMatchObject({
+              role: "developer",
+              content: [{ type: "input_text", text: expect.stringMatching(/\S/u) }],
+            });
+            instructionBytesByTurn.push(JSON.stringify(instructions));
             const currentUser = input.findLastIndex(
               (item) => item.role === "user" && JSON.stringify(item.content).includes(message),
             );
@@ -156,15 +164,12 @@ describe("Codex delivery-mode prompt caching", () => {
               expect(deliveryRequest.body.prompt_cache_key).toBe(
                 deliveryRequestsByTurn[0]!.body.prompt_cache_key,
               );
-              expect(deliveryRequest.body.instructions).toBe(
-                deliveryRequestsByTurn[0]!.body.instructions,
-              );
+              expect(instructionBytesByTurn[index]).toBe(instructionBytesByTurn[0]);
               expect(JSON.stringify(deliveryRequest.body.tools)).toBe(
                 JSON.stringify(deliveryRequestsByTurn[0]!.body.tools),
               );
             }
             expect(deliveryRequest.body.prompt_cache_key).toEqual(expect.any(String));
-            expect(deliveryRequest.body.instructions).toEqual(expect.any(String));
             expect(deliveryRequest.body.tools).toEqual(expect.any(Array));
           }
           console.info(
@@ -176,7 +181,7 @@ describe("Codex delivery-mode prompt caching", () => {
                 deliveryRequestsByTurn.map((request) => request.body.prompt_cache_key),
               ).size,
               instructionsSha256: createHash("sha256")
-                .update(String(deliveryRequestsByTurn[0]!.body.instructions))
+                .update(instructionBytesByTurn[0]!)
                 .digest("hex"),
               toolsSha256: createHash("sha256")
                 .update(JSON.stringify(deliveryRequestsByTurn[0]!.body.tools))

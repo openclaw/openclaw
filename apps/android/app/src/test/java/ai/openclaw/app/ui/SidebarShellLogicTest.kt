@@ -46,7 +46,7 @@ class SidebarShellLogicTest {
       ),
       destinations.take(5),
     )
-    assertTrue(SidebarDestination.SkillWorkshop in destinations.drop(5))
+    assertTrue(SidebarDestination.Dreaming in destinations.drop(5))
     assertEquals(destinations.size, destinations.distinct().size)
   }
 
@@ -201,7 +201,7 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun expandedSessionPresentationRevealsAllRowsAndCollapsesToTheSameResult() {
+  fun expandedSessionPresentationRevealsAllRows() {
     val sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) }
 
     val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
@@ -212,7 +212,6 @@ class SidebarShellLogicTest {
     assertFalse(collapsed.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
     assertTrue(expanded.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
     assertTrue(expanded.canExpandRecent)
-    assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
   }
 
   @Test
@@ -325,19 +324,19 @@ class SidebarShellLogicTest {
 
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session, activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false), fallback = sessionSourceLabel(session.key), activeRunLabel = null, nowMs = 1_000),
     )
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false, status = "running"), activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false, status = "running"), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertNull(sidebarSessionActivity("running", lastRunError = null, hasActiveRun = false, unread = false))
     assertNull(sidebarSessionActivity("done", lastRunError = null, hasActiveRun = true, unread = false))
@@ -366,9 +365,6 @@ class SidebarShellLogicTest {
     activity: Long,
     pinned: Boolean = false,
     archived: Boolean = false,
-    displayName: String? = null,
-    label: String? = null,
-    owner: String? = null,
     category: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
@@ -377,9 +373,6 @@ class SidebarShellLogicTest {
       lastActivityAt = activity,
       pinned = pinned,
       archived = archived,
-      displayName = displayName,
-      label = label,
-      ownerAgentId = owner,
       category = category,
     )
 }

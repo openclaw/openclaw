@@ -63,7 +63,7 @@ If you are unsure, report privately. We would rather route a careful report than
 
 - Search existing advisories before filing.
 - Include likely duplicate GHSA IDs in your report when applicable.
-- Maintainers may close lower-quality/later duplicates in favor of the earliest high-quality canonical report.
+- Maintainers may close lower-quality/later duplicates in favor of the earliest high-quality report.
 
 ## Security Posture and Report Rules
 
@@ -346,7 +346,7 @@ node --version  # Should be v24.16+ or v26.1+
 
 When running OpenClaw in Docker:
 
-1. The official image runs as a non-root user (`node`) for reduced attack surface
+1. The official image runs as a non-root user (`node`) to limit what a compromised process can do
 2. Use `--read-only` flag when possible for additional filesystem protection
 3. Limit container capabilities with `--cap-drop=ALL`
 

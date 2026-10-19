@@ -21,8 +21,7 @@ interface GhCommandParams {
 
 export function runGhCommand(args: string[], params: GhCommandParams = {}) {
   const spawnSyncImpl: NonNullable<GhCommandParams["spawnSyncImpl"]> =
-    params.spawnSyncImpl ??
-    ((command, commandArgs, options) => spawnSync(command, commandArgs, options));
+    params.spawnSyncImpl ?? spawnSync;
   const proc = spawnSyncImpl("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",

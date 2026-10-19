@@ -36,13 +36,13 @@ openclaw onboard
 ```
 
 Allow local discovery, then choose **Apple Foundation Models** when it appears.
-Setup offers this option only after a background probe confirms that the model is
+Setup offers this option only after a background check confirms that the model is
 available and has at least 8,192 context tokens. It stays hidden while eligibility
 is unknown, when prerequisites are missing, or when the model has a smaller window.
 
 On first discovery, OpenClaw compiles the bundled Swift helper in a temporary
 directory with your installed Apple tools, reads the native model's availability
-and context size, and removes the temporary helper. Compilation and probing run
+and context size, and removes the temporary helper. Compilation and checking run
 in child processes so they do not block the Gateway's event loop. Discovery does
 not install an inference helper or change your configuration. It is bounded and
 cancellable; a failed or timed-out check does not offer the model.

@@ -2,25 +2,28 @@
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  loadDeliveryQueueEntryInDatabase,
-  type DeliveryQueueReadMode,
-} from "./delivery-queue-sqlite-bound.js";
+  failedDeliveryQueueHealthAdmission,
+  isDeliveryQueueTombstonePruneDue,
+  nextDeliveryQueueTombstoneExpiryAdmission,
+  type FailedDeliveryQueueHealth,
+} from "./delivery-queue-cache.js";
+import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
-  getDeliveryQueueEntryOwnersInDatabase,
   loadDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
-  type DeliveryQueueStoredStatus,
   type TerminalizePendingDeliveryQueueEntryParams,
   type TerminalizePendingDeliveryQueueEntryResult,
 } from "./delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
+  captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "./delivery-queue-state-context.js";
 import { executeDeliveryQueueOperation } from "./delivery-queue-worker-store.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 
 export type {
   DeliveryQueueCompletionRetention,
@@ -39,31 +42,19 @@ function openStateDatabase(stateDir?: string, context?: DeliveryQueueStateContex
   });
 }
 
-/** Load a single pending delivery queue entry. */
-export function loadDeliveryQueueEntry(
+/** Select receipt and pending custody together, preserving bounded receipt expiry. */
+export async function inspectDeliveryQueueReceipt(
   queueName: string,
   id: string,
-  stateDir?: string,
-  mode: DeliveryQueueReadMode = "pending",
-  context?: DeliveryQueueStateContext,
-): DeliveryQueueEntryState | null {
-  return loadDeliveryQueueEntryInDatabase(
-    openStateDatabase(stateDir, context),
-    queueName,
-    id,
-    mode,
-  );
-}
-
-/** Read row status without hiding dead-lettered entries. */
-export function getDeliveryQueueEntryStatus(
-  queueName: string,
-  id: string,
-  stateDir?: string,
-): DeliveryQueueStoredStatus | undefined {
-  return getDeliveryQueueEntryOwnersInDatabase(openStateDatabase(stateDir), [queueName], id).get(
-    queueName,
-  )?.status;
+  includePending: boolean,
+  context: DeliveryQueueStateContext,
+) {
+  const result = await executeDeliveryQueueOperation(context, undefined, {
+    type: "deliveryQueue.inspectReceipt",
+    input: { queueName, id, includePending },
+  });
+  context.workerContext.admission.assertCurrent();
+  return result;
 }
 
 /** Load all pending entries for a queue namespace in database order. */
@@ -80,15 +71,42 @@ export function loadDeliveryQueueEntries(
 export async function countFailedDeliveryQueueEntries(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
-): Promise<Array<{ queueName: string; count: number; oldestFailedAt?: number }>> {
-  return executeDeliveryQueueOperation(context, stateDir, {
+): Promise<FailedDeliveryQueueHealth> {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const cached = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    failedDeliveryQueueHealthAdmission,
+    () => undefined,
+  );
+  if (cached !== undefined) {
+    return cached;
+  }
+  return executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.countFailed",
     input: undefined,
   });
 }
 
 /** Count pending entries across an exact set of queue namespaces. */
-export function countPendingDeliveryQueueEntries(
+export async function countPendingDeliveryQueueEntries(
+  queueNames: readonly string[],
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<number> {
+  if (queueNames.length === 0) {
+    return 0;
+  }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const count = await executeDeliveryQueueOperation(captured, undefined, {
+    type: "deliveryQueue.countPending",
+    input: { queueNames: [...queueNames] },
+  });
+  captured.workerContext.admission.assertCurrent();
+  return count;
+}
+
+/** Doctor's offline migration retains its admitted native database owner. */
+export function countPendingDeliveryQueueEntriesForMaintenance(
   queueNames: readonly string[],
   stateDir?: string,
   context?: DeliveryQueueStateContext,
@@ -120,7 +138,16 @@ export async function pruneExpiredDeliveryQueueTombstones(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const expiry = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    nextDeliveryQueueTombstoneExpiryAdmission,
+    () => undefined,
+  );
+  if (!isDeliveryQueueTombstonePruneDue(expiry, Date.now())) {
+    return;
+  }
+  await executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.pruneTombstones",
     input: undefined,
   });

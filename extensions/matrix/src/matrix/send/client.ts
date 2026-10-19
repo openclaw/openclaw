@@ -1,8 +1,8 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixRuntimeClientOptions } from "../client-bootstrap.js";
+import { getMatrixMonitorTaskSignal } from "../monitor/task-runner.js";
 import type { MatrixClient } from "../sdk.js";
 import { withMatrixSendCurrentness } from "../sdk/send-currentness.js";
 
@@ -19,8 +19,7 @@ export function resolveMediaMaxBytes(
       "Matrix media limits requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
-  const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
+  const matrixCfg = resolveMatrixAccountConfig({ cfg, accountId });
   const mediaMaxMb = matrixCfg.mediaMaxMb;
   // Only a positive value is a cap, matching CommonMediaMaxMbSchema. `0` or a negative
   // number would become a literal 0-byte limit that rejects every outbound media send;
@@ -43,13 +42,19 @@ export async function withResolvedMatrixSendClient<T>(
       readiness: "started",
     },
     (client, abortSignal) => {
-      if (!opts.signal && !opts.assertDirectAdapterHandoff) {
+      // A pre-resolved client used to skip this guard. Retirement aborts the
+      // monitor signal while that client can still belong to another monitor.
+      const monitorSignal = getMatrixMonitorTaskSignal();
+      if (!opts.signal && !opts.assertDirectAdapterHandoff && !monitorSignal) {
         return run(client, abortSignal);
       }
       return withMatrixSendCurrentness(
         client,
         () => {
           opts.assertDirectAdapterHandoff?.();
+          // The SDK scheduler can drain this send in another monitor's context.
+          // Keep the signal captured at entry so retirement follows this send.
+          monitorSignal?.throwIfAborted();
           opts.signal?.throwIfAborted();
           abortSignal?.throwIfAborted();
         },

@@ -1,4 +1,3 @@
-// Google Meet plugin module implements plugin harness behavior.
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -8,7 +7,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
 import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
 import { listGoogleMeetCalendarEvents } from "../calendar.js";
-import type { GoogleMeetExportManifest } from "../cli-export.js";
+import type { buildGoogleMeetExportManifest } from "../cli-export.js";
 import type {
   GoogleMeetArtifactsResult,
   GoogleMeetAttendanceResult,
@@ -17,9 +16,17 @@ import type {
 import type { GoogleMeetRuntime } from "../runtime.js";
 import { MEET_URL } from "./fixtures.test-helpers.js";
 
+export { captureStdout } from "./fixtures.test-helpers.js";
+
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;
 };
+type NodeRuntime = OpenClawPluginApi["runtime"]["nodes"];
+type GatewayRequest = (
+  method: string,
+  params?: Record<string, unknown>,
+  options?: Record<string, unknown>,
+) => Promise<unknown>;
 
 export const noopLogger = {
   info: vi.fn(),
@@ -28,33 +35,32 @@ export const noopLogger = {
   debug: vi.fn(),
 };
 
-type GoogleMeetTestNodeListResult = {
-  nodes: Array<{
-    nodeId: string;
-    displayName?: string;
-    connected?: boolean;
-    commands?: string[];
-    caps?: string[];
-    remoteIp?: string;
-  }>;
-};
-
 type CommandResult = {
   code: number;
   stdout?: string;
   stderr?: string;
 };
 
-export function captureStdout() {
-  let output = "";
-  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-    output += String(chunk);
-    return true;
-  }) as typeof process.stdout.write);
-  return {
-    output: () => output,
-    restore: () => writeSpy.mockRestore(),
-  };
+export function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T>;
+export function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T;
+export function withPlatform<T>(
+  platform: NodeJS.Platform,
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
+  const originalPlatform = process.platform;
+  const restore = () => Object.defineProperty(process, "platform", { value: originalPlatform });
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    const result = fn();
+    if (result instanceof Promise) {
+      return result.finally(restore);
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
 }
 
 export function setupGoogleMeetPlugin(
@@ -64,20 +70,11 @@ export function setupGoogleMeetPlugin(
     fullConfig?: Record<string, unknown>;
     stateEnv?: NodeJS.ProcessEnv;
     gatewayAvailable?: boolean;
-    gatewayRequestHandler?: (
-      method: string,
-      params?: Record<string, unknown>,
-      options?: Record<string, unknown>,
-    ) => Promise<unknown>;
-    nodesListResult?: GoogleMeetTestNodeListResult;
+    gatewayRequestHandler?: GatewayRequest;
+    nodesListResult?: Awaited<ReturnType<NodeRuntime["list"]>>;
     nodesInvokeResult?: unknown;
     browserActResult?: Record<string, unknown>;
-    nodesInvokeHandler?: (params: {
-      nodeId: string;
-      command: string;
-      params?: unknown;
-      timeoutMs?: number;
-    }) => Promise<unknown>;
+    nodesInvokeHandler?: NodeRuntime["invoke"];
     runCommandWithTimeoutHandler?: (
       argv: string[],
       options?: { timeoutMs?: number },
@@ -111,41 +108,30 @@ export function setupGoogleMeetPlugin(
     }
     if (params.command === "browser.proxy") {
       const proxy = params.params as { path?: string; body?: { url?: string; targetId?: string } };
+      const reply = (result: unknown) => ({ payload: { result } });
       if (proxy.path === "/tabs") {
-        return { payload: { result: { running: true, tabs: [] } } };
+        return reply({ running: true, tabs: [] });
       }
       if (proxy.path === "/tabs/open") {
-        return {
-          payload: {
-            result: {
-              targetId: "tab-1",
-              title: "Meet",
-              url: proxy.body?.url ?? MEET_URL,
-            },
-          },
-        };
+        return reply({ targetId: "tab-1", title: "Meet", url: proxy.body?.url ?? MEET_URL });
       }
       if (proxy.path === "/act") {
-        return {
-          payload: {
-            result: {
-              ok: true,
-              targetId: proxy.body?.targetId ?? "tab-1",
-              result: JSON.stringify({
-                audioInputRouted: true,
-                audioOutputRouted: true,
-                ...(options.browserActResult ?? {
-                  inCall: true,
-                  micMuted: false,
-                  title: "Meet call",
-                  url: MEET_URL,
-                }),
-              }),
-            },
-          },
-        };
+        return reply({
+          ok: true,
+          targetId: proxy.body?.targetId ?? "tab-1",
+          result: JSON.stringify({
+            audioInputRouted: true,
+            audioOutputRouted: true,
+            ...(options.browserActResult ?? {
+              inCall: true,
+              micMuted: false,
+              title: "Meet call",
+              url: MEET_URL,
+            }),
+          }),
+        });
       }
-      return { payload: { result: { ok: true } } };
+      return reply({ ok: true });
     }
     return options.nodesInvokeResult ?? { launched: true };
   });
@@ -154,21 +140,23 @@ export function setupGoogleMeetPlugin(
       if (options.runCommandWithTimeoutHandler) {
         return options.runCommandWithTimeoutHandler(argv, runOptions);
       }
-      if (argv[0]?.endsWith("system_profiler")) {
-        return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
+      const isPulseAudioList =
+        argv[0] === "pactl" &&
+        argv[1] === "list" &&
+        argv[2] === "short" &&
+        (argv[3] === "sinks" || argv[3] === "sources");
+      const stdout = argv[0]?.endsWith("system_profiler")
+        ? "BlackHole 2ch"
+        : isPulseAudioList
+          ? "1\topenclaw_meeting_audio\n"
+          : "";
+      return { code: 0, stdout, stderr: "" };
     },
   );
-  const gatewayRequest = vi.fn(
-    async (
-      method: string,
-      params?: Record<string, unknown>,
-      requestOptions?: Record<string, unknown>,
-    ) =>
-      options.gatewayRequestHandler
-        ? await options.gatewayRequestHandler(method, params, requestOptions)
-        : await invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
+  const gatewayRequest = vi.fn<GatewayRequest>(async (method, params, requestOptions) =>
+    options.gatewayRequestHandler
+      ? await options.gatewayRequestHandler(method, params, requestOptions)
+      : await invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
   );
   const stateEnv = options.stateEnv;
   const api = createTestPluginApi({
@@ -203,10 +191,7 @@ export function setupGoogleMeetPlugin(
         runCommandWithTimeout,
         formatNativeDependencyHint: vi.fn(() => "Install with brew install blackhole-2ch."),
       },
-      nodes: {
-        list: nodesList,
-        invoke: nodesInvoke,
-      },
+      nodes: { list: nodesList, invoke: nodesInvoke },
     } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
@@ -225,16 +210,7 @@ export function setupGoogleMeetPlugin(
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
     registerNodeInvokePolicy: (policy: unknown) => nodeInvokePolicies.push(policy),
   });
-  const originalPlatform = process.platform;
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: options.registerPlatform ?? "darwin",
-  });
-  try {
-    plugin.register(api);
-  } finally {
-    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-  }
+  withPlatform(options.registerPlatform ?? "darwin", () => plugin.register(api));
   return {
     cliRegistrations,
     methods,
@@ -270,7 +246,7 @@ type GoogleMeetToolDetails = {
   export: {
     dryRun?: boolean;
     files?: string[];
-    manifest?: GoogleMeetExportManifest;
+    manifest?: ReturnType<typeof buildGoogleMeetExportManifest>;
     zipFile?: string;
   };
   leave: Awaited<ReturnType<GoogleMeetRuntime["leave"]>>;
@@ -302,31 +278,23 @@ export async function invokeGoogleMeetGatewayMethodForTest(
     | ((opts: {
         params: Record<string, unknown>;
         client?: { internal?: { pluginRuntimeOwnerId?: string } };
-        respond: (
-          ok: boolean,
-          payload?: unknown,
-          error?: { message?: string; details?: unknown },
-        ) => void;
+        respond: GatewayRespond;
       }) => Promise<void> | void)
     | undefined;
   if (!handler) {
     throw new Error(`gateway method not registered: ${method}`);
   }
   return await new Promise((resolve, reject) => {
-    const respond = (
-      ok: boolean,
-      payload?: unknown,
-      error?: { message?: string; details?: unknown },
-    ) => {
+    const respond: GatewayRespond = (ok, payload, error) => {
       if (ok) {
         resolve(payload);
         return;
       }
-      const err = new Error(error?.message ?? "gateway request failed") as Error & {
-        details?: unknown;
-      };
-      err.details = error?.details ?? payload;
-      reject(err);
+      reject(
+        Object.assign(new Error(error?.message ?? "gateway request failed"), {
+          details: error?.details ?? payload,
+        }),
+      );
     };
     void Promise.resolve(
       handler({
@@ -339,6 +307,12 @@ export async function invokeGoogleMeetGatewayMethodForTest(
     ).catch(reject);
   });
 }
+
+type GatewayRespond = (
+  ok: boolean,
+  payload?: unknown,
+  error?: { message?: string; details?: unknown },
+) => void;
 
 export function createGoogleMeetToolGatewayForTest(
   methods: Map<string, unknown>,

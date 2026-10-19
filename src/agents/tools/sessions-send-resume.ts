@@ -1,10 +1,10 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 /** Parent task continuation with one completion owner across execution turns. */
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
 import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -30,6 +30,7 @@ export function captureSessionsSendResumeCaller(): SessionsSendResumeCaller | un
 export async function resumeSessionsSendTask(params: {
   cfg: OpenClawConfig;
   caller: SessionsSendResumeCaller;
+  assertCurrent?: () => void;
   targetAgentId: string;
   sessionKey: string;
   displayKey: string;
@@ -39,13 +40,18 @@ export async function resumeSessionsSendTask(params: {
   callGateway: AgentToolGatewayRequestCaller;
 }): Promise<ReturnType<typeof jsonResult>> {
   try {
+    const assertCurrent = () => {
+      params.caller.assertCurrent();
+      params.assertCurrent?.();
+    };
+    assertCurrent();
     const session = await readAcpSessionEntryAsync({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       sessionKey: params.sessionKey,
-      assertCurrent: params.caller.assertCurrent,
+      assertCurrent,
     });
-    params.caller.assertCurrent();
+    assertCurrent();
     const entry = session?.entry;
     if (
       !entry ||
@@ -60,6 +66,7 @@ export async function resumeSessionsSendTask(params: {
       caller: params.caller,
       childSessionKey: params.sessionKey,
       childSessionId: entry.sessionId,
+      childLifecycleRevision: entry.lifecycleRevision,
     });
     const accepted = await params.callGateway<{
       runId: string;
@@ -74,6 +81,7 @@ export async function resumeSessionsSendTask(params: {
             expectedExistingSessionId: subagentResume.childSessionId,
           },
           assertDispatchCurrent: params.caller.assertCurrent,
+          sessionMutationCommitGuard: params.assertCurrent,
           timeoutMs: 10_000,
         },
         subagentResume,

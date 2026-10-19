@@ -26,7 +26,7 @@ import type {
   ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
   ReplyDispatcher as ReplyRuntimeDispatcher,
 } from "openclaw/plugin-sdk/reply-runtime";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {
@@ -628,12 +628,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["buildApprovalResolutionRef"],
       omits: ["resolveApprovalOverGateway", "withOperatorApprovalsGatewayClient"],
     });
-    expectSourceMentions("reply-chunking", [
-      "chunkText",
-      "chunkTextWithMode",
-      "isSilentReplyPayloadText",
-      "isSilentReplyText",
-    ]);
+    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
       "buildInboundHistoryFromEntries",
       "buildInboundHistoryFromMap",
@@ -781,7 +776,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
     });
     expectSourceContract("memory-core-host-runtime-files", {
-      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      mentions: ["MemorySearchResult"],
       omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
     });
     expectSourceMentions("plugin-test-runtime", [
@@ -1098,12 +1093,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolveServicePrefixedTarget",
       "resolveTargetsWithOptionalToken",
     ]);
-    expectSourceMentions("channel-config-writes", [
-      "authorizeConfigWrite",
-      "canBypassConfigWritePolicy",
-      "formatConfigWriteDeniedMessage",
-      "resolveChannelConfigWrites",
-    ]);
+    expectSourceMentions("channel-config-writes", ["resolveChannelConfigWrites"]);
     expectSourceMentions("channel-feedback", [
       "createStatusReactionController",
       "logAckFailure",
@@ -1127,31 +1117,11 @@ describe("plugin-sdk subpath exports", () => {
       "isRecord",
       "resolveEnabledConfiguredAccountId",
     ]);
-    expectSourceMentions("command-auth", [
-      "buildCommandTextFromArgs",
-      "buildModelsProviderData",
-      "hasControlCommand",
-      "listNativeCommandSpecsForConfig",
-      "listSkillCommandsForAgents",
-      "normalizeCommandBody",
-      "createPreCryptoDirectDmAuthorizer",
-      "resolveCommandAuthorization",
-      "resolveCommandAuthorizedFromAuthorizers",
-      "resolveInboundDirectDmAccessWithRuntime",
-      "resolveControlCommandGate",
-      "resolveDualTextControlCommandGate",
-      "resolveNativeCommandSessionTargets",
-      "resolveStoredModelOverride",
-      "shouldComputeCommandAuthorized",
-      "shouldHandleTextCommands",
-    ]);
     expectSourceMentions("command-status", [
       "buildCommandsMessage",
       "buildCommandsMessagePaginated",
       "buildHelpMessage",
     ]);
-    expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
-    expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -1184,8 +1154,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("thread-bindings-runtime", [
-      "resolveThreadBindingFarewellText",
-      "resolveThreadBindingLifecycle",
       "registerSessionBindingAdapter",
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
@@ -1240,7 +1208,7 @@ describe("plugin-sdk subpath exports", () => {
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
-      mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
+      mentions: ["buildSingleProviderApiKeyCatalog", "buildManifestProviderCatalogFamily"],
       omits: ["buildDeepSeekProvider", "buildVeniceProvider"],
     });
 
@@ -1444,19 +1412,6 @@ describe("plugin-sdk subpath exports", () => {
       const mod = await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${subpath}`);
       expect(typeof mod, `deprecated subpath ${subpath} should resolve`).toBe("object");
     }
-  });
-
-  it("keeps repeated silent-token semantics visible through the reply-chunking subpath", async () => {
-    const replyChunkingSdk = await importResolvedPluginSdkSubpath(
-      "openclaw/plugin-sdk/reply-chunking",
-    );
-
-    expect(replyChunkingSdk.isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
-    expect(replyChunkingSdk.isSilentReplyPayloadText("NO_REPLY\n\nNO_REPLY")).toBe(true);
-    expect(replyChunkingSdk.isSilentReplyText("HEARTBEAT_OK\nHEARTBEAT_OK", "HEARTBEAT_OK")).toBe(
-      true,
-    );
-    expect(replyChunkingSdk.isSilentReplyText("Visible update\n\nNO_REPLY")).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

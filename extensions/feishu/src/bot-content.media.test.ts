@@ -1,138 +1,83 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createFeishuTestConfig } from "./bot.test-support.js";
 
-type SaveMessageResourceFeishu = typeof import("./media.js").saveMessageResourceFeishu;
-type SavedResourceRequest = Parameters<SaveMessageResourceFeishu>[0];
-
-const saveMessageResourceFeishu = vi.hoisted(() => vi.fn<SaveMessageResourceFeishu>());
-
-vi.mock("./media.js", () => ({
-  saveMessageResourceFeishu,
-}));
-
+type SaveResource = typeof import("./media.js").saveMessageResourceFeishu;
+const saveMessageResourceFeishu = vi.hoisted(() => vi.fn<SaveResource>());
+vi.mock("./media.js", () => ({ saveMessageResourceFeishu }));
 import { resolveFeishuMediaList } from "./bot-content.js";
 
-function savedContentType(params: SavedResourceRequest): string {
-  if (params.originalFilename?.endsWith(".csv")) {
-    return "text/csv";
-  }
-  if (params.originalFilename?.endsWith(".zip")) {
-    return "application/zip";
-  }
-  return params.type === "image" ? "image/png" : "video/mp4";
-}
-
 const cfg = createFeishuTestConfig({ dmPolicy: "open" });
+const download = (content: unknown, messageType = "post") =>
+  resolveFeishuMediaList({
+    cfg,
+    messageId: "msg-files",
+    messageType,
+    content: JSON.stringify(content),
+    maxBytes: 1024,
+  });
+const document = (path: string, contentType: string) => ({
+  path: `/tmp/${path}`,
+  contentType,
+  kind: "document",
+});
 
 describe("resolveFeishuMediaList post files[]", () => {
   beforeEach(() => {
     saveMessageResourceFeishu.mockReset();
-    saveMessageResourceFeishu.mockImplementation(async (params: SavedResourceRequest) => ({
+    saveMessageResourceFeishu.mockImplementation(async ({ originalFilename, fileKey, type }) => ({
       saved: {
-        id: params.originalFilename ?? params.fileKey,
-        path: `/tmp/${params.originalFilename ?? params.fileKey}`,
-        size: Buffer.byteLength(params.fileKey),
-        contentType: savedContentType(params),
+        id: originalFilename ?? fileKey,
+        path: `/tmp/${originalFilename ?? fileKey}`,
+        size: Buffer.byteLength(fileKey),
+        contentType: originalFilename?.endsWith(".csv")
+          ? "text/csv"
+          : originalFilename?.endsWith(".zip")
+            ? "application/zip"
+            : type === "image"
+              ? "image/png"
+              : "video/mp4",
       },
     }));
   });
 
-  it("downloads top-level files[] from the issue captioned-post payload", async () => {
-    const media = await resolveFeishuMediaList({
-      cfg,
-      messageId: "msg-post-top-level-files",
-      messageType: "post",
-      content: JSON.stringify({
-        title: "",
-        content: [[{ tag: "text", text: "这是账本" }]],
-        content_v2: [[{ tag: "text", text: "这是账本" }]],
-        files: [
-          {
-            file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
-            file_name: "amount-2026-08-01_2026-08-31.csv",
-            is_folder: false,
-          },
-        ],
-      }),
-      maxBytes: 1024,
-    });
-
-    expect(saveMessageResourceFeishu).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "msg-post-top-level-files",
-        fileKey: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
-        type: "file",
-        originalFilename: "amount-2026-08-01_2026-08-31.csv",
-      }),
-    );
-    expect(media).toEqual([
-      {
-        path: "/tmp/amount-2026-08-01_2026-08-31.csv",
-        contentType: "text/csv",
-        kind: "document",
-      },
-    ]);
-  });
-
-  it("downloads multiple top-level post files[] when the body has no text", async () => {
-    const media = await resolveFeishuMediaList({
-      cfg,
-      messageId: "msg-post-multi-files",
-      messageType: "post",
-      content: JSON.stringify({
-        title: "",
-        content: [[]],
-        content_v2: [[]],
-        files: [
-          {
-            file_key: "file_v3_zip_aug",
-            file_name: "usage_data_2026-08-01_2026-08-31.zip",
-            is_folder: false,
-          },
-          {
-            file_key: "file_v3_zip_sep",
-            file_name: "usage_data_2026-09-01_2026-09-18.zip",
-            is_folder: false,
-          },
-        ],
-      }),
-      maxBytes: 1024,
-    });
-
+  it.each([
+    {
+      name: "captioned",
+      text: "这是账本",
+      files: [{ file_key: "file_report", file_name: "report.csv", is_folder: false }],
+      expected: [document("report.csv", "text/csv")],
+    },
+    {
+      name: "multiple files without text",
+      text: undefined,
+      files: [
+        { file_key: "file_aug", file_name: "aug.zip", is_folder: false },
+        { file_key: "file_sep", file_name: "sep.zip", is_folder: false },
+      ],
+      expected: [document("aug.zip", "application/zip"), document("sep.zip", "application/zip")],
+    },
+  ])("downloads top-level files[] for $name posts", async ({ text, files, expected }) => {
+    const content = [text ? [{ tag: "text", text }] : []];
+    expect(await download({ title: "", content, content_v2: content, files })).toEqual(expected);
     expect(
       saveMessageResourceFeishu.mock.calls.map(([request]) => ({
+        messageId: request.messageId,
         fileKey: request.fileKey,
-        fileName: request.originalFilename,
+        originalFilename: request.originalFilename,
         type: request.type,
       })),
-    ).toEqual([
-      {
-        fileKey: "file_v3_zip_aug",
-        fileName: "usage_data_2026-08-01_2026-08-31.zip",
+    ).toEqual(
+      files.map(({ file_key, file_name }) => ({
+        messageId: "msg-files",
+        fileKey: file_key,
+        originalFilename: file_name,
         type: "file",
-      },
-      {
-        fileKey: "file_v3_zip_sep",
-        fileName: "usage_data_2026-09-01_2026-09-18.zip",
-        type: "file",
-      },
-    ]);
-    expect(media).toEqual([
-      {
-        path: "/tmp/usage_data_2026-08-01_2026-08-31.zip",
-        contentType: "application/zip",
-        kind: "document",
-      },
-      {
-        path: "/tmp/usage_data_2026-09-01_2026-09-18.zip",
-        contentType: "application/zip",
-        kind: "document",
-      },
-    ]);
+      })),
+    );
   });
 
-  it("keeps unnamed top-level post files as documents when download supplies the filename", async () => {
-    saveMessageResourceFeishu.mockImplementation(async () => ({
+  it("keeps unnamed top-level files as documents when download supplies the filename", async () => {
+    saveMessageResourceFeishu.mockResolvedValue({
       saved: {
         id: "report.pdf",
         path: "/tmp/report.pdf",
@@ -141,84 +86,54 @@ describe("resolveFeishuMediaList post files[]", () => {
       },
       fileName: "report.pdf",
       contentType: "application/pdf",
-    }));
-
-    const media = await resolveFeishuMediaList({
-      cfg,
-      messageId: "msg-post-unnamed-file",
-      messageType: "post",
-      content: JSON.stringify({
-        title: "",
-        content: [[]],
-        files: [{ file_key: "file_pdf" }],
-      }),
-      maxBytes: 1024,
     });
-
+    expect(await download({ title: "", content: [[]], files: [{ file_key: "file_pdf" }] })).toEqual(
+      [document("report.pdf", "application/pdf")],
+    );
     expect(saveMessageResourceFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageId: "msg-post-unnamed-file",
+        messageId: "msg-files",
         fileKey: "file_pdf",
         type: "file",
+        originalFilename: undefined,
       }),
     );
-    expect(saveMessageResourceFeishu.mock.calls[0]?.[0].originalFilename).toBeUndefined();
-    expect(media).toEqual([
-      {
-        path: "/tmp/report.pdf",
-        contentType: "application/pdf",
-        kind: "document",
-      },
-    ]);
   });
 
-  it.each([undefined, "clip", "clip.csv"])("keeps inline media %s as video", async (fileName) => {
-    const media = await resolveFeishuMediaList({
-      cfg,
-      messageId: "msg-post-unnamed-media",
-      messageType: "post",
-      content: JSON.stringify({
+  it.each([undefined, "clip.csv"])("keeps inline media %s as video", async (fileName) => {
+    expect(
+      await download({
         title: "",
-        content: [[{ tag: "media", file_key: "file_inline", file_name: fileName }]],
+        content: [
+          [
+            {
+              tag: "media",
+              file_key: "file_inline",
+              file_name: fileName,
+            },
+          ],
+        ],
       }),
-      maxBytes: 1024,
-    });
-
-    expect(media).toEqual([
+    ).toEqual([
       {
         path: `/tmp/${fileName ?? "file_inline"}`,
-        contentType: fileName?.endsWith(".csv") ? "text/csv" : "video/mp4",
+        contentType: fileName ? "text/csv" : "video/mp4",
         kind: "video",
       },
     ]);
   });
 
-  it("keeps standalone file messages on the document download path", async () => {
-    const media = await resolveFeishuMediaList({
-      cfg,
-      messageId: "msg-file-only",
-      messageType: "file",
-      content: JSON.stringify({
-        file_key: "file_v3_0015l_ad981d73-aabb-ccdd-eeff-1234567890ab",
-        file_name: "usage.zip",
-      }),
-      maxBytes: 1024,
-    });
-
+  it("keeps standalone files on the document download path", async () => {
+    expect(await download({ file_key: "file_usage", file_name: "usage.zip" }, "file")).toEqual([
+      document("usage.zip", "application/zip"),
+    ]);
     expect(saveMessageResourceFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageId: "msg-file-only",
-        fileKey: "file_v3_0015l_ad981d73-aabb-ccdd-eeff-1234567890ab",
+        messageId: "msg-files",
+        fileKey: "file_usage",
         type: "file",
         originalFilename: "usage.zip",
       }),
     );
-    expect(media).toEqual([
-      {
-        path: "/tmp/usage.zip",
-        contentType: "application/zip",
-        kind: "document",
-      },
-    ]);
   });
 });

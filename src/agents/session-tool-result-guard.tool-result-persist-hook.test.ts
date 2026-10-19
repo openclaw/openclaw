@@ -25,7 +25,6 @@ import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 type PersistedToolResultMessage = ToolResultMessage & { details: Record<string, unknown> };
-const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(resetGlobalHookRunner);
@@ -87,165 +86,42 @@ function expectPersistedToolResultDetailsCapped(sm: SessionManager) {
 }
 
 describe("session persistence hooks", () => {
-  it.each(["tool_result_persist", "before_message_write"] as const)(
-    "caps text and details expanded by %s",
-    (hook) => {
-      installHook(hook, ({ message }) =>
-        message.role === "toolResult"
-          ? {
-              message: {
-                ...message,
-                content: [{ type: "text", text: "y".repeat(5000) }],
-                details: { status: "completed", aggregated: "x".repeat(150000) },
-              },
-            }
-          : undefined,
-      );
-      const sm = guardSessionManager(SessionManager.inMemory(), {
-        agentId: "main",
-        sessionKey: "main",
-        contextWindowTokens: 100,
-      });
-      appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
-      expectPersistedToolResultTextCapped(sm);
-      expectPersistedToolResultDetailsCapped(sm);
-    },
-  );
-
-  it("redacts small recursive details, including keys and depth-limited branches", () => {
-    const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    const bearerValue = "bearerdiagnosticvalue1234567890";
-    const adjacentLongGithubToken = "ghp_" + "a".repeat(5_000);
-    let deepDetails: Record<string, unknown> = { token: tokenValue };
-    for (let index = 0; index < 10; index++) {
-      deepDetails = { child: deepDetails };
-    }
-    const sm = createGuardedSession();
-    appendToolResultDetails(sm, {
-      status: "completed",
-      token: tokenValue,
-      card_number: 4242424242424242,
-      authToken: [tokenValue],
-      adjacentLongGithubToken: "x".repeat(1_000) + adjacentLongGithubToken + " z",
-      ["https://example.test/callback?token=" + tokenValue]: "ok",
-      deepDetails,
-      nested: {
-        apiKey: { value: bearerValue },
-        stdout: "Authorization: Bearer " + bearerValue,
-      },
+  it("caps text and details expanded by before_message_write", () => {
+    installHook("before_message_write", ({ message }) =>
+      message.role === "toolResult"
+        ? {
+            message: {
+              ...message,
+              content: [{ type: "text", text: "y".repeat(5000) }],
+              details: { status: "completed", aggregated: "x".repeat(150000) },
+            },
+          }
+        : undefined,
+    );
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+      contextWindowTokens: 100,
     });
-    const toolResult = requirePersistedToolResult(sm);
-    const serialized = JSON.stringify(toolResult.details);
-    expect(toolResultText(toolResult)).toBe("visible output stays small");
-    for (const retained of ["Bearer", "…", "token=", "***", "max depth exceeded"]) {
-      expect(serialized).toContain(retained);
-    }
-    for (const secret of [
-      tokenValue,
-      bearerValue,
-      adjacentLongGithubToken,
-      "a".repeat(100),
-      "4242424242424242",
-    ]) {
-      expect(serialized).not.toContain(secret);
-    }
+    appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
+    expectPersistedToolResultTextCapped(sm);
+    expectPersistedToolResultDetailsCapped(sm);
   });
 
-  it("applies in-memory redaction config to persisted details", () => {
+  it("keeps logging patterns out of tool persistence", () => {
     const customSecret = "customsecret=abcdef1234567890ghij";
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",
       sessionKey: "main",
-      config: {
-        logging: {
-          redactPatterns: [String.raw`customsecret=([^\s]+)`],
-        },
-      },
+      config: { logging: { redactPatterns: [String.raw`customsecret=([^\s]+)`] } },
     });
-    appendToolResultDetails(
-      sm,
-      {
-        diagnostic: customSecret,
-      },
-      customSecret,
-    );
-
+    appendToolResultDetails(sm, { diagnostic: customSecret }, customSecret);
     const toolResult = requirePersistedToolResult(sm);
-    const serialized = JSON.stringify(toolResult);
-    expect(serialized).toContain("customsecret=abcdef…ghij");
-    expect(serialized).not.toContain(customSecret);
+    expect(toolResult.details).toEqual({ diagnostic: customSecret });
+    expect(toolResultText(toolResult)).toBe(customSecret);
   });
 
-  it("redacts oversized summary fields without leaking lookahead or splitting surrogate pairs", () => {
-    const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    const boundaryGhToken = "ghp_" + "a".repeat(36);
-    const postBoundarySecret = "UNREDACTED_AFTER_LIMIT_SECRET";
-    const shrinkPrefix =
-      Array.from({ length: 20 }, () => "GITHUB_TOKEN=" + tokenValue).join(" ") + " ";
-    const scanPrefix = Array.from({ length: 5 }, () => "ghp_" + "a".repeat(140)).join(" ");
-    const sm = createGuardedSession();
-    appendToolResultDetails(sm, {
-      status: { state: "completed", token: tokenValue },
-      sessionId: "exec-1",
-      ["https://example.test/callback?token=" + tokenValue]: "ok",
-      aggregated: "x".repeat(120_000),
-      tail:
-        "GITHUB_TOKEN=" +
-        tokenValue +
-        " " +
-        "x".repeat(1_940) +
-        " " +
-        boundaryGhToken +
-        " GITHUB_TOKEN=" +
-        "a".repeat(5_000) +
-        ' {"token":"' +
-        "b".repeat(5_000) +
-        '"}',
-      name: "x".repeat(1_000) + '{"token":"' + "r".repeat(10_000) + "z".repeat(1_000),
-      cwd:
-        shrinkPrefix +
-        "x".repeat(2_300 - shrinkPrefix.length) +
-        postBoundarySecret +
-        "z".repeat(5_000),
-      fullOutputPath: "u".repeat(1_487) + "😀" + "v".repeat(9_000),
-      truncation: scanPrefix + "x".repeat(1_999 - scanPrefix.length) + "😀" + "z".repeat(9_000),
-      sessions: [
-        {
-          sessionId: "proc-1",
-          status: { state: "completed", token: tokenValue },
-          command: "x".repeat(490) + " --token " + tokenValue + " " + "y".repeat(6_000),
-          aggregated: "a".repeat(80_000),
-          tail: "z".repeat(8_000),
-        },
-      ],
-    });
-    const toolResult = requirePersistedToolResult(sm);
-    const details = toolResult.details;
-    const serialized = JSON.stringify(details);
-    expect(toolResultText(toolResult)).toBe("visible output stays small");
-    expect(details.persistedDetailsTruncated).toBe(true);
-    expect(serialized).toContain("token=***");
-    for (const value of [details.tail, details.name, details.cwd]) {
-      expect(value).toContain("partial secret span omitted");
-      expect(value).toContain("boundary overlap omitted");
-    }
-    for (const value of [details.fullOutputPath, details.truncation]) {
-      expect(value).toContain("boundary overlap omitted");
-      expect(value).not.toMatch(LONE_SURROGATE_RE);
-    }
-    for (const secret of [
-      tokenValue,
-      boundaryGhToken.slice(0, 12),
-      postBoundarySecret,
-      "a".repeat(100),
-      "b".repeat(100),
-      "r".repeat(100),
-    ]) {
-      expect(serialized).not.toContain(secret);
-    }
-  });
-
-  it("redacts retained structured fields in fallback oversized details summaries", () => {
+  it("preserves retained structured fields in fallback oversized details summaries", () => {
     const tokenValue = "fallback-token-abcdefghijklmnopqrstuv";
     const spill = Object.freeze({
       path: "/tmp/web-fetch-output",
@@ -282,11 +158,11 @@ describe("session persistence hooks", () => {
     expect(details.finalDetailsTruncated).toBe(true);
     expect(details).toMatchObject({ success: true, disabled: false, unavailable: false });
     expect(details.error).toBe("upstream unavailable");
-    expect(details.status).toMatchObject({ token: "***" });
+    expect(details.status).toMatchObject({ token: tokenValue });
     expect(details.spilledChars).toBe(2_000_000);
     expect(details.spillTruncated).toBe(true);
     expect(details.spill).toEqual(spill);
-    expect(serialized).not.toContain(tokenValue);
+    expect(serialized).toContain(tokenValue);
   });
 
   it("caps oversized toolResult details without serializing the original payload", () => {
@@ -350,9 +226,8 @@ describe("session persistence hooks", () => {
     expect(details.originalDetailKeys).toContain("debug_0");
   });
 
-  it("reapplies the details cap after redaction expands hook details", () => {
-    const deepItems = Array.from({ length: 2_000 }, () => ({}));
-    const hookDetails = { a: { b: { c: { d: { e: { f: { g: deepItems } } } } } } };
+  it("caps oversized details returned by tool_result_persist", () => {
+    const hookDetails = { aggregated: "x".repeat(20_000) };
     installHook("tool_result_persist", ({ message }) =>
       message.role === "toolResult" ? { message: { ...message, details: hookDetails } } : undefined,
     );
@@ -360,6 +235,19 @@ describe("session persistence hooks", () => {
     appendToolResultDetails(sm, { big: "x".repeat(10_000) }, "ok", "read");
     expectPersistedToolResultDetailsCapped(sm);
   });
+
+  it("keeps the original tool result when a hook returns a non-message replacement", () => {
+    // A malformed plugin replacement must not fail the append or drop the admitted result.
+    installHook("tool_result_persist", () => ({
+      message: "not-a-message" as unknown as AgentMessage,
+    }));
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, { status: "ok" }, "ok", "read");
+    const toolResult = requirePersistedToolResult(sm);
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResultText(toolResult)).toBe("ok");
+  });
+
   it("refreshes skipped write hooks when reusing a session manager", () => {
     installHook("before_message_write", ({ message }) =>
       message.role === "user" ? { message: { ...message, content: "hooked" } } : undefined,
@@ -539,11 +427,21 @@ describe("guardSessionManager transcript visibility", () => {
       runId: "completion-run",
       inputProvenance: { ...childProvenance, sourceTool: "subagent_announce" },
     }).appendMessage(assistantText("Your bug is fixed and tested", 5));
+    guardSessionManager(sessionManager, {
+      runId: "private-completion-run",
+      privateCompletion: true,
+      inputProvenance: { ...childProvenance, sourceTool: "subagent_settle" },
+    }).appendMessage(assistantText("I sent the reviewed outcome to the requester", 6));
+    guardSessionManager(sessionManager, { runId: "next-human-run" }).appendMessage(
+      assistantText("The next user answer remains visible", 7),
+    );
     const messages = SessionManager.open(target).buildSessionContext().messages;
-    expect(messages).toHaveLength(5);
+    expect(messages).toHaveLength(7);
     expect(messages.map((message) => Reflect.get(message, "display") === false)).toEqual([
       true,
       false,
+      false,
+      true,
       false,
       true,
       false,
@@ -557,6 +455,43 @@ describe("guardSessionManager transcript visibility", () => {
       provenance: { kind: "external_user" },
     });
   });
+
+  it.each([{ privateCompletion: true as const }, { trigger: "memory" as const }])(
+    "refreshes hidden run visibility before and after ordinary input (%j)",
+    async (hiddenOptions) => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+      const { sessionManager, target } = await openPersistedSessionManager();
+      guardSessionManager(sessionManager, {
+        runId: "hidden-first",
+        ...hiddenOptions,
+      }).appendMessage(makeUserMessage("Internal input", 1));
+      sessionManager.appendMessage(assistantText("Internal result", 2));
+      guardSessionManager(sessionManager, { runId: "human-run" }).appendMessage(
+        makeUserMessage("What did you find?", 3),
+      );
+      sessionManager.appendMessage(assistantText("The requested answer", 4));
+      guardSessionManager(sessionManager, { runId: "hidden-next", ...hiddenOptions }).appendMessage(
+        assistantText("Further internal work", 5),
+      );
+
+      const messages = SessionManager.open(target).buildSessionContext().messages;
+      expect(messages.map((message) => Reflect.get(message, "display") === false)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        true,
+      ]);
+      expect(updates.map(({ message }) => Reflect.get(message!, "display") === false)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        true,
+      ]);
+    },
+  );
 
   it("keeps the user-turn recorder attached when hiding memory maintenance", () => {
     const sm = SessionManager.inMemory();

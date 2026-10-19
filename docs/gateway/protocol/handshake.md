@@ -66,6 +66,20 @@ Client replies with `connect`:
 
 Gateway responds with `hello-ok`:
 
+The default connect deadline is 30 seconds, allowing authentication and profile
+preparation to finish on busy or slower hosts. It is a total deadline, not an idle
+timeout: progress does not extend it. The client connect watchdog and server
+preauth timeout share this default. Operators can override the server budget with
+`OPENCLAW_HANDSHAKE_TIMEOUT_MS`; configure connecting clients with the same budget.
+
+When the Gateway already holds a named canonical owner and its local-owner
+binding, initial connections and reconnects reuse those profile facts. Committed
+profile writes update the retained catalog; creating an owner, adopting a missing
+name, or restoring an absent binding still uses the profile writer. Merged or
+misbound owners require `openclaw doctor --fix` before reconnecting. Every
+connection retains its authentication, device authorization, role, and visibility
+checks.
+
 ```json
 {
   "type": "res",
@@ -96,6 +110,14 @@ Gateway responds with `hello-ok`:
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+
+Clients that do not use health details at connection time can advertise
+`hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
+then sends `snapshot.health: {}` instead of the cached health details. The
+required snapshot fields and version counters remain present; health RPCs and
+health events are unchanged. Clients without this capability retain the full
+cached health snapshot, and older Gateways ignore the capability.
+
 `controlUiUrl` optionally advertises the Gateway's configured public Control UI
 origin and base path for shareable links, independent of the client's tunnel or
 development-server address. It is omitted when `gateway.publicOrigin` is unset
@@ -153,9 +175,9 @@ route exits or is replaced, the Gateway closes connections that received its
 identity URL with code `1012`; reconnect to discover the current route.
 
 `openclaw.setup.verify` additionally checks the Gateway's current application and
-restart state before and after its live inference probe. It returns
+restart state before and after its live inference check. It returns
 `{ ok: false, status: "unavailable", error }` while saved settings are not active,
-restart work remains, or the verified runtime changes during the probe. Clients
+restart work remains, or the verified runtime changes during the check. Clients
 should preserve the selected model and retry after application or restart finishes.
 Standalone CLI verification still tests saved configuration without requiring a
 running Gateway.
@@ -237,6 +259,12 @@ the general protocol version. Frames stay under 64 KiB, except a negotiated
 `worker.inference.start` frame may be up to 25 MiB. The closed allowlist contains
 `worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
 `worker.inference.start`, and `worker.inference.cancel`.
+
+Assistant messages in `worker.transcript.commit` may carry the live event's
+`itemId`. The Gateway binds it to its generated commit key, removes it before
+storage, and publishes the correlation only after the row commits. It is not
+provider replay data. This worker-only field travels between the exact
+builds admitted by the bundle, version, and feature checks above.
 
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission

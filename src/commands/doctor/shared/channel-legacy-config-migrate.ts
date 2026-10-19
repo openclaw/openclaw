@@ -1,5 +1,3 @@
-// Legacy config migration bridge for channel doctor compatibility contracts.
-
 import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
@@ -15,7 +13,8 @@ import {
   isPluginDoctorMigrationDeferred,
 } from "../../../plugins/doctor-contract-registry.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+import { isRecord, visitChannelEntries } from "./legacy-config-record-shared.js";
+import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
@@ -50,25 +49,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
   if (defaults) {
     migrateEntry(defaults, "channels.defaults");
   }
-  for (const [channelId, value] of Object.entries(channels)) {
-    if (!channelId.trim() || isChannelConfigMetadataKey(channelId) || !isRecord(value)) {
+  for (const channelId of Object.keys(channels)) {
+    if (!channelId.trim() || isChannelConfigMetadataKey(channelId)) {
       continue;
     }
-    const preserveEmptyPluginBlock = channelId === "feishu";
-    migrateEntry(value, `channels.${channelId}`, preserveEmptyPluginBlock);
-    const accounts = isRecord(value.accounts) ? value.accounts : null;
-    if (!accounts) {
-      continue;
-    }
-    for (const [accountId, account] of Object.entries(accounts)) {
-      if (isRecord(account)) {
-        migrateEntry(
-          account,
-          `channels.${channelId}.accounts.${accountId}`,
-          preserveEmptyPluginBlock,
-        );
-      }
-    }
+    visitChannelEntries(raw, channelId, (entry, path) =>
+      migrateEntry(entry, path, channelId === "feishu"),
+    );
   }
 }
 
@@ -89,7 +76,7 @@ function resolveBundledChannelCompatibilityNormalizer(
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(
   cfg: Record<string, unknown>,
-  options?: { pluginContracts?: boolean },
+  options?: { pluginContracts?: boolean; historicalWebhookListeners?: boolean },
 ): {
   next: Record<string, unknown>;
   changes: string[];
@@ -130,13 +117,18 @@ export function applyChannelDoctorCompatibilityMigrations(
       : [
           ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
         ].toSorted();
-  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> = pluginIds.length
-    ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
-        config,
-        pluginIds,
-      })
-    : { config: bundled.config, changes: [] };
-  const warnings = [...(bundled.warnings ?? []), ...(plugins.warnings ?? [])];
+  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> =
+    pluginIds.length || options?.historicalWebhookListeners
+      ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
+          config,
+          pluginIds: options?.historicalWebhookListeners
+            ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
+            : pluginIds,
+          historicalWebhookListeners: options?.historicalWebhookListeners,
+        })
+      : { config: bundled.config, changes: [] };
+  // Bundled and installed contract views can report the same warning-only condition.
+  const warnings = [...new Set([...(bundled.warnings ?? []), ...(plugins.warnings ?? [])])];
   return {
     next: plugins.config,
     changes: [...changes, ...bundled.changes, ...plugins.changes],

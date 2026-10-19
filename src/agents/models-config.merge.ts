@@ -6,7 +6,6 @@ import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-co
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../config/model-cost.js";
 import type {
@@ -49,8 +48,6 @@ export function normalizeProviderMapKeys<T>(
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
-  baseUrl?: string;
-  api?: string;
 };
 
 /** Authored fields keyed by exact provider/model tuples, independent of display ref syntax. */
@@ -97,14 +94,6 @@ export function buildSourceModelFields(
   );
 }
 
-function getProviderModelId(model: unknown): string {
-  if (!model || typeof model !== "object") {
-    return "";
-  }
-  const id = (model as { id?: unknown }).id;
-  return normalizeOptionalString(id) ?? "";
-}
-
 /** Merges implicit provider models with explicit config while preserving explicit fields. */
 export function mergeProviderModels<TProvider extends ProviderModelCatalog>(
   implicit: TProvider,
@@ -116,23 +105,21 @@ export function mergeProviderModels(
   explicit: ProviderModelCatalog,
   options?: ProviderModelMergeOptions,
 ): ProviderModelCatalog {
-  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
-  const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  const implicitHeaders = isRecord(implicit.headers) ? implicit.headers : undefined;
-  const explicitHeaders = isRecord(explicit.headers) ? explicit.headers : undefined;
-  const mergeProviderFields = () => ({
+  const implicitModels = implicit.models ?? [];
+  const explicitModels = explicit.models ?? [];
+  const mergedProvider = {
     ...implicit,
     ...explicit,
-    ...(implicitHeaders || explicitHeaders
-      ? { headers: { ...implicitHeaders, ...explicitHeaders } }
+    ...(implicit.headers || explicit.headers
+      ? { headers: { ...implicit.headers, ...explicit.headers } }
       : {}),
-  });
+  };
   if (implicitModels.length === 0) {
-    return mergeProviderFields();
+    return mergedProvider;
   }
 
   const getModelId = (model: { id: string }) =>
-    options?.modelIdMatching === "exact" ? model.id : getProviderModelId(model);
+    options?.modelIdMatching === "exact" ? model.id : model.id.trim();
   const implicitById = new Map(
     implicitModels
       .map((model) => [getModelId(model), model] as const)
@@ -192,6 +179,11 @@ export function mergeProviderModels(
       configuredRoute,
       configuredCompat: explicitModel.compat,
     });
+    const parameterCount =
+      explicitModel.parameterCount ??
+      (modelTransportRoutesMatch(catalogRoute, configuredRoute)
+        ? implicitModel.parameterCount
+        : undefined);
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
       : modelTransportRoutesMatch(catalogRoute, configuredRoute)
@@ -203,6 +195,7 @@ export function mergeProviderModels(
       baseUrl: _baseUrl,
       headers: _headers,
       maxTokensSource: _maxTokensSource,
+      parameterCount: _parameterCount,
       ...implicitMetadata
     } = implicitModel;
     return Object.assign(
@@ -216,6 +209,7 @@ export function mergeProviderModels(
       },
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
+      parameterCount === undefined ? {} : { parameterCount },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
@@ -236,7 +230,7 @@ export function mergeProviderModels(
   }
 
   return {
-    ...mergeProviderFields(),
+    ...mergedProvider,
     models: mergedModels,
   };
 }
@@ -258,10 +252,6 @@ export function mergeProviders(params: {
       : explicit;
   }
   return out;
-}
-
-function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  return normalizeOptionalString(entry?.api);
 }
 
 function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
@@ -286,7 +276,7 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
 function resolveProviderApiSurface(
   entry: ExistingProviderConfig | ProviderConfig | undefined,
 ): string | undefined {
-  return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
+  return normalizeOptionalString(entry?.api) ?? resolveModelApiSurface(entry);
 }
 
 function shouldPreserveExistingApiKey(params: {

@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getAiTransportHost } from "../host.js";
 import { hasMediaPayload } from "../media-payload.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
@@ -43,11 +42,6 @@ function isBinaryMimeType(mimeType: string): boolean {
   return normalized ? !TEXTUAL_MIME_PATTERN.test(normalized) : false;
 }
 
-function describeOmittedValue(value: unknown, label: string): string {
-  const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
-  return length ? `[${label} omitted: ${length} chars]` : `[${label} omitted]`;
-}
-
 function redactInlineDataUris(value: string): string {
   return value.replace(
     INLINE_DATA_URI_PATTERN,
@@ -58,13 +52,8 @@ function redactInlineDataUris(value: string): string {
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
-    const host = getAiTransportHost();
-    const redactedWrapper = host.redactModelVisibleSecrets({
-      structuredToolResult: block,
-    });
-    const redactedBlock = redactedWrapper.structuredToolResult;
     const serialized = JSON.stringify(
-      redactedBlock,
+      block,
       function structuredToolResultReplacer(this: unknown, key, value) {
         if (OPAQUE_OR_BINARY_FIELD_RE.test(key)) {
           return `[omitted ${key}]`;
@@ -72,14 +61,15 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
         if (key === "data") {
           const mimeType = readMimeType(this);
           if (mimeType && isBinaryMimeType(mimeType)) {
-            return describeOmittedValue(value, "binary data");
+            const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
+            return length ? `[binary data omitted: ${length} chars]` : "[binary data omitted]";
           }
         }
         if (typeof value === "bigint") {
           return value.toString();
         }
         if (typeof value === "string") {
-          return redactInlineDataUris(host.redactModelVisibleSecrets(value));
+          return redactInlineDataUris(value);
         }
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
           return undefined;

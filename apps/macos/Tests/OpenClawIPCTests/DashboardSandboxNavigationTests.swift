@@ -74,7 +74,10 @@ struct DashboardSandboxNavigationTests {
             navigationType: .other) == allowed)
         #expect(!ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture", password: nil),
+            auth: DashboardWindowAuth.nativeDevice(
+                gatewayUrl: "wss://gateway.example/",
+                token: "fixture",
+                password: nil),
             isMainFrame: true,
             sourceIsDashboard: true,
             navigationType: .other))
@@ -222,7 +225,7 @@ struct DashboardSandboxNavigationTests {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let dashboardURL = server.url("/")
-        let auth = DashboardWindowAuth(
+        let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: server.websocketURL().absoluteString, token: "fixture-token", password: nil)
         let controller = DashboardWindowController(
             url: dashboardURL,
@@ -349,12 +352,15 @@ struct DashboardSandboxNavigationTests {
         let dashboardURL = dashboard.url("/control/")
         let controller = DashboardWindowController(
             url: dashboardURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture-only", password: nil),
+            auth: DashboardWindowAuth.nativeDevice(
+                gatewayUrl: dashboard.websocketURL("/control/").absoluteString,
+                token: "fixture-only",
+                password: nil),
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        controller.update(url: dashboardURL, auth: controller.auth)
         var rendered = false
         try await TestWait.state("sandbox inner document handshake") {
             rendered = await (try? controller.webView.evaluateJavaScript(

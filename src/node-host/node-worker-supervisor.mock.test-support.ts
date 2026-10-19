@@ -74,22 +74,26 @@ vi.mock("./node-worker-container-lifecycle.js", () => ({
     remove = mocks.remove;
   },
 }));
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    acquirePreparedWorkspace = mocks.acquirePreparedWorkspace;
-    applyRetainSnapshot = mocks.retain;
-    quiescence = {
-      hasActiveWork: () => false,
-      close: mocks.quiescenceClose,
-    };
-    processes = {
-      hasActiveWork: () => false,
-      stopEnvironment: async () => {},
-      close: async () => {},
-    };
-  },
-}));
+vi.mock("./node-worker-workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./node-worker-workspace.js")>();
+  const { NodeWorkerWorkspaceProcesses } = await import("./node-worker-workspace-processes.js");
+  return {
+    ...actual,
+    NodeWorkerWorkspaceRuntime: class {
+      acquirePreparedWorkspace = mocks.acquirePreparedWorkspace;
+      applyRetainSnapshot = mocks.retain;
+      quiescence = {
+        hasActiveWork: () => false,
+        close: mocks.quiescenceClose,
+      };
+      processes = new NodeWorkerWorkspaceProcesses();
+    },
+  };
+});
+
+// mock-isolation: These pure supervisor tests never inspect host processes or boot identity.
 vi.mock("./node-worker-process-identity.js", () => ({
+  getNodeWorkerBootIdentity: () => null,
   requireNodeWorkerProcessIdentity: (pid: number) => ({ pid, startTime: 1 }),
   inspectNodeWorkerProcessIdentity: mocks.inspectIdentity,
 }));

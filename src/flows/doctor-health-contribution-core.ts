@@ -1,13 +1,12 @@
-import type {
-  DoctorHealthCheckContext,
-  DoctorHealthFlowContext,
-} from "./doctor-health-contribution-types.js";
-import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
+import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import {
+  noteDoctorRepairResult,
+  resolveDoctorWorkspaceDir,
+} from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
-import { copyHealthChecks } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import { isHealthCheckEnabledByDefault, type HealthFinding } from "./health-checks.js";
 
@@ -20,19 +19,14 @@ function reportDoctorRepairResult(
   ctx.cfg = result.config;
   renderStructuredHealthFindings(ctx, findings);
   recordDoctorHealthWarnings(ctx, findings, result.warnings);
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result, note);
 }
 
-function withDoctorHealthCheckFacts<T extends object>(
-  ctx: DoctorHealthFlowContext,
-  input: T,
-): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot" | "agentDatabaseRefusals"> {
+function createDoctorHealthCheckContext<T extends object>(ctx: DoctorHealthFlowContext, input: T) {
   return {
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    configPath: ctx.configPath,
     ...input,
     agentDatabaseRefusals: ctx.agentDatabaseRefusals,
     ...(ctx.runWithPluginMetadataSnapshot
@@ -59,19 +53,15 @@ export async function runStructuredHealthRepairs(
     cwd: workspaceDir,
     env: ctx.env,
   });
-  const checks = copyHealthChecks(
-    listExtensionHealthChecksForDoctor(await resolveCoreChecks(), availabilityFindings).filter(
-      isHealthCheckEnabledByDefault,
-    ),
-  );
+  const checks = listExtensionHealthChecksForDoctor(
+    await resolveCoreChecks(),
+    availabilityFindings,
+  ).filter(isHealthCheckEnabledByDefault);
   const result = await runDoctorHealthRepairs(
-    withDoctorHealthCheckFacts(ctx, {
+    createDoctorHealthCheckContext(ctx, {
       mode: "fix" as const,
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
       env: ctx.env,
       cwd: workspaceDir,
-      configPath: ctx.configPath,
     }),
     { checks },
   );
@@ -102,12 +92,9 @@ export async function runCoreContributionHealth(
   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
-    withDoctorHealthCheckFacts(ctx, {
+    createDoctorHealthCheckContext(ctx, {
       mode: "fix" as const,
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
       cwd: workspaceDir,
-      configPath: ctx.configPath,
       dryRun,
     }),
     { checks, dryRun },
@@ -117,19 +104,16 @@ export async function runCoreContributionHealth(
 
 function formatHealthFindings(findings: readonly HealthFinding[]): string {
   return findings
-    .map((finding) => {
-      const lines = [`- ${finding.message}`];
-      if (finding.path) {
-        lines.push(`  path: ${finding.path}`);
-      }
-      if (finding.requirement) {
-        lines.push(`  issue: ${finding.requirement}`);
-      }
-      if (finding.fixHint) {
-        lines.push(`  fix: ${finding.fixHint}`);
-      }
-      return lines.join("\n");
-    })
+    .map((finding) =>
+      [
+        `- ${finding.message}`,
+        finding.path && `  path: ${finding.path}`,
+        finding.requirement && `  issue: ${finding.requirement}`,
+        finding.fixHint && `  fix: ${finding.fixHint}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    )
     .join("\n");
 }
 
@@ -145,12 +129,9 @@ export async function runCoreHealthFindingNote(
     return;
   }
   const findings = await check.detect(
-    withDoctorHealthCheckFacts(ctx, {
+    createDoctorHealthCheckContext(ctx, {
       mode: "doctor" as const,
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
       cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
-      configPath: ctx.configPath,
       allowExecSecretRefs: ctx.options.allowExec === true,
     }),
   );

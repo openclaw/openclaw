@@ -1,15 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as changedDependencies from "../../scripts/lib/changed-dependencies.mts";
-import {
-  createChangedExtensionFallbackShards,
-  hasBuildArtifactAffectingChange,
-  hasCoreExtensionImpact,
-} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -19,13 +14,12 @@ import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mt
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 import {
   gatewayCallsitesGuard,
   createChangedNodeTestShards,
   materializeGatewayCallsitesFixture,
-  fallbackGroups,
   selectedFiles,
+  fallbackGroups,
   expectProtectedOwnerExpansion,
 } from "./ci-changed-node-test-plan.test-support.js";
 
@@ -33,34 +27,59 @@ const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
 
+function writeFiles(cwd: string, files: Record<string, string>) {
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    writeFileSync(path.join(cwd, file), source);
+  }
+}
+
+function createSourceFixture(prefix: string, files: Record<string, string>) {
+  const cwd = argvTempDirs.make(prefix);
+  writeFiles(cwd, files);
+  return cwd;
+}
+
+function expectFiles(
+  shards: ReturnType<typeof createChangedNodeTestShards>,
+  files: readonly string[],
+  label?: string,
+) {
+  expect(shards, label).not.toBeNull();
+  expect(selectedFiles(shards).toSorted(), label).toEqual([...files].toSorted());
+}
+
+function runPlan(config: string, ...includePatterns: string[]) {
+  return { config, forwardedArgs: [], includePatterns, watchMode: false };
+}
+
 function createErasedCoreSourceFixture() {
-  const cwd = argvTempDirs.make("changed-erased-core-");
   const erasedSource = "export interface Entry { value: string }\n";
-  const files = {
-    "src/example/entry.ts": erasedSource,
+  const cwd = createSourceFixture("changed-erased-core-", {
+    ...Object.fromEntries(
+      [
+        "entry",
+        "entry-sibling",
+        "entry-imported",
+        "entry-read",
+        "import-retained",
+        "ambient",
+        "incomplete",
+        "entry.d",
+        "retired",
+      ].map((name) => [`src/example/${name}.ts`, erasedSource]),
+    ),
     "src/test-utils/entry.ts": erasedSource,
     [sourcePolicyTest]: "export {};\n",
-    "src/example/entry-sibling.ts": erasedSource,
     "src/example/entry-sibling.test.ts": "export {};\n",
-    "src/example/entry-imported.ts": erasedSource,
     "src/example/import-consumer.test.ts": 'import "./entry-imported.js";\n',
-    "src/example/entry-read.ts": erasedSource,
     "src/example/source-reader.test.ts":
       'import { readFileSync } from "node:fs";\nreadFileSync(new URL("./entry-read.ts", import.meta.url), "utf8");\n',
     "src/example/runtime.ts": "export const value = 1;\n",
     "src/example/runtime-consumer.test.ts": 'import "./runtime.js";\n',
     "src/example/unknown.ts": "export const value = 1;\n",
     "src/example/runtime-before.ts": "export const value = 1;\n",
-    "src/example/import-retained.ts": erasedSource,
-    "src/example/ambient.ts": erasedSource,
-    "src/example/incomplete.ts": erasedSource,
-    "src/example/entry.d.ts": erasedSource,
-    "src/example/retired.ts": erasedSource,
-  };
-  for (const [file, source] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), source);
-  }
+  });
   materializeGatewayCallsitesFixture(cwd);
   const git = (...args: string[]) =>
     execFileSync(
@@ -82,7 +101,7 @@ function createErasedCoreSourceFixture() {
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture baseline");
   const baseRef = git("rev-parse", "HEAD");
-  for (const [file, source] of Object.entries({
+  writeFiles(cwd, {
     "src/example/entry.ts": "export interface Entry { value: number }\n",
     "src/test-utils/entry.ts": "export interface Entry { value: number }\n",
     "src/example/entry-sibling.ts": "export type Entry = { value: number };\n",
@@ -96,93 +115,13 @@ function createErasedCoreSourceFixture() {
     "src/example/incomplete.ts": "export interface Entry { value:\n",
     "src/example/new-entry.ts": erasedSource,
     "src/example/untracked.ts": erasedSource,
-  })) {
-    writeFileSync(path.join(cwd, file), source);
-  }
+  });
   git("add", "src/example/new-entry.ts");
   rmSync(path.join(cwd, "src/example/retired.ts"));
   return { cwd, baseRef };
 }
 
 describe("CI changed Node test plan", () => {
-  it("leaves dedicated UI tests to their owners while retaining changed Node-driven tests", () => {
-    const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
-    const node = "ui/src/components/form-controls.browser.test.ts";
-    const bootstrap = "extensions/browser/chrome-extension/bootstrap.chromium.test.ts";
-    const uiE2e = [
-      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-      "ui/src/e2e/settings-layout.e2e.test.ts",
-    ];
-    const changedPaths = [browser, node, ...uiE2e];
-    const shards = createChangedNodeTestShards(changedPaths);
-    expect(shards).not.toBeNull();
-    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
-    expect(targets).toContain(node);
-    expect(targets).not.toContain(browser);
-    expect(targets).toEqual(expect.arrayContaining(uiE2e));
-    expect(createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: false })).toEqual(shards);
-
-    const dedicated = createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: true });
-    expect(dedicated).not.toBeNull();
-    expect(dedicated?.flatMap((shard) => shard.targets ?? [])).toEqual(
-      targets.filter((target) => !uiE2e.includes(target)),
-    );
-    expect(dedicated?.filter((shard) => !shard.targets)).toEqual(
-      shards?.filter((shard) => !shard.targets),
-    );
-    for (const dedicatedUiE2e of [undefined, false, true]) {
-      const bootstrapPlan = createChangedNodeTestShards([bootstrap, node], { dedicatedUiE2e });
-      expect(bootstrapPlan).not.toBeNull();
-      expect(selectedFiles(bootstrapPlan).includes(bootstrap)).toBe(dedicatedUiE2e !== true);
-      expect(selectedFiles(bootstrapPlan)).toContain(node);
-    }
-    const coreE2e = "src/gateway/gateway.test.ts";
-    for (const dedicatedUiE2e of [false, true]) {
-      const coreShards = createChangedNodeTestShards([coreE2e], { dedicatedUiE2e });
-      expect(coreShards).not.toBeNull();
-      expect(selectedFiles(coreShards)).toContain(coreE2e);
-      expect(buildVitestRunPlans([coreE2e])[0]?.forwardedArgs).toContain(coreE2e);
-      const mixed = createChangedNodeTestShards([...changedPaths, "src/deleted.ts"], {
-        dedicatedUiE2e,
-      });
-      expect(mixed).not.toBeNull();
-      expect(selectedFiles(mixed)).toContain(node);
-      expect(selectedFiles(mixed)).not.toContain("test/scripts/mobile-release-ci.test.ts");
-    }
-  });
-  it("keeps plugin-owned package metadata on its package and concrete readers", () => {
-    const cwd = argvTempDirs.make("changed-plugin-metadata-");
-    const manifest = "extensions/msteams/package.json";
-    const reader = "src/infra/plugin-package-reader.test.ts";
-    const hostReader = "src/plugins/bundled-plugin-metadata.test.ts";
-    const pluginTests = ["extensions/msteams/index.test.ts", "extensions/msteams/setup.test.ts"];
-    for (const [file, source] of Object.entries({
-      [manifest]: JSON.stringify({ name: "@openclaw/msteams" }),
-      [reader]: 'import "../../extensions/msteams/package.json" with { type: "json" };',
-      [hostReader]: "export {};",
-      [pluginTests[0]!]: "export {};",
-      [pluginTests[1]!]: "export {};",
-      "extensions/discord/package.json": JSON.stringify({ name: "@openclaw/discord" }),
-      "extensions/discord/index.test.ts": "export {};",
-    })) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), source);
-    }
-    const dependencies = vi
-      .spyOn(changedDependencies, "resolveChangedDependencies")
-      .mockReturnValue({ importers: [], pluginMetadataPaths: [manifest] });
-    try {
-      const shards = createChangedNodeTestShards([manifest], { cwd });
-      expect(shards).not.toBeNull();
-      expect(selectedFiles(shards).toSorted()).toEqual([...pluginTests, reader].toSorted());
-      expect(
-        selectedFiles(createChangedNodeTestShards([manifest, hostReader], { cwd })).toSorted(),
-      ).toEqual([...pluginTests, reader, hostReader].toSorted());
-    } finally {
-      dependencies.mockRestore();
-    }
-  });
-
   it.each([
     ["extensions/copilot/index.ts", ["extensions/copilot/index.test.ts"]],
     ["extensions/copilot/harness.ts", ["extensions/copilot/harness.test.ts"]],
@@ -211,12 +150,7 @@ describe("CI changed Node test plan", () => {
       ).toBe(true);
     }
     expect(buildVitestRunPlans([hostTest])).toEqual([
-      {
-        config: "test/vitest/vitest.agents-core.config.ts",
-        forwardedArgs: [],
-        includePatterns: [hostTest],
-        watchMode: false,
-      },
+      runPlan("test/vitest/vitest.agents-core.config.ts", hostTest),
     ]);
     expect(
       buildVitestRunPlans([
@@ -224,18 +158,11 @@ describe("CI changed Node test plan", () => {
         "extensions/copilot/harness.test.ts",
       ]),
     ).toEqual([
-      {
-        config: "test/vitest/vitest.extension-database-workers.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/copilot/harness.test.ts"],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.extensions.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/copilot/index.test.ts"],
-        watchMode: false,
-      },
+      runPlan(
+        "test/vitest/vitest.extension-database-workers.config.ts",
+        "extensions/copilot/harness.test.ts",
+      ),
+      runPlan("test/vitest/vitest.extensions.config.ts", "extensions/copilot/index.test.ts"),
     ]);
   });
 
@@ -284,6 +211,7 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
       areas: ["src/channels"],
@@ -300,44 +228,94 @@ describe("CI changed Node test plan", () => {
     );
   });
 
-  it.each([
-    {
-      source: "test/scripts/openclaw-npm-plugin-recovery-workflow.test.ts",
-      targets: [
-        "test/scripts/openclaw-npm-plugin-recovery-workflow.test.ts",
-        "test/scripts/test-projects.test.ts",
-      ],
-    },
-    ...[
-      "extensions/codex/src/app-server/run-attempt.native-config.test.ts",
-      "extensions/codex/src/app-server/run-attempt.subscription.test.ts",
-    ].map((source) => ({
-      source,
-      targets: expect.arrayContaining([source, "test/vitest-projects-config.test.ts"]),
-    })),
-  ])("selects inventory guards alongside $source", ({ source, targets: expected }) => {
-    const shards = createChangedNodeTestShards([source]);
+  it("selects UI source consumers through exact executable owner plans", () => {
+    const shards = createChangedNodeTestShards([
+      "ui/src/app-routes.ts",
+      "ui/src/app-navigation.ts",
+    ]);
     expect(shards).not.toBeNull();
-    const targets = fallbackGroups(shards ?? []).flatMap((group) => group.includePatterns ?? []);
-    expect(targets.toSorted()).toEqual(expected);
+    expect(selectedFiles(shards)).toEqual(
+      expect.arrayContaining(["ui/src/app-routes.test.ts", "ui/src/app-navigation.test.ts"]),
+    );
+    const uiFiles = selectedFiles(shards).filter((file) => file.startsWith("ui/"));
+    const uiPlans = buildVitestRunPlans(uiFiles);
+    expect(uiPlans.length).toBeGreaterThan(0);
+    expect(
+      uiPlans.flatMap((plan) => plan.includePatterns ?? plan.forwardedArgs).toSorted(),
+    ).toEqual(uiFiles.toSorted());
+    expect(
+      uiPlans.every(
+        (plan) =>
+          plan.config === "ui/vitest.config.ts" || plan.config.startsWith("test/vitest/vitest.ui"),
+      ),
+    ).toBe(true);
+    expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-ci.test.ts");
   });
 
-  it("routes cron alert sanitization changes through alert policy suites", () => {
-    const shards = createChangedNodeTestShards(["src/cron/failure-notification-text.ts"]);
-    const targets = selectedFiles(shards);
+  it("leaves dedicated UI tests to their owners while retaining changed Node-driven tests", () => {
+    const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
+    const node = "ui/src/components/form-controls.browser.test.ts";
+    const bootstrap = "extensions/browser/chrome-extension/bootstrap.chromium.test.ts";
+    const uiE2e = [
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+      "ui/src/e2e/settings-layout.e2e.test.ts",
+    ];
+    const changedPaths = [browser, node, ...uiE2e];
+    const shards = createChangedNodeTestShards(changedPaths);
+    expect(shards).not.toBeNull();
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+    expect(targets).toContain(node);
+    expect(targets).not.toContain(browser);
+    expect(targets).toEqual(expect.arrayContaining(uiE2e));
+    expect(createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: false })).toEqual(shards);
 
-    expectProtectedOwnerExpansion(
-      shards,
-      [
-        "src/cron/failure-notification-text.test.ts",
-        "src/cron/service.stream-trigger.test.ts",
-        "src/cron/service.stream-validation.test.ts",
-        "src/cron/service/timer.timeout-watchdog.test.ts",
-        gatewayCallsitesGuard,
-      ],
-      ["src/cron"],
+    const dedicated = createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: true });
+    expect(dedicated).not.toBeNull();
+    expect(dedicated?.flatMap((shard) => shard.targets ?? [])).toEqual(
+      targets.filter((target) => !uiE2e.includes(target)),
     );
-    expect(targets).not.toContain("src/infra/device-bootstrap.test.ts");
+    expect(dedicated?.filter((shard) => !shard.targets)).toEqual(
+      shards?.filter((shard) => !shard.targets),
+    );
+    for (const dedicatedUiE2e of [undefined, false, true]) {
+      const bootstrapPlan = createChangedNodeTestShards([bootstrap, node], { dedicatedUiE2e });
+      expect(bootstrapPlan).not.toBeNull();
+      expect(selectedFiles(bootstrapPlan).includes(bootstrap)).toBe(dedicatedUiE2e !== true);
+      expect(selectedFiles(bootstrapPlan)).toContain(node);
+    }
+    const coreE2e = "src/gateway/gateway.test.ts";
+    for (const dedicatedUiE2e of [false, true]) {
+      const coreShards = createChangedNodeTestShards([coreE2e], { dedicatedUiE2e });
+      expect(coreShards).not.toBeNull();
+      expect(selectedFiles(coreShards)).toContain(coreE2e);
+      expect(buildVitestRunPlans([coreE2e])[0]?.forwardedArgs).toContain(coreE2e);
+      const mixed = createChangedNodeTestShards([...changedPaths, "src/deleted.ts"], {
+        dedicatedUiE2e,
+      });
+      expect(mixed).not.toBeNull();
+      expect(selectedFiles(mixed)).toContain(node);
+      expect(selectedFiles(mixed)).not.toContain("test/scripts/mobile-release-ci.test.ts");
+    }
+  });
+  it("keeps plugin-owned package metadata on its package and concrete readers", () => {
+    const manifest = "extensions/msteams/package.json";
+    const reader = "src/infra/plugin-package-reader.test.ts";
+    const hostReader = "src/plugins/bundled-plugin-metadata.test.ts";
+    const pluginTests = ["extensions/msteams/index.test.ts", "extensions/msteams/setup.test.ts"];
+    const cwd = createSourceFixture("changed-plugin-metadata-", {
+      [manifest]: JSON.stringify({ name: "@openclaw/msteams" }),
+      [reader]: 'import "../../extensions/msteams/package.json" with { type: "json" };',
+      [hostReader]: "export {};",
+      [pluginTests[0]!]: "export {};",
+      [pluginTests[1]!]: "export {};",
+      "extensions/discord/package.json": JSON.stringify({ name: "@openclaw/discord" }),
+      "extensions/discord/index.test.ts": "export {};",
+    });
+    const shards = createChangedNodeTestShards([manifest], { cwd });
+    expectFiles(shards, [...pluginTests, reader]);
+    expect(
+      selectedFiles(createChangedNodeTestShards([manifest, hostReader], { cwd })).toSorted(),
+    ).toEqual([...pluginTests, reader, hostReader].toSorted());
   });
 
   it("keeps a focused source job beside its canonical source scanner", () => {
@@ -347,6 +325,8 @@ describe("CI changed Node test plan", () => {
       "src/agents/live-model-filter.test.ts",
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
+      // Missing history retains this cross-area consumer's closed module mock.
+      "src/gateway/gateway-models.profiles.live.test-helpers.test.ts",
     ];
     expectProtectedOwnerExpansion(
       shards,
@@ -361,37 +341,6 @@ describe("CI changed Node test plan", () => {
       expect(owners[0]?.runner, target).toBeDefined();
       expect(owners[0]?.predictedSeconds, target).toBeGreaterThan(0);
     }
-  });
-
-  it.each([
-    "src/node-host/node-worker-bundle-installer.test.ts",
-    "src/plugin-sdk/plugin-config-runtime.test.ts",
-    "src/plugins/contracts/registry.retry.test.ts",
-    "src/channels/plugins/config-schema.test.ts",
-  ])("keeps exact test leaf %s focused while retaining boundary coverage", (target) => {
-    expect(hasCoreExtensionImpact([target])).toBe(false);
-    expect(createChangedExtensionFallbackShards([target])).toEqual([]);
-    const dedicatedContractShards = [{ task: "contracts-channels", includePatterns: [target] }];
-    const shards = createChangedNodeTestShards([target], { dedicatedContractShards });
-    expect(shards).toEqual([
-      {
-        checkName: "checks-node-changed",
-        configs: [],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed",
-        targets: [target],
-        predictedSeconds: expect.any(Number),
-      },
-      {
-        checkName: "checks-node-changed-boundary",
-        configs: ["test/vitest/vitest.boundary.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed-boundary",
-      },
-    ]);
-    expect(shards?.every((shard) => (shard.predictedSeconds ?? 0) <= 300)).toBe(true);
   });
 
   it.each([
@@ -422,31 +371,8 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it("keeps uncovered and deleted-path coverage beside a dedicated contract target", () => {
-    const target = "src/plugins/contracts/registry.retry.test.ts";
-    const remaining = [
-      "src/plugin-sdk/plugin-config-runtime.test.ts",
-      "src/channels/plugins/config-schema.test.ts",
-      "src/plugins/contracts/deleted.test.ts",
-    ];
-    const options = {
-      dedicatedContractShards: [{ task: "contracts-plugins", includePatterns: [target] }],
-    };
-    expect(createChangedNodeTestShards([target, ...remaining], options)).toEqual(
-      createChangedNodeTestShards(remaining),
-    );
-    for (const companion of ["src/deleted.ts", "tsconfig.json"]) {
-      const mixed = createChangedNodeTestShards([target, companion], options);
-      expect(mixed).not.toBeNull();
-      expect(selectedFiles(mixed)).not.toContain(target);
-      expect(selectedFiles(mixed)).not.toContain(
-        "extensions/acpx/src/runtime-advertised-model.process.test.ts",
-      );
-    }
-  });
-
   it("requires dedicated config ownership and retains independent source scanners", () => {
-    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-contract-coverage-"));
+    const cwd = argvTempDirs.make("openclaw-contract-coverage-");
     const target = "src/plugins/contracts/fixture.test.ts";
     const source = "src/test-utils/fixture.ts";
     const unrelated = [
@@ -454,13 +380,17 @@ describe("CI changed Node test plan", () => {
       "src/channels/plugins/contracts/unowned.test.ts",
     ];
     try {
-      for (const file of [target, source, sourcePolicyTest, ...unrelated]) {
-        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-        writeFileSync(
-          path.join(cwd, file),
-          file === target ? 'import "../../test-utils/fixture.js";\nexport {};\n' : "export {};\n",
-        );
-      }
+      writeFiles(
+        cwd,
+        Object.fromEntries(
+          [target, source, sourcePolicyTest, ...unrelated].map((file) => [
+            file,
+            file === target
+              ? 'import "../../test-utils/fixture.js";\nexport {};\n'
+              : "export {};\n",
+          ]),
+        ),
+      );
       materializeGatewayCallsitesFixture(cwd);
       for (const file of unrelated) {
         const before = createChangedNodeTestShards([file], { cwd });
@@ -493,142 +423,27 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it.each(
-    [[], ["extensions/matrix/src/matrix/actions/verification.test.ts"]].map((companions) => ({
-      companions,
-    })),
-  )(
-    "retains max-lines owner regressions beside its dedicated guard and $companions",
-    ({ companions }) => {
-      const paths = ["config/max-lines-baseline.txt", ...companions];
-      for (const options of [{}, { dedicatedMaxLinesRatchet: false }]) {
-        const uncredited = createChangedNodeTestShards(paths, options);
-        expect(uncredited).not.toBeNull();
-        const groups = fallbackGroups(uncredited ?? []);
-        const targets = groups.flatMap((group) => group.includePatterns ?? []);
-        expectProtectedOwnerExpansion(
-          uncredited,
-          [
-            "test/scripts/check-max-lines-ratchet.test.ts",
-            "test/scripts/ci-changed-node-test-plan.test.ts",
-            "test/scripts/ci-workflow-planning.test.ts",
-            ...companions,
-          ],
-          ["scripts", "src/scripts", "test/scripts"],
-        );
-        expect(targets).toEqual(expect.arrayContaining(companions));
-      }
-      const shards = createChangedNodeTestShards(paths, { dedicatedMaxLinesRatchet: true });
-      expect(shards).not.toBeNull();
-      const groups = fallbackGroups(shards ?? []);
-      const targets = groups.flatMap((group) => group.includePatterns ?? []);
-      const configs = groups.flatMap((group) => group.configs);
-      expect(configs).toContain("test/vitest/vitest.tooling.config.ts");
-      expect(shards).toEqual(createChangedNodeTestShards(paths));
-      if (companions.length) {
-        expect(targets).toContain("test/scripts/check-max-lines-ratchet.test.ts");
-        expect(targets).toContain("extensions/matrix/src/matrix/actions/verification.test.ts");
-      } else {
-        expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
-        expect(targets).not.toContain("src/infra/device-bootstrap.test.ts");
-      }
-    },
-  );
-
-  it.each([
-    {
-      owner: "scripts/check-max-lines-ratchet.mts",
-      tests: ["test/scripts/check-max-lines-ratchet.test.ts"],
-    },
-    { owner: "scripts/lib/shrink-ratchet.mts", tests: ["test/scripts/shrink-ratchet.test.ts"] },
-    {
-      owner: ".github/workflows/ci.yml",
-      tests: [
-        "test/scripts/check-workflows.test.ts",
-        "test/scripts/ci-workflow-guards.test.ts",
-        "test/scripts/ci-workflow-planning.test.ts",
-        "test/scripts/ci-workflow-evidence.test.ts",
-        "test/scripts/ci-changed-node-test-plan.test.ts",
-      ],
-    },
-  ])("retains owner coverage for max-lines baseline mixed with $owner", ({ owner, tests }) => {
-    const shards = createChangedNodeTestShards(["config/max-lines-baseline.txt", owner], {
-      dedicatedMaxLinesRatchet: true,
-    });
-    expect(shards).not.toBeNull();
-    const groups = fallbackGroups(shards ?? []);
-    const targets = groups.flatMap((group) => group.includePatterns ?? []);
-    const configs = groups.flatMap((group) => group.configs);
-    expect(targets).toEqual(expect.arrayContaining(tests));
-    expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
-    expect(configs).not.toContain("test/vitest/vitest.tui-pty.config.ts");
-    expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-  });
-
-  it("retains planner regression coverage beside a dedicated max-lines guard", () => {
-    const shards = createChangedNodeTestShards(
-      ["config/max-lines-baseline.txt", "scripts/lib/ci-changed-node-test-plan.mts"],
-      { dedicatedMaxLinesRatchet: true },
-    );
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards)).toContain("test/scripts/ci-changed-node-test-plan.test.ts");
-  });
-
-  it("does not expand other config data or a missing max-lines baseline", () => {
-    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ratchet-routing-"));
-    try {
-      mkdirSync(path.join(cwd, "config"));
-      const baseline = "config/max-lines-baseline.txt";
-      const unknown = "config/max-lines-baseline-other.txt";
-      writeFileSync(path.join(cwd, baseline), "");
-      writeFileSync(path.join(cwd, unknown), "");
-      const options = { cwd, dedicatedMaxLinesRatchet: true };
-      const live = createChangedNodeTestShards([baseline, unknown], options);
-      expect(live).toEqual([
-        expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-      ]);
-      rmSync(path.join(cwd, baseline));
-      expect(createChangedNodeTestShards([baseline], options)).toEqual(live);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it.each(
-    (["blacksmith", "hybrid", "github"] as const).flatMap((runnerBackend) =>
-      boundaryTestFiles.map((target) => ({ runnerBackend, target })),
-    ),
-  )(
-    "runs $target once through the local boundary owner on $runnerBackend",
-    ({ runnerBackend, target }) => {
-      expect(createChangedNodeTestShards([target], { runnerBackend })).toEqual([
-        {
-          checkName: "checks-node-changed-boundary",
-          configs: ["test/vitest/vitest.boundary.config.ts"],
-          requiresDist: false,
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          shardName: "changed-boundary",
-        },
-      ]);
-      // Local explicit selection still runs only the requested file.
-      expect(buildVitestRunPlans([target])).toMatchObject([
-        {
-          config: "test/vitest/vitest.boundary.config.ts",
-          includePatterns: [target],
-          forwardedArgs: [],
-          watchMode: false,
-        },
-      ]);
-    },
-  );
-
-  it.each([
-    "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts",
-    "test/scripts/ci-linux-git.test.ts",
-  ])("retains the other test owner alongside a boundary target: %s", (companion) => {
-    expect(
-      createChangedNodeTestShards(["test/extension-import-boundaries.test.ts", companion]),
-    ).toEqual(createChangedNodeTestShards([companion]));
+  it("runs a boundary target once through its local owner", () => {
+    const target = "test/extension-import-boundaries.test.ts";
+    const runnerBackend = "blacksmith";
+    expect(createChangedNodeTestShards([target], { runnerBackend })).toEqual([
+      {
+        checkName: "checks-node-changed-boundary",
+        configs: ["test/vitest/vitest.boundary.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-boundary",
+      },
+    ]);
+    // Local explicit selection still runs only the requested file.
+    expect(buildVitestRunPlans([target])).toMatchObject([
+      {
+        config: "test/vitest/vitest.boundary.config.ts",
+        includePatterns: [target],
+        forwardedArgs: [],
+        watchMode: false,
+      },
+    ]);
   });
 
   it("leaves explicit boundary coverage with the selected artifact owner", () => {
@@ -643,84 +458,32 @@ describe("CI changed Node test plan", () => {
     expect(shards?.map((shard) => shard.checkName)).not.toContain("checks-node-changed-boundary");
   });
 
-  it.each(["docs/help/index.md", "src/infra/deleted-boundary.test.ts"])(
-    "retains the local boundary owner with an ignored companion: %s",
-    (companion) => {
-      const target = "test/extension-import-boundaries.test.ts";
-      expect(createChangedNodeTestShards([target, companion])).toEqual(
-        createChangedNodeTestShards([target]),
-      );
-    },
-  );
-
-  it.each(["src/infra/deleted-boundary.ts", "tsconfig.json"])(
-    "keeps boundary coverage beside a deleted source or hub input: %s",
-    (companion) => {
-      const shards = createChangedNodeTestShards(
-        ["test/extension-import-boundaries.test.ts", companion],
-        { dedicatedBuildArtifacts: false },
-      );
-      expect(shards).not.toBeNull();
-      expect(shards).toContainEqual(
-        expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-      );
-      expect(selectedFiles(shards)).not.toContain(
-        "extensions/acpx/src/runtime-advertised-model.process.test.ts",
-      );
-    },
-  );
-
-  it("retains the complete boundary owner when its leaf config changes", () => {
-    const shards = createChangedNodeTestShards([
-      "test/extension-import-boundaries.test.ts",
-      "test/vitest/vitest.boundary.config.ts",
-    ]);
-    expect(shards).not.toBeNull();
-    expect(fallbackGroups(shards ?? [])).toContainEqual(
-      expect.objectContaining({
-        configs: ["test/vitest/vitest.boundary.config.ts"],
-      }),
-    );
-    expect(
-      fallbackGroups(shards ?? []).find((group) =>
-        group.configs.includes("test/vitest/vitest.boundary.config.ts"),
-      )?.includePatterns,
-    ).toBeUndefined();
-  });
-
   it("keeps direct helper readers and owner-bounded transitive contracts", () => {
-    const cwd = argvTempDirs.make("changed-helper-consumers-");
     const helper = "test/helpers/local-fixture.ts";
     const direct = "src/example/direct-consumer.test.ts";
     const indirect = "src/example/indirect-consumer.test.ts";
     const e2e = "extensions/example/proof.e2e.test.ts";
-    for (const [file, source] of [
-      [helper, "export const fixture = 1;\n"],
-      [direct, 'import "../../test/helpers/local-fixture.js";\n'],
-      [indirect, 'import "./direct-consumer.test.js";\n'],
-      [e2e, 'import "../../test/helpers/local-fixture.js";\n'],
-      ["src/example/unrelated.test.ts", "export {};\n"],
-    ] as const) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), source);
-    }
+    const cwd = createSourceFixture("changed-helper-consumers-", {
+      [helper]: "export const fixture = 1;\n",
+      [direct]: 'import "../../test/helpers/local-fixture.js";\n',
+      [indirect]: 'import "./direct-consumer.test.js";\n',
+      [e2e]: 'import "../../test/helpers/local-fixture.js";\n',
+      "src/example/unrelated.test.ts": "export {};\n",
+    });
     for (const [changedPath, expected] of [
       [helper, [direct, e2e]],
       [direct, [direct, indirect]],
     ] as const) {
       const shards = createChangedNodeTestShards([changedPath], { cwd });
-      expect(shards).not.toBeNull();
-      expect(selectedFiles(shards).toSorted()).toEqual([...expected].toSorted());
+      expectFiles(shards, expected);
       expect(selectedFiles(shards)).not.toContain("src/example/unrelated.test.ts");
     }
     const explicit = createChangedNodeTestShards([helper, e2e], { cwd });
-    expect(explicit).not.toBeNull();
-    expect(selectedFiles(explicit).toSorted()).toEqual([e2e, direct].toSorted());
+    expectFiles(explicit, [e2e, direct]);
     expect(selectedFiles(explicit)).not.toContain(indirect);
   });
 
   it("retains protected configuration consumers while bounding ordinary cross-area consumers", () => {
-    const cwd = argvTempDirs.make("changed-bounded-owner-contracts-");
     const source = "src/config/mutate.ts";
     const sibling = "src/config/mutate.test.ts";
     const contract = "src/config/owner-contract.test.ts";
@@ -729,7 +492,7 @@ describe("CI changed Node test plan", () => {
     const protectedConsumer = "src/state/local-onboarding-state.test.ts";
     expect(PR_PROTECTED_RUNTIME_TEST_FILES).toContain(protectedConsumer);
     expect(PR_PROTECTED_RUNTIME_TEST_FILES).not.toContain(unrelated);
-    for (const [file, content] of Object.entries({
+    const cwd = createSourceFixture("changed-bounded-owner-contracts-", {
       [source]: "export const value = 1;\n",
       [sibling]: "export {};\n",
       "src/config/config.ts": 'export { value } from "./mutate.js";\n',
@@ -737,19 +500,13 @@ describe("CI changed Node test plan", () => {
       [directReader]: 'import "../config/mutate.js";\n',
       [unrelated]: 'import "../config/config.js";\n',
       [protectedConsumer]: 'import "../config/config.js";\n',
-    })) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), content);
-    }
+    });
     const shards = createChangedNodeTestShards([source], {
       cwd,
       includePrExemptRuntimeTests: false,
       includeReleaseOnlyRuntimeTests: false,
     });
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards).toSorted()).toEqual(
-      [sibling, contract, directReader, protectedConsumer].toSorted(),
-    );
+    expectFiles(shards, [sibling, contract, directReader, protectedConsumer]);
     expect(selectedFiles(shards)).not.toContain(unrelated);
   });
 
@@ -757,27 +514,18 @@ describe("CI changed Node test plan", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";
     const unowned = "src/test-utils/unowned.ts";
-    const createFixture = () => {
-      const cwd = argvTempDirs.make("changed-policy-scanner-");
-      for (const [file, content] of [
-        [source, "export const value = 1;\n"],
-        [consumer, 'import "../test-utils/runtime.js";\n'],
-        [unowned, "export {};\n"],
-      ] as const) {
-        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-        writeFileSync(path.join(cwd, file), content);
-      }
-      return cwd;
-    };
+    const createFixture = () =>
+      createSourceFixture("changed-policy-scanner-", {
+        [source]: "export const value = 1;\n",
+        [consumer]: 'import "../test-utils/runtime.js";\n',
+        [unowned]: "export {};\n",
+      });
     const cwd = createFixture();
     materializeGatewayCallsitesFixture(cwd);
     mkdirSync(path.dirname(path.join(cwd, sourcePolicyTest)), { recursive: true });
     writeFileSync(path.join(cwd, sourcePolicyTest), "export {};\n");
     const shards = createChangedNodeTestShards([source], { cwd });
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards).toSorted()).toEqual(
-      [consumer, gatewayCallsitesGuard, sourcePolicyTest].toSorted(),
-    );
+    expectFiles(shards, [consumer, gatewayCallsitesGuard, sourcePolicyTest]);
     for (const paths of [[unowned], [source, unowned]]) {
       expect(selectedFiles(createChangedNodeTestShards(paths, { cwd })).toSorted()).toEqual(
         [
@@ -811,58 +559,25 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
-  it("selects erased core sources through their concrete owner tests", () => {
+  it("keeps erased-source owner selection independent of history", () => {
     const fixture = createErasedCoreSourceFixture();
-    const reasons: string[] = [];
-    const options = {
-      ...fixture,
-      dedicatedCoreTypeChecks: true,
-      onFallback: (reason: string) => reasons.push(reason),
-    };
-    for (const source of ["src/example/entry.ts", "src/example/new-entry.ts"]) {
-      const shards = createChangedNodeTestShards([source], options);
-      expect(shards, source).not.toBeNull();
-      expect(selectedFiles(shards).toSorted(), source).toEqual(
-        [
-          "src/example/entry-sibling.test.ts",
-          "src/example/import-consumer.test.ts",
-          "src/example/runtime-consumer.test.ts",
-          "src/example/source-reader.test.ts",
-          gatewayCallsitesGuard,
-        ].toSorted(),
-      );
-    }
-    const shards = createChangedNodeTestShards(
-      [
-        "src/example/entry.ts",
-        "src/test-utils/entry.ts",
-        "src/example/entry-sibling.ts",
-        "src/example/entry-imported.ts",
-        "src/example/entry-read.ts",
-        "src/example/runtime.ts",
-      ],
-      options,
-    );
-    expect(shards, reasons.join("\n")).not.toBeNull();
-    expect(selectedFiles(shards).toSorted()).toEqual(
-      [
-        "src/example/entry-sibling.test.ts",
-        "src/example/import-consumer.test.ts",
-        "src/example/runtime-consumer.test.ts",
-        "src/example/source-reader.test.ts",
-        gatewayCallsitesGuard,
-        sourcePolicyTest,
-      ].toSorted(),
-    );
-  });
-
-  it("keeps erased-source owner selection independent of history and dedicated type gates", () => {
-    const fixture = createErasedCoreSourceFixture();
-    const options = { ...fixture, dedicatedCoreTypeChecks: true };
+    const options = fixture;
     for (const [label, paths, overrides] of [
-      ["missing gate", ["src/example/entry.ts"], { dedicatedCoreTypeChecks: undefined }],
-      ["disabled gate", ["src/example/entry.ts"], { dedicatedCoreTypeChecks: false }],
-      ["policy-only owner", ["src/test-utils/entry.ts"], { dedicatedCoreTypeChecks: false }],
+      ["ordinary source", ["src/example/entry.ts"], {}],
+      ["new source", ["src/example/new-entry.ts"], {}],
+      [
+        "mixed sources",
+        [
+          "src/example/entry.ts",
+          "src/test-utils/entry.ts",
+          "src/example/entry-sibling.ts",
+          "src/example/entry-imported.ts",
+          "src/example/entry-read.ts",
+          "src/example/runtime.ts",
+        ],
+        {},
+      ],
+      ["policy-only owner", ["src/test-utils/entry.ts"], {}],
       ["missing base", ["src/example/entry.ts"], { baseRef: undefined }],
       ["moving base", ["src/example/entry.ts"], { baseRef: "HEAD" }],
       ["missing history", ["src/example/entry.ts"], { baseRef: "a".repeat(40) }],
@@ -876,71 +591,20 @@ describe("CI changed Node test plan", () => {
       ["unknown companion", ["src/example/entry.ts", "src/example/unknown.ts"], {}],
     ] as const) {
       const shards = createChangedNodeTestShards([...paths], { ...options, ...overrides });
-      expect(shards, label).not.toBeNull();
-      expect(selectedFiles(shards).toSorted(), label).toEqual(
-        (paths.some((file) => file === "src/test-utils/entry.ts")
+      expectFiles(
+        shards,
+        label === "policy-only owner"
           ? [gatewayCallsitesGuard, sourcePolicyTest]
           : [
+              ...(label === "mixed sources" ? [sourcePolicyTest] : []),
               "src/example/entry-sibling.test.ts",
               "src/example/import-consumer.test.ts",
               "src/example/runtime-consumer.test.ts",
               "src/example/source-reader.test.ts",
               gatewayCallsitesGuard,
-            ]
-        ).toSorted(),
+            ],
+        label,
       );
-    }
-  });
-
-  it("keeps actionlint consumers bounded to direct importers and changed owner areas", () => {
-    for (const withConfigConsumer of [false, true]) {
-      const cwd = argvTempDirs.make("changed-actionlint-consumers-");
-      const files = {
-        ".github/actionlint.yaml": "self-hosted-runner: {}\n",
-        "src/example/runtime.ts": "export const value = 1;\n",
-        "src/example/runtime-consumer.test.ts": 'import "./runtime.js";\n',
-        "src/example/unknown.ts": "export const value = 1;\n",
-        ...(withConfigConsumer
-          ? {
-              "scripts/actionlint-reader.mts":
-                'export const config = new URL("../.github/actionlint.yaml", import.meta.url);\n',
-              "src/example/actionlint-reader.test.ts":
-                'import "../../scripts/actionlint-reader.mts";\n',
-            }
-          : {}),
-      };
-      for (const [file, source] of Object.entries(files)) {
-        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-        writeFileSync(path.join(cwd, file), source);
-      }
-      materializeGatewayCallsitesFixture(cwd);
-      const reasons: string[] = [];
-      const shards = createChangedNodeTestShards(
-        [".github/actionlint.yaml", "src/example/runtime.ts"],
-        { cwd, onFallback: (reason) => reasons.push(reason) },
-      );
-      expect(shards, reasons.join("\n")).not.toBeNull();
-      const runtimeOwners = ["src/example/runtime-consumer.test.ts", gatewayCallsitesGuard];
-      const configReader = "src/example/actionlint-reader.test.ts";
-      expect(selectedFiles(shards).toSorted()).toEqual(
-        [...runtimeOwners, ...(withConfigConsumer ? [configReader] : [])].toSorted(),
-      );
-      expect(selectedFiles(shards).includes(configReader)).toBe(withConfigConsumer);
-      const unknown = createChangedNodeTestShards(
-        [".github/actionlint.yaml", "src/example/unknown.ts"],
-        { cwd },
-      );
-      expect(unknown).not.toBeNull();
-      expect(selectedFiles(unknown).toSorted()).toEqual(
-        [...runtimeOwners, ...(withConfigConsumer ? [configReader] : [])].toSorted(),
-      );
-      if (withConfigConsumer) {
-        const directHelper = createChangedNodeTestShards(["scripts/actionlint-reader.mts"], {
-          cwd,
-        });
-        expect(directHelper).not.toBeNull();
-        expect(selectedFiles(directHelper)).toEqual([configReader]);
-      }
     }
   });
 
@@ -951,8 +615,7 @@ describe("CI changed Node test plan", () => {
     const runtimeConsumer = "src/example/runtime-consumer.test.ts";
     const sourceReader = "src/example/native-source-reader.test.ts";
     for (const withSourceReader of [false, true]) {
-      const cwd = argvTempDirs.make("changed-native-consumers-");
-      const files = {
+      const cwd = createSourceFixture("changed-native-consumers-", {
         [swift]: "struct Example {}\n",
         [android]: "class Example\n",
         [runtime]: "export const value = 1;\n",
@@ -963,17 +626,11 @@ describe("CI changed Node test plan", () => {
               [sourceReader]: `import { readFileSync } from "node:fs";\nreadFileSync(new URL("../../${swift}", import.meta.url), "utf8");\n`,
             }
           : {}),
-      };
-      for (const [file, source] of Object.entries(files)) {
-        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-        writeFileSync(path.join(cwd, file), source);
-      }
+      });
       materializeGatewayCallsitesFixture(cwd);
-      const dedicatedNativeChecks = { macos: true, ios: true, android: true };
       const reasons: string[] = [];
       const options = {
         cwd,
-        dedicatedNativeChecks,
         onFallback: (reason: string) => reasons.push(reason),
       };
       const expected = [
@@ -982,9 +639,7 @@ describe("CI changed Node test plan", () => {
         ...(withSourceReader ? [sourceReader] : []),
       ].toSorted();
       const shards = createChangedNodeTestShards([swift, android, runtime], options);
-      expect(shards, reasons.join("\n")).not.toBeNull();
-      expect(selectedFiles(shards).toSorted()).toEqual(expected);
-      expect(createChangedNodeTestShards([swift, android, runtime], { cwd })).toEqual(shards);
+      expectFiles(shards, expected, reasons.join("\n"));
       expect(
         createChangedNodeTestShards(
           [swift, android, runtime, "apps/unknown/Example.swift"],
@@ -993,76 +648,39 @@ describe("CI changed Node test plan", () => {
       ).toEqual(shards);
       if (withSourceReader) {
         const readerOwned = createChangedNodeTestShards([swift, runtime], { cwd });
-        expect(readerOwned).not.toBeNull();
-        expect(selectedFiles(readerOwned).toSorted()).toEqual(expected);
-      } else {
-        for (const missing of ["macos", "ios", "android"] as const) {
-          expect(
-            createChangedNodeTestShards([swift, android, runtime], {
-              cwd,
-              dedicatedNativeChecks: { ...dedicatedNativeChecks, [missing]: false },
-            }),
-            missing,
-          ).toEqual(shards);
-        }
+        expectFiles(readerOwned, expected);
       }
     }
   });
 
-  it("routes the native source inventory to both readers in a mixed Android PR", () => {
-    const changedPaths = [
-      "apps/.i18n/native-source.json",
-      "apps/android/README.md",
-      "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
-      "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatRealtimeTalk.kt",
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-      "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
-      "apps/android/app/src/test/java/ai/openclaw/app/ui/chat/ChatComposerLayoutTest.kt",
-      "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt",
-    ];
-    const onFallback = vi.fn();
-    const dedicatedNativeChecks = { macos: false, ios: false, android: true };
-    const shards = createChangedNodeTestShards(changedPaths, {
-      dedicatedNativeChecks,
-      includeReleaseOnlyToolingShards: false,
-      onFallback,
-    });
-    expect(onFallback).not.toHaveBeenCalled();
-    expect(shards).not.toBeNull();
-    const files = selectedFiles(shards);
-    expect(files.filter((file) => file === "test/scripts/android-app-i18n.test.ts")).toHaveLength(
-      1,
-    );
-    expect(files.filter((file) => file === "test/scripts/apple-app-i18n.test.ts")).toHaveLength(1);
-    expect(files).toHaveLength(2);
-    expect(
-      createChangedNodeTestShards([...changedPaths, "apps/.i18n/unowned.json"], {
-        dedicatedNativeChecks,
-      }),
-    ).toEqual(shards);
-    expect(
-      createChangedNodeTestShards(changedPaths, {
-        dedicatedNativeChecks: { ...dedicatedNativeChecks, android: false },
-      }),
-    ).toEqual(shards);
-  });
-
   it.each([
+    ...[
+      "src/secrets/runtime-auth-store-admission.ts",
+      "src/agents/prepared-model-runtime.configured.ts",
+    ].map((changedPath) => ({
+      changedPath,
+      expected: ["src/gateway/server.agents.config-readiness.test.ts"],
+    })),
+    {
+      changedPath: "src/gateway/config-reload.ts",
+      expected: [
+        "src/gateway/server.config-patch.test.ts",
+        "src/gateway/server.agents.config-readiness.test.ts",
+      ],
+    },
+    ...["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"].map((changedPath) => ({
+      changedPath,
+      expected: [
+        "src/gateway/server.agent-execution-shutdown.test.ts",
+        "src/gateway/server.agent-late-admission.test.ts",
+      ],
+    })),
     {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
     },
     {
       changedPath: "scripts/lib/ci-proof-test-inventory.mts",
-      expected: ["test/vitest-pr-exempt-retention.test.ts"],
-    },
-    {
-      changedPath: "scripts/lib/test-selector-source-facts.mts",
-      expected: ["test/vitest-pr-exempt-retention.test.ts"],
-    },
-    {
-      changedPath: "scripts/lib/test-source-term-matcher.mts",
       expected: ["test/vitest-pr-exempt-retention.test.ts"],
     },
     {
@@ -1099,7 +717,8 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          includeReleaseOnlyToolingShards: false,
+          // Gateway owner watches must survive the default aggressive PR selection.
+          selectionMode: changedPath.startsWith("src/gateway/") ? "aggressive" : "full",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
@@ -1123,20 +742,15 @@ describe("CI changed Node test plan", () => {
   );
 
   it("keeps the Gateway callsite scanner beside extension source importers", () => {
-    const cwd = argvTempDirs.make("changed-extension-scanner-");
     const source = "extensions/example/src/runtime.ts";
     const importer = "src/infra/extension-consumer.test.ts";
-    for (const [file, content] of [
-      [source, "export {};\n"],
-      [importer, `import "../../${source}";\n`],
-      [gatewayCallsitesGuard, "export {};\n"],
-    ] as const) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), content);
-    }
+    const cwd = createSourceFixture("changed-extension-scanner-", {
+      [source]: "export {};\n",
+      [importer]: `import "../../${source}";\n`,
+      [gatewayCallsitesGuard]: "export {};\n",
+    });
     const shards = createChangedNodeTestShards([source], { cwd });
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards).toSorted()).toEqual([gatewayCallsitesGuard, importer].toSorted());
+    expectFiles(shards, [gatewayCallsitesGuard, importer]);
   });
 
   it.each([
@@ -1155,22 +769,19 @@ describe("CI changed Node test plan", () => {
       },
     },
   ])("selects consumers of $specifier without a package-wide fallback", (fixture) => {
-    const cwd = argvTempDirs.make("changed-alias-consumers-");
     const target = "src/infra/alias-consumer.test.ts";
-    for (const [file, source] of [
-      [fixture.source, "export const value = 1;\n"],
-      [fixture.manifest, JSON.stringify(fixture.document)],
-      [target, `import "${fixture.specifier}";\n`],
-      ["src/infra/unrelated.test.ts", "export {};\n"],
-    ] as const) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), source);
-    }
+    const cwd = argvTempDirs.make("changed-alias-consumers-");
+    writeFiles(cwd, {
+      [fixture.source]: "export const value = 1;\n",
+      [fixture.manifest]: JSON.stringify(fixture.document),
+      [target]: `import "${fixture.specifier}";\n`,
+      "src/infra/unrelated.test.ts": "export {};\n",
+    });
     materializeGatewayCallsitesFixture(cwd);
     const shards = createChangedNodeTestShards([fixture.source], { cwd });
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards).toSorted()).toEqual(
-      (fixture.source.startsWith("src/") ? [target, gatewayCallsitesGuard] : [target]).toSorted(),
+    expectFiles(
+      shards,
+      fixture.source.startsWith("src/") ? [target, gatewayCallsitesGuard] : [target],
     );
   });
 
@@ -1188,58 +799,73 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(mixed)).not.toContain(deleted);
   });
 
-  it("keeps targeting when a diff only deletes test files alongside live source", () => {
-    const shards = createChangedNodeTestShards([
-      "src/agents/deleted-obsolete.test.ts",
-      "src/agents/live-provider-owner.ts",
+  it("runs only the boundary shard when a diff deletes a test", () => {
+    const cwd = argvTempDirs.make("openclaw-ci-deleted-test-");
+    expect(createChangedNodeTestShards(["src/gone.test.ts"], { cwd })).toEqual([
+      {
+        checkName: "checks-node-changed-boundary",
+        configs: ["test/vitest/vitest.boundary.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-boundary",
+      },
     ]);
-    expect(shards).not.toBeNull();
-    const targets = selectedFiles(shards);
-    expect(targets).toContain("src/agents/live-model-filter.test.ts");
   });
 
-  it.each(["src/gone.test.ts", "src/plugin-sdk/gone.test.ts"])(
-    "runs only the boundary shard when a diff deletes %s",
-    (target) => {
-      const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
-      try {
-        expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
-        expect(createChangedNodeTestShards([target], { cwd })).toEqual([
-          {
-            checkName: "checks-node-changed-boundary",
-            configs: ["test/vitest/vitest.boundary.config.ts"],
-            requiresDist: false,
-            runner: "blacksmith-8vcpu-ubuntu-2404",
-            shardName: "changed-boundary",
-          },
-        ]);
-      } finally {
-        rmSync(cwd, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it("selects UI source consumers through exact executable owner plans", () => {
-    const shards = createChangedNodeTestShards([
-      "ui/src/app-routes.ts",
-      "ui/src/app-navigation.ts",
-    ]);
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards)).toEqual(
-      expect.arrayContaining(["ui/src/app-routes.test.ts", "ui/src/app-navigation.test.ts"]),
+  it("retains leaf-config owners and their execution metadata", () => {
+    const config = "test/vitest/vitest.commands.config.ts";
+    const full = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+    });
+    const owners = full.flatMap((job) =>
+      job.groups.filter((group) => group.configs.includes(config)),
     );
-    const uiFiles = selectedFiles(shards).filter((file) => file.startsWith("ui/"));
-    const uiPlans = buildVitestRunPlans(uiFiles);
-    expect(uiPlans.length).toBeGreaterThan(0);
+    expect(owners.length).toBeGreaterThan(1);
+    const expectCanonicalCommands = (shards: ReturnType<typeof createChangedNodeTestShards>) => {
+      expect(shards).not.toBeNull();
+      const groups = fallbackGroups(shards ?? []);
+      const selectedOwners = groups.filter((group) => group.configs.includes(config));
+      expect(selectedOwners.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        owners.flatMap((group) => group.includePatterns ?? []).toSorted(),
+      );
+      expect(selectedOwners.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+      for (const owner of owners) {
+        const fullJob = expectDefined(
+          full.find((job) => job.groups.includes(owner)),
+          "canonical commands job",
+        );
+        const selectedJob = expectDefined(
+          shards?.find((job) => job.groups?.some((group) => group.shard_name === owner.shard_name)),
+          "selected commands job",
+        );
+        expect(selectedJob.runner).toBe(fullJob.runner);
+        const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
+        expect(selectedJob.env).toEqual(
+          singleton ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : fullJob.env,
+        );
+        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
+        expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);
+        expect(selectedJob.timeoutMinutes).toBe(fullJob.timeoutMinutes);
+      }
+      const configs = groups.flatMap((group) => group.configs);
+      expect(configs).not.toContain("test/vitest/vitest.cron.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.ui.config.ts");
+    };
+    const shards = createChangedNodeTestShards([config]);
+    expectCanonicalCommands(shards);
     expect(
-      uiPlans.flatMap((plan) => plan.includePatterns ?? plan.forwardedArgs).toSorted(),
-    ).toEqual(uiFiles.toSorted());
-    expect(
-      uiPlans.every(
-        (plan) =>
-          plan.config === "ui/vitest.config.ts" || plan.config.startsWith("test/vitest/vitest.ui"),
-      ),
-    ).toBe(true);
-    expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-ci.test.ts");
+      createChangedNodeTestShards([config], {
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      }),
+    ).toEqual(shards);
+    expect(selectedFiles(shards)).toEqual(
+      expect.arrayContaining([
+        "test/vitest-projects-config.test.ts",
+        "test/scripts/ci-node-test-plan.commands.test.ts",
+      ]),
+    );
   });
 });

@@ -41,22 +41,37 @@ describe("nextcloud-talk normalizeCompatibilityConfig streaming aliases", () => 
     expect(home?.streaming).toEqual({ chunkMode: "newline", block: { enabled: true } });
     expect(home?.blockStreaming).toBeUndefined();
   });
-
-  it("still runs the legacy private-network migration and stays idempotent", () => {
-    const first = normalizeCompatibilityConfig({
-      cfg: talkConfig({ allowPrivateNetwork: true, blockStreaming: false }),
-    });
-    const talk = first.config.channels?.["nextcloud-talk"] as unknown as Record<string, unknown>;
-    expect(talk.allowPrivateNetwork).toBeUndefined();
-    expect(talk.network).toEqual({ dangerouslyAllowPrivateNetwork: true });
-    expect(talk.streaming).toEqual({ block: { enabled: false } });
-
-    const second = normalizeCompatibilityConfig({ cfg: first.config });
-    expect(second.changes).toEqual([]);
-  });
 });
 
 describe("Nextcloud Talk webhook port migration", () => {
+  it.each([
+    { name: "absent", cfg: {}, accounts: [] },
+    {
+      name: "unconfigured",
+      cfg: talkConfig({ botSecret: "test-bot-secret" }),
+      accounts: [],
+    },
+    {
+      name: "disabled",
+      cfg: talkConfig({
+        enabled: false,
+        baseUrl: "https://cloud.example.com",
+        botSecret: "test-bot-secret",
+      }),
+      accounts: [],
+    },
+    {
+      name: "configured",
+      cfg: talkConfig({
+        baseUrl: "https://cloud.example.com",
+        botSecret: "test-bot-secret",
+      }),
+      accounts: ["default"],
+    },
+  ])("preserves historical listeners only for $name channel state", ({ cfg, accounts }) => {
+    expect(normalizeCompatibilityConfig({ cfg }).historicalWebhookAccountIds).toEqual(accounts);
+  });
+
   it("preserves explicit listeners and host-only settings with the historical port", () => {
     const cfg: CoreConfig = {
       channels: {

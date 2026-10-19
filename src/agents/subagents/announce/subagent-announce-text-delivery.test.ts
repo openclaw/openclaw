@@ -9,7 +9,6 @@ import {
 } from "../../../test-utils/channel-plugins.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
-import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 
 const content = "Long child result. ".repeat(180).trim();
 
@@ -51,57 +50,41 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
       },
     ]),
   );
-  const steer = vi.fn(async () => ({ status: "steered" as const }));
-  const deliver = () =>
-    runSubagentAnnounceDispatch({
-      expectsCompletionMessage: true,
+  const deliver = async () => {
+    const result = await deliverCompletionDirect({
+      cfg: {},
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      directIdempotencyKey: "chunked-text-completion",
+      deliveryTarget: { deliver: true, channel: "discord", to: "dm:U123" },
+      internalEvents: taskCompletionEvents({ result: content }),
+      contentKind: "completed_result",
       signal: controller.signal,
-      steer,
-      direct: async () => {
-        const result = await deliverCompletionDirect({
-          cfg: {},
-          requesterSessionKey: "agent:main:discord:dm:U123",
-          directIdempotencyKey: "chunked-text-completion",
-          deliveryTarget: { deliver: true, channel: "discord", to: "dm:U123" },
-          internalEvents: taskCompletionEvents({ result: content }),
-          contentKind: "completed_result",
-          signal: controller.signal,
-          onDeliveryResult,
-        });
-        if (!result) {
-          throw new Error("Expected a direct text completion attempt");
-        }
-        return result;
-      },
+      onDeliveryResult,
     });
-  return { deliver, received, sendText, onDeliveryResult, steer };
+    if (!result) {
+      throw new Error("Expected a direct text completion attempt");
+    }
+    return result;
+  };
+  return { deliver, received, sendText, onDeliveryResult };
 }
 
 describe("direct completion text delivery", () => {
-  it.each(["rejected", "aborted", "sent"] as const)(
+  it.each(["rejected", "aborted"] as const)(
     "settles a chunked result when its second chunk is %s",
     async (outcome) => {
       const fixture = setup(outcome);
       const result = await fixture.deliver();
 
       expect(fixture.sendText).toHaveBeenCalledTimes(2);
-      expect(fixture.steer).not.toHaveBeenCalled();
-      if (outcome === "sent") {
-        expect(fixture.received.join(" ")).toBe(content);
-        expect(result).toMatchObject({ delivered: true, path: "direct" });
-        expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ delivered: true }),
-        );
-      } else {
-        expect(fixture.received).toHaveLength(1);
-        expect(result).toMatchObject({
-          delivered: false,
-          path: "direct",
-          disposition: "permanent_failure",
-        });
-        expect(result.error).toContain(`second chunk ${outcome}`);
-        expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
-      }
+      expect(fixture.received).toHaveLength(1);
+      expect(result).toMatchObject({
+        delivered: false,
+        path: "direct",
+        disposition: "permanent_failure",
+      });
+      expect(result.error).toContain(`second chunk ${outcome}`);
+      expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
     },
   );
 
@@ -121,6 +104,7 @@ describe("direct completion text delivery", () => {
           throw new Error("Delivery settled without entering its mirror");
         }),
       ]);
+      expect(fixture.sendText).toHaveBeenCalledTimes(2);
       expect(fixture.received.join(" ")).toBe(content);
       expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
@@ -129,7 +113,7 @@ describe("direct completion text delivery", () => {
       releaseMirror.resolve();
       await delivery;
     }
-    await expect(delivery).resolves.toMatchObject({ delivered: true });
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
   });
 
   it.each(["mirror", "report"] as const)(
@@ -146,7 +130,6 @@ describe("direct completion text delivery", () => {
       await expect(fixture.deliver()).resolves.toMatchObject({ delivered: true, path: "direct" });
       expect(fixture.received.join(" ")).toBe(content);
       expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
-      expect(fixture.steer).not.toHaveBeenCalled();
     },
   );
 });

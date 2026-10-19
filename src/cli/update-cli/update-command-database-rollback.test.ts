@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildBackupArchivePath } from "../../commands/backup-shared.js";
@@ -16,7 +16,9 @@ import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as schemas from "../../infra/update-candidate-state.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   createUpdateRun,
@@ -31,6 +33,8 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
+import { leaveExitedWriterWalFamily } from "./update-command-database-rollback.test-support.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const { bindExecutionGuards, executionParams, mocks } =
@@ -118,6 +122,20 @@ const readiness = await import("./update-command-readiness.js");
 const { runUpdateFinalizationDoctorInFreshProcess } =
   await import("./update-command-fresh-doctor.js");
 const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
+const gatewayLockUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.gatewayLock);
+const databaseGenerationsUrl = resolveRuntimeWorkerUrl(
+  updateExecutorNativeEntrypoints.databaseGenerations,
+);
+const sourceLoader = gatewayLockUrl.pathname.endsWith(".ts")
+  ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
+     await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});`
+  : "";
+
+beforeEach(() => {
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
+});
 
 afterEach(async () => {
   if (service) {
@@ -175,6 +193,7 @@ function readDatabase(file: string) {
 
 it.each([
   "package",
+  "exited-writer",
   "git",
   "git-edited",
   "verification",
@@ -196,9 +215,12 @@ it.each([
       scenario === "post-migration-write" ||
       scenario === "schema-neutral-write";
     const preservesMigrated = outsideWrite && scenario !== "git-edited";
+    const candidateSchemas =
+      scenario === "schema-neutral-write" ? { state: 15, agent: 21 } : { state: 18, agent: 23 };
     const migratedVersions = scenario === "schema-neutral-write" ? [15, 21] : [18, 23];
     const initialFailure =
       scenario === "package" ||
+      scenario === "exited-writer" ||
       gitInstall ||
       scenario === "verification" ||
       scenario === "serving" ||
@@ -267,9 +289,8 @@ it.each([
     const files = ${JSON.stringify([shared, agent])};
     const manifest=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
     const acquireCustody = async (role, port) => {
-      process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
-      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
-      const {acquireGatewayLock}=await import(${JSON.stringify(new URL("../../infra/gateway-lock.ts", import.meta.url).href)});
+      ${sourceLoader}
+      const {acquireGatewayLock}=await import(${JSON.stringify(gatewayLockUrl.href)});
       const owner=await acquireGatewayLock({env:process.env,role,port,allowInTests:true,timeoutMs:0});
       assert(owner);
       return owner;
@@ -286,13 +307,12 @@ it.each([
       const input=JSON.parse(fs.readFileSync(0,'utf8'));
       assert(input.executor && input.runId && input.root);
       assert.equal(fs.realpathSync(input.root),fs.realpathSync(new URL('../',import.meta.url)));
-      process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
-      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
-      const {readUpdateDatabaseGenerations}=await import(${JSON.stringify(new URL("../../infra/update-database-generations.ts", import.meta.url).href)});
+      ${sourceLoader}
+      const {readUpdatePhysicalDatabaseGenerations}=await import(${JSON.stringify(databaseGenerationsUrl.href)});
       const custody=await acquireCustody('sqlite-maintenance');
       try {
         const expected=input.databaseGenerations;
-        const fromGenerations=expected && readUpdateDatabaseGenerations(Object.keys(expected));
+        const fromGenerations=expected && await readUpdatePhysicalDatabaseGenerations(Object.keys(expected));
         const unchanged=expected && isDeepStrictEqual(fromGenerations,expected);
         let result;
         if (${!initialFailure} && !fs.existsSync(${JSON.stringify(initialDoctor)})) {
@@ -313,7 +333,7 @@ it.each([
           result=${JSON.stringify(scenario === "verification" ? { status: "ok" } : { status: "error", maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } })};
           process.exitCode=${scenario === "verification" ? 0 : 1};
         }
-        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:readUpdateDatabaseGenerations(Object.keys(expected))};
+        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:await readUpdatePhysicalDatabaseGenerations(Object.keys(expected))};
         fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,JSON.stringify(result));
       } finally {
         await custody.release();
@@ -321,8 +341,8 @@ it.each([
     } else {
       const {version}=manifest;
       assert(version==='1.0.0'||${preservesMigrated},'only the compatible candidate may serve preserved writes');
-      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?[15,21]:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
       const custody=await acquireCustody('gateway',Number(process.argv[3]));
+      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?[15,21]:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
       const server=http.createServer((request,response)=>{
         if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
         response.setHeader('content-type','application/json');response.end(JSON.stringify({version,databases:files.map(read)}));
@@ -335,7 +355,7 @@ it.each([
   `;
     for (const [root, version, versions] of [
       [packageRoot, "1.0.0", { state: 15, agent: 21 }],
-      [swapFixture.params.stage.packageRoot, "2.0.0", { state: 18, agent: 23 }],
+      [swapFixture.params.stage.packageRoot, "2.0.0", candidateSchemas],
     ] as const) {
       await fs.writeFile(
         path.join(root, "package.json"),
@@ -488,7 +508,7 @@ it.each([
       steps: [],
       durationMs: 0,
       logTail: [],
-      candidateSchemaVersions: { state: 18, agent: 23 },
+      candidateSchemaVersions: candidateSchemas,
       doctorConfigWrites: true,
     });
     vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(async () => {
@@ -534,6 +554,9 @@ it.each([
           ...swapFixture.params,
           beforeActivate: params.beforeActivate,
           onTransaction: async (transaction) => {
+            if (scenario === "exited-writer") {
+              await leaveExitedWriterWalFamily(agent, path.join(base, "exited-writer"));
+            }
             await params.onTransaction?.(transaction);
             retainedSnapshotDirectory = `${transaction.backupRoot}.databases`;
             if (scenario === "intervening") {
@@ -602,7 +625,7 @@ it.each([
           root: packageRoot,
           opts,
           databaseBackup,
-          onDatabaseWriteStep: (step) => executionResult?.steps.push(step),
+          onDoctorStep: (step) => executionResult?.steps.push(step),
           yes: true,
           json: true,
           nodeRunner: process.execPath,
@@ -692,7 +715,7 @@ it.each([
           opts,
           startedAt: Date.now(),
           invocationCwd: base,
-          packageTargetSchemaVersions: { state: 18, agent: 23 },
+          packageTargetSchemaVersions: candidateSchemas,
           shouldRestart: scenario !== "serving",
         };
         const execution = await executeMutableUpdate(await bindExecutionGuards(params));
@@ -702,6 +725,12 @@ it.each([
         if (gitInstall) {
           assert(databaseBackup, "Git update must capture pre-migration databases");
           retainedSnapshotDirectory = databaseBackup.directory;
+        }
+        if (scenario === "exited-writer") {
+          // Capture under maintenance custody must not rebuild the source WAL index.
+          const captured = execution.result.steps.find((step) => step.name === "database snapshot");
+          expect(captured?.warnings ?? []).toEqual([]);
+          expect(databaseBackup?.sourceGenerations[agent]).toEqual(expect.any(String));
         }
         if (restores && initialFailure) {
           expect(databaseBackup?.migration).toMatchObject({
@@ -730,6 +759,7 @@ it.each([
           outsideWrite
             ? "state-migrated-no-rollback"
             : scenario === "package" ||
+                scenario === "exited-writer" ||
                 gitInstall ||
                 scenario === "serving" ||
                 scenario === "config-refused"
@@ -794,8 +824,16 @@ it.each([
             expect(readDatabase(snapshot)).toEqual(file === shared ? before.shared : before.agent);
           }
           const preserved = { shared: readDatabase(shared), agent: readDatabase(agent) };
+          if (preservesMigrated) {
+            expect(execution.result.recovery).toMatchObject({
+              serviceRestartSafe: false,
+              dataAtRisk: "state-migrated-no-rollback",
+            });
+          }
           await expect(finalize()).rejects.toMatchObject({
-            result: { reason: "state-migrated-no-rollback" },
+            result: {
+              reason: preservesMigrated ? "post-update-failed" : "state-migrated-no-rollback",
+            },
           });
           expect({ shared: readDatabase(shared), agent: readDatabase(agent) }).toEqual(preserved);
           const active = JSON.parse(
@@ -823,11 +861,17 @@ it.each([
           if (preservesMigrated) {
             expect(record).toMatchObject({
               status: "failed",
-              reason: "state-migrated-no-rollback",
-              verification: { serviceRunning: true, readyz: true, runningVersion: "2.0.0" },
+              reason: "post-update-failed",
+              verification: {
+                serviceRunning: true,
+                readyz: true,
+                runningVersion: "2.0.0",
+                recovery: { serviceRestartSafe: true, service: "healthy", version: "2.0.0" },
+              },
             });
+            expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
             expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
-              "running on the preserved migrated state",
+              "running on the retained state",
             );
           }
           return;

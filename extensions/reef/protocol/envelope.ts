@@ -22,7 +22,6 @@ export interface ReplayStore {
   /** Renews an in-flight claim while slow guard or review work is active. */
   refresh?(peer: string, id: string): Promise<void>;
   complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
-  consume(peer: string, id: string): Promise<void>;
   release(peer: string, id: string): Promise<void>;
   completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
 }
@@ -144,12 +143,8 @@ const HKDF_INFO = utf8("reef-v1");
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
 export function seal(options: SealOptions): Envelope {
-  validateEnvelopeMetadata(
-    options.id,
-    options.from,
-    options.to,
-    options.ts ?? Math.floor(Date.now() / 1000),
-  );
+  const ts = options.ts ?? Math.floor(Date.now() / 1000);
+  validateEnvelopeMetadata(options.id, options.from, options.to, ts);
   validateMessageBody(options.body);
   const plaintext = canonicalBytes(options.body);
   if (plaintext.length > REEF_MAX_PLAINTEXT_BYTES) {
@@ -170,7 +165,7 @@ export function seal(options: SealOptions): Envelope {
     id: options.id,
     from: options.from,
     to: options.to,
-    ts: options.ts ?? Math.floor(Date.now() / 1000),
+    ts,
     epk: base64(ephemeral.publicKey),
     n: base64(nonce),
     ct: base64(gcm(key, nonce).encrypt(plaintext)),
@@ -179,21 +174,6 @@ export function seal(options: SealOptions): Envelope {
     ...unsigned,
     sig: base64(ed25519.sign(canonicalBytes(unsigned), decodeKey(options.senderSigningSecretKey))),
   };
-}
-
-export async function open(options: OpenOptions): Promise<MessageBody> {
-  const result = await openClaimed(options);
-  if (result.claim === "duplicate") {
-    throw new ReplayedError("duplicate envelope");
-  }
-  const peer = parseHandleEpoch(options.envelope.from).handle;
-  try {
-    await options.replayStore.consume(peer, options.envelope.id);
-    return result.body;
-  } catch (error) {
-    await options.replayStore.release(peer, options.envelope.id);
-    throw error;
-  }
 }
 
 export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResult> {
@@ -209,7 +189,9 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
       canonicalBytes(unsigned),
       decodeKey(options.senderSigningPublicKey),
     );
-  } catch {}
+  } catch {
+    // Malformed signature/key material follows the same BadSignatureError path as a mismatch.
+  }
   if (!validSignature) {
     throw new BadSignatureError();
   }

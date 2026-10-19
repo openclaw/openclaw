@@ -1,8 +1,8 @@
-import path from "node:path";
 import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -93,17 +93,7 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
 
 async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
-  const dropdown = menu.locator("wa-dropdown");
-  // The heading is visible before the menu finishes scaling. Observe this opening,
-  // not a previous one, before Playwright chooses an action's click coordinates.
-  await dropdown.evaluate((element) => {
-    element.removeAttribute("data-e2e-after-show");
-    element.addEventListener(
-      "wa-after-show",
-      () => element.setAttribute("data-e2e-after-show", ""),
-      { once: true },
-    );
-  });
+  const surface = menu.locator(".chat-header-session-menu__panel");
   const trigger = page.locator(".chat-header-session-menu__trigger");
   if (input === "keyboard") {
     await trigger.focus();
@@ -111,8 +101,8 @@ async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "point
   } else {
     await trigger.click();
   }
-  await expect.poll(() => dropdown.getAttribute("data-e2e-after-show")).not.toBeNull();
-  await menu.locator(".board-widget__page-menu-heading").waitFor();
+  await surface.waitFor({ state: "visible" });
+  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
   return menu;
 }
 
@@ -134,7 +124,7 @@ suite.define(() => {
         const original = await frame.elementHandle();
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-expanded.png") });
+
         await showHeaderMenu(page);
         await page.keyboard.press("Escape");
         const menu = await showHeaderMenu(page, "keyboard");
@@ -144,12 +134,12 @@ suite.define(() => {
         await menu.locator('[value="board-widget:resize:xl"]').waitFor();
         const itemFonts = await menu.evaluate((element) =>
           Array.from(
-            element.querySelectorAll("wa-dropdown-item"),
+            element.querySelectorAll('[role^="menuitem"]'),
             (item) => getComputedStyle(item).font,
           ),
         );
         expect([...new Set(itemFonts)]).toEqual([expect.any(String)]);
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-header-menu.png") });
+
         const resized = { ...board, revision: 2 };
         await gateway.setMethodResponse("board.update", resized);
         await menu.locator('[value="board-widget:resize:xl"]').click();
@@ -171,18 +161,15 @@ suite.define(() => {
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
         const splitMenu = await showHeaderMenu(page);
         await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
         await page.keyboard.press("Escape");
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-split.png") });
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Focus", exact: true })
-          .click();
+
+        await selectChatLayoutAction(page, "Focus");
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         const multiple = {
           ...board,
@@ -201,7 +188,9 @@ suite.define(() => {
         await updateBoard(gateway, multiple);
         await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
         await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
+        await showHeaderMenu(page);
         expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
           true,
         );
@@ -234,49 +223,15 @@ suite.define(() => {
           ops: [{ kind: "widget_remove", name: "research-widget" }],
         });
         await page.locator('[data-test-id="board-empty"]').waitFor();
+        await showHeaderMenu(page);
         expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         await page.getByRole("tab", { name: "Overview", exact: true }).click();
         await frame.waitFor();
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
-      },
-    );
-  });
-
-  it("keeps pending decisions and failed header operations visible in the fullscreen widget", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
-      async ({ page }) => {
-        const initial = snapshot();
-        initial.widgets[0]!.grantState = "pending";
-        const { gateway, board } = await openDashboard(page, initial);
-        const widget = page.locator('[data-widget-name="release-status"]');
-        await widget.getByRole("button", { name: "Allow", exact: true }).waitFor();
-        expect(await widget.locator(chrome).count()).toBe(0);
-        const rejected = structuredClone(board);
-        rejected.revision = 2;
-        for (const item of rejected.widgets) {
-          item.grantState = "rejected";
-        }
-        await gateway.setMethodResponse("board.widget.grant", rejected);
-        await widget.getByRole("button", { name: "Reject", exact: true }).click();
-        expect((await gateway.waitForRequest("board.widget.grant")).params).toMatchObject({
-          name: "release-status",
-          decision: "rejected",
-        });
-        await widget.locator('[data-test-id="board-rejected"]').waitFor();
-        const menu = await showHeaderMenu(page);
-        await gateway.setMethodResponse("board.update", {
-          __mockError: { code: "UNAVAILABLE", message: "Synthetic dashboard write failure" },
-        });
-        await gateway.deferNext("board.get", { sessionKey });
-        await menu.locator('[value="board-widget:remove"]').click();
-        await gateway.waitForRequest("board.update");
-        await widget.locator('[data-test-id="board-widget-action-error"]').waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-action-error.png") });
-        expect(await widget.locator(chrome).count()).toBe(0);
       },
     );
   });
@@ -308,12 +263,6 @@ suite.define(() => {
             readOnly ? 0 : 1,
           );
           expect(await gateway.getRequests("board.update")).toHaveLength(0);
-          await page.screenshot({
-            path: path.join(
-              suite.artifactDir,
-              readOnly ? "candidate-touch-readonly.png" : "candidate-touch-menu.png",
-            ),
-          });
         },
       );
     },

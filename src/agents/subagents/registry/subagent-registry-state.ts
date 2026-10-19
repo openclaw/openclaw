@@ -4,41 +4,36 @@ import {
 } from "../../../sessions/session-lifecycle-events.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import {
-  captureOpenClawStateWorkerContext,
-  prepareOpenClawStateReadSource,
-} from "../../../state/openclaw-state-worker-context.js";
+import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import { projectSubagentRunForMaintenance } from "./subagent-delivery-state.js";
 import {
-  projectSubagentRunForMaintenance,
-  projectSubagentRunForSessionList,
-} from "./subagent-delivery-state.js";
-import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
-import {
-  persistSubagentRegistryChangesAsync,
-  reconcileRetiredSubagentRegistryWrites,
-  supersedePendingSubagentRegistryWrites,
-  type SubagentRegistryWriteOptions,
-} from "./subagent-registry-persistence.js";
+  getSubagentRunsForChildSession,
+  getSubagentSessionReadLookup,
+  compactSubagentRunForMemory,
+  immutableSubagentRunSessionList,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
+import { countActiveRunsForSessionFromRuns } from "./subagent-registry-queries.js";
 import {
-  assertSubagentReadContext,
-  captureSubagentFactsAdmission,
   consumeFreshSubagentRuns,
   getSessionListLookup,
   getSubagentRunsSnapshot,
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
+  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
   shouldReadPersistedSubagentRuns,
   SubagentSessionListUnavailableError,
   type SubagentRunsCache,
-  type SubagentRunPublication,
 } from "./subagent-registry-read-cache.js";
 import {
+  mergeSubagentRunReadScope,
   prepareSubagentRunReadSnapshot,
   prepareSubagentMaintenanceReadSnapshot,
   prepareSubagentSessionRunReadSnapshot,
@@ -48,40 +43,26 @@ import {
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import {
-  loadSubagentRunsForChildSessionFromSqlite,
-  loadSubagentRunsForControllerFromSqlite,
-  loadSubagentRegistryFromSqlite,
-  loadSubagentMaintenanceRunsFromSqlite,
-  saveSubagentRegistryChangesToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
-  load: loadSubagentRegistryFromSqlite,
-  copy: structuredClone,
+  copy: compactSubagentRunForMemory,
   project: (entry) => entry,
 };
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
-  copy: projectSubagentRunForSessionList,
-  project: projectSubagentRunForSessionList,
+  copy: immutableSubagentRunSessionList,
+  project: immutableSubagentRunSessionList,
 };
-const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
+const persistedSubagentMaintenanceReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
-  load: () => loadSubagentMaintenanceRunsFromSqlite(),
   copy: projectSubagentRunForMaintenance,
-  // Maintenance consumes live rows synchronously into keys; only published facts need copies.
-  project: (entry) => entry,
+  project: projectSubagentRunForMaintenance,
 };
 
-// Read caches deliberately advance on failed best-effort writes. Keep notification facts
-// commit-owned so a successful retry still refreshes the parent, including after archive.
+// Notification facts advance only with acknowledged row publications.
 const committedSwarmNotifications = new Map<
   string,
   { event: SessionLifecycleEvent; signature: string }
@@ -120,10 +101,11 @@ function swarmNotification(
 
 function updateCommittedSwarmNotifications(
   runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
+  changedRunIds: readonly string[] | undefined,
 ): SessionLifecycleEvent[] {
   const events = new Map<string, SessionLifecycleEvent>();
-  for (const runId of changedRunIds) {
+  const ids = changedRunIds ?? new Set([...committedSwarmNotifications.keys(), ...runs.keys()]);
+  for (const runId of ids) {
     const previous = committedSwarmNotifications.get(runId);
     const next = swarmNotification(runs.get(runId));
     if (previous?.signature === next?.signature) {
@@ -147,7 +129,7 @@ function updateCommittedSwarmNotifications(
 function rememberPersistedSubagentRunsSnapshot(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds?: readonly string[],
-  publication: SubagentRunPublication = {},
+  databasePath?: string,
 ): Array<string | undefined> | undefined {
   const previous =
     persistedSubagentSessionListRunsReadCache.state.snapshot ??
@@ -162,31 +144,41 @@ function rememberPersistedSubagentRunsSnapshot(
         run?.swarmRequesterSessionKey,
       ]),
     );
-  for (const cache of [
-    persistedSubagentRunsReadCache,
-    persistedSubagentSessionListRunsReadCache,
-    persistedSubagentMaintenanceRunsReadCache,
-  ]) {
-    rememberSubagentRunsSnapshot(cache, runs, changedRunIds, publication);
+  for (const cache of [persistedSubagentRunsReadCache, persistedSubagentSessionListRunsReadCache]) {
+    rememberSubagentRunsSnapshot(cache, runs, changedRunIds, databasePath);
   }
+  rememberSubagentRunsSnapshot(
+    persistedSubagentMaintenanceReadCache,
+    runs,
+    changedRunIds,
+    databasePath,
+  );
   return keys;
 }
 
 /** Publishes registry rows already committed by a cross-owner shared-state transaction. */
 export function publishSubagentRunsAfterAtomicStore(
   runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
-  deferredObserverEvents: Array<() => void>,
+  changedRunIds: readonly string[] | undefined,
   databasePath?: string,
-): void {
-  supersedePendingSubagentRegistryWrites(changedRunIds);
+): () => void {
   subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
-  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, { databasePath });
+  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, databasePath);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
-  deferredObserverEvents.push(() => {
+  return () => {
     publishSubagentRunChanges(keys, changedRunIds, "persistence");
     events.forEach(emitSessionLifecycleEvent);
-  });
+  };
+}
+
+/** Hydration establishes a notification baseline before synchronous ownership observers run. */
+export function rememberRestoredSubagentRunNotification(entry: SubagentRunRecord): void {
+  const notification = swarmNotification(entry);
+  if (notification) {
+    committedSwarmNotifications.set(entry.runId, notification);
+  } else {
+    committedSwarmNotifications.delete(entry.runId);
+  }
 }
 
 /** Existing resident facts, fenced by the physical source rather than a publisher's scope. */
@@ -272,116 +264,58 @@ export async function prepareOptionalSubagentSessionListReadCache(): Promise<boo
   if (!shouldReadPersistedSubagentRuns()) {
     return true;
   }
-  const context = captureOpenClawStateWorkerContext();
   try {
     await prepareSubagentSessionListReadCache();
-    assertSubagentReadContext(context);
     return true;
   } catch (error) {
     if (!(error instanceof SubagentSessionListUnavailableError)) {
       throw error;
     }
-    assertSubagentReadContext(context);
     return false;
   }
 }
 
 export function clearSubagentRunsReadCacheForTest(): void {
-  supersedePendingSubagentRegistryWrites();
   committedSwarmNotifications.clear();
   persistedSubagentRunsReadCache.state = {};
   persistedSubagentSessionListRunsReadCache.state = {};
-  persistedSubagentMaintenanceRunsReadCache.state = {};
+  persistedSubagentMaintenanceReadCache.state = {};
 }
 
-function persistSubagentRuns(
-  runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
-  strict: boolean,
-): void {
-  supersedePendingSubagentRegistryWrites(changedRunIds);
-  let committed = false;
-  try {
-    saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
-    committed = true;
-  } catch (error) {
-    if (strict) {
-      throw error;
-    }
-  }
-  if (committed) {
-    subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
-  }
-  // In-process readers must observe the authoritative memory snapshot before the wake.
-  const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, { committed });
-  const events = committed ? updateCommittedSwarmNotifications(runs, changedRunIds) : [];
-  publishSubagentRunChanges(keys, changedRunIds, "persistence");
-  events.forEach(emitSessionLifecycleEvent);
+/** Consume a canonical worker read without crossing a cache-publication invalidation. */
+export function consumeFreshSubagentRegistryRows<T>(
+  context: OpenClawStateWorkerContext,
+  consume: (runs: ReadonlyMap<string, SubagentRunRecord>) => T,
+): Promise<T> {
+  return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, consume);
 }
 
-export function persistSubagentRunsToDisk(
-  runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
-) {
-  persistSubagentRuns(runs, changedRunIds, false);
-}
-
-export function persistSubagentRunsToDiskOrThrow(
-  runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
-) {
-  persistSubagentRuns(runs, changedRunIds, true);
-}
-
-export function persistSubagentRunsToDiskAsyncOrThrow(
-  runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
-  options: SubagentRegistryWriteOptions,
-): Promise<void> {
-  return persistSubagentRegistryChangesAsync(runs, changedRunIds, options, (snapshot, runIds) => {
-    options.onCommitted?.();
-    subagentRuns.settleCompletionAuthorities(snapshot, runIds);
-    const keys = rememberPersistedSubagentRunsSnapshot(snapshot, runIds, {
-      databasePath: options.context.admission.databasePath,
-    });
-    const events = updateCommittedSwarmNotifications(snapshot, runIds);
-    publishSubagentRunChanges(keys, runIds, "persistence");
-    events.forEach(emitSessionLifecycleEvent);
-  });
-}
-
-export async function restoreSubagentRunsFromDisk(params: {
-  runs: Map<string, SubagentRunRecord>;
-  mergeOnly?: boolean;
-  context?: OpenClawStateWorkerContext;
-  assertCurrent?: () => void;
-}) {
-  const context = params.context ?? captureOpenClawStateWorkerContext();
-  return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, (restored) => {
-    params.assertCurrent?.();
-    if (!params.mergeOnly) {
-      reconcileRetiredSubagentRegistryWrites(params.runs, restored);
-    }
-    supersedePendingSubagentRegistryWrites();
-    const keys = rememberPersistedSubagentRunsSnapshot(restored);
-    let added = 0;
-    for (const [runId, entry] of restored.entries()) {
-      if (params.mergeOnly && params.runs.has(runId)) {
-        continue;
+/** Registration shares the loaded registry; committed receipts keep retained generations current. */
+export async function prepareSubagentRegistrationRows(
+  childSessionKey: string,
+  selectedRunIds: readonly string[],
+  context: OpenClawStateWorkerContext,
+): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
+  const prepared = await prepareSubagentRunsCache(
+    persistedSubagentRunsReadCache,
+    async (source) => {
+      const rows = await readAllSubagentRunsInWorker(source);
+      for (const [runId, entry] of rows) {
+        rows.set(runId, compactSubagentRunForMemory(entry));
       }
-      params.runs.set(runId, entry);
-      const notification = swarmNotification(entry);
-      if (notification) {
-        committedSwarmNotifications.set(runId, notification);
-      } else {
-        committedSwarmNotifications.delete(runId);
-      }
-      subagentRuns.commitOwnership(entry);
-      added += 1;
-    }
-    publishSubagentRunChanges(keys, undefined, "persistence");
-    return added;
-  });
+      return rows;
+    },
+    context,
+  );
+  const runIds = new Set(selectedRunIds);
+  return () =>
+    mergeSelectedFullRuns(
+      persistedSubagentRunsReadCache,
+      subagentRuns,
+      prepared,
+      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
+      { context },
+    );
 }
 
 export function getSubagentRunsSnapshotForRead(
@@ -423,17 +357,13 @@ export function getSubagentSessionListRunsSnapshotForChildSessions(
 
 export function prepareSubagentMaintenanceRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
+  options?: { live?: true },
 ) {
   return prepareSubagentMaintenanceReadSnapshot(
     inMemoryRuns,
-    persistedSubagentMaintenanceRunsReadCache,
+    persistedSubagentMaintenanceReadCache,
+    options,
   );
-}
-
-export function getSubagentMaintenanceRunsSnapshotForRead(
-  inMemoryRuns: Map<string, SubagentRunRecord>,
-): Map<string, SubagentRunMaintenanceRecord> {
-  return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentMaintenanceRunsReadCache);
 }
 
 /** Hydrate selected payloads, then capture their current graph and raw owners in one frame. */
@@ -461,11 +391,13 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
 export function prepareSubagentRunsSnapshotForSessions(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   sessionKeys: readonly string[],
+  context?: OpenClawStateWorkerContext,
 ) {
   return prepareSubagentSessionRunReadSnapshot({
     inMemoryRuns,
     sessionKeys,
     fullCache: persistedSubagentRunsReadCache,
+    context,
   });
 }
 
@@ -502,6 +434,23 @@ export async function prepareSubagentRunsSnapshotForRunIds(
   };
 }
 
+/** Admission needs current raw owners, not newly projected session-list rows. */
+export function countActiveSubagentRunsForSession(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  requesterSessionKey: string,
+  options?: { collect?: boolean; requesterAgentId?: string },
+): number {
+  const runs = new Map<string, SubagentRunReadRecord>(
+    shouldReadPersistedSubagentRuns()
+      ? loadPersistedSubagentRunsForRead(persistedSubagentSessionListRunsReadCache)
+      : undefined,
+  );
+  for (const [runId, entry] of inMemoryRuns) {
+    runs.set(runId, entry);
+  }
+  return countActiveRunsForSessionFromRuns(runs, requesterSessionKey, options);
+}
+
 export function getSubagentSessionListRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   controllerSessionKeys?: readonly string[],
@@ -526,12 +475,25 @@ export function getSubagentSessionListRunsSnapshotForRead(
     }
     const lookup = getSessionListLookup(cache, cached);
     return getSubagentRunsSnapshot(inMemoryRuns, cache, {
-      fresh: true,
       load: () => indexedSnapshotRows(cached, lookup.selectControllers(keys)),
       matches,
     });
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentSessionListRunsReadCache);
+}
+
+/** Current control facts reuse the same membership owner as asynchronous payload reads. */
+export function getSubagentControlRunsSnapshotForRead(
+  sessionKey: string,
+): Map<string, SubagentRunReadRecord> {
+  const cache = persistedSubagentSessionListRunsReadCache;
+  const compact = shouldReadPersistedSubagentRuns()
+    ? loadPersistedSubagentRunsForRead(cache)
+    : new Map<string, SubagentRunReadRecord>();
+  return mergeSubagentRunReadScope(subagentRuns, cache, compact, {
+    sessionKeys: [sessionKey],
+    descendants: false,
+  });
 }
 
 /** Exact rows share the owner snapshot while projecting only their complete requester trees. */
@@ -544,52 +506,45 @@ export function getSubagentSessionListRunsSnapshotForSessions(
   }
   const cache = persistedSubagentSessionListRunsReadCache;
   const cached = shouldReadPersistedSubagentRuns() ? getPersistedSubagentRunsSnapshot(cache) : null;
-  const lookup = cached ? getSessionListLookup(cache, cached) : undefined;
-  const indexed = lookup?.selectSessions(sessionKeys, inMemoryRuns.values());
-  const selected =
-    indexed?.sessionKeys ??
-    collectSubagentSessionReadKeys(sessionKeys, cached?.values() ?? [], inMemoryRuns.values());
+  const live = getSubagentSessionReadLookup(inMemoryRuns);
+  const lookup = cached ? getSessionListLookup(cache, cached) : live;
+  const indexed = lookup.selectSessions(sessionKeys, live);
+  const persisted = cached ? indexedSnapshotRows(cached, indexed.cacheKeys) : [];
   return getSubagentRunsSnapshot(inMemoryRuns, cache, {
     // The loader owns cache selection so topology and metadata use the same source.
-    fresh: true,
-    // Descendant queries only inspect records, matching their unscoped snapshots.
-    borrowPersisted: true,
     load: () => {
       if (cached) {
-        return indexed ? indexedSnapshotRows(cached, indexed.cacheKeys) : cached.values();
+        return persisted;
       }
       throw new Error("Subagent session-list facts must be prepared before synchronous reads");
     },
-    matches: (entry) => selected.has(entry.childSessionKey.trim()),
-  });
-}
-
-export function getSubagentRunsSnapshotForController(
-  inMemoryRuns: Map<string, SubagentRunRecord>,
-  controllerSessionKey: string,
-): Map<string, SubagentRunRecord> {
-  const key = controllerSessionKey.trim();
-  if (!key) {
-    return new Map();
-  }
-  return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
-    selectCached: (lookup) => lookup.selectControllers(new Set([key])),
-    load: () => loadSubagentRunsForControllerFromSqlite(key),
-    matches: (entry) => resolveControllerSessionKey(entry) === key,
+    // A live replacement can have moved out of a selected durable child bucket.
+    liveRunIds: new Set([
+      ...live.selectChildren(indexed.sessionKeys),
+      ...persisted.map((entry) => entry.runId),
+    ]),
+    matches: (entry) => indexed.sessionKeys.has(entry.childSessionKey.trim()),
   });
 }
 
 export function getSubagentRunsSnapshotForChildSession(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   childSessionKey: string,
-): Map<string, SubagentRunRecord> {
+  childAgentId?: string,
+): Promise<Map<string, SubagentRunRecord>> {
   const key = childSessionKey.trim();
   if (!key) {
-    return new Map();
+    return Promise.resolve(new Map());
   }
-  return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
-    selectCached: (lookup) => lookup.selectChildren(new Set([key])),
-    load: () => loadSubagentRunsForChildSessionFromSqlite(key),
-    matches: (entry) => entry.childSessionKey === key,
-  });
+  return withSubagentRunReadSnapshot(
+    inMemoryRuns,
+    (snapshot) => ({
+      runIds: [...snapshot.values()]
+        .filter((entry) => matchesSubagentChildSessionOwner(entry, key, childAgentId))
+        .map((entry) => entry.runId),
+      sessionKeys: [],
+    }),
+    (_selection, runs) => new Map(runs),
+    { childSessionKeys: [key] },
+  );
 }

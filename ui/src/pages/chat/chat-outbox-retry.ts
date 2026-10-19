@@ -4,7 +4,6 @@ import type { ChatHost } from "./chat-send-contract.ts";
 
 type RetryTimer = {
   timer: ReturnType<typeof setTimeout>;
-  suppressGenericWake: boolean;
   connectionEpoch: number | undefined;
   host: ChatHost;
 };
@@ -44,7 +43,6 @@ export function scheduleChatOutboxRetry(
   key: string,
   delayMs: number,
   wake: (host: ChatHost) => void,
-  suppressGenericWake: boolean,
 ): void {
   const client = host.client;
   if (!host.connected || !client) {
@@ -55,14 +53,11 @@ export function scheduleChatOutboxRetry(
     return;
   }
   const attempt = (state.attempts.get(key) ?? 0) + 1;
-  const retryDelayMs = suppressGenericWake
-    ? computeBackoff({ initialMs: delayMs, maxMs: RETRY_MAX_MS, factor: 2, jitter: 0 }, attempt)
-    : delayMs;
-  if (suppressGenericWake) {
-    state.attempts.set(key, attempt);
-  } else {
-    state.attempts.delete(key);
-  }
+  const retryDelayMs = computeBackoff(
+    { initialMs: delayMs, maxMs: RETRY_MAX_MS, factor: 2, jitter: 0 },
+    attempt,
+  );
+  state.attempts.set(key, attempt);
   const retry: RetryTimer = {
     timer: setTimeout(() => {
       state.timers.delete(key);
@@ -70,7 +65,6 @@ export function scheduleChatOutboxRetry(
         wake(retry.host);
       }
     }, retryDelayMs),
-    suppressGenericWake,
     connectionEpoch: host.connectionEpoch,
     host,
   };
@@ -97,14 +91,12 @@ export function consumeChatOutboxRetry(
     retry.connectionEpoch = host.connectionEpoch;
     retry.host = host;
   }
-  if (!itemId && !ownerStale && retry.suppressGenericWake) {
+  if (!itemId && !ownerStale) {
     return true;
   }
   clearTimeout(retry.timer);
   state.timers.delete(key);
-  if (itemId || ownerStale) {
-    state.attempts.delete(key);
-  }
+  state.attempts.delete(key);
   return false;
 }
 

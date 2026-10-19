@@ -11,14 +11,12 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
-import {
-  finishCronRunReceiptAsync,
-  finishCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
-} from "./run-receipt-store.js";
+import { finishCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "./run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
@@ -66,7 +64,6 @@ describe("pending cron receipt retention", () => {
     // next admitted run. Its pending job association must keep the receipt.
     for (let index = 0; index < 64; index += 1) {
       const prepared = prepareCronRunReceiptClaim({
-        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
@@ -76,7 +73,6 @@ describe("pending cron receipt retention", () => {
         claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
-          resolveAgentId: (current) => current.agentId!,
         }),
       );
       history.push(receipt.receiptId);
@@ -123,8 +119,10 @@ describe("pending cron receipt retention", () => {
       owner.stop();
       await editor.update(job.id, { agentId: "beta" });
 
-      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      // A late settlement still prunes after an owner edit closes its receipt.
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toMatchObject({
+        receiptId: pending!.receiptId,
+      });
+      // A late result prunes while preserving the unreconciled run marker after an owner edit.
       const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
       let fetchedRows: number;
       try {
@@ -133,6 +131,7 @@ describe("pending cron receipt retention", () => {
             database: db,
             receiptSchema: prepareCronRunReceiptWriteSchema(db),
             handle: pending!,
+            pendingReceiptId: pending!.receiptId,
             status: "ok",
             finishedAtMs: now,
           }),

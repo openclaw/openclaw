@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -18,24 +18,25 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "./session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { agentCommandMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
@@ -44,10 +45,27 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const titleGeneration = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../auto-reply/reply/conversation-label-generator.js").generateConversationLabelWithFallback
+  >(),
+);
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+// Recovery owns identity and continuation; title model behavior has separate boundary coverage.
+vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>()),
+  generateConversationLabelWithFallback: titleGeneration,
+}));
+
+// Reverse hook order joins accepted fixture work before draining global owners.
+afterEach(() => drainGlobalSingletonLifecycleState());
+
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const prepareProfiles = useUserProfileCatalogForTest();
+
+beforeEach(async () => {
+  await prepareProfiles();
+  titleGeneration.mockReset().mockResolvedValue("Recovered session");
 });
 
 function recoveryWorkerPlacement(params: {
@@ -83,6 +101,7 @@ async function seedRecoverableSession(params: {
   sourceSessionId: string;
   storePath: string;
   overrides?: Parameters<typeof sessionStoreEntry>[1];
+  messages?: Parameters<typeof seedSessionTranscript>[0]["messages"];
 }) {
   await writeSessionStore({
     entries: {
@@ -104,26 +123,57 @@ async function seedRecoverableSession(params: {
     sessionId: params.sourceSessionId,
     sessionKey: params.sourceKey,
     storePath: params.storePath,
-    messages: [{ role: "user", content: "recover the interrupted cloud workspace" }],
+    messages: params.messages ?? [
+      { role: "user", content: "recover the interrupted cloud workspace" },
+    ],
   });
 }
 
-async function recoveryFixture(name: string, overrides?: Parameters<typeof sessionStoreEntry>[1]) {
+async function recoveryFixture(
+  name: string,
+  overrides?: Parameters<typeof sessionStoreEntry>[1],
+  messages?: Parameters<typeof seedSessionTranscript>[0]["messages"],
+) {
   const { storePath } = await createSessionStoreDir();
   const sourceKey = `agent:main:dashboard:${name}`;
   const sourceSessionId = `${name}-source`;
-  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath, overrides });
+  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath, overrides, messages });
   const scope = { agentId: "main", sessionKey: sourceKey, storePath };
   return {
     sourceKey,
     sourceSessionId,
     scope,
     source: () => loadSessionEntry(scope),
+    read: (sessionKey: string) => loadSessionEntry({ ...scope, sessionKey }),
+    transcript: (sessionKey = sourceKey, sessionId = sourceSessionId) =>
+      loadTranscriptEvents({ ...scope, sessionKey, sessionId }),
     placement: (state: WorkerSessionPlacementRecord["state"]) =>
       recoveryWorkerPlacement({ sessionId: sourceSessionId, sessionKey: sourceKey, state }),
     recover: <T = unknown>(options?: Parameters<typeof directSessionReq<T>>[2]) =>
       directSessionReq<T>("sessions.recover", { agentId: "main", key: sourceKey }, options),
   };
+}
+
+function placementContext(
+  current: () => WorkerSessionPlacementRecord | undefined,
+  reclaim?: unknown,
+) {
+  return {
+    workerSessionPlacementService: recoveryPlacementReader(current),
+    workerPlacementDispatchService: { dispatch: vi.fn(), ...(reclaim ? { reclaim } : {}) },
+  };
+}
+
+function runtimeClient(sessionKey: string) {
+  return {
+    connect: { scopes: ["operator.write"] },
+    internal: { agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey } },
+  } as never;
+}
+
+function expectUnrecovered(source: ReturnType<typeof loadSessionEntry>) {
+  expect(source?.archivedAt).toBeUndefined();
+  expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
 }
 
 async function sessionWorktree(dir: string, name: string, sessionKey: string) {
@@ -200,12 +250,13 @@ test("sessions.recover settles its active placement before archiving a real sess
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       get: () => placement,
+      getAsync: async () => placement,
       waitForTurnClaimRelease: vi.fn(async () => {}),
     },
     loadSessionRuntime: async () => ({
       managedWorktrees,
       resolveCanonicalSessionEntryFromStoreKeys,
-      resolveGatewaySessionStoreTargetWithStore,
+      resolveGatewaySessionStoreTargetInWorker,
     }),
     revokeSessionAuthority: vi.fn(),
   });
@@ -219,7 +270,7 @@ test("sessions.recover settles its active placement before archiving a real sess
         ...request,
         authorize,
         beforeDrain,
-        begin: () => {
+        begin: async () => {
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
             sessionKey: sourceKey,
@@ -244,10 +295,7 @@ test("sessions.recover settles its active placement before archiving a real sess
         },
       }),
   );
-  const context = {
-    workerSessionPlacementService: recoveryPlacementReader(() => placement),
-    workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-  };
+  const context = placementContext(() => placement, reclaim);
 
   const recovering = directSessionReq<{ key: string; sessionId: string }>(
     "sessions.recover",
@@ -280,11 +328,13 @@ test("sessions.recover settles its active placement before archiving a real sess
     archivedAt: expect.any(Number),
     worktree: { id: worktree.id },
   });
-  expect(managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
+  expect(await managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
     id: worktree.id,
     ownerId: sourceKey,
   });
-  expect(managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? "")).toBeUndefined();
+  expect(
+    await managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? ""),
+  ).toBeUndefined();
   expect(
     loadSessionEntry({
       agentId: "main",
@@ -328,7 +378,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
     let releaseAdmission = () => {};
     const admission =
       phase === "before-interrupt"
-        ? await beginSessionWorkAdmission({
+        ? await beginSessionEffect({
             scope: storePath,
             identities: [sessionId, sessionKey],
             assertAllowed: () => {},
@@ -339,7 +389,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
           })
         : undefined;
     releaseAdmission = () => admission?.release();
-    const begin = vi.fn(() => ({ ...placement, state: "draining" as const }));
+    const begin = vi.fn(async () => ({ ...placement, state: "draining" as const }));
     const reclaim = vi.fn(async () => {
       throw new Error("ineligible worker must not be reclaimed");
     });
@@ -347,6 +397,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         get: () => placement,
+        getAsync: async () => placement,
         waitForTurnClaimRelease: async () => {
           if (phase === "before-drain") {
             await wait();
@@ -360,7 +411,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
         return {
           managedWorktrees,
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         };
       },
       revokeSessionAuthority: vi.fn(),
@@ -409,11 +460,7 @@ test.each(["rejected", "unavailable", "stale-result"] as const)(
     });
 
     const recovered = await fixture.recover({
-      context: {
-        workerSessionPlacementService: recoveryPlacementReader(() => placement),
-        workerPlacementDispatchService:
-          failure === "unavailable" ? { dispatch: vi.fn() } : { dispatch: vi.fn(), reclaim },
-      },
+      context: placementContext(() => placement, failure === "unavailable" ? undefined : reclaim),
     });
 
     expect(recovered).toMatchObject({
@@ -424,9 +471,7 @@ test.each(["rejected", "unavailable", "stale-result"] as const)(
         message: expect.stringContaining("sessions.reclaim"),
       },
     });
-    const source = fixture.source();
-    expect(source?.archivedAt).toBeUndefined();
-    expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
+    expectUnrecovered(fixture.source());
     expect(reclaim).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
   },
 );
@@ -439,10 +484,7 @@ test.each(["requested", "failed"] as const)(
     const reclaim = vi.fn();
 
     const recovered = await fixture.recover({
-      context: {
-        workerSessionPlacementService: recoveryPlacementReader(() => placement),
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-      },
+      context: placementContext(() => placement, reclaim),
     });
 
     expect(recovered).toMatchObject({
@@ -477,65 +519,71 @@ test.each(["session-id", "lifecycle-revision"] as const)(
     });
 
     const recovered = await fixture.recover({
-      context: {
-        workerSessionPlacementService: recoveryPlacementReader(() => placement),
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-      },
+      context: placementContext(() => placement, reclaim),
     });
 
     expect(recovered).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("changed") },
     });
-    const source = fixture.source();
-    expect(source?.archivedAt).toBeUndefined();
-    expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
+    expectUnrecovered(fixture.source());
   },
 );
 
-test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
-  const sourceKey = "agent:main:dashboard:tombstoned";
-  const sourceSessionId = "tombstoned-session";
-  await writeSessionStore({
-    entries: {
-      [sourceKey]: sessionStoreEntry(sourceSessionId, {
-        status: "failed",
-        abortedLastRun: true,
-        agentHarnessId: "codex",
-        agentRuntimeOverride: "codex",
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        modelSelectionLocked: true,
-        pinnedAt: 1,
-        sandbox: "required",
-        spawnedCwd: "/tmp/recovered-worktree",
-        mainRestartRecovery: {
-          cycleId: "cycle-tombstoned",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    },
+test("sessions.recover preserves device-folder affinity before launching its successor", async () => {
+  const deviceFolder = { deviceId: "recovery-device", path: "/existing/project" };
+  const fixture = await recoveryFixture("device-folder-recovery", { deviceFolder });
+  const launchContinuation = vi.fn(async (target: { sessionKey: string; storePath: string }) => {
+    expect(loadSessionEntry(target)?.deviceFolder).toEqual(deviceFolder);
+    return { status: "started" as const, runId: "device-folder-recovery-run" };
   });
-  await seedSessionTranscript({
+  const result = await recoverGatewaySession({
+    cfg: getRuntimeConfig(),
+    key: fixture.sourceKey,
     agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    storePath,
-    messages: [
+    workerPlacementContext: {},
+    launchContinuation,
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    created: true,
+    successorEntry: { deviceFolder },
+  });
+  expect(launchContinuation).toHaveBeenCalledOnce();
+  expect(fixture.source()?.deviceFolder).toEqual(deviceFolder);
+});
+
+test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
+  testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
+  const inherited: Parameters<typeof sessionStoreEntry>[1] = {
+    agentHarnessId: "codex",
+    agentRuntimeOverride: "codex",
+    providerOverride: "openai",
+    modelOverride: "gpt-5.6-sol",
+    modelSelectionLocked: true,
+    sandbox: "required",
+    communication: { send: "never", receive: "ask" },
+    spawnedCwd: "/tmp/recovered-worktree",
+  };
+  const fixture = await recoveryFixture(
+    "tombstoned",
+    {
+      ...inherited,
+      pinnedAt: 1,
+      mainRestartRecovery: {
+        cycleId: "cycle-tombstoned",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    },
+    [
       { role: "user", content: "finish the interrupted implementation" },
       { role: "assistant", content: [{ type: "text", text: "I reached the final check." }] },
     ],
-  });
-  const sourceTranscriptBefore = await loadTranscriptEvents({
-    agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    storePath,
-  });
+  );
+  const { sourceSessionId } = fixture;
+  const sourceTranscriptBefore = await fixture.transcript();
 
   type RecoveryPayload = {
     key: string;
@@ -543,8 +591,8 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     continuation: { status: string; runId?: string };
   };
   const [recovered, concurrentRetry] = await Promise.all([
-    directSessionReq<RecoveryPayload>("sessions.recover", { agentId: "main", key: sourceKey }),
-    directSessionReq<RecoveryPayload>("sessions.recover", { agentId: "main", key: sourceKey }),
+    fixture.recover<RecoveryPayload>(),
+    fixture.recover<RecoveryPayload>(),
   ]);
 
   expect(recovered.ok, JSON.stringify(recovered.error)).toBe(true);
@@ -555,7 +603,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry).toMatchObject({
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -563,17 +611,11 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
       continuation: { status: "started" },
     },
   });
-  expect(loadSessionEntry({ agentId: "main", sessionKey: successorKey, storePath })).toMatchObject({
-    agentHarnessId: "codex",
-    agentRuntimeOverride: "codex",
-    modelSelectionLocked: true,
-    modelOverride: "gpt-5.6-sol",
+  expect(fixture.read(successorKey)).toMatchObject({
+    ...inherited,
     previousSessionId: sourceSessionId,
-    providerOverride: "openai",
-    sandbox: "required",
-    spawnedCwd: "/tmp/recovered-worktree",
   });
-  const archivedSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+  const archivedSource = fixture.source();
   expect(archivedSource).toMatchObject({
     archivedAt: expect.any(Number),
     mainRestartRecovery: {
@@ -585,30 +627,13 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     },
   });
   expect(archivedSource).not.toHaveProperty("pinnedAt");
-  await expect(
-    loadTranscriptEvents({
-      agentId: "main",
-      sessionId: sourceSessionId,
-      sessionKey: sourceKey,
-      storePath,
-    }),
-  ).resolves.toEqual(sourceTranscriptBefore);
-  expect(
-    JSON.stringify(
-      await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: successorSessionId,
-        sessionKey: successorKey,
-        storePath,
-      }),
-    ),
-  ).toContain("finish the interrupted implementation");
+  await expect(fixture.transcript()).resolves.toEqual(sourceTranscriptBefore);
+  expect(JSON.stringify(await fixture.transcript(successorKey, successorSessionId))).toContain(
+    "finish the interrupted implementation",
+  );
 
-  const repeated = await directSessionReq<typeof recovered.payload>("sessions.recover", {
-    agentId: "main",
-    key: sourceKey,
-  });
-  expect(repeated).toMatchObject({
+  const repeated = await fixture.recover<RecoveryPayload>();
+  expect(repeated, JSON.stringify(repeated)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -640,6 +665,7 @@ test.each([
     if (recovering && !systemActor) {
       setUserProfileRole(recovering.id, "requester");
     }
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
       createdVia: "operator" as const,
@@ -696,8 +722,11 @@ test.each([
       context: {
         getRuntimeConfig: () =>
           identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getCommittedRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
       },
     };
+    prepareGatewayRecipientProfile(request.client);
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
       "sessions.recover",
@@ -743,6 +772,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-recovery@example.com");
   setUserProfileRole(profile.id, "guest");
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const key = "agent:main:dashboard:role-denied-recovery";
   await writeSessionStore({
     entries: {
@@ -826,12 +856,13 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   } as never;
   // Use an already-registered single-key mutation to isolate handler/writer propagation from
   // the separate sessions.recover registry regression covered at the router boundary.
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "sessions.reset",
     requestParams: { key: sourceKey, agentId: "main" },
     context: { getRuntimeConfig } as never,
   });
+  using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   expect(authorization.error).toBeNull();
   if (!authorization.authorization) {
     throw new Error("failed to capture recovery source participation");
@@ -839,7 +870,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
 
   const mutationEntered = createDeferredCore();
   const releaseMutation = createDeferredCore();
-  const heldMutation = runExclusiveSessionLifecycleMutation({
+  const heldMutation = runSessionMutation({
     scope: scope.storePath,
     identities: [sourceKey, sourceSessionId],
     run: async () => {
@@ -887,20 +918,10 @@ test("sessions.recover revalidates runtime authority after its cloud placement r
   });
 
   const recovered = await fixture.recover({
-    client: {
-      connect: { scopes: ["operator.write"] },
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey: fixture.sourceKey,
-        },
-      },
-    } as never,
+    client: runtimeClient(fixture.sourceKey),
     context: {
       validateAgentRuntimeApprovalAuthority: () => authorityActive,
-      workerSessionPlacementService: recoveryPlacementReader(() => placement),
-      workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+      ...placementContext(() => placement, reclaim),
     },
   });
 
@@ -909,9 +930,7 @@ test("sessions.recover revalidates runtime authority after its cloud placement r
     error: { code: "INVALID_REQUEST", message: "agent runtime authority is no longer active" },
   });
   expect(reclaim).toHaveBeenCalledOnce();
-  const source = fixture.source();
-  expect(source?.archivedAt).toBeUndefined();
-  expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
+  expectUnrecovered(fixture.source());
 });
 
 test("sessions.recover rejects continuation launch after runtime authority closes", async () => {
@@ -924,16 +943,7 @@ test("sessions.recover rejects continuation launch after runtime authority close
       validateAgentRuntimeApprovalAuthority: () =>
         !fixture.source()?.mainRestartRecovery?.tombstone?.recoveredSessionKey,
     },
-    client: {
-      connect: { scopes: ["operator.write"] },
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey: fixture.sourceKey,
-        },
-      },
-    } as never,
+    client: runtimeClient(fixture.sourceKey),
   });
 
   expect(recovered).toMatchObject({
@@ -941,15 +951,13 @@ test("sessions.recover rejects continuation launch after runtime authority close
     payload: {
       continuation: {
         status: "rejected",
-        error: { message: "agent runtime authority is no longer active" },
+        error: {
+          code: "INVALID_REQUEST",
+          message: "agent runtime authority is no longer active",
+        },
       },
     },
   });
-  expect(
-    loadSessionEntry({
-      agentId: "main",
-      sessionKey: recovered.payload?.key ?? "",
-      storePath: fixture.scope.storePath,
-    }),
-  ).toBeDefined();
+  expect(agentCommandMock).not.toHaveBeenCalled();
+  expect(fixture.read(recovered.payload?.key ?? "")).toBeDefined();
 });

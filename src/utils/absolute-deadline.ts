@@ -7,6 +7,7 @@ export function scheduleAbsoluteDeadline(
   deadlineAtMs: number,
   onExpired: () => void,
   now: () => number = () => Date.now(),
+  { unref = false }: { unref?: boolean } = {},
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const checkDeadline = () => {
@@ -16,12 +17,13 @@ export function scheduleAbsoluteDeadline(
       return;
     }
     timer = setTimeout(checkDeadline, Math.min(remainingMs, MAX_TIMER_TIMEOUT_MS));
+    if (unref) {
+      timer.unref();
+    }
   };
   checkDeadline();
   return () => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   };
 }
 

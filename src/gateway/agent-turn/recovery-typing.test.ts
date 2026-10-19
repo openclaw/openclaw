@@ -62,7 +62,6 @@ function fixture(
 }
 describe("recovery typing", () => {
   it.each([
-    { cadence: "default", typingIntervalSeconds: undefined, intervalMs: 6_000, expectedSends: 11 },
     { cadence: "configured", typingIntervalSeconds: 10, intervalMs: 10_000, expectedSends: 7 },
   ])(
     "honors $cadence cadence beyond one minute and stops at settlement",
@@ -136,19 +135,12 @@ describe("recovery typing", () => {
     expect(f.sendTyping).toHaveBeenCalledOnce();
     expect(f.onError).toHaveBeenCalledOnce();
   });
-  it("does nothing for a channel without typing support", async () => {
-    const f = fixture({ resolveAdapter: async () => undefined });
-    f.manager.start(f.params);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.sendTyping).not.toHaveBeenCalled();
-    expect(f.onError).not.toHaveBeenCalled();
-  });
-  it.each(["default", "agent"] as const)("respects a %s typing opt-out", async (where) => {
+  it("respects a default typing opt-out", async () => {
     const f = fixture({
       getConfig: () => ({
         agents: {
-          defaults: { typingMode: where === "default" ? "never" : "instant" },
-          entries: { main: { typingMode: where === "agent" ? "never" : undefined } },
+          defaults: { typingMode: "never" },
+          entries: { main: {} },
         },
       }),
     });

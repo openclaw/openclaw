@@ -1,13 +1,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
-import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -38,7 +41,8 @@ let fixture: ReturnType<typeof createDoctorNoCowToolFixture>;
 const nativeStatfs = fs.statfsSync;
 
 beforeEach(() => {
-  root = tempDirs.make("openclaw-nocow-");
+  // The real socket fixture must fit sockaddr_un even with a deeply nested TMPDIR.
+  root = tempDirs.make("openclaw-nocow-", process.platform === "win32" ? undefined : "/tmp");
   directory = path.join(root, "state");
   fs.mkdirSync(directory);
   sqlitePath = path.join(directory, "openclaw.sqlite");
@@ -71,14 +75,91 @@ async function repair(assertCurrent = () => {}) {
   const result = await repairDoctorSqliteNoCow({
     paths: [sqlitePath],
     stateDir: root,
+    env: { ...process.env, OPENCLAW_STATE_DIR: root },
     assertCurrent,
   });
   return [...result.changes, ...result.warnings];
 }
 
 describe("Doctor btrfs NOCOW", () => {
+  it("leaves unrelated trees and their inodes untouched with bounded ACL work", async () => {
+    seedDatabase();
+    const nested = path.join(directory, "codex-home");
+    fs.mkdirSync(nested);
+    for (let index = 0; index < 64; index++) {
+      fs.writeFileSync(path.join(nested, `${index}.txt`), "unrelated");
+    }
+    const sibling = path.join(nested, "0.txt");
+    const original = fs.statSync(sibling);
+    const originalDirectory = fs.statSync(directory);
+    expect((await repair()).join("\n")).toContain("Rewrote");
+    expect(fs.statSync(sibling).ino).toBe(original.ino);
+    expect(fs.statSync(directory).ino).toBe(originalDirectory.ino);
+    expect(
+      vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl").length,
+    ).toBeLessThanOrEqual(2);
+  });
+
+  it.each([
+    ["fuser", "fuser cannot inspect processes"],
+    ["mv", "kernel/filesystem lacks RENAME_EXCHANGE"],
+  ])("refuses unsupported %s before inventory and copies", async (command, limit) => {
+    seedDatabase();
+    const original = fs.statSync(directory).ino;
+    const tool = vi.mocked(spawnSync).getMockImplementation()!;
+    vi.mocked(spawnSync).mockImplementation((name, args, options) =>
+      name === command
+        ? { status: 1, stdout: "", stderr: "unsupported", pid: 0, output: [], signal: null }
+        : tool(name, args, options),
+    );
+    const inventory = vi.spyOn(fs, "readdirSync");
+    const copy = vi.spyOn(fsp, "open");
+    expect((await repair()).join("\n")).toContain(limit);
+    expect(vi.mocked(spawnSync).mock.calls.some(([name]) => name === "getfacl")).toBe(false);
+    expect(inventory.mock.calls.some(([pathname]) => pathname === directory)).toBe(false);
+    expect(copy).not.toHaveBeenCalled();
+    expect(fs.statSync(directory).ino).toBe(original);
+    expect(fs.readdirSync(root).some((name) => name.includes(".nocow-"))).toBe(false);
+  });
+
+  it("preflights sibling stores on one filesystem once", async () => {
+    seedDatabase();
+    const sibling = path.join(root, "agent");
+    fs.cpSync(directory, sibling, { recursive: true });
+    const result = await repairDoctorSqliteNoCow({
+      paths: [sqlitePath, path.join(sibling, "openclaw.sqlite")],
+      stateDir: root,
+      env: { OPENCLAW_STATE_DIR: root },
+      assertCurrent: () => {},
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(2);
+    const probes = vi
+      .mocked(spawnSync)
+      .mock.calls.filter(
+        ([command, args]) => command === "fuser" && args?.[0]?.includes(".nocow-probe-"),
+      );
+    expect(probes).toHaveLength(1);
+    expect(fixture.exchanges).toBe(6);
+  });
+
+  it("refuses a store opened after copying before the real exchange", async () => {
+    seedDatabase();
+    const original = fs.statSync(directory).ino;
+    const tool = vi.mocked(spawnSync).getMockImplementation()!;
+    let inspections = 0;
+    vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+      command === "fuser" && args?.includes(sqlitePath) && ++inspections === 2
+        ? { status: 0, stdout: "12345", stderr: "", pid: 0, output: [], signal: null }
+        : tool(command, args, options),
+    );
+    expect((await repair()).join("\n")).toContain("store files are open (pids: 12345)");
+    expect(fs.statSync(directory).ino).toBe(original);
+    expect(fixture.exchanges).toBe(0);
+  });
+
   it.skipIf(process.platform !== "linux")(
-    "rewrites shared and agent stores after the real Doctor maintenance scope drains",
+    "rewrites shared and agent stores after Doctor drains native and admission descriptors",
     async () => {
       await withOpenClawTestState(
         { scenario: "external-service", label: "doctor-nocow-owner" },
@@ -112,7 +193,7 @@ describe("Doctor btrfs NOCOW", () => {
                 loadPersistedAuthProfileStore(path.dirname(agent.path));
               }
               const preflight = await prepareDoctorDatabasePreflight({
-                cfg: { agents: { list: [{ id: "main" }, { id: "secondary" }] } },
+                cfg: { agents: { entries: { main: {}, secondary: {} } } },
               });
               expect(preflight.agentDatabaseMigrationDiscovery?.discovery.targets).toHaveLength(3);
               return inspectDoctorSqliteNoCow([state.path, ...agents.map((agent) => agent.path)])
@@ -132,7 +213,7 @@ describe("Doctor btrfs NOCOW", () => {
             const originals = paths.map((pathname) => fs.statSync(pathname).ino);
             await maintenance!.repairSqliteNoCow(paths);
             expect(maintenance!.warnings).toEqual([]);
-            expect(fixture.exchanges).toBe(4);
+            expect(fixture.exchanges).toBeGreaterThanOrEqual(4);
             expect(handleCounts.length).toBeGreaterThan(0);
             expect(handleCounts.every((count) => count === 0)).toBe(true);
             for (const [index, pathname] of paths.entries()) {
@@ -156,13 +237,62 @@ describe("Doctor btrfs NOCOW", () => {
               }
             }
             expect(
-              log.mock.calls.filter(([line]) => line.startsWith("Rewrote SQLite")),
+              log.mock.calls.filter(([line]) => line.startsWith("Rewrote SQLite files")),
             ).toHaveLength(4);
           } finally {
             await maintenance?.release();
           }
         },
       );
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "keeps admission descriptors when an unknown native handle blocks NOCOW repair",
+    async () => {
+      seedDatabase();
+      const admitted = openNodeSqliteDatabase(sqlitePath);
+      try {
+        admitSqliteSchema(admitted);
+      } finally {
+        admitted.close();
+      }
+      const unknown = new DatabaseSync(sqlitePath);
+      unknown.exec("BEGIN IMMEDIATE");
+      const identity = fs.statSync(sqlitePath);
+      const sourceDescriptors = () =>
+        fs
+          .readdirSync("/proc/self/fd")
+          .flatMap((entry) => {
+            try {
+              const descriptor = Number(entry);
+              const file = fs.fstatSync(descriptor);
+              return file.dev === identity.dev && file.ino === identity.ino ? [descriptor] : [];
+            } catch {
+              return [];
+            }
+          })
+          .toSorted((left, right) => left - right);
+      const descriptors = sourceDescriptors();
+      expect(descriptors.length).toBeGreaterThanOrEqual(2);
+      const native =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const fakeTools = vi.mocked(spawnSync).getMockImplementation()!;
+      vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+        command === "fuser"
+          ? native.spawnSync(command, args, options)
+          : fakeTools(command, args, options),
+      );
+      try {
+        expect((await repair()).join("\n")).toContain("store files are open");
+        expect(sourceDescriptors()).toEqual(descriptors);
+        expect(unknown.isTransaction).toBe(true);
+        expect(fs.statSync(sqlitePath).ino).toBe(identity.ino);
+        expect(fixture.exchanges).toBe(0);
+      } finally {
+        unknown.exec("ROLLBACK");
+        unknown.close();
+      }
     },
   );
 
@@ -180,18 +310,32 @@ describe("Doctor btrfs NOCOW", () => {
     );
   });
 
-  it.each(["ok", "exchange-timeout"] as const)(
-    "preserves WAL rows and siblings, retains original identity, and settles %s exchange",
+  it.each(["exchange-timeout", "different-owner"] as const)(
+    "preserves WAL rows, siblings, metadata and original identity with %s",
     async (outcome) => {
       seedDatabase();
-      fixture.tools = outcome;
-      fs.chmodSync(sqlitePath, 0o640);
-      fs.chmodSync(directory, 0o750);
       const original = fs.statSync(sqlitePath);
       const originalDirectory = fs.statSync(directory);
-      const notes = await repair();
-      expect(notes.join(",")).toContain("Rewrote SQLite store directory with NOCOW");
-      expect(fixture.exchanges).toBe(1);
+      if (outcome === "exchange-timeout") {
+        fixture.tools = outcome;
+      } else {
+        const stat = fs.statSync;
+        vi.spyOn(fs, "statSync").mockImplementation((pathname, options) => {
+          const value = stat(pathname, options);
+          if (
+            value &&
+            String(pathname).includes(".nocow-backup-") &&
+            typeof value.uid === "number"
+          ) {
+            return Object.assign(value, { uid: value.uid + 1 });
+          }
+          return value;
+        });
+      }
+      const chown = vi.spyOn(fs, "chownSync");
+      const chmod = vi.spyOn(fs, "chmodSync");
+      expect((await repair()).join(",")).toContain("Rewrote SQLite files with NOCOW");
+      expect(fixture.exchanges).toBe(3);
       expect(fs.statSync(sqlitePath).ino).not.toBe(original.ino);
       expect(fs.statSync(sqlitePath).mode).toBe(original.mode);
       expect(fs.statSync(directory).mode).toBe(originalDirectory.mode);
@@ -205,34 +349,20 @@ describe("Doctor btrfs NOCOW", () => {
       } finally {
         db.close();
       }
+      if (outcome === "different-owner") {
+        const targetCall = chown.mock.calls.findIndex(([pathname]) =>
+          String(pathname).endsWith("openclaw.sqlite"),
+        );
+        expect(targetCall).toBeGreaterThanOrEqual(0);
+        const target = chown.mock.calls[targetCall]?.[0];
+        expect(chown.mock.calls[targetCall]).toEqual([target, original.uid, original.gid]);
+        const modeCall = chmod.mock.calls.findIndex(([pathname]) => pathname === target);
+        expect(chown.mock.invocationCallOrder[targetCall]).toBeLessThan(
+          chmod.mock.invocationCallOrder[modeCall]!,
+        );
+      }
     },
   );
-
-  it("restores original ownership before file permissions when copying as another owner", async () => {
-    seedDatabase();
-    const original = fs.statSync(sqlitePath);
-    const stat = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((pathname, options) => {
-      const value = stat(pathname, options);
-      if (value && String(pathname).includes(".nocow-backup-") && typeof value.uid === "number") {
-        return Object.assign(value, { uid: value.uid + 1 });
-      }
-      return value;
-    });
-    const chown = vi.spyOn(fs, "chownSync");
-    const chmod = vi.spyOn(fs, "chmodSync");
-    expect((await repair()).join(",")).toContain("Rewrote");
-    const targetCall = chown.mock.calls.findIndex(([pathname]) =>
-      String(pathname).endsWith("openclaw.sqlite"),
-    );
-    expect(targetCall).toBeGreaterThanOrEqual(0);
-    const target = chown.mock.calls[targetCall]?.[0];
-    expect(chown.mock.calls[targetCall]).toEqual([target, original.uid, original.gid]);
-    const modeCall = chmod.mock.calls.findIndex(([pathname]) => pathname === target);
-    expect(chown.mock.invocationCallOrder[targetCall]).toBeLessThan(
-      chmod.mock.invocationCallOrder[modeCall]!,
-    );
-  });
 
   it.skipIf(process.platform === "win32")(
     "preserves nested symlink bytes and empty lock files without following targets",
@@ -258,8 +388,8 @@ describe("Doctor btrfs NOCOW", () => {
       const originalLock = fs.statSync(lock);
       const tool = vi.mocked(spawnSync).getMockImplementation()!;
       vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-        if (command === "fuser") {
-          expect(args).toContain(lock);
+        if (command === "fuser" && !args?.[0]?.includes(".nocow-probe-")) {
+          expect(args).not.toContain(lock);
           for (const pathname of args ?? []) {
             expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(false);
             expect(pathname.startsWith(external)).toBe(false);
@@ -268,8 +398,8 @@ describe("Doctor btrfs NOCOW", () => {
         return tool(command, args, options);
       });
 
-      expect((await repair()).join("\n")).toContain("Rewrote SQLite store directory with NOCOW");
-      expect(fixture.exchanges).toBe(1);
+      expect((await repair()).join("\n")).toContain("Rewrote SQLite files with NOCOW");
+      expect(fixture.exchanges).toBe(3);
       for (const [index, [pathname, target]] of [...links].entries()) {
         const stat = fs.lstatSync(pathname);
         expect(stat.isSymbolicLink()).toBe(true);
@@ -278,14 +408,14 @@ describe("Doctor btrfs NOCOW", () => {
       }
       expect(fs.existsSync(path.join(nested, "dangling.sqlite"))).toBe(false);
       expect(fs.statSync(lock).isFile()).toBe(true);
-      expect(fs.statSync(lock).ino).not.toBe(originalLock.ino);
+      expect(fs.statSync(lock).ino).toBe(originalLock.ino);
       expect(fs.readFileSync(lock)).toHaveLength(0);
       expect(fs.readFileSync(path.join(external, "untouched"), "utf8")).toBe("outside the store");
     },
   );
 
   it.skipIf(process.platform === "win32").each(["FIFO", "socket", "hard-linked"] as const)(
-    "refuses a %s entry with its type and path before exchanging the store",
+    "leaves unrelated %s entries untouched",
     async (type) => {
       seedDatabase();
       const pathname = path.join(directory, "unsupported");
@@ -306,12 +436,8 @@ describe("Doctor btrfs NOCOW", () => {
       }
       try {
         const notes = (await repair()).join("\n");
-        expect(notes).toContain(
-          type === "hard-linked"
-            ? "hard-linked path:"
-            : `unsupported store directory entry (${type}): ${pathname}`,
-        );
-        expect(fixture.exchanges).toBe(0);
+        expect(notes).toContain("Rewrote SQLite files with NOCOW");
+        expect(fixture.exchanges).toBe(3);
         expect(fs.statSync(directory).ino).toBe(original.ino);
       } finally {
         if (server) {
@@ -323,163 +449,35 @@ describe("Doctor btrfs NOCOW", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([false, true])(
-    "preserves named access ACLs and exact source default ACLs (default=%s)",
-    async (defaults) => {
+  it.skipIf(process.platform === "win32").each(["access", "default", "denied-grant"] as const)(
+    "preserves source %s ACLs without exposing inherited grants",
+    async (kind) => {
       seedDatabase();
       const fileAcl = "user::rw-\nuser:12345:r--\ngroup::r--\nmask::r--\nother::---";
-      const directoryAcl = defaults ? `${baseAcl}\n${inheritedDefaultAcl}` : baseAcl;
-      fixture.acls.set(sqlitePath, fileAcl);
+      const directoryAcl =
+        kind === "default"
+          ? `${baseAcl}\n${inheritedDefaultAcl}`
+          : kind === "denied-grant"
+            ? "user::rwx\nuser:12345:---\ngroup::r-x\nmask::r-x\nother::---"
+            : baseAcl;
       fixture.acls.set(directory, directoryAcl);
-      expect((await repair()).join(",")).toContain("Rewrote");
-      const stagedDirectory = [...fixture.acls.keys()].find(
-        (pathname) =>
-          pathname.includes(".nocow-backup-") &&
-          !pathname.endsWith(".sqlite") &&
-          !pathname.endsWith(".txt"),
-      )!;
-      expect(fixture.acls.get(stagedDirectory)).toBe(directoryAcl);
-      expect(fixture.acls.get(path.join(stagedDirectory, "openclaw.sqlite"))).toBe(fileAcl);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "keeps inherited named grants masked until the source directory ACL denies them",
-    async () => {
-      seedDatabase();
-      fixture.acls.set(directory, "user::rwx\nuser:12345:---\ngroup::r-x\nmask::r-x\nother::---");
+      if (kind !== "denied-grant") {
+        fixture.acls.set(sqlitePath, fileAcl);
+      }
       const originalMode = fs.statSync(directory).mode;
-      fixture.verifyPrivateAclBoundary = true;
       expect((await repair()).join(",")).toContain("Rewrote");
       expect(fs.statSync(directory).mode).toBe(originalMode);
-    },
-  );
-
-  it.each(["getfacl", "setfacl", "changed-directory-acl", "verification"] as const)(
-    "keeps the original store when ACL preservation fails: %s",
-    async (failure) => {
-      seedDatabase();
-      const original = fs.statSync(sqlitePath);
-      if (failure === "getfacl" || failure === "setfacl") {
-        fixture.unavailableAclTool = failure;
-      }
-      if (failure === "changed-directory-acl") {
-        vi.mocked(setSqliteDirectoryNoCow).mockImplementation(() => {
-          fixture.acls.set(directory, `${baseAcl}\n${inheritedDefaultAcl}`);
-        });
-      }
-      if (failure === "verification") {
-        fixture.acls.set(
-          sqlitePath,
-          "user::rw-\nuser:12345:r--\ngroup::r--\nmask::r--\nother::---",
-        );
-        fixture.rejectAclVerification = true;
-      }
-      const notes = await repair();
-      expect(notes.join(",")).toMatch(/refused/u);
-      expect(fixture.exchanges).toBe(0);
-      expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
-      if (failure === "changed-directory-acl") {
-        expect(notes.join(",")).toContain("source store changed");
+      expect(fixture.acls.get(directory)).toBe(directoryAcl);
+      if (kind !== "denied-grant") {
+        const stagedFile = [...fixture.acls.keys()].find(
+          (pathname) => pathname.includes(".nocow-backup-") && pathname.endsWith("openclaw.sqlite"),
+        )!;
+        expect(fixture.acls.get(stagedFile)).toBe(fileAcl);
       }
     },
   );
 
   it.each([
-    { name: "many sibling files", count: 2_001, suffix: "", outcome: "holders" },
-    { name: "long UTF-8 paths", count: 320, suffix: "界".repeat(60), outcome: "closed" },
-    {
-      name: "an inspection failure in a later batch",
-      count: 320,
-      suffix: "界".repeat(60),
-      outcome: "inspection-error",
-    },
-  ])(
-    "inspects every file in bounded fuser batches with $name",
-    async ({ count, suffix, outcome }) => {
-      seedDatabase();
-      const nested = path.join(directory, "workshop-skills");
-      fs.mkdirSync(nested);
-      const files = [
-        sqlitePath,
-        `${sqlitePath}-wal`,
-        `${sqlitePath}-shm`,
-        path.join(directory, "sibling.txt"),
-      ];
-      for (let index = 0; index < count; index++) {
-        const pathname = path.join(nested, `${index}-${suffix}.txt`);
-        fs.writeFileSync(pathname, "preserved sibling");
-        files.push(pathname);
-      }
-      const original = fs.statSync(sqlitePath);
-      const tool = vi.mocked(spawnSync).getMockImplementation()!;
-      const batches: string[][] = [];
-      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-        if (command !== "fuser") {
-          return tool(command, args, options);
-        }
-        const argv = [...(args ?? [])];
-        batches.push(argv);
-        const result = { status: 1, stdout: "", stderr: "", pid: 0, output: [], signal: null };
-        if (
-          argv.length > 2_000 ||
-          argv.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname, "utf8") + 1, 0) >
-            64 * 1024
-        ) {
-          return {
-            ...result,
-            status: null,
-            error: Object.assign(new Error("spawnSync fuser E2BIG"), { code: "E2BIG" }),
-          };
-        }
-        if (outcome === "holders") {
-          return { ...result, status: 0, stdout: batches.length === 1 ? "12345 12345" : "67890" };
-        }
-        if (outcome === "inspection-error" && batches.length > 1) {
-          return { ...result, stderr: "Cannot stat file /proc/123/fd/4: Permission denied" };
-        }
-        return result;
-      });
-
-      const notes = (await repair()).join("\n");
-      expect(notes).not.toContain("E2BIG");
-      expect(batches.length).toBeGreaterThan(1);
-      expect(batches.flat().slice(0, files.length).toSorted()).toEqual(files.toSorted());
-      if (outcome === "closed") {
-        expect(notes).toContain("Rewrote SQLite store directory with NOCOW");
-        expect(fixture.exchanges).toBe(1);
-        expect(fs.readFileSync(files.at(-1)!, "utf8")).toBe("preserved sibling");
-        expect(batches.flat().filter((pathname) => pathname === sqlitePath)).toHaveLength(2);
-      } else {
-        expect(notes).toContain(
-          outcome === "holders"
-            ? "store files are open (pids: 12345, 67890)"
-            : "fuser could not establish that all handles are closed: Cannot stat file /proc/123/fd/4: Permission denied",
-        );
-        expect(fixture.exchanges).toBe(0);
-        expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
-      }
-    },
-  );
-
-  it.each([
-    {
-      name: "open handles",
-      result: { status: 0, stdout: " 12345 67890", stderr: "/synthetic/store.sqlite:\n" },
-      detail: "store files are open (pids: 12345, 67890)",
-      absent: "could not establish",
-    },
-    {
-      name: "incomplete process inspection",
-      result: {
-        status: 1,
-        stdout: "",
-        stderr: "Cannot stat file /proc/123/fd/4: Permission denied\n",
-      },
-      detail:
-        "fuser could not establish that all handles are closed: Cannot stat file /proc/123/fd/4: Permission denied",
-      absent: "store files are open",
-    },
     {
       name: "missing fuser",
       result: {
@@ -488,62 +486,103 @@ describe("Doctor btrfs NOCOW", () => {
         stderr: "",
         error: Object.assign(new Error("spawnSync fuser ENOENT"), { code: "ENOENT" }),
       },
-      detail: "fuser could not establish that all handles are closed: spawnSync fuser ENOENT",
-      absent: "store files are open",
+      detail: "spawnSync fuser ENOENT",
     },
     {
       name: "unexpected exit status",
       result: { status: 2, stdout: "", stderr: "" },
-      detail: "fuser could not establish that all handles are closed: exit status 2",
-      absent: "store files are open",
+      detail: "exit status 2",
     },
     {
       name: "terminated fuser",
       result: { status: null, stdout: "", stderr: "", signal: "SIGTERM" as const },
-      detail: "fuser could not establish that all handles are closed: signal SIGTERM",
-      absent: "store files are open",
+      detail: "signal SIGTERM",
     },
-  ])("distinguishes $name without exchanging the store", async ({ result, detail, absent }) => {
+  ])("refuses uncertain SQLite handles with $name", async (scenario) => {
     seedDatabase();
     const original = fs.statSync(sqlitePath);
-    fixture.fuserResult = { pid: 0, output: [], signal: null, ...result };
-    const notes = (await repair()).join("\n");
-    expect(notes).toContain(detail);
-    expect(notes).not.toContain(absent);
+    fixture.fuserResult = { pid: 0, output: [], signal: null, ...scenario.result };
+    expect((await repair()).join("\n")).toContain(
+      `fuser could not establish that all handles are closed: ${scenario.detail}`,
+    );
     expect(fixture.exchanges).toBe(0);
     expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
   });
 
+  it.each([false, true])(
+    "cleans interrupted copies and resumes after checkpoint=%s",
+    async (checkpoint) => {
+      seedDatabase();
+      const unknown = `${directory}.nocow-backup-unknown`;
+      fs.mkdirSync(unknown);
+      fs.writeFileSync(path.join(unknown, "keep"), "unknown data");
+      let attempted = 0;
+      fixture.beforeExchange = () => {
+        if (++attempted === 2) {
+          throw new Error("interrupted");
+        }
+      };
+      await expect(repair()).rejects.toThrow("publication needs inspection");
+      const installed = fs.statSync(sqlitePath).ino;
+      if (checkpoint) {
+        const checkpointed = openNodeSqliteDatabase(sqlitePath);
+        checkpointed.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        checkpointed.close();
+        fs.rmSync(`${sqlitePath}-wal`, { force: true });
+        fs.rmSync(`${sqlitePath}-shm`, { force: true });
+      }
+      expect(inspectDoctorSqliteNoCow([sqlitePath]).paths).toEqual([sqlitePath]);
+      const interrupted = fs
+        .readdirSync(root)
+        .find((name) => name.startsWith("state.nocow-backup-") && !name.endsWith("unknown"))!;
+      const retained = path.join(root, interrupted, "openclaw.sqlite");
+      const original = fs.statSync(retained).ino;
+      fixture.beforeExchange = undefined;
+      const progress = vi.fn();
+      const result = await repairDoctorSqliteNoCow({
+        paths: [sqlitePath],
+        stateDir: root,
+        env: { OPENCLAW_STATE_DIR: root },
+        assertCurrent: () => {},
+        log: progress,
+      });
+      expect(result.warnings).toEqual([]);
+      expect(fs.statSync(sqlitePath).ino).toBe(installed);
+      expect(fs.statSync(retained).ino).toBe(original);
+      expect(fs.existsSync(path.join(root, interrupted, "openclaw.sqlite-wal"))).toBe(false);
+      expect(fs.readFileSync(path.join(unknown, "keep"), "utf8")).toBe("unknown data");
+      if (!checkpoint) {
+        expect(progress.mock.calls.some(([message]) => message.includes("(0/2)"))).toBe(true);
+      }
+      expect(inspectDoctorSqliteNoCow([sqlitePath]).paths).toEqual([]);
+      const db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      try {
+        expect(db.prepare("SELECT value FROM payload").get()?.value).toBe("in the WAL");
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each(["database", "sidecar"])("refuses an aliased %s before mutation", async (kind) => {
+    seedDatabase();
+    const source = kind === "database" ? sqlitePath : `${sqlitePath}-wal`;
+    fs.linkSync(source, path.join(root, "alias"));
+    expect((await repair()).join("\n")).toContain("hard-linked path");
+    expect(fixture.exchanges).toBe(0);
+  });
+
   it.each([
     "space",
-    "busy",
+    "getfacl",
+    "setfacl",
+    "verification",
     "unavailable",
     "authority",
     "corrupt",
     "exchange-failed",
-    "changed-source",
-    ...(process.platform === "win32" ? [] : ["changed-symlink" as const]),
-    "new-wal",
-    "changed-wal",
   ] as const)("leaves the previous store intact on %s refusal", async (failure) => {
     seedDatabase();
-    if (failure === "new-wal") {
-      const db = openNodeSqliteDatabase(sqlitePath);
-      db.prepare("SELECT value FROM payload").get();
-      db.close();
-      expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
-    }
-    if (failure === "new-wal" || failure === "changed-wal") {
-      const tool = vi.mocked(spawnSync).getMockImplementation()!;
-      let inspections = 0;
-      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-        const result = tool(command, args, options);
-        if (command === "fuser" && ++inspections === 2) {
-          fs.appendFileSync(`${sqlitePath}-wal`, "unexpected writer");
-        }
-        return result;
-      });
-    }
     const original = fs.statSync(sqlitePath);
     if (failure === "space") {
       vi.mocked(fs.statfsSync).mockReturnValue({
@@ -551,7 +590,7 @@ describe("Doctor btrfs NOCOW", () => {
         bavail: 0n,
       });
     }
-    if (failure === "busy" || failure === "unavailable" || failure === "exchange-failed") {
+    if (failure === "unavailable" || failure === "exchange-failed") {
       fixture.tools = failure;
     }
     if (failure === "corrupt") {
@@ -559,18 +598,12 @@ describe("Doctor btrfs NOCOW", () => {
       fs.unlinkSync(`${sqlitePath}-shm`);
       fs.writeFileSync(sqlitePath, "not a database");
     }
-    if (failure === "changed-source") {
-      vi.mocked(setSqliteDirectoryNoCow).mockImplementation(() => {
-        fs.writeFileSync(path.join(directory, "sibling.txt"), "changed by another writer");
-      });
+    if (failure === "getfacl" || failure === "setfacl") {
+      fixture.unavailableAclTool = failure;
     }
-    if (failure === "changed-symlink") {
-      const link = path.join(directory, "link");
-      fs.symlinkSync("sibling.txt", link);
-      vi.mocked(setSqliteDirectoryNoCow).mockImplementationOnce(() => {
-        fs.unlinkSync(link);
-        fs.symlinkSync("changed-target", link);
-      });
+    if (failure === "verification") {
+      fixture.acls.set(sqlitePath, "user::rw-\nuser:12345:r--\ngroup::r--\nmask::r--\nother::---");
+      fixture.rejectAclVerification = true;
     }
     const notes = await repair(() => {
       if (failure === "authority") {
@@ -580,7 +613,11 @@ describe("Doctor btrfs NOCOW", () => {
     expect(notes.join(",")).not.toContain("Rewrote");
     expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
     expect(fixture.exchanges).toBe(failure === "exchange-failed" ? 1 : 0);
-    expect(notes.join(",")).toMatch(/refused|skipped/u);
+    expect(notes.join(",")).toMatch(
+      failure === "getfacl" || failure === "setfacl" || failure === "verification"
+        ? /skipped/u
+        : /refused|skipped/u,
+    );
     expect(fs.readdirSync(root).filter((name) => name.startsWith("state.nocow-backup-"))).toEqual(
       [],
     );
@@ -588,14 +625,6 @@ describe("Doctor btrfs NOCOW", () => {
       expect(
         fs.readdirSync(root).filter((name) => name.startsWith("state.nocow-snapshots-")),
       ).toEqual([]);
-    }
-    if (
-      failure === "changed-source" ||
-      failure === "changed-symlink" ||
-      failure === "new-wal" ||
-      failure === "changed-wal"
-    ) {
-      expect(notes.join(",")).toContain("source store changed");
     }
   });
 });

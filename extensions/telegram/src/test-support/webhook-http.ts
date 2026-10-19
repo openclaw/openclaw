@@ -1,25 +1,38 @@
-import { request, type IncomingMessage } from "node:http";
+import { request } from "node:http";
+import { setImmediate } from "node:timers/promises";
 
 export async function yieldWebhookTask(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
 }
 
-function collectResponseBody(
-  res: IncomingMessage,
+function webhookRequest(
+  params: { port: number; path: string; secret?: string; declaredLength: number },
   onDone: (payload: { statusCode: number; body: string }) => void,
-): void {
-  const chunks: Buffer[] = [];
-  res.on("data", (chunk: Buffer | string) => {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  });
-  res.on("end", () => {
-    onDone({
-      statusCode: res.statusCode ?? 0,
-      body: Buffer.concat(chunks).toString("utf-8"),
-    });
-  });
+) {
+  return request(
+    {
+      hostname: "127.0.0.1",
+      port: params.port,
+      path: params.path,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(params.declaredLength),
+        ...(params.secret === undefined
+          ? {}
+          : { "x-telegram-bot-api-secret-token": params.secret }),
+      },
+    },
+    (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      res.on("end", () => {
+        onDone({ statusCode: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf-8") });
+      });
+    },
+  );
 }
 
 function createSingleSettlement<T>(params: {
@@ -28,43 +41,17 @@ function createSingleSettlement<T>(params: {
   clear: () => void;
 }) {
   let settled = false;
-  return {
-    isSettled() {
-      return settled;
-    },
-    resolve(value: T) {
+  const once =
+    <A>(callback: (value: A) => void) =>
+    (value: A) => {
       if (settled) {
         return;
       }
       settled = true;
       params.clear();
-      params.resolve(value);
-    },
-    reject(error: unknown) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      params.clear();
-      params.reject(error);
-    },
-  };
-}
-
-async function fetchWithTimeout(
-  input: string,
-  init: Omit<RequestInit, "signal">,
-  timeoutMs: number,
-): Promise<Response> {
-  const abort = new AbortController();
-  const timer = setTimeout(() => {
-    abort.abort();
-  }, timeoutMs);
-  try {
-    return await fetch(input, { ...init, signal: abort.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+      callback(value);
+    };
+  return { resolve: once(params.resolve), reject: once(params.reject) };
 }
 
 export async function postWebhookJson(params: {
@@ -73,18 +60,21 @@ export async function postWebhookJson(params: {
   secret?: string;
   timeoutMs?: number;
 }): Promise<Response> {
-  return await fetchWithTimeout(
-    params.url,
-    {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), params.timeoutMs ?? 5_000);
+  try {
+    return await fetch(params.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(params.secret ? { "x-telegram-bot-api-secret-token": params.secret } : {}),
       },
       body: params.payload,
-    },
-    params.timeoutMs ?? 5_000,
-  );
+      signal: abort.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function postWebhookHeadersOnly(params: {
@@ -101,25 +91,10 @@ export async function postWebhookHeadersOnly(params: {
       clear: () => clearTimeout(timeout),
     });
 
-    const req = request(
-      {
-        hostname: "127.0.0.1",
-        port: params.port,
-        path: params.path,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(params.declaredLength),
-          ...(params.secret ? { "x-telegram-bot-api-secret-token": params.secret } : {}),
-        },
-      },
-      (res) => {
-        collectResponseBody(res, (payload) => {
-          settle.resolve(payload);
-          req.destroy();
-        });
-      },
-    );
+    const req = webhookRequest({ ...params, secret: params.secret || undefined }, (payload) => {
+      settle.resolve(payload);
+      req.destroy();
+    });
 
     const timeout = setTimeout(() => {
       req.destroy(
@@ -128,12 +103,7 @@ export async function postWebhookHeadersOnly(params: {
       settle.reject(new Error("timed out waiting for webhook response"));
     }, params.timeoutMs ?? 5_000);
 
-    req.on("error", (error) => {
-      if (settle.isSettled() && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
-        return;
-      }
-      settle.reject(error);
-    });
+    req.on("error", settle.reject);
 
     req.flushHeaders();
   });
@@ -150,37 +120,12 @@ export async function postWebhookWithDeclaredLength(params: {
   | { kind: "error"; code: string | undefined }
 > {
   return await new Promise((resolve) => {
-    const req = request(
-      {
-        hostname: "127.0.0.1",
-        port: params.port,
-        path: params.path,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(params.declaredLength),
-          "x-telegram-bot-api-secret-token": params.secret,
-        },
-      },
-      (res) => {
-        collectResponseBody(res, (payload) => {
-          resolve({ kind: "response", ...payload });
-        });
-      },
-    );
+    const req = webhookRequest(params, (payload) => resolve({ kind: "response", ...payload }));
     req.on("error", (error: NodeJS.ErrnoException) => {
       resolve({ kind: "error", code: error.code });
     });
     req.end(params.body);
   });
-}
-
-function createDeterministicRng(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state * 1_664_525 + 1_013_904_223) >>> 0;
-    return state / 4_294_967_296;
-  };
 }
 
 export async function postWebhookPayloadWithChunkPlan(params: {
@@ -202,22 +147,7 @@ export async function postWebhookPayloadWithChunkPlan(params: {
       clear: () => clearTimeout(timeout),
     });
 
-    const req = request(
-      {
-        hostname: "127.0.0.1",
-        port: params.port,
-        path: params.path,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(payloadBuffer.length),
-          "x-telegram-bot-api-secret-token": params.secret,
-        },
-      },
-      (res) => {
-        collectResponseBody(res, settle["resolve"]);
-      },
-    );
+    const req = webhookRequest({ ...params, declaredLength: payloadBuffer.length }, settle.resolve);
 
     const timeout = setTimeout(() => {
       settle.reject(
@@ -228,9 +158,7 @@ export async function postWebhookPayloadWithChunkPlan(params: {
       req.destroy();
     }, params.timeoutMs ?? 15_000);
 
-    req.on("error", (error) => {
-      settle.reject(error);
-    });
+    req.on("error", settle.reject);
 
     const writeAll = async () => {
       if (params.mode === "single") {
@@ -238,11 +166,15 @@ export async function postWebhookPayloadWithChunkPlan(params: {
         return;
       }
 
-      const rng = createDeterministicRng(26156);
+      let rngState = 26156;
       let offset = 0;
       while (offset < payloadBuffer.length) {
         const remaining = payloadBuffer.length - offset;
-        const nextSize = Math.max(1, Math.min(remaining, 1 + Math.floor(rng() * 8_192)));
+        rngState = (rngState * 1_664_525 + 1_013_904_223) >>> 0;
+        const nextSize = Math.max(
+          1,
+          Math.min(remaining, 1 + Math.floor((rngState / 4_294_967_296) * 8_192)),
+        );
         const chunk = payloadBuffer.subarray(offset, offset + nextSize);
         const written = new Promise<void>((resolveWrite, rejectWrite) => {
           req.write(chunk, (error) => {
@@ -265,8 +197,6 @@ export async function postWebhookPayloadWithChunkPlan(params: {
       req.end();
     };
 
-    void writeAll().catch((error: unknown) => {
-      settle.reject(error);
-    });
+    void writeAll().catch(settle.reject);
   });
 }

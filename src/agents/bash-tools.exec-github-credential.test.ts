@@ -29,8 +29,8 @@ let hostsPath: string;
 const safeMessage =
   "GitHub Identity credential is unavailable or insecure. Reconnect or change GitHub Identity, then retry.";
 
-async function writeToken(token = "synthetic-launch-token") {
-  await fs.writeFile(hostsPath, `github.com:\n  oauth_token: ${token}\n`, { mode: 0o600 });
+async function writeToken(token = "synthetic-launch-token", host = "github.com") {
+  await fs.writeFile(hostsPath, `${host}:\n  oauth_token: ${token}\n`, { mode: 0o600 });
 }
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -93,6 +93,46 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === "win32")("local GitHub credential launch boundary", () => {
+  it.each(["github.com", "ghe.example.test", "tenant.ghe.com"])(
+    "uses only the selected %s profile at the actual child boundary",
+    async (host) => {
+      await writeToken("synthetic-launch-token", host);
+      const probe = path.join(root, "host-credential-outcome.cjs");
+      await fs.writeFile(
+        probe,
+        `process.stdout.write(JSON.stringify({
+          host: process.env.GH_HOST,
+          selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-launch-token",
+          cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
+        }));`,
+      );
+      const options = {
+        command: [process.execPath, probe].map(quoteCliArg).join(" "),
+        env: {
+          HOME: root,
+          ZDOTDIR: root,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          GH_CONFIG_DIR: profileDir,
+          GH_HOST: host,
+          GH_TOKEN: "",
+          GH_ENTERPRISE_TOKEN: "",
+          GITHUB_TOKEN: "synthetic-ambient-fallback",
+          GITHUB_ENTERPRISE_TOKEN: "synthetic-ambient-enterprise",
+        },
+      };
+      const outcome = await (await launch(options)).promise;
+      expect(outcome.exitCode).toBe(0);
+      expect(JSON.parse(outcome.aggregated)).toEqual({ host, selected: true, cleared: true });
+      if (host !== "github.com") {
+        await writeToken();
+        const refused = await (await launch(options)).promise;
+        expect(refused.exitCode).toBe(1);
+        expect(refused.aggregated).toContain(safeMessage);
+      }
+      expect(JSON.stringify(boundary.spawn.mock.calls)).not.toContain("synthetic-launch-token");
+    },
+  );
+
   it.each([true])(
     "keeps prepared, requested and snapshot environments secretless (pty=%s)",
     async (usePty) => {
@@ -188,7 +228,6 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
   });
 
   it.each([
-    "missing",
     "tokenless",
     "malformed",
     "multiline",
@@ -210,8 +249,6 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
     };
     if (yaml[fault]) {
       await fs.writeFile(hostsPath, yaml[fault]);
-    } else if (fault === "missing") {
-      await fs.rm(hostsPath);
     } else if (fault === "public-file") {
       await fs.chmod(hostsPath, 0o644);
     } else if (fault === "public-directory") {

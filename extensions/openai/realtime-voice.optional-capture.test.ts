@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const { FakeWebSocket } = await vi.hoisted(async () => {
@@ -5,16 +6,14 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
   return createOpenAIRealtimeMockState();
 });
 const mocks = vi.hoisted(() => ({
-  captureAvailable: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
   proxyAgent: { fixture: "configured-proxy" },
 }));
 
 vi.mock("ws", () => ({ default: FakeWebSocket }));
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  get captureWsEventAsync() {
-    return mocks.captureAvailable ? mocks.capture : undefined;
-  },
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  captureWsEventAsync: mocks.capture,
   resolveDebugProxySettings: () => ({ enabled: true }),
   createDebugProxyWebSocketAgent: () => mocks.proxyAgent,
 }));
@@ -25,10 +24,9 @@ beforeEach(() => {
   mocks.capture.mockReset().mockResolvedValue(undefined);
 });
 
-it.each(["absent", "present", "rejected"] as const)(
+it.each(["present", "rejected"] as const)(
   "preserves proxied realtime events and close when async capture is %s",
   async (capture) => {
-    mocks.captureAvailable = capture !== "absent";
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
@@ -68,26 +66,21 @@ it.each(["absent", "present", "rejected"] as const)(
       await bridge.close();
     }
     expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
-    if (capture === "absent") {
-      expect(mocks.capture).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.capture.mock.calls.map(([event]) => event)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ direction: "local", kind: "ws-open" }),
-          expect.objectContaining({ direction: "outbound", kind: "ws-frame" }),
-          expect.objectContaining({ direction: "inbound", kind: "ws-frame" }),
-          expect.objectContaining({ direction: "local", kind: "error" }),
-          expect.objectContaining({ direction: "local", kind: "ws-close" }),
-        ]),
-      );
-    }
+    expect(mocks.capture.mock.calls.map(([event]) => event)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ direction: "local", kind: "ws-open" }),
+        expect.objectContaining({ direction: "outbound", kind: "ws-frame" }),
+        expect.objectContaining({ direction: "inbound", kind: "ws-frame" }),
+        expect.objectContaining({ direction: "local", kind: "error" }),
+        expect.objectContaining({ direction: "local", kind: "ws-close" }),
+      ]),
+    );
   },
 );
 
-it.each(["absent", "present", "rejected"] as const)(
+it.each(["present", "rejected"] as const)(
   "preserves Live session input and graceful close when async capture is %s",
   async (capture) => {
-    mocks.captureAvailable = capture !== "absent";
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
@@ -117,12 +110,8 @@ it.each(["absent", "present", "rejected"] as const)(
     }
     expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed");
     expect(harness.onError).not.toHaveBeenCalled();
-    if (capture === "absent") {
-      expect(mocks.capture).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.capture).toHaveBeenCalledWith(
-        expect.objectContaining({ meta: { provider: "openai", capability: "gpt-live-voice" } }),
-      );
-    }
+    expect(mocks.capture).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: { provider: "openai", capability: "gpt-live-voice" } }),
+    );
   },
 );

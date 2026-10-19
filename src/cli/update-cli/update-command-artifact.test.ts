@@ -5,13 +5,11 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as privateWorkspaceRemoval from "../../infra/fs-safe-remove.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import {
-  createNpmTarget,
-  writePackageRoot,
-} from "../../infra/package-update-steps.test-support.js";
+import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { resolveGlobalInstallTarget } from "../../infra/update-global.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -71,10 +69,24 @@ it.each([
     vi.stubEnv("NODE_COMPILE_CACHE", canonicalTmp);
     vi.stubEnv("OPENCLAW_AGENT_DIR", canonicalState);
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(canonicalState, "continuation"));
-    const target = createNpmTarget(path.join(base, "prefix", "lib", "node_modules"));
-    target.npmOwner = { version: "11.10.0", lifecyclePolicy: "unflagged" };
-    const root = target.packageRoot!;
+    const root = path.join(base, "prefix", "lib", "node_modules", "openclaw");
     await writePackageRoot(root, "1.0.0");
+    const target = await resolveGlobalInstallTarget({
+      manager: "npm",
+      pkgRoot: root,
+      honorPackageRoot: true,
+      runCommand: (argv, options) =>
+        runCommandWithTimeout(argv, {
+          ...options,
+          env: { NODE_COMPILE_CACHE: undefined, NODE_DISABLE_COMPILE_CACHE: "1" },
+        }),
+      timeoutMs: 30_000,
+    });
+    expect(target).toMatchObject({
+      manager: "npm",
+      globalRoot: path.dirname(root),
+      packageRoot: root,
+    });
     const source = path.join(base, "package");
     await writePackageRoot(source, "1.0.1");
     await fs.writeFile(

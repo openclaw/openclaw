@@ -22,10 +22,16 @@ import {
   resolvePreferredNodePath,
   resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
-import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePinForInstall,
+} from "../../daemon/runtime-pin-state.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { sanitizeServiceInspectionError } from "../../daemon/service-inspection-error.js";
+import {
+  sanitizeServiceInspectionError,
+  ServiceStartRefusalError,
+} from "../../daemon/service-inspection-error.js";
 import { reconcileGatewayServiceDefinition } from "../../daemon/service-reconciliation.js";
 import type {
   GatewayServiceDefinitionBackupReceipt,
@@ -57,9 +63,11 @@ import {
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
+import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { assertExpectedRuntimePin, resolveRestoreServiceCli } from "./install-restore-cli.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
@@ -114,7 +122,9 @@ export function mergeInstallInvocationEnv(params: {
   const platform = params.platform ?? process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
-  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+  for (const [rawKey, rawValue] of Object.entries(
+    omitSecretEgressProxyEnvironment(params.env, platform),
+  )) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key || isDangerousHostEnvVarName(key)) {
       continue;
@@ -183,7 +193,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
   } catch (error) {
-    fail(sanitizeServiceInspectionError(error).message);
+    const message = sanitizeServiceInspectionError(error).message;
+    // No installer writes precede this read; the updater can retain the unchanged definition.
+    fail(
+      error instanceof ServiceStartRefusalError
+        ? `SERVICE_DEFINITION_UNKNOWN: ${message}`
+        : message,
+    );
     return;
   }
   let loaded;
@@ -204,14 +220,44 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   });
   let pinSnapshot;
   try {
-    pinSnapshot = readDaemonRuntimePinForInstall(
-      { kind: "gateway", env: installEnv },
-      existingServiceCommand,
-      opts.runtime !== undefined || opts.runtimePath !== undefined,
+    pinSnapshot = await withDaemonRuntimePinMigration(installEnv, () =>
+      readDaemonRuntimePinForInstall(
+        { kind: "gateway", env: installEnv },
+        existingServiceCommand,
+        opts.runtime !== undefined || opts.runtimePath !== undefined,
+      ),
     );
   } catch (error) {
     fail(`Runtime pin inspection failed: ${String(error)}`);
     return;
+  }
+  if (opts.expectedRuntimePin !== undefined) {
+    try {
+      assertExpectedRuntimePin(opts.expectedRuntimePin, pinSnapshot, "Gateway");
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+  let restoreServiceCli: Parameters<typeof buildGatewayInstallPlan>[0]["serviceCli"];
+  let restoredRuntimePath: string | undefined;
+  if (opts.restoreServiceCli !== undefined) {
+    try {
+      ({ serviceCli: restoreServiceCli, runtimePath: restoredRuntimePath } =
+        await resolveRestoreServiceCli(opts.restoreServiceCli, opts, installEnv));
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+  if (opts.expectedRuntimePin !== undefined) {
+    // This interop path defers startup preparation until custody and recovery inputs are valid.
+    const { ensureConfigReady } = await import("../program/config-guard.js");
+    await ensureConfigReady({
+      runtime: defaultRuntime,
+      commandPath: ["gateway", "install"],
+      suppressDoctorStdout: json,
+    });
   }
   let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
   const effectiveServiceEnv = mergeGatewayServiceEnv(process.env, existingServiceCommand);
@@ -267,12 +313,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (opts.wrapper !== undefined) {
     try {
       wrapperPath = await resolveOpenClawWrapperPath(opts.wrapper);
-      if (!wrapperPath) {
-        fail("Invalid --wrapper");
-        return;
-      }
     } catch (err) {
       fail(`Invalid --wrapper: ${String(err)}`);
+      return;
+    }
+    if (!wrapperPath) {
+      fail("Invalid --wrapper");
       return;
     }
   }
@@ -293,7 +339,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         installEnv,
       );
     }
-    runtimePath = wrapperPath ? undefined : pinnedRuntimePath;
+    runtimePath = wrapperPath ? undefined : (pinnedRuntimePath ?? restoredRuntimePath);
   } catch (error) {
     fail(
       `Invalid runtime pin: ${String(error)}; reinstall with an explicit --runtime or --runtime-path to replace the saved runtime pin.`,
@@ -350,14 +396,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
           runtime: "node",
           preferCurrentExecPath: true,
         });
-        if (!runtimePath) {
-          fail(
-            `No supported Node runtime is available. Install Node ${SUPPORTED_NODE_VERSIONS}, then rerun openclaw gateway install.`,
-          );
-          return;
-        }
       } catch (error) {
         fail(`Gateway runtime selection failed: ${String(error)}`);
+        return;
+      }
+      if (!runtimePath) {
+        fail(
+          `No supported Node runtime is available. Install Node ${SUPPORTED_NODE_VERSIONS}, then rerun openclaw gateway install.`,
+        );
         return;
       }
       autoRefreshMessage = `Replacing ${replacement} with ${runtimePath}; refreshing the install.`;
@@ -379,6 +425,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtimePath,
       pinnedRuntimePath,
       wrapperPath,
+      serviceCli: restoreServiceCli,
       existingCommand: existingServiceCommand,
       existingEnvironment: existingServiceEnv,
       existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
@@ -470,6 +517,15 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtimePinUpdate: {
         expected: pinSnapshot,
         pin: pinnedRuntimePath ? { runtime, path: pinnedRuntimePath } : undefined,
+        ...(opts.expectedRuntimePin !== undefined
+          ? {
+              requireDefinitionMatch: true as const,
+              // Recovery replaces a failed service; definition and pin custody still fence changes.
+              ...(!restoreServiceCli && pinSnapshot.definition !== undefined
+                ? { requireRunning: true as const }
+                : {}),
+            }
+          : {}),
       },
       env: installEnv,
       stdout,

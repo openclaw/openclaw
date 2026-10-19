@@ -1,7 +1,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -55,6 +56,7 @@ it("preserves archive cursor ties, page limits, and protected rows across worker
     }
     writeSessionEntry(database, "agent:main:eligible-a", victim);
     writeSessionEntry(database, "agent:main:eligible-b", { ...victim, sessionId: "second" });
+    writeSessionEntry(database, "agent:main:live", { ...victim, sessionId: "live" });
     writeSessionEntry(database, "agent:main:pinned", { ...victim, pinnedAt: 1 });
     writeSessionEntry(database, "agent:main:recent", { ...victim, updatedAt: Date.now() });
   }, options);
@@ -63,7 +65,7 @@ it("preserves archive cursor ties, page limits, and protected rows across worker
     async (owner) => {
       const first = await owner.readArchivedEvictionCandidates({
         env: process.env,
-        archived: { limit: 1, preserveRecentMs: 60_000 },
+        archived: { limit: 1, preserveRecentMs: 60_000, liveSessionKeys: ["agent:main:live"] },
       });
       expect(first).toMatchObject({
         candidates: [{ sessionKey: "agent:main:eligible-a", entry: victim }],
@@ -72,14 +74,24 @@ it("preserves archive cursor ties, page limits, and protected rows across worker
       });
       const second = await owner.readArchivedEvictionCandidates({
         env: process.env,
-        archived: { after: first.cursor, limit: 1, preserveRecentMs: 60_000 },
+        archived: {
+          after: first.cursor,
+          limit: 1,
+          preserveRecentMs: 60_000,
+          liveSessionKeys: ["agent:main:live"],
+        },
       });
       expect(second.candidates.map((candidate) => candidate.sessionKey)).toEqual([
         "agent:main:eligible-b",
       ]);
       const last = await owner.readArchivedEvictionCandidates({
         env: process.env,
-        archived: { after: second.cursor, limit: 1, preserveRecentMs: 60_000 },
+        archived: {
+          after: second.cursor,
+          limit: 1,
+          preserveRecentMs: 60_000,
+          liveSessionKeys: ["agent:main:live"],
+        },
       });
       expect(last).toMatchObject({
         candidates: [],
@@ -91,7 +103,7 @@ it("preserves archive cursor ties, page limits, and protected rows across worker
   );
 });
 
-it.each(["rebound", "admitted", "rejected", "revoked"] as const)(
+it.each(["rebound", "admitted", "registered", "rejected", "revoked"] as const)(
   "refuses stale archived eviction after a delayed batch is %s",
   async (outcome) => {
     runOpenClawAgentWriteTransaction(
@@ -124,7 +136,7 @@ it.each(["rebound", "admitted", "rejected", "revoked"] as const)(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     try {
       await awaitGateBeforeSettlement(reached.promise, sweep, "Archived worker read was bypassed");
@@ -135,10 +147,16 @@ it.each(["rebound", "admitted", "rejected", "revoked"] as const)(
           options,
         );
       } else if (outcome === "admitted") {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: storePath,
           identities: [key, victim.sessionId],
           assertAllowed: () => {},
+        });
+      } else if (outcome === "registered") {
+        registerAgentRunContext("archived-live-run", {
+          agentId: "main",
+          sessionKey: key,
+          projectSessionActive: true,
         });
       } else if (outcome === "revoked") {
         closing = closeOpenClawAgentDatabaseByPathAsync(options.path);
@@ -150,6 +168,7 @@ it.each(["rebound", "admitted", "rejected", "revoked"] as const)(
       } else {
         const message = {
           admitted: "competing work is in flight",
+          registered: "Session became active",
           rejected: "archived batch rejected",
           revoked: "revoked",
         }[outcome];
@@ -161,6 +180,7 @@ it.each(["rebound", "admitted", "rejected", "revoked"] as const)(
       );
     } finally {
       release.resolve();
+      clearAgentRunContext("archived-live-run");
       admission?.release();
       await result;
       await closing;

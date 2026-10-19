@@ -313,6 +313,41 @@ class CallbackScenarioTest(unittest.TestCase):
         ])
         self.assertEqual(sent, [7, 8])
 
+    def test_scenario_album_send_records_every_member_and_replies_to_the_last(self):
+        clock = [0]
+        calls = []
+        appended = []
+        class Recorder:
+            started_at = 0
+            chat_id = 4242
+            def _append(self, kind, message_id, **fields):
+                appended.append((kind, message_id, fields))
+        class Driver:
+            def send_photos(self, chat_id, paths, caption="", reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append(("album", chat_id, tuple(paths), caption))
+                clock[0] = 1
+                return [{"id": 7}, {"id": 8}, {"id": 9}]
+            def send_text(self, chat_id, text, reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append(("text", chat_id, text, reply_to))
+                clock[0] = 6
+                return {"id": 10}
+        photos = ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]
+        actions = [
+            {"type": "send", "atMs": 0, "text": "album caption", "photos": photos},
+            {"type": "send", "atMs": 0, "text": "follow-up", "replyToPrevious": True},
+        ]
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            sent = record.run_scenario(Recorder(), Driver(), {}, actions, 5)
+        self.assertEqual(calls, [
+            ("album", 4242, tuple(photos), "album caption"),
+            ("text", 4242, "follow-up", 9),
+        ])
+        self.assertEqual(sent, [7, 8, 9, 10])
+        kind, message_id, fields = appended[0]
+        self.assertEqual((kind, message_id), ("action", 7))
+        self.assertEqual(fields["photos"], photos)
+        self.assertEqual(fields["messageIds"], [7, 8, 9])
+
     def test_records_partial_rich_revisions_raw_without_fetching_full_content(self):
         client = FakeClient()
         rich = {

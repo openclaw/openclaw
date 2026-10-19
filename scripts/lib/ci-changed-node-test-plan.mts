@@ -11,11 +11,10 @@ import {
   uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isBoundaryTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
-import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   detectChangedScope,
   isCiDocumentationPath as isDocumentationPath,
-  isNodeTestDataOnlyPath,
+  isIndependentlyCheckedDocumentation,
 } from "../ci-changed-scope.mjs";
 import {
   buildVitestRunPlans,
@@ -30,11 +29,9 @@ import {
   resolveChangedTestTargetPlan,
   UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
-import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { getChangedPathFacts, isTestOnlyPath } from "./changed-path-facts.mjs";
 import {
   createChangedExtensionConfigShards,
-  createChangedExtensionConfigShardsForPaths,
   packChangedExtensionConfigShards,
   resolveChangedExtensionRoots,
 } from "./ci-extension-test-shards.mts";
@@ -53,10 +50,11 @@ import {
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
-  type NodeTestShardGroup,
+  type NodeTestShard,
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
-import { isPolicyTestOwnedPath, resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
+import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
+import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
@@ -73,11 +71,9 @@ import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
 } from "./extension-test-plan.mts";
-import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 import {
   mergeVitestPretestBuildModes,
   resolveVitestPretestBuildMode,
-  type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
 import {
   createCompactSplitTimingGeneration,
@@ -86,28 +82,17 @@ import {
   VITEST_PRETEST_BUILD_SECONDS,
 } from "./vitest-shard-metadata.mts";
 
-type ChangedNodeTestShard = {
-  checkName: string;
-  configs: string[];
-  groups?: NodeTestShardGroup[];
-  env?: Record<string, string>;
-  includePatterns?: string[];
-  planConcurrency?: number;
-  predictedSeconds?: number;
-  predictedTestSeconds?: number;
-  pretestBuildMode?: VitestPretestBuildMode;
-  requiresDist: boolean;
-  runner: string;
-  shardName: string;
+// The manifest protocol also reads this policy from historical target planners.
+export { hasQaSmokeAffectingChange } from "./ci-qa-smoke-scope.mts";
+export { isCiDocumentationPath, resolveReleaseFastLaneScope } from "../ci-changed-scope.mjs";
+
+type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
-  timeoutMinutes?: number;
 };
 type CwdOptions = { cwd?: string };
 type PlanDiagnostic = (reason: string) => void;
 type ChangedTargetValidation = {
   baseRef?: string;
-  dedicatedCoreTypeChecks?: boolean;
-  dedicatedNativeChecks?: { macos: boolean; ios: boolean; android: boolean };
   onFallback?: PlanDiagnostic;
   selectionMode?: "full" | "aggressive";
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
@@ -229,22 +214,18 @@ const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 const PR_NODE_TEST_SECONDS = 150;
-const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
-const publicPluginSdkEntrySources = Object.values(
-  buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
-);
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
 // the build pipeline itself, including shared declaration publication and cache owners.
 // Built-artifact test inputs below also require this lane even though they do
 // not change the bytes under test.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|cli-invocation\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
 const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
@@ -267,22 +248,6 @@ export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   );
 }
 
-// QA-owned surfaces that keep the smoke lane on PRs and main: the qa-lab
-// harness and scenario data, the two channels the smoke profile drives
-// (matrix, telegram), the packaged-CLI docker packaging scripts, and the QA
-// lane's own orchestration (this planner, the CI workflow, composite
-// actions) — changes to the gate must not be able to skip the gated lane.
-const QA_SMOKE_SURFACE_RE =
-  /^(?:extensions\/(?:matrix|qa-lab|telegram)|qa)\/|^scripts\/(?:build-all\.mts|package-openclaw-for-docker\.mts)$|^scripts\/lib\/ci-changed-node-test-plan\.mts$|^\.github\/(?:workflows\/ci\.yml$|actions\/)/u;
-
-/**
- * Broad runtime changes deliberately wait for manual/release validation;
- * automatic PR and main runs select the same QA-owned surfaces.
- */
-export function hasQaSmokeAffectingChange(changedPaths: string[]) {
-  return changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath));
-}
-
 // UI artifacts and their own build/performance policy retain explicit ownership;
 // workspace packages use their direct UI import edges instead of a global fallback.
 const CONTROL_UI_PERFORMANCE_SURFACE_RE =
@@ -292,7 +257,9 @@ export function hasControlUiPerformanceAffectingChange(
   changedPaths: string[],
   options: CwdOptions = {},
 ) {
-  const sources = changedPaths.filter((file) => !isTestOnlyPath(file));
+  const sources = changedPaths.filter(
+    (file) => !isTestOnlyPath(file) && !isDocumentationPath(file),
+  );
   if (sources.some((file) => CONTROL_UI_PERFORMANCE_SURFACE_RE.test(file))) {
     return true;
   }
@@ -319,9 +286,6 @@ const PROMPT_SNAPSHOT_SURFACE_RE =
 // plugin-sdk agent harness, codex catalog fixtures).
 const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
 
-const GLOBAL_NODE_TEST_INPUT_RE =
-  /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-process-env\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
-
 /**
  * True when a changed path can influence generated prompt snapshots: it
  * touches the snapshot surface directly, or the generator's import graph
@@ -330,10 +294,11 @@ const GLOBAL_NODE_TEST_INPUT_RE =
  */
 export function hasPromptSnapshotAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
   const cwd = options.cwd ?? process.cwd();
-  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+  const relevantPaths = changedPaths.filter((changedPath) => !isDocumentationPath(changedPath));
+  if (relevantPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
     return true;
   }
-  const sourcePaths = changedPaths.filter(
+  const sourcePaths = relevantPaths.filter(
     (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
   );
   if (sourcePaths.length === 0) {
@@ -405,46 +370,6 @@ function createBoundaryShard() {
   };
 }
 
-function isIndependentlyCheckedDocumentation(changedPath: string, cwd: string) {
-  if (
-    changedPath !== changedPath.trim() ||
-    path.posix.normalize(changedPath) !== changedPath ||
-    !isNodeTestDataOnlyPath(changedPath)
-  ) {
-    return false;
-  }
-  // Docs/instruction routing owns these pages; packaged templates retain runtime proof.
-  // Missing pages are deletions, but symlinks (including dangling ones) are not pages.
-  const entry = lstatSync(path.join(cwd, changedPath), { throwIfNoEntry: false });
-  return entry === undefined || entry.isFile();
-}
-
-export function resolveReleaseFastLaneScope(
-  changedPaths: readonly string[] | null,
-  options: CwdOptions = {},
-): { eligible: true } | { eligible: false; reason: string } {
-  if (!changedPaths?.length) {
-    return { eligible: false, reason: "missing changed paths" };
-  }
-  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
-  if (globalInput) {
-    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
-  }
-  const cwd = options.cwd ?? process.cwd();
-  const outsideScope = changedPaths.find(
-    (file) =>
-      !file.startsWith(".github/workflows/") &&
-      !file.startsWith("scripts/") &&
-      !file.startsWith("test/scripts/") &&
-      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
-      file !== "docs/reference/RELEASING.md" &&
-      !isIndependentlyCheckedDocumentation(file, cwd),
-  );
-  return outsideScope === undefined
-    ? { eligible: true }
-    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
-}
-
 /** The fixed cross-area smoke travels through the same exact-file owners as changed tests. */
 const PR_SMOKE_TEST_FILES = [
   "test/gateway-rpc-exporters.test.ts",
@@ -475,6 +400,7 @@ export function resolveChangedNodeTestTargets(
     cwd,
     broad: false,
     boundedOwners: true,
+    baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
@@ -631,8 +557,9 @@ function createChangedTargetShards(
   rowBudget?: number,
 ) {
   const timings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings("blacksmith") };
+  // Target children use source routing, even when selection remaps their canonical owner.
   const buildModeOf = (chunk: typeof targets) =>
-    chunk.some(({ plans }) => plans.some((plan) => plan.config === E2E_VITEST_CONFIG))
+    chunk.some(({ sourcePlans }) => sourcePlans.some((plan) => plan.config === E2E_VITEST_CONFIG))
       ? "private-qa"
       : resolveVitestPretestBuildMode([{ includePatterns: chunk.map(({ target }) => target) }]);
   const targetChunks: (typeof targets)[] = [];
@@ -727,6 +654,18 @@ function createChangedTargetShards(
     }
     return shard;
   });
+}
+
+/** Balance slow process proofs while reserving both rows inside the existing matrix cap. */
+export function createNodeWorkerE2eTestShards() {
+  return createChangedTargetShards(
+    resolvePreciseChangedTargets(NODE_WORKER_E2E_TEST_FILES, process.cwd()),
+    {
+      checkName: "checks-node-worker-e2e",
+      shardName: "node-worker-e2e",
+    },
+    2,
+  ).map((shard) => Object.assign(shard, { planConcurrency: 1 }));
 }
 
 /** Narrow canonical envelopes without changing their workers, routing, or isolation. */
@@ -899,63 +838,6 @@ function boundChangedNodeRows(
 }
 
 /**
- * True when core or shared runtime changes can affect extension consumers beyond
- * the changed extension paths.
- */
-export function hasCoreExtensionImpact(changedPaths: string[], options: CwdOptions = {}) {
-  // Planner policy has its own selector/guard tests. Running every plugin for
-  // a planner edit adds no runtime-consumer coverage; hourly/release plans
-  // and the complete-inventory planner assertions retain that proof.
-  if (
-    changedPaths.some(
-      (changedPath) =>
-        GLOBAL_NODE_TEST_INPUT_RE.test(changedPath) ||
-        getChangedPathFacts(changedPath).surface === "rootGlobal",
-    )
-  ) {
-    return true;
-  }
-  const cwd = options.cwd ?? process.cwd();
-  const regularLivePaths = changedPaths.filter(
-    (changedPath) =>
-      existsSync(path.join(cwd, changedPath)) &&
-      !changedPath.startsWith("extensions/") &&
-      !isPolicyTestOwnedPath(changedPath),
-  );
-  return (
-    detectChangedLanes(changedPaths).extensionImpactFromCore ||
-    (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
-      hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd, {
-        resolveAliases: true,
-      }))
-  );
-}
-
-/**
- * Covers changed extensions plus the full core-impact blast radius when precise
- * planning falls back. See #124412.
- */
-export function createChangedExtensionFallbackShards(
-  changedPaths: string[],
-  options: CwdOptions & RuntimeTestSelection = {},
-): ChangedNodeTestShard[] {
-  const cwd = options.cwd ?? process.cwd();
-  const shards = hasCoreExtensionImpact(changedPaths, { cwd })
-    ? createChangedExtensionConfigShards(
-        listAvailableExtensionIds(cwd).map((extensionId) => `extensions/${extensionId}`),
-        { ...options, changedPaths, fullConfigInventory: true, cwd },
-      )
-    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd, { ...options, changedPaths });
-  const jobs = packChangedExtensionConfigShards(shards);
-  if (jobs.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
-    throw new Error(
-      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${jobs.length} planned)`,
-    );
-  }
-  return jobs;
-}
-
-/**
  * Builds bounded PR jobs from precise changed-test targets.
  * Missing input is an error for the caller; changed inputs never widen to a full suite.
  */
@@ -965,8 +847,6 @@ export function createChangedNodeTestShards(
     ChangedTargetValidation & {
       runnerBackend?: string;
       compactNodeJobCap?: number;
-      releaseFastLane?: boolean;
-      includeReleaseOnlyToolingShards?: boolean;
       includeReleaseOnlyRuntimeTests?: boolean;
       includePrExemptRuntimeTests?: boolean;
       dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
@@ -974,7 +854,6 @@ export function createChangedNodeTestShards(
       dedicatedUiE2e?: boolean;
       dedicatedUiTests?: boolean;
       selectedTestTargets?: readonly string[];
-      dedicatedMaxLinesRatchet?: boolean;
     } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
@@ -1077,13 +956,14 @@ export function createChangedNodeTestShards(
   const canonicalTargets = prTargetPlans
     .filter(({ target }) => !target.startsWith("extensions/"))
     .filter(
-      ({ plans }) =>
+      ({ target, plans }) =>
         plans.every((plan) => plan.includePatterns) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
+          resolveVitestPretestBuildMode([{ includePatterns: [target] }]) === "private-qa" ||
           plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
         plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )

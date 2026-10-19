@@ -1,5 +1,4 @@
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-// Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
 import { normalizeConfigModelSelectionParent } from "./model-input-normalization.js";
 
@@ -38,8 +37,11 @@ export function parseConfigPath(
   return { ok: true, path: parts };
 }
 
-/** Sets a value at a validated config path, creating missing plain-object parents. */
-export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
+export function setConfigValueAtPath(
+  root: PathNode,
+  path: readonly string[],
+  value: unknown,
+): void {
   const leafKey = path.at(-1);
   if (leafKey === undefined) {
     throw new Error("Config path must contain at least one segment");
@@ -59,7 +61,11 @@ export function setConfigValueAtPath(root: PathNode, path: string[], value: unkn
 }
 
 /** Removes a value at a config path and prunes empty parent objects created by setters. */
-export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
+export function unsetConfigValueAtPath(
+  root: PathNode,
+  path: string[],
+  preserveEmptyParentsFrom?: PathNode,
+): boolean {
   const leafKey = path.at(-1);
   if (leafKey === undefined) {
     return false;
@@ -85,8 +91,14 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   // preserving any parent that still carries sibling config.
   for (const { node, key } of stack.toReversed()) {
     const child = node[key];
-    if (isPlainObject(child) && Object.keys(child).length === 0) {
+    if (
+      isPlainObject(child) &&
+      Object.keys(child).length === 0 &&
+      (!preserveEmptyParentsFrom ||
+        getConfigValueAtPath(preserveEmptyParentsFrom, path.slice(0, stack.length)) === undefined)
+    ) {
       delete node[key];
+      stack.pop();
     } else {
       break;
     }
@@ -94,8 +106,7 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   return true;
 }
 
-/** Reads a value from a config path, stopping at the first non-plain-object parent. */
-export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
+export function getConfigValueAtPath(root: PathNode, path: readonly string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
     if (!isPlainObject(cursor) || !Object.hasOwn(cursor, key)) {

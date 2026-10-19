@@ -1,4 +1,3 @@
-/** launchctl state parsing, inspection, and bootstrap primitives. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -45,6 +44,7 @@ import {
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
+  GatewayServiceControlArgs,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceReadOptions,
@@ -254,7 +254,12 @@ export async function readLaunchAgentProgramArguments(
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
     const [probe, system] = await Promise.all([
       probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`, timeoutMs).catch(
-        () => null,
+        (error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        },
       ),
       inspectSystemLaunchDaemonOwnership(label, { timeoutMs, scanInstalledPlists: false }),
     ]);
@@ -287,7 +292,12 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
     return { env, port: null, probeHosts: [] };
   }
-  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const command = await readLaunchAgentProgramArguments(env).catch((error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return null;
+  });
   return {
     env: mergeGatewayServiceEnv(env, command),
     port:
@@ -330,17 +340,18 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   preserveAutoStart?: boolean;
   preservedEnabled?: boolean;
   assertCurrent?: () => void;
+  deadline?: GatewayServiceControlArgs["deadline"];
   // Opt-in for callers that just issued `bootout` on this label. Only those can
   // race a pending teardown, so start/install/recovery paths keep failing fast
   // on an unrelated EIO instead of waiting out the teardown deadline.
   retryPendingTeardown?: boolean;
-}) {
+}): Promise<"bootstrapped" | "already-loaded"> {
   if (params.preserveAutoStart) {
     params.assertCurrent?.();
     const label = params.serviceTarget.slice(params.domain.length + 1);
     let enabled = params.preservedEnabled;
     if (enabled === undefined) {
-      const state = await execLaunchctl(["print-disabled", params.domain]);
+      const state = await execLaunchctl(["print-disabled", params.domain], params.deadline);
       if (state.code !== 0) {
         throw new Error(`launchctl print-disabled failed: ${formatLaunchctlResultDetail(state)}`);
       }
@@ -348,7 +359,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     }
     params.assertCurrent?.();
     if (!enabled) {
-      const enable = await execLaunchctl(["enable", params.serviceTarget]);
+      const enable = await execLaunchctl(["enable", params.serviceTarget], params.deadline);
       if (enable.code !== 0) {
         throw new Error(`launchctl enable failed: ${formatLaunchctlResultDetail(enable)}`);
       }
@@ -363,7 +374,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     if (!enabled) {
       try {
         params.assertCurrent?.();
-        const disable = await execLaunchctl(["disable", params.serviceTarget]);
+        const disable = await execLaunchctl(["disable", params.serviceTarget], params.deadline);
         if (disable.code !== 0) {
           throw new Error(
             `LaunchAgent disabled policy could not be restored: ${formatLaunchctlResultDetail(disable)}`,
@@ -382,14 +393,17 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         "LaunchAgent bootstrap and disabled-policy restoration failed.",
       );
     }
-    return;
+    if (boot.status === "rejected") {
+      throw boot.reason;
+    }
+    return boot.value;
   }
 
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
   if (!params.skipEnable) {
     params.assertCurrent?.();
-    const enable = await execLaunchctl(["enable", params.serviceTarget]);
+    const enable = await execLaunchctl(["enable", params.serviceTarget], params.deadline);
     if (enable.code === 0) {
       params.onMutation?.("enable");
     }
@@ -397,10 +411,13 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
   for (;;) {
     params.assertCurrent?.();
-    const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+    const boot = await execLaunchctl(
+      ["bootstrap", params.domain, params.plistPath],
+      params.deadline,
+    );
     if (boot.code === 0) {
       params.onMutation?.("bootstrap");
-      return;
+      return "bootstrapped";
     }
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
@@ -410,13 +427,17 @@ export async function bootstrapLaunchAgentOrThrow(params: {
           domain: params.domain,
           actionHint: params.actionHint,
         }),
+        { cause: boot },
       );
     }
     if (boot.termination === "exit" && isLaunchctlOperationAlreadyInProgress(detail)) {
-      const state = await probeLaunchAgentState(params.serviceTarget);
+      const state = await probeLaunchAgentState(
+        params.serviceTarget,
+        params.deadline?.remainingMs(),
+      );
       if (state.state === "running" || state.state === "stopped") {
         params.onMutation?.("bootstrap");
-        return;
+        return "already-loaded";
       }
     }
     const remainingMs = teardownDeadline - Date.now();
@@ -425,9 +446,16 @@ export async function bootstrapLaunchAgentOrThrow(params: {
       !isLaunchctlBootstrapPendingTeardown(boot) ||
       remainingMs <= 0
     ) {
-      throw new Error(`launchctl bootstrap failed: ${detail}`);
+      throw new Error(`launchctl bootstrap failed: ${detail}`, { cause: boot });
     }
-    await sleep(Math.min(LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS, remainingMs));
+    await sleep(
+      Math.min(
+        LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS,
+        remainingMs,
+        params.deadline?.remainingMs() ?? Infinity,
+      ),
+      params.deadline?.signal,
+    );
   }
 }
 type LaunchctlPrintInfo = {

@@ -1,11 +1,13 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { isSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { registerAgentContinuationRecoveryTests } from "./agent-continuation-recovery.test-utils.js";
@@ -20,11 +22,11 @@ import {
   setDateOnlyFakeClockActive,
   waitForAssertion,
   expectRecordFields,
-  expectStringFieldContains,
   expectSqliteSessionFileMarkerForEntry,
   mockCallArg,
   expectRespondError,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
   setupNewYorkTimeConfig,
   resetTimeConfig,
@@ -35,14 +37,18 @@ import {
   cronMediaCompletionEvent,
   setupCronContinuationReleaseFixture,
   operatorWriteGatewayClient,
+  REAL_PNG,
   waitForAgentCommandCall,
   invokeAgent,
+  observeAgentLifecycleAdmission,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
 describe("gateway agent handler", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-media-routing-");
   afterEach(describe0AfterEach0);
 
   it.each([
@@ -72,74 +78,69 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTestDir({ prefix: "openclaw-gateway-stale-failed-session-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      const storePath = `${sessionsDir}/sessions.json`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptFields = await scenario.configureTranscript({
-        sessionId: scenario.sessionId,
-        storePath,
-      });
-      const failedEntryWithStaleActivity = {
-        sessionId: scenario.sessionId,
-        ...transcriptFields,
-        status: "failed",
-        startedAt: now - 11 * 60_000,
-        endedAt: now - 10 * 60_000,
-        runtimeMs: 60_000,
-        abortedLastRun: true,
-        updatedAt: now - 10 * 60_000,
-        sessionStartedAt: now - 20 * 60_000,
-        lastInteractionAt: now - 10 * 60_000,
-      };
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: { session: { idleMinutes: 5 } },
-        storePath,
-        entry: failedEntryWithStaleActivity,
-        canonicalKey: scenario.sessionKey,
-      });
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [scenario.sessionKey]: { ...failedEntryWithStaleActivity },
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
-
-      await invokeAgent({
-        message: "recover stale failed",
-        agentId: "main",
-        sessionKey: scenario.sessionKey,
-        idempotencyKey: `test-idem-${scenario.sessionId}`,
-      } as AgentParams);
-
-      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-      expect(call.sessionId).toBe(scenario.sessionId);
-      if (scenario.expectsSqlitePresence) {
-        expect(mocks.hasSessionTranscriptEventsSync).toHaveBeenCalledWith({
-          agentId: "main",
-          sessionId: scenario.sessionId,
-          sessionKey: scenario.sessionKey,
-          storePath,
-          sessionEntry: failedEntryWithStaleActivity,
-        });
-      } else {
-        expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
-      }
-      expect(capturedEntry?.sessionId).toBe(scenario.sessionId);
-      expect(capturedEntry?.status).toBeUndefined();
-      expect(capturedEntry?.startedAt).toBeUndefined();
-      expect(capturedEntry?.endedAt).toBeUndefined();
-      expect(capturedEntry?.runtimeMs).toBeUndefined();
-      expect(capturedEntry?.abortedLastRun).toBeUndefined();
-      expectSqliteSessionFileMarkerForEntry(capturedEntry);
+    const root = sessionDirs.make();
+    const sessionsDir = `${root}/sessions`;
+    const storePath = `${sessionsDir}/sessions.json`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptFields = await scenario.configureTranscript({
+      sessionId: scenario.sessionId,
+      storePath,
     });
+    const failedEntryWithStaleActivity = {
+      sessionId: scenario.sessionId,
+      ...transcriptFields,
+      status: "failed",
+      startedAt: now - 11 * 60_000,
+      endedAt: now - 10 * 60_000,
+      runtimeMs: 60_000,
+      abortedLastRun: true,
+      updatedAt: now - 10 * 60_000,
+      sessionStartedAt: now - 20 * 60_000,
+      lastInteractionAt: now - 10 * 60_000,
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: { session: { idleMinutes: 5 } },
+      storePath,
+      entry: failedEntryWithStaleActivity,
+      canonicalKey: scenario.sessionKey,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [scenario.sessionKey]: { ...failedEntryWithStaleActivity },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mockSuccessfulAgentCommand();
+
+    await invokeAgent({
+      message: "recover stale failed",
+      agentId: "main",
+      sessionKey: scenario.sessionKey,
+      idempotencyKey: `test-idem-${scenario.sessionId}`,
+    } as AgentParams);
+
+    const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+    expect(call.sessionId).toBe(scenario.sessionId);
+    if (scenario.expectsSqlitePresence) {
+      expect(mocks.hasSessionTranscriptEventsSync).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionId: scenario.sessionId,
+        sessionKey: scenario.sessionKey,
+        storePath,
+      });
+    } else {
+      expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
+    }
+    expect(capturedEntry?.sessionId).toBe(scenario.sessionId);
+    expect(capturedEntry?.status).toBeUndefined();
+    expect(capturedEntry?.startedAt).toBeUndefined();
+    expect(capturedEntry?.endedAt).toBeUndefined();
+    expect(capturedEntry?.runtimeMs).toBeUndefined();
+    expect(capturedEntry?.abortedLastRun).toBeUndefined();
+    expectSqliteSessionFileMarkerForEntry(capturedEntry);
   });
 
   it("recovers a failed session when its SQLite transcript rows exist", async () => {
@@ -148,11 +149,14 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTestDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
-      const failedEntryWithResolvedTranscript = {
+    const root = sessionDirs.make();
+    const sessionsDir = `${root}/sessions`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: `${sessionsDir}/sessions.json`,
+      entry: {
         sessionId: "failed-present-session-id",
         status: "failed",
         startedAt: now - 1_000,
@@ -162,28 +166,21 @@ describe("gateway agent handler", () => {
         updatedAt: now,
         sessionStartedAt: now,
         lastInteractionAt: now,
-      };
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: `${sessionsDir}/sessions.json`,
-        entry: failedEntryWithResolvedTranscript,
-        canonicalKey: "agent:main:main",
-      });
-
-      const capturedEntry = await runMainAgentAndCaptureEntry(
-        "test-idem-failed-present-transcript",
-      );
-
-      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-      expect(call.sessionId).toBe("failed-present-session-id");
-      expect(capturedEntry?.sessionId).toBe("failed-present-session-id");
-      expect(capturedEntry?.status).toBeUndefined();
-      expect(capturedEntry?.startedAt).toBeUndefined();
-      expect(capturedEntry?.endedAt).toBeUndefined();
-      expect(capturedEntry?.runtimeMs).toBeUndefined();
-      expect(capturedEntry?.abortedLastRun).toBeUndefined();
-      expectSqliteSessionFileMarkerForEntry(capturedEntry);
+      },
+      canonicalKey: "agent:main:main",
     });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-failed-present-transcript");
+
+    const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+    expect(call.sessionId).toBe("failed-present-session-id");
+    expect(capturedEntry?.sessionId).toBe("failed-present-session-id");
+    expect(capturedEntry?.status).toBeUndefined();
+    expect(capturedEntry?.startedAt).toBeUndefined();
+    expect(capturedEntry?.endedAt).toBeUndefined();
+    expect(capturedEntry?.runtimeMs).toBeUndefined();
+    expect(capturedEntry?.abortedLastRun).toBeUndefined();
+    expectSqliteSessionFileMarkerForEntry(capturedEntry);
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
@@ -196,7 +193,7 @@ describe("gateway agent handler", () => {
     });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: existingEntry,
       canonicalKey: sessionKey,
     });
@@ -211,10 +208,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -250,22 +244,19 @@ describe("gateway agent handler", () => {
     let capturedEntry: Record<string, unknown> | undefined;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: capturedEntry,
       canonicalKey: sessionKey,
     }));
 
+    const store: Record<string, unknown> = {};
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {};
       const result = await updater(store);
-      capturedEntry = result as Record<string, unknown>;
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -301,7 +292,7 @@ describe("gateway agent handler", () => {
     let capturedEntry: Record<string, unknown> | undefined;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: capturedEntry,
       canonicalKey: sessionKey,
     }));
@@ -313,10 +304,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -471,7 +459,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: existingEntry,
       canonicalKey: sessionKey,
     });
@@ -486,10 +474,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -548,70 +533,54 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not bypass image support check for non-ACP sessions with acpTurnSource", async () => {
-    primeMainAgentRun();
-    mocks.agentCommand.mockClear();
+  it.each([
+    { name: "non-ACP session", sessionKey: "agent:main:main" },
+    { name: "ACP-shaped session without metadata", sessionKey: "agent:main:acp:missing-meta" },
+  ])("requires image understanding for a $name with acpTurnSource", async ({ sessionKey }) => {
+    mocks.loadConfigReturn = {
+      agents: { defaults: { model: { primary: "test/text-only" } } },
+    };
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.readAcpSessionMetaAsync.mockResolvedValue(undefined);
     const respond = vi.fn();
+    const context = makeContext();
+    context.loadGatewayModelCatalog = vi.fn<typeof context.loadGatewayModelCatalog>(async () => [
+      { id: "text-only", name: "Synthetic text model", provider: "test", input: ["text"] },
+    ]);
+    const runId = `image-offload-${sessionKey}`;
 
     await invokeAgent(
       {
         message: "describe this image",
         agentId: "main",
-        sessionKey: "agent:main:main",
+        sessionKey,
         acpTurnSource: "manual_spawn",
-        idempotencyKey: "test-acp-image-bypass-guard",
+        idempotencyKey: runId,
         attachments: [
           {
             type: "file",
             mimeType: "image/png",
             fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
+            content: REAL_PNG.toString("base64"),
           },
         ],
       },
-      { respond, reqId: "test-acp-image-bypass-guard" },
+      { context, respond, reqId: runId },
     );
 
-    // Non-ACP session (agent:main:main) with acpTurnSource="manual_spawn" must
-    // NOT bypass resolveGatewayModelSupportsImages. The image should be rejected
-    // by the normal image-support check since this is not an ACP session.
+    // A claimed ACP source cannot hand raw images to a text-only model.
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "does not accept image inputs");
-  });
-
-  it("does not bypass image support check for ACP-shaped sessions without ACP metadata", async () => {
-    mockMainSessionEntry({ sessionId: "existing-acp-shaped-session" });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-    mocks.agentCommand.mockClear();
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "describe this image",
-        agentId: "main",
-        sessionKey: "agent:main:acp:missing-meta",
-        acpTurnSource: "manual_spawn",
-        idempotencyKey: "test-acp-image-metadata-bypass-guard",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
-          },
-        ],
-      },
-      { respond, reqId: "test-acp-image-metadata-bypass-guard" },
+    expect(respond).toHaveBeenLastCalledWith(
+      false,
+      expect.objectContaining({ status: "error" }),
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining(
+          "Configure agents.defaults.imageModel or tools.media.models",
+        ),
+      }),
+      expect.objectContaining({ runId }),
     );
-
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "does not accept image inputs");
   });
 
   it("rejects provider and model overrides for write-scoped callers", async () => {
@@ -693,7 +662,7 @@ describe("gateway agent handler", () => {
   it("preserves fresh modelOverride when cached entry is stale (#5369)", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "subagent-session-id",
         updatedAt: Date.now() - 1000,
@@ -715,10 +684,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:test-uuid"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -740,7 +706,7 @@ describe("gateway agent handler", () => {
   it("preserves all fresh session fields when cached entry is stale (#5369 broader)", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "subagent-session-id",
         updatedAt: Date.now() - 1000,
@@ -789,10 +755,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:test-broader"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -810,7 +773,7 @@ describe("gateway agent handler", () => {
   it("checks delivery sendPolicy against the fresh store entry (#5369)", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "subagent-session-id",
         updatedAt: Date.now() - 1000,
@@ -837,10 +800,7 @@ describe("gateway agent handler", () => {
       args?.entry?.sendPolicy === "deny" ? "deny" : "allow",
     );
     mocks.agentCommand.mockClear();
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const respond = vi.fn();
     await invokeAgent(
       {
@@ -872,37 +832,36 @@ describe("gateway agent handler", () => {
 
   it("recovers terminal failed agent API sessions with SQLite transcript rows", async () => {
     const sessionId = "failed-agent-session";
-    await withTestDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: `${sessionsDir}/sessions.json`,
-        entry: {
-          sessionId,
-          status: "failed",
-          startedAt: 100,
-          endedAt: 200,
-          runtimeMs: 100,
-          abortedLastRun: true,
-          updatedAt: Date.now(),
-        },
-        canonicalKey: "agent:main:main",
-      });
-
-      const capturedEntry = await runMainAgentAndCaptureEntry("recover-terminal-agent-session");
-      const call = await waitForAgentCommandCall();
-
-      expect(call.sessionId).toBe(sessionId);
-      expectRecordFields(capturedEntry, {
+    const root = sessionDirs.make();
+    const sessionsDir = `${root}/sessions`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: `${sessionsDir}/sessions.json`,
+      entry: {
         sessionId,
-        status: undefined,
-        startedAt: undefined,
-        endedAt: undefined,
-        runtimeMs: undefined,
-        abortedLastRun: undefined,
-      });
+        status: "failed",
+        startedAt: 100,
+        endedAt: 200,
+        runtimeMs: 100,
+        abortedLastRun: true,
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:main",
+    });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("recover-terminal-agent-session");
+    const call = await waitForAgentCommandCall();
+
+    expect(call.sessionId).toBe(sessionId);
+    expectRecordFields(capturedEntry, {
+      sessionId,
+      status: undefined,
+      startedAt: undefined,
+      endedAt: undefined,
+      runtimeMs: undefined,
+      abortedLastRun: undefined,
     });
   });
 
@@ -915,7 +874,7 @@ describe("gateway agent handler", () => {
     );
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "old-session-id",
         updatedAt: Date.now() - 1000,
@@ -928,7 +887,6 @@ describe("gateway agent handler", () => {
         "agent:main:subagent:test-rotation": {
           sessionId: "fresh-session-id",
           updatedAt: Date.now(),
-          status: "running",
           startedAt: 111,
           sessionFile: "/tmp/fresh-session.jsonl",
         },
@@ -937,10 +895,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:test-rotation"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -954,7 +909,7 @@ describe("gateway agent handler", () => {
 
     expectRecordFields(capturedEntry, {
       sessionId: "fresh-session-id",
-      status: "running",
+      status: undefined,
       startedAt: 111,
       sessionStartedAt: undefined,
     });
@@ -973,7 +928,7 @@ describe("gateway agent handler", () => {
     const recoveredStartedAt = Date.now() - 5_000;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "legacy-session-id",
         updatedAt: Date.now() - 1000,
@@ -998,10 +953,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:legacy"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -1022,7 +974,7 @@ describe("gateway agent handler", () => {
     const freshStartedAt = Date.now() - 2_500;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "legacy-session-id",
         updatedAt: Date.now() - 1000,
@@ -1048,10 +1000,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:concurrent"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -1214,7 +1163,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1370,7 +1319,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1404,7 +1353,9 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
-  it("claims an exact cron continuation until the admitted agent turn settles", async () => {
+  it("claims an exact cron continuation until the admitted agent turn settles", async ({
+    signal,
+  }) => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
     const baseSessionKey = "agent:main:cron:job-1";
@@ -1422,7 +1373,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1432,85 +1383,99 @@ describe("gateway agent handler", () => {
       [sessionKey]: structuredClone(entry),
     };
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    let finishFirstTurn: (result: { payloads: Array<{ text: string }> }) => void = () => {};
-    mocks.agentCommand.mockImplementationOnce(
-      async () =>
-        await new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
-          finishFirstTurn = resolve;
-        }),
-    );
+    const firstTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
+    mocks.agentCommand.mockImplementationOnce(() => firstTurn.promise);
+    const admissionObserver = await observeAgentLifecycleAdmission("cron-media-first");
+    let firstSource: ReturnType<typeof getRpcSource>;
     const context = makeContext();
-    const first = await invokeAgent(
-      {
-        message: "first media completion",
-        sessionKey,
-        internalEvents: [cronMediaCompletionEvent()],
-        idempotencyKey: "cron-media-first",
-      },
-      {
-        reqId: "cron-media-first",
-        client: cronContinuationGatewayClient(),
-        context,
-        flushDispatch: false,
-      },
-    );
-    let admissionActiveAtFinalResponse: boolean | undefined;
-    first.mockImplementation((ok, payload) => {
-      if (ok && payload && typeof payload === "object" && "status" in payload) {
-        admissionActiveAtFinalResponse = isSessionWorkAdmissionActive("/tmp/sessions.json", [
+    try {
+      const first = await invokeAgent(
+        {
+          message: "first media completion",
           sessionKey,
-          "run-1",
-        ]);
-      }
-    });
-    await waitForAgentCommandCall();
-    expect(
-      expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-    ).toMatchObject({
-      phase: "continuing",
-      ownerRunId: "cron-media-first",
-    });
-
-    const second = await invokeAgent(
-      {
-        message: "second media completion",
-        sessionKey,
-        internalEvents: [cronMediaCompletionEvent()],
-        idempotencyKey: "cron-media-second",
-      },
-      {
-        reqId: "cron-media-second",
-        client: cronContinuationGatewayClient(),
-        context,
-        flushDispatch: false,
-      },
-    );
-    expectRespondError(second, {
-      code: ErrorCodes.UNAVAILABLE,
-      message: "cron run continuation changed before admission",
-    });
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
-    expect(
-      expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-    ).toMatchObject({
-      phase: "continuing",
-      ownerRunId: "cron-media-first",
-    });
-
-    finishFirstTurn({ payloads: [{ text: "continued" }] });
-    await waitForAssertion(() => {
+          internalEvents: [cronMediaCompletionEvent()],
+          idempotencyKey: "cron-media-first",
+        },
+        {
+          reqId: "cron-media-first",
+          client: cronContinuationGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      );
+      firstSource = expectDefined(getRpcSource("cron-media-first"), "first continuation source");
+      const admission = await admissionObserver.getReceipt();
+      let admissionActiveAtFinalResponse: boolean | undefined;
+      first.mockImplementation((ok, payload) => {
+        if (ok && payload && typeof payload === "object" && "status" in payload) {
+          admissionActiveAtFinalResponse = admission.isActive();
+        }
+      });
+      await waitForAgentCommandCall();
       expect(
         expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-      ).toEqual({
-        lifecycleRevision: "revision-1",
-        phase: "ready",
-        basePersisted: true,
+      ).toMatchObject({
+        phase: "continuing",
+        ownerRunId: "cron-media-first",
       });
-    });
-    await waitForAssertion(() => expect(admissionActiveAtFinalResponse).toBe(false));
-    expect(first).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ok" }), undefined, {
-      runId: "cron-media-first",
-    });
+
+      const second = await invokeAgent(
+        {
+          message: "second media completion",
+          sessionKey,
+          internalEvents: [cronMediaCompletionEvent()],
+          idempotencyKey: "cron-media-second",
+        },
+        {
+          reqId: "cron-media-second",
+          client: cronContinuationGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      );
+      expectRespondError(second, {
+        code: ErrorCodes.UNAVAILABLE,
+        message: "cron run continuation changed before admission",
+      });
+      expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+      expect(
+        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+      ).toMatchObject({
+        phase: "continuing",
+        ownerRunId: "cron-media-first",
+      });
+
+      firstTurn.resolve({ payloads: [{ text: "continued" }] });
+      await waitForAssertion(() => {
+        expect(
+          expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
+        ).toEqual({
+          lifecycleRevision: "revision-1",
+          phase: "ready",
+          basePersisted: true,
+        });
+      });
+      await waitForAssertion(() => expect(admissionActiveAtFinalResponse).toBe(false));
+      expect(first).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "ok" }),
+        undefined,
+        {
+          runId: "cron-media-first",
+        },
+      );
+      await withinTest(firstSource.input.settlement.promise, signal);
+      expect(
+        isSessionControllerWorkActive(getAgentTestStorePath(), [sessionKey, "run-1"], "main"),
+      ).toBe(false);
+    } finally {
+      firstTurn.resolve({ payloads: [{ text: "continued" }] });
+      try {
+        await firstSource?.input.settlement.promise;
+      } finally {
+        admissionObserver.restore();
+      }
+    }
   });
 
   it("rejects terminal continuation settlement after its Gateway owner generation changes", async () => {
@@ -1583,7 +1548,7 @@ describe("gateway agent handler", () => {
     const store: Record<string, SessionEntry> = { [sessionKey]: structuredClone(entry) };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1629,7 +1594,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
@@ -1701,7 +1666,7 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });

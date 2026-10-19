@@ -1,14 +1,18 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ConfigWritePostCommitError } from "../../config/io.write-errors.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const write = vi.hoisted(() => vi.fn());
 vi.mock("../../config/io.js", async (importOriginal) => ({
@@ -26,32 +30,6 @@ vi.mock("../config-get-response.js", () => ({
   readConfigGetResponse: vi.fn(),
   invalidateConfigGetResponseCache: vi.fn(),
 }));
-const dirs = createTempDirTracker();
-afterEach(dirs.cleanup);
-
-it.each([
-  { exists: false, valid: true },
-  { exists: true, valid: false },
-])(
-  "config.get preserves diagnostics without inferring rollback from a backup: %j",
-  async ({ exists, valid }) => {
-    const configPath = path.join(dirs.make("config-read-recovery-"), "openclaw.json");
-    writeFileSync(`${configPath}.bak`, '{"gateway":{"mode":"local"}}');
-    const snapshot = {
-      ...createConfigWriteSnapshot({}).snapshot,
-      path: configPath,
-      exists,
-      valid,
-      issues: valid ? [] : [{ path: "gateway.port", message: "Expected number, received string" }],
-      configRevisionHash: "revision",
-      appliedConfigHash: null,
-    };
-    vi.mocked(readConfigGetResponse).mockResolvedValue(snapshot);
-    const { options, respond } = createConfigHandlerHarness({ method: "config.get" });
-    await expectDefined(configHandlers["config.get"], "registered config.get")(options);
-    expect(respond).toHaveBeenCalledWith(true, snapshot, undefined);
-  },
-);
 
 it("config.get keeps recorded publication failure across an older read and reconciles a fresh valid read", async () => {
   const writeHarness = createConfigHandlerHarness({

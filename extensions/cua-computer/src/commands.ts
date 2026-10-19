@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseScreenSnapshotParamsJSON,
   type ComputerActParams,
@@ -13,7 +13,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
 import { z } from "zod";
 import type { CuaComputerActParams } from "./action-targets.js";
-import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
+import { CLICK_ACTIONS, normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 import {
   ClickButton,
   ScrollDirection,
@@ -21,8 +21,14 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
-import { actionEnvelope, platformActions, projectedToolDetails } from "./driver-result.js";
+import {
+  actionEnvelope,
+  CUA_WIRE_ACTION_NAMES,
+  platformActions,
+  projectedToolDetails,
+} from "./driver-result.js";
 import { createLazyCuaExecutionResources } from "./execution-resources.js";
+import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
   issueFrame,
@@ -37,7 +43,6 @@ import { closeRecordingExecution } from "./recording-actions.js";
 import { handleWindowAct } from "./window-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
-const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 // Rastermill enforces inputPixels before resizing, so this must clear the native
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
@@ -210,7 +215,7 @@ function clickArgs(
   platform: NodeJS.Platform,
   frame: CuaLastFrame,
   params: CuaComputerActParams,
-  button: ClickButton,
+  button: "left" | "right" | "middle",
   count: 1 | 2 | 3,
 ) {
   const point = scalePoint(frame, params.x, params.y, params.action);
@@ -222,7 +227,9 @@ function clickArgs(
   }
   return {
     ...point,
-    button,
+    button: { left: ClickButton.Left, right: ClickButton.Right, middle: ClickButton.Middle }[
+      button
+    ],
     count,
   };
 }
@@ -330,18 +337,7 @@ async function handleDesktopAct(
         case "middle_click":
         case "double_click":
         case "triple_click": {
-          const button =
-            desktopParams.action === "right_click"
-              ? ClickButton.Right
-              : desktopParams.action === "middle_click"
-                ? ClickButton.Middle
-                : ClickButton.Left;
-          const count =
-            desktopParams.action === "double_click"
-              ? 2
-              : desktopParams.action === "triple_click"
-                ? 3
-                : 1;
+          const { button, count } = CLICK_ACTIONS[desktopParams.action];
           result = assertToolSuccess(
             await driver.click(clickArgs(platform, frame, desktopParams, button, count), signal),
             "click",
@@ -394,6 +390,7 @@ export function createCuaComputerProvider(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
+  const generation = `cua-computer-v2:${randomUUID()}`;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
   let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
@@ -435,9 +432,7 @@ export function createCuaComputerProvider(
       provider: {
         id: "cua-computer",
         label: "CUA Computer",
-        generation: isSupportedPlatform
-          ? `cua-computer-v2:${availabilityDriver().generation}`
-          : "cua-computer-v2:unsupported",
+        generation,
       },
       actions: platformActions(platform),
       targets: ["screen", "window", "element", "browser"],
@@ -473,9 +468,28 @@ export function createCuaComputerProvider(
       }
       const executionDriver = options.driver ?? createDriver();
       const resources = createLazyCuaExecutionResources();
-      const executionState = { resources, recording: {} };
+      const executionState: CuaExecutionState = { resources, recording: {} };
       const queue = new KeyedAsyncQueue();
       const frameState: CuaFrameState = { generation: executionDriver.generation };
+      const prepareExecution = async (signal?: AbortSignal) => {
+        const assertAuthority = () => {
+          signal?.throwIfAborted();
+          assertOpen();
+        };
+        assertAuthority();
+        try {
+          await executionDriver.prepareExecution?.(signal, assertAuthority);
+        } finally {
+          // Released recording ownership must not survive an interrupted renewal.
+          if (frameState.generation !== executionDriver.generation) {
+            executionState.recording.active = undefined;
+          }
+        }
+        // Close/cancellation can arrive while the native health call is pending.
+        assertAuthority();
+        // Renewal revokes refs before action validation, not after dispatch.
+        adoptGeneration(frameState, executionDriver.generation);
+      };
       let closing = false;
       let closePromise: Promise<void> | undefined;
       const assertOpen = () => {
@@ -496,6 +510,7 @@ export function createCuaComputerProvider(
             assertOpen();
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
             assertPrimaryDisplay(params.screenIndex);
+            await prepareExecution(signal);
             const format = params.format ?? "jpeg";
             const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
             const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
@@ -546,12 +561,14 @@ export function createCuaComputerProvider(
         act: async (paramsJSON, signal) =>
           await queue.enqueue("execution", async () => {
             assertOpen();
+            const params = parseComputerActParamsJSON(paramsJSON);
+            await prepareExecution(signal);
             return await handleWindowAct(
               platform,
               executionDriver,
               frameState,
               executionState,
-              parseComputerActParamsJSON(paramsJSON),
+              params,
               handleDesktopAct,
               signal,
             );

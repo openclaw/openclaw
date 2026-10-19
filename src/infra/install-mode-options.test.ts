@@ -37,24 +37,16 @@ describe("install mode option helpers", () => {
     {
       name: "uses default timeout when not provided",
       params: {},
-      defaultTimeoutMs: undefined,
       expected: { timeoutMs: 120_000, mode: "install", dryRun: false },
-    },
-    {
-      name: "honors custom timeout default override",
-      params: {},
-      defaultTimeoutMs: 5000,
-      expected: { timeoutMs: 5000, mode: "install", dryRun: false },
     },
     {
       name: "preserves explicit timeout values",
       params: { timeoutMs: 0, mode: "update" as const, dryRun: true },
-      defaultTimeoutMs: 5000,
       expected: { timeoutMs: 0, mode: "update", dryRun: true },
     },
-  ])("$name", ({ params, defaultTimeoutMs, expected }) => {
+  ])("$name", ({ params, expected }) => {
     const logger = { warn: (_message: string) => {} };
-    const result = resolveTimedInstallModeOptions(params, logger, defaultTimeoutMs);
+    const result = resolveTimedInstallModeOptions(params, logger);
     expect(result.timeoutMs).toBe(expected.timeoutMs);
     expect(result.mode).toBe(expected.mode);
     expect(result.dryRun).toBe(expected.dryRun);

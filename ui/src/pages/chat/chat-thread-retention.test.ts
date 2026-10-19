@@ -8,6 +8,11 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 
+function hasLiveTarget(reference: WeakRef<object>): boolean {
+  // Keep JSC's dereferenced temporary out of the suspended async test frame.
+  return reference.deref() !== undefined;
+}
+
 describe("tool expansion state", () => {
   it("releases a closed pane's messages while retaining its disclosure choices", async () => {
     resetChatThreadState();
@@ -30,7 +35,7 @@ describe("tool expansion state", () => {
       const { messageReference, collectionControl } = populatePane();
       await collectGarbageForTest();
       expect(collectionControl.deref()).toBeUndefined();
-      expect(messageReference.deref() !== undefined).toBe(true);
+      expect(hasLiveTarget(messageReference)).toBe(true);
 
       resetChatThreadState(paneId);
       await collectGarbageForTest();

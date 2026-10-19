@@ -1,10 +1,9 @@
-import { Value } from "typebox/value";
 import type { PendingApprovalSnapshot } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  SessionApprovalEventSchema,
-  SessionApprovalReplaySchema,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import {
+  isSessionApprovalEvent,
+  isSessionApprovalReplay,
+} from "../../lib/protocol-validators.generated/approvals.js";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -77,32 +76,30 @@ function projectPendingApproval(
 }
 
 export function projectSessionApprovalReplay(
-  value: unknown,
+  replay: unknown,
   sessionKey: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] {
-  if (!Value.Check(SessionApprovalReplaySchema, value)) {
+  if (!isSessionApprovalReplay(replay)) {
     return [];
   }
-  const replay = Value.Decode(SessionApprovalReplaySchema, value);
   if (!approvalStreamMatchesSession(replay.sessionKey, sessionKey, selectedAgentId)) {
     return [];
   }
-  return replay.approvals
-    .filter((approval) => approval.status === "pending")
-    .map((approval) => projectPendingApproval(approval, sessionKey, approval.sourceSessionKey));
+  return replay.approvals.map((approval) =>
+    projectPendingApproval(approval, sessionKey, approval.sourceSessionKey),
+  );
 }
 
 export function reconcileSessionApprovalEvent(
   queue: readonly ExecApprovalRequest[],
-  value: unknown,
+  event: unknown,
   sessionKey?: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] | null {
-  if (!Value.Check(SessionApprovalEventSchema, value)) {
+  if (!isSessionApprovalEvent(event)) {
     return null;
   }
-  const event = Value.Decode(SessionApprovalEventSchema, value);
   const presentationSessionKey = sessionKey ?? event.sessionKey;
   if (!approvalStreamMatchesSession(event.sessionKey, presentationSessionKey, selectedAgentId)) {
     return null;

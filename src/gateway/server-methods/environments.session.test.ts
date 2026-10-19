@@ -7,7 +7,7 @@ import {
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import * as support from "../worker-environments/service.test-support.js";
@@ -97,7 +97,7 @@ describe("conversation environment presentation participants", () => {
     "rejects ambiguous %s presentation before creating an environment, but permits creation without presentation",
     async (presentation) => {
       const test = fixture();
-      await withPersonalToolTurn({ owner }, async (turn) => {
+      await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
         expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
         await test.call(presentation);
         expect(test.create).not.toHaveBeenCalled();
@@ -141,16 +141,20 @@ describe("conversation environment presentation participants", () => {
     expect(test.provision).toHaveBeenCalledOnce();
   });
 
-  it("reports dispatch-time ambiguity and cancels the reserved environment before allocation", async () => {
+  it.each(["ambiguity", "revocation"])("cancels before allocation: %s", async (change) => {
     const test = fixture();
-    await withPersonalToolTurn({ owner }, async (turn) => {
+    await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
       const reserve = support.testState.store.createSessionAttachmentIntent.bind(
         support.testState.store,
       );
       vi.spyOn(support.testState.store, "createSessionAttachmentIntent").mockImplementation(
         async (...args) => {
           const reservation = await reserve(...args);
-          expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+          if (change === "revocation") {
+            turn.revoke(owner.profileId);
+          } else {
+            expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+          }
           return reservation;
         },
       );
@@ -159,7 +163,11 @@ describe("conversation environment presentation participants", () => {
       expect(test.respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({ message: expect.stringMatching(/Several people.*Alice.*Bob/s) }),
+        expect.objectContaining({
+          message: expect.stringMatching(
+            change === "revocation" ? /Profile access revoked/ : /Several people.*Alice.*Bob/s,
+          ),
+        }),
       );
       expect(test.context.broadcastToConnIds).not.toHaveBeenCalled();
       expect(test.provision).not.toHaveBeenCalled();

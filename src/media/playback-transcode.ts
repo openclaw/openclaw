@@ -1,18 +1,19 @@
 // Playback transcode policy and lazy media-store cache ownership.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, type ExactFileIdentity } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createPermitPool } from "../shared/permit-pool.js";
@@ -39,8 +40,7 @@ type PlaybackSourceIdentity = {
   size: number;
   mtimeMs: number;
   ctimeMs: number;
-  dev: number;
-  ino: number;
+  exactIdentity: ExactFileIdentity;
 };
 
 type PlaybackSourceStat = Omit<PlaybackSourceIdentity, "path">;
@@ -109,18 +109,16 @@ const log = createSubsystemLogger("media/playback");
 
 /** Hashes the immutable source identity used by playback cache file names. */
 function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        source.path,
-        source.size,
-        source.mtimeMs,
-        source.ctimeMs,
-        source.dev,
-        source.ino,
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      source.path,
+      source.size,
+      source.mtimeMs,
+      source.ctimeMs,
+      source.exactIdentity.dev.toString(),
+      source.exactIdentity.ino.toString(),
+    ]),
+  );
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -132,15 +130,18 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 function playbackSourceIdentityMatches(
   source: PlaybackSourceIdentity,
-  opened: { realPath: string; stat: PlaybackSourceStat },
+  opened: {
+    realPath: string;
+    stat: Omit<PlaybackSourceStat, "exactIdentity">;
+    exactIdentity: ExactFileIdentity;
+  },
 ): boolean {
   return (
     opened.realPath === source.path &&
     opened.stat.size === source.size &&
     opened.stat.mtimeMs === source.mtimeMs &&
     opened.stat.ctimeMs === source.ctimeMs &&
-    opened.stat.dev === source.dev &&
-    opened.stat.ino === source.ino
+    sameFileIdentity(opened.exactIdentity, source.exactIdentity)
   );
 }
 
@@ -320,7 +321,6 @@ export async function resolvePlaybackMetadataForSource(
   return { playback: mode === "fallback" ? undefined : mode, durationMs, width, height };
 }
 
-/** Replaces the original container suffix for a transcoded response filename. */
 export function replacePlaybackFileExtension(fileName: string, extension: `.${string}`): string {
   const currentExtension = path.extname(fileName);
   const stem = currentExtension ? fileName.slice(0, -currentExtension.length) : fileName;
@@ -478,6 +478,7 @@ async function transcodePlaybackSource(params: {
           !playbackSourceIdentityMatches(params.source, {
             realPath: opened.realPath,
             stat: await opened.handle.stat(),
+            exactIdentity: opened.exactIdentity,
           })
         ) {
           throw new Error("Playback source changed during transcode read");
@@ -525,7 +526,10 @@ async function transcodePlaybackSource(params: {
       try {
         outputProbe = await probePlaybackMediaFileDescriptor(outputHandle.fd, params.kind);
       } finally {
-        await outputHandle.close().catch(() => {});
+        await runBestEffortCleanup({
+          cleanup: () => outputHandle.close(),
+          onError: (error) => log.warn("Failed to close playback probe output", { error }),
+        });
       }
       if (
         !outputProbe?.durationMs ||

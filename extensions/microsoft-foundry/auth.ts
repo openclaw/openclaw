@@ -4,7 +4,7 @@ import type {
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
@@ -29,15 +29,6 @@ import {
   resolveConfiguredModelNameHint,
   resolveFoundryApi,
 } from "./shared.js";
-
-function shouldTestFoundryTextConnection(params: {
-  modelId: string;
-  modelNameHint?: string | null;
-}): boolean {
-  return !isFoundryMaiImageModel(
-    resolveConfiguredModelNameHint(params.modelId, params.modelNameHint),
-  );
-}
 
 export const entraIdAuthMethod: ProviderAuthMethod = {
   id: "entra-id",
@@ -161,7 +152,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
 
-    if (shouldTestFoundryTextConnection({ modelId, modelNameHint })) {
+    if (!isFoundryMaiImageModel(resolveConfiguredModelNameHint(modelId, modelNameHint))) {
       await testFoundryConnection({
         ctx,
         endpoint,
@@ -212,7 +203,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
     groupHint: "Entra ID + API key",
   },
   run: async (ctx) => {
-    const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
       allowKeychainPrompt: false,
     });
     const existing = authStore.profiles[`${PROVIDER_ID}:default`];

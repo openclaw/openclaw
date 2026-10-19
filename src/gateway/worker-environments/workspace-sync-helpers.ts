@@ -5,8 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMissingPathError } from "../../infra/errno.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { ignoreMissingPath, isMissingPathError } from "../../infra/errno.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
@@ -14,18 +13,16 @@ import { sleep } from "../../utils/sleep.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
-  workerSshOptions,
+  workerSshCommandPrefix,
   workerSshRemoteCommand,
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
-  recordRemoteWorkspaceHashMetrics,
   replaceWorkerWorkspaceHashMemoEntries,
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
-  type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 import {
@@ -87,15 +84,7 @@ export function workerWorkspaceRsyncRemoteCommand(
   prepared: PreparedWorkerSsh,
   port = prepared.port,
 ): string {
-  return workerSshRemoteCommand([
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-  ]);
+  return workerSshRemoteCommand(workerSshCommandPrefix(prepared, port));
 }
 
 type WorkerWorkspaceRsyncReceiverMode = "accepted-next" | "git-pack" | "workspace-root";
@@ -161,25 +150,6 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
   return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
 }
 
-export function workerWorkspaceSshArgv(
-  prepared: PreparedWorkerSsh,
-  remoteArgv: readonly string[],
-  port = prepared.port,
-): string[] {
-  return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-    "--",
-    prepared.sshTarget,
-    workerSshRemoteCommand(remoteArgv),
-  ];
-}
-
 export async function resolveRemoteWorkspaceManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,
@@ -216,31 +186,24 @@ export async function captureRemoteWorkspaceManifest(params: {
   baseCommit: string | null;
   priorManifestDigests: readonly string[];
   hashMemo: WorkspaceHashMemo;
-  metrics: WorkspaceReconcileMetrics;
   maxHashMemoBytes?: number;
 }): Promise<string> {
-  params.metrics.remoteManifestCalls += 1;
-  const startedAt = performance.now();
-  const captured = await params
-    .runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: [
-        "node",
-        "-e",
-        params.maxHashMemoBytes === undefined
-          ? REMOTE_WORKSPACE_MANIFEST_JS
-          : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
-        params.remoteWorkspaceDir,
-        params.baseCommit ?? "",
-        params.baseCommit ? "eligible" : "all",
-        ...params.priorManifestDigests,
-        "memo-v1",
-      ],
-      input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
-    })
-    .finally(() => {
-      params.metrics.remoteManifestWallDurationMs += performance.now() - startedAt;
-    });
+  const captured = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
+    argv: [
+      "node",
+      "-e",
+      params.maxHashMemoBytes === undefined
+        ? REMOTE_WORKSPACE_MANIFEST_JS
+        : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
+      params.remoteWorkspaceDir,
+      params.baseCommit ?? "",
+      params.baseCommit ? "eligible" : "all",
+      ...params.priorManifestDigests,
+      "memo-v1",
+    ],
+    input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
+  });
   if (!workerWorkspaceCommandSucceeded(captured)) {
     throw new Error(
       `Worker workspace manifest capture failed: ${boundedWorkerError(
@@ -258,7 +221,6 @@ export async function captureRemoteWorkspaceManifest(params: {
     });
   }
   replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, response.memo);
-  recordRemoteWorkspaceHashMetrics(params.metrics, response.metrics);
   return response.manifestRef;
 }
 
@@ -267,23 +229,19 @@ export async function probeWorkspaceGitMode(params: {
   commandOptions: CommandOptions;
   runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
 }): Promise<{ mode: "git" | "plain"; gitRoot: string; baseCommit: string }> {
-  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch(ignoreMissingPath);
   if (!gitAdmin) {
     return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
   }
+  const commandOptions = {
+    ...params.commandOptions,
+    env: { ...params.commandOptions.env, GIT_NO_LAZY_FETCH: "1" },
+  };
   const [gitRootResult, gitBaseResult] = await Promise.all([
-    params.runTask(
-      ["git", "-C", params.localPath, "rev-parse", "--show-toplevel"],
-      params.commandOptions,
-    ),
+    params.runTask(["git", "-C", params.localPath, "rev-parse", "--show-toplevel"], commandOptions),
     params.runTask(
       ["git", "-C", params.localPath, "rev-parse", "--verify", "--quiet", "HEAD"],
-      params.commandOptions,
+      commandOptions,
     ),
   ]);
   if (!workerWorkspaceCommandSucceeded(gitRootResult)) {
@@ -304,11 +262,11 @@ export async function probeWorkspaceGitMode(params: {
 
 export async function resolveWorkerWorkspaceGitAuthor(
   request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
-  runTask: (argv: string[]) => Promise<SpawnResult>,
+  runTask: (argv: string[], options: Pick<CommandOptions, "env">) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
   const read = async (key: "name" | "email") => {
-    const result = await runTask([...git, `user.${key}`]);
+    const result = await runTask([...git, `user.${key}`], { env: { GIT_NO_LAZY_FETCH: "1" } });
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
   const [name, email] = await Promise.all([

@@ -15,7 +15,7 @@ const SCAN_WORKER_MARKER = "openclawTestSelectorSourceScan";
 const MAX_SCAN_WORKERS = 8;
 // Worker startup costs tens of milliseconds; small scans stay on one thread.
 const MIN_FILES_PER_SCAN_WORKER = 256;
-type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean };
+type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean; end?: number };
 const CONSERVATIVE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"`]*?\s+from\s+)?["'`]([^"'`]+)["'`]|\b(?:import(?:\.meta\.resolve)?|require(?:\.resolve)?)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|\bnew\s+URL\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*import\.meta\.url\s*,?\s*\)/gu;
 
@@ -114,7 +114,7 @@ function sourceTokens(source: string): {
         continue;
       }
       if (char === '"' || char === "'") {
-        tokens.push({ value: quoted(char), literal: true });
+        tokens.push({ value: quoted(char), literal: true, end: offset });
         continue;
       }
       if (char === "`") {
@@ -274,11 +274,631 @@ function sourceTokens(source: string): {
   return { tokens, uncertain, possibleJsx };
 }
 
+function hasUnparsedIdentifierTokens(tokens: SourceToken[]) {
+  return tokens.some(
+    (token) => !token.literal && (token.value === "\\" || /\P{ASCII}/u.test(token.value)),
+  );
+}
+
+function runtimeSourceTokens(source: string) {
+  try {
+    // Reuse the native syntax-erasure owner used by importFacts below. This
+    // parses only the changed blob; no compiler program or dependencies load.
+    return sourceTokens(nodeModule.stripTypeScriptTypes(source, { mode: "strip" }));
+  } catch {
+    return null;
+  }
+}
+
+/** Syntactic runtime export identities; null keeps unfamiliar syntax conservative. */
+export function readTestSelectorExportNames(source: string): string[] | null {
+  const parsed = runtimeSourceTokens(source);
+  if (
+    !parsed ||
+    parsed.uncertain ||
+    parsed.possibleJsx ||
+    hasUnparsedIdentifierTokens(parsed.tokens)
+  ) {
+    return null;
+  }
+  const { tokens } = parsed;
+  const names = new Set<string>();
+  let moduleDepth = 0;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.literal) {
+      continue;
+    }
+    if (
+      (token.value === "module" &&
+        tokens[index + 1]?.value === "." &&
+        tokens[index + 2]?.value === "exports") ||
+      (token.value === "exports" && [".", "["].includes(tokens[index + 1]?.value ?? ""))
+    ) {
+      return null;
+    }
+    if (token.value === "{") {
+      moduleDepth++;
+    } else if (token.value === "}") {
+      moduleDepth--;
+    }
+    if (
+      token.value !== "export" ||
+      moduleDepth !== 0 ||
+      (tokens[index - 1]?.value === "." && !tokens[index - 1]?.literal)
+    ) {
+      continue;
+    }
+    let cursor = index + 1;
+    const at = () => tokens[cursor]?.value;
+    if (at() === "default") {
+      names.add("default");
+      continue;
+    }
+    if (at() === "async") {
+      cursor++;
+    }
+    if (["function", "class"].includes(at() ?? "")) {
+      cursor++;
+      if (at() === "*") {
+        cursor++;
+      }
+      const name = at();
+      if (!name || !/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        return null;
+      }
+      names.add(name);
+    } else if (at() === "{") {
+      cursor++;
+      while (cursor < tokens.length && (tokens[cursor]?.literal || at() !== "}")) {
+        let name = at();
+        cursor++;
+        if (at() === "as") {
+          name = tokens[++cursor]?.value;
+          cursor++;
+        }
+        if (name !== undefined) {
+          names.add(name);
+        }
+        if (at() !== "," && at() !== "}") {
+          return null;
+        }
+        if (at() === ",") {
+          cursor++;
+        }
+      }
+    } else if (at() === "*") {
+      if (tokens[cursor + 1]?.value === "as") {
+        names.add(tokens[cursor + 2]?.value ?? "<unknown>");
+      } else {
+        // A wildcard's names belong to another source; retain mock coverage.
+        return null;
+      }
+    } else if (["const", "let", "var"].includes(at() ?? "")) {
+      const name = tokens[++cursor];
+      if (!name || name.literal || !/^[A-Za-z_$][\w$]*$/u.test(name.value)) {
+        return null;
+      }
+      names.add(name.value);
+      let depth = 0;
+      for (cursor++; cursor < tokens.length; cursor++) {
+        const part = tokens[cursor]!;
+        if (part.literal) {
+          continue;
+        }
+        // Do not infer extra exports from generics, comma expressions, or a
+        // following declaration separated by automatic semicolon insertion.
+        if (depth === 0 && ["<", ">", "\\", ","].includes(part.value)) {
+          return null;
+        }
+        if (depth === 0 && [";", "export"].includes(part.value)) {
+          break;
+        }
+        if (["(", "[", "{"].includes(part.value)) {
+          depth++;
+        } else if ([")", "]", "}"].includes(part.value)) {
+          depth--;
+        }
+      }
+    } else {
+      return null;
+    }
+  }
+  // Without ESM value exports this may publish arbitrary CommonJS keys.
+  return moduleDepth === 0 && names.size > 0 ? [...names].toSorted() : null;
+}
+
+/** Tagged runtime binding identities; literal names cannot collide with namespace consumption. */
+export function readTestSelectorImportNames(source: string): Map<string, string[]> {
+  const parsed = runtimeSourceTokens(source);
+  const imports = new Map<string, string[]>();
+  if (
+    !parsed ||
+    parsed.uncertain ||
+    parsed.possibleJsx ||
+    hasUnparsedIdentifierTokens(parsed.tokens)
+  ) {
+    // Unknown syntax must not prove that a newly consumed export is absent.
+    const specifiers = new Set(importFacts(source, false).imports);
+    for (const match of source.matchAll(CONSERVATIVE_IMPORT_PATTERN)) {
+      const specifier = match[1] ?? match[2] ?? match[3]?.replace(/[?#].*$/u, "");
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    }
+    for (const specifier of specifiers) {
+      imports.set(specifier, [`unknown:${source}`]);
+    }
+    return imports;
+  }
+  const { tokens } = parsed;
+  for (let index = 0; index < tokens.length; index++) {
+    if (
+      tokens[index]!.literal ||
+      !["import", "export"].includes(tokens[index]!.value) ||
+      (tokens[index - 1]?.value === "." && !tokens[index - 1]?.literal)
+    ) {
+      continue;
+    }
+    const next = tokens[index + 1];
+    if (
+      !next ||
+      next.literal ||
+      next.value === "." ||
+      (tokens[index]!.value === "export" && !["{", "*"].includes(next.value))
+    ) {
+      continue;
+    }
+    const names = new Set<string>();
+    let cursor = index + 1;
+    let specifier: string | undefined;
+    if (next.value === "(") {
+      if (tokens[index + 2]?.literal) {
+        specifier = tokens[index + 2]!.value;
+        names.add("namespace:dynamic-import");
+      }
+    } else {
+      if (!["{", "*"].includes(next.value)) {
+        names.add("name:default");
+        cursor++;
+        if (tokens[cursor]?.value === ",") {
+          cursor++;
+        }
+      }
+      if (tokens[cursor]?.value === "*") {
+        names.add(
+          tokens[index]!.value === "export"
+            ? tokens[cursor + 1]?.value === "as"
+              ? "namespace:re-export-as"
+              : "namespace:re-export-all"
+            : "namespace:import",
+        );
+        cursor++;
+        if (tokens[cursor]?.value === "as") {
+          cursor += 2;
+        }
+      } else if (tokens[cursor]?.value === "{") {
+        cursor++;
+        while (
+          cursor < tokens.length &&
+          (tokens[cursor]?.literal || tokens[cursor]?.value !== "}")
+        ) {
+          const name = tokens[cursor]!.value;
+          names.add(`name:${name}`);
+          cursor++;
+          if (tokens[cursor]?.value === "as") {
+            cursor += 2;
+          }
+          if (tokens[cursor]?.value === ",") {
+            cursor++;
+          } else if (tokens[cursor]?.value !== "}") {
+            break;
+          }
+        }
+        cursor++;
+      }
+      if (tokens[cursor]?.value === "from" && tokens[cursor + 1]?.literal) {
+        specifier = tokens[cursor + 1]!.value;
+      }
+    }
+    if (specifier && names.size > 0) {
+      imports.set(
+        specifier,
+        [...new Set([...(imports.get(specifier) ?? []), ...names])].toSorted(),
+      );
+    }
+  }
+  return imports;
+}
+
+function tokenGroupEnds(tokens: SourceToken[]) {
+  const ends = new Map<number, number>();
+  const stack: number[] = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.literal) {
+      continue;
+    }
+    if (["(", "[", "{"].includes(token.value)) {
+      stack.push(index);
+    } else if ([")", "]", "}"].includes(token.value)) {
+      const start = stack.pop();
+      if (start !== undefined) {
+        ends.set(start, index);
+      }
+    }
+  }
+  return ends;
+}
+
+function tokenExpressionEnd(tokens: SourceToken[], ends: Map<number, number>, start: number) {
+  let index = start;
+  for (; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.literal) {
+      continue;
+    }
+    if (
+      [",", ";", "}", "]", ")", "export"].includes(token.value) ||
+      (index > start && ["function", "class", "const", "let", "var"].includes(token.value))
+    ) {
+      break;
+    }
+    index = ends.get(index) ?? index;
+  }
+  return index;
+}
+
+/** Source descriptors resolve `${sourceWorkerName}${extension}` beside their declaring module. */
+export function runtimeWorkerSpecifier(sourceWorkerName: string) {
+  // Extension substitution also resolves dotted stems such as `*.test-support`.
+  return `./${sourceWorkerName}.js`;
+}
+
+function runtimeWorkerFacts(tokens: SourceToken[]) {
+  const imports: string[] = [];
+  const workerExports: [string, string][] = [];
+  const ends = tokenGroupEnds(tokens);
+  const declarations: Array<{ name: string; start: number; end: number; selfRead: boolean }> = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.literal) {
+      continue;
+    }
+    if (token.value === "export" && tokens[index + 1]?.value === "const") {
+      let nameIndex = index + 2;
+      while (nameIndex < tokens.length) {
+        const name = tokens[nameIndex];
+        if (name?.literal || !/^[A-Za-z_$][\w$]*$/u.test(name?.value ?? "")) {
+          break;
+        }
+        let equals = nameIndex + 1;
+        while (equals < tokens.length && tokens[equals]?.value !== "=") {
+          if ([";", "export"].includes(tokens[equals]!.value)) {
+            break;
+          }
+          equals = (ends.get(equals) ?? equals) + 1;
+        }
+        if (tokens[equals]?.value !== "=") {
+          break;
+        }
+        const start = equals + 1;
+        const end = tokenExpressionEnd(tokens, ends, start);
+        declarations.push({
+          name: name!.value,
+          start,
+          end,
+          selfRead: tokens.some(
+            (part, position) =>
+              position !== nameIndex &&
+              !part.literal &&
+              part.value === name!.value &&
+              (tokens[position - 1]?.value !== "." || tokens[position - 2]?.value === "."),
+          ),
+        });
+        if (tokens[end]?.value !== ",") {
+          break;
+        }
+        nameIndex = end + 1;
+      }
+    }
+    index = ends.get(index) ?? index;
+  }
+  for (const [start, end] of ends) {
+    if (tokens[start]?.value !== "{") {
+      continue;
+    }
+    let currentModuleUrl = false;
+    let sourceWorkerName: string | undefined;
+    for (let cursor = start + 1; cursor < end; cursor++) {
+      const key = tokens[cursor]!;
+      if (tokens[cursor + 1]?.value === ":") {
+        const valueStart = cursor + 2;
+        const valueEnd = tokenExpressionEnd(tokens, ends, valueStart);
+        const propertyEnd = tokens[valueEnd]?.value === "," || valueEnd === end;
+        if (key.value === "currentModuleUrl") {
+          currentModuleUrl =
+            propertyEnd &&
+            valueEnd === valueStart + 5 &&
+            ["import", ".", "meta", ".", "url"].every(
+              (value, offset) =>
+                !tokens[valueStart + offset]?.literal &&
+                tokens[valueStart + offset]?.value === value,
+            );
+        } else if (key.value === "sourceWorkerName") {
+          sourceWorkerName =
+            propertyEnd && valueEnd === valueStart + 1 && tokens[valueStart]?.literal
+              ? tokens[valueStart]!.value
+              : undefined;
+        }
+        cursor = valueEnd - 1;
+      } else {
+        cursor = ends.get(cursor) ?? cursor;
+      }
+    }
+    if (!currentModuleUrl || sourceWorkerName === undefined) {
+      continue;
+    }
+    const declaration = declarations.find((entry) => entry.start <= start && end < entry.end);
+    if (!declaration || declaration.selfRead) {
+      imports.push(runtimeWorkerSpecifier(sourceWorkerName));
+      continue;
+    }
+    let workerPath = declaration.name;
+    if (declaration.start !== start && tokens[declaration.start]?.value === "{") {
+      const objectEnd = ends.get(declaration.start)!;
+      for (let cursor = declaration.start + 1; cursor < objectEnd; cursor++) {
+        if (tokens[cursor + 1]?.value === ":") {
+          const valueStart = cursor + 2;
+          const valueEnd = tokenExpressionEnd(tokens, ends, valueStart);
+          if (valueStart <= start && end < valueEnd) {
+            workerPath += `.${tokens[cursor]!.value}`;
+            break;
+          }
+          cursor = valueEnd - 1;
+        } else {
+          cursor = ends.get(cursor) ?? cursor;
+        }
+      }
+    }
+    workerExports.push([workerPath, sourceWorkerName]);
+  }
+  return { imports, workerExports };
+}
+
+/** Descriptor paths consumed through each runtime import binding. */
+export function readRuntimeWorkerDescriptorReads(source: string): Map<string, string[]> {
+  const { tokens, uncertain, possibleJsx } = sourceTokens(source);
+  const reads = new Map<string, Set<string>>();
+  const add = (specifier: string, workerPath: string) => {
+    const paths = reads.get(specifier) ?? new Set<string>();
+    paths.add(workerPath);
+    reads.set(specifier, paths);
+  };
+  if (uncertain || possibleJsx || hasUnparsedIdentifierTokens(tokens)) {
+    for (const specifier of importFacts(source, false).imports) {
+      add(specifier, "*");
+    }
+    for (const match of source.matchAll(CONSERVATIVE_IMPORT_PATTERN)) {
+      const specifier = match[1] ?? match[2] ?? match[3]?.replace(/[?#].*$/u, "");
+      if (specifier) {
+        add(specifier, "*");
+      }
+    }
+    return new Map([...reads].map(([specifier, paths]) => [specifier, [...paths]]));
+  }
+  const bindings = new Map<string, { specifier: string; name: string }>();
+  const declarations = new Set<number>();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.literal || tokens[index - 1]?.value === ".") {
+      continue;
+    }
+    if (["import", "require"].includes(token.value) && tokens[index + 1]?.value === "(") {
+      if (tokens[index + 2]?.literal) {
+        add(tokens[index + 2]!.value, "*");
+      }
+      continue;
+    }
+    if (!["import", "export"].includes(token.value)) {
+      continue;
+    }
+    let cursor = index + 1;
+    if (tokens[cursor]?.value === "type" || tokens[cursor]?.value === ".") {
+      continue;
+    }
+    const names: Array<{ name: string; local: string }> = [];
+    if (token.value === "import" && !["{", "*"].includes(tokens[cursor]?.value ?? "")) {
+      cursor++;
+      if (tokens[cursor]?.value === ",") {
+        cursor++;
+      }
+    }
+    if (tokens[cursor]?.value === "*") {
+      cursor++;
+      const local = tokens[cursor]?.value === "as" ? tokens[cursor + 1]?.value : undefined;
+      names.push({ name: "*", local: local ?? "*" });
+      if (local) {
+        cursor += 2;
+      }
+    } else if (tokens[cursor]?.value === "{") {
+      cursor++;
+      while (cursor < tokens.length && tokens[cursor]?.value !== "}") {
+        const typeOnly =
+          tokens[cursor]?.value === "type" &&
+          !["as", ",", "}"].includes(tokens[cursor + 1]?.value ?? "");
+        if (typeOnly) {
+          cursor++;
+        }
+        const name = tokens[cursor++]?.value;
+        let local = name;
+        if (tokens[cursor]?.value === "as") {
+          local = tokens[++cursor]?.value;
+          cursor++;
+        }
+        if (!typeOnly && name && local) {
+          names.push({ name, local });
+        }
+        if (tokens[cursor]?.value !== ",") {
+          break;
+        }
+        cursor++;
+      }
+      cursor++;
+    }
+    if (tokens[cursor]?.value !== "from" || !tokens[cursor + 1]?.literal) {
+      continue;
+    }
+    const specifier = tokens[cursor + 1]!.value;
+    for (const { name, local } of names) {
+      if (token.value === "export") {
+        add(specifier, name);
+      } else {
+        bindings.set(local, { specifier, name });
+      }
+    }
+    for (let position = index; position <= cursor + 1; position++) {
+      declarations.add(position);
+    }
+    index = cursor + 1;
+  }
+  const member = (index: number) =>
+    tokens[index]?.value === "." &&
+    !tokens[index + 1]?.literal &&
+    /^[A-Za-z_$][\w$]*$/u.test(tokens[index + 1]?.value ?? "")
+      ? tokens[index + 1]!.value
+      : undefined;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (
+      token.literal ||
+      declarations.has(index) ||
+      (tokens[index - 1]?.value === "." && tokens[index - 2]?.value !== ".")
+    ) {
+      continue;
+    }
+    const binding = bindings.get(token.value);
+    if (!binding) {
+      continue;
+    }
+    const first = member(index + 1);
+    const second = member(index + 3);
+    add(
+      binding.specifier,
+      binding.name === "*"
+        ? first
+          ? `${first}${second ? `.${second}` : ""}`
+          : "*"
+        : `${binding.name}${first ? `.${first}` : ""}`,
+    );
+  }
+  return new Map([...reads].map(([specifier, paths]) => [specifier, [...paths]]));
+}
+
+function mockSpecifiers(tokens: SourceToken[]): string[] {
+  // Keep module-like mock registrations regardless of the local Vitest binding.
+  const specifiers = new Set<string>();
+  for (let index = 0; index < tokens.length; index++) {
+    if (
+      tokens[index]!.literal ||
+      tokens[index]!.value !== "." ||
+      !["mock", "doMock"].includes(tokens[index + 1]?.value ?? "")
+    ) {
+      continue;
+    }
+    let open = index + 2;
+    if (tokens[open]?.value === "<") {
+      let depth = 0;
+      do {
+        const token = tokens[open++]!;
+        if (!token.literal && token.value === "<") {
+          depth++;
+        }
+        if (!token.literal && token.value === ">") {
+          depth--;
+        }
+      } while (open < tokens.length && depth > 0);
+    }
+    if (tokens[open]?.value !== "(") {
+      continue;
+    }
+    const argument = tokens[open + 1];
+    if (argument?.literal) {
+      specifiers.add(argument.value);
+    } else if (
+      argument?.value === "import" &&
+      tokens[open + 2]?.value === "(" &&
+      tokens[open + 3]?.literal
+    ) {
+      specifiers.add(tokens[open + 3]!.value);
+    }
+  }
+  return [...specifiers];
+}
+
+function leadingTypeOnlyImports(source: string, tokens: SourceToken[]): string[] {
+  let end = 0;
+  for (let index = 0; !tokens[index]?.literal && tokens[index]?.value === "import";) {
+    let cursor = index + 1;
+    if ([".", "("].includes(tokens[cursor]?.value ?? "")) {
+      break;
+    }
+    if (!tokens[cursor]?.literal) {
+      while (
+        tokens[cursor] &&
+        tokens[cursor]?.value !== ";" &&
+        !(tokens[cursor]?.value === "from" && tokens[cursor + 1]?.literal)
+      ) {
+        cursor++;
+      }
+      cursor++;
+    }
+    const specifier = tokens[cursor];
+    if (!specifier?.literal || specifier.end === undefined) {
+      break;
+    }
+    end = specifier.end;
+    index = cursor + 1 + Number(tokens[cursor + 1]?.value === ";");
+  }
+  if (
+    !end ||
+    tokens.some((token) => !token.literal && token.value === "\\") ||
+    /\b(?:import|require|from|URL|sourceWorkerName)\b/u.test(source.slice(end))
+  ) {
+    return [];
+  }
+  try {
+    const prefix = source.slice(0, end);
+    const runtime = new Set(
+      importFacts(nodeModule.stripTypeScriptTypes(prefix, { mode: "strip" }), false).imports,
+    );
+    return importFacts(prefix, false).imports.filter((specifier) => !runtime.has(specifier));
+  } catch {
+    return [];
+  }
+}
+
 function importFacts(
   source: string,
   classifyTypes = true,
-): { imports: string[]; typeOnlyImports: string[] } {
+): {
+  imports: string[];
+  typeOnlyImports: string[];
+  mocks: string[];
+  workerExports: [string, string][];
+} {
   const { tokens, uncertain, possibleJsx } = sourceTokens(source);
+  const mocks = mockSpecifiers(tokens);
+  if (uncertain || possibleJsx || hasUnparsedIdentifierTokens(tokens)) {
+    // An unfamiliar lexical context cannot prove that a literal mock is absent.
+    for (const match of source.matchAll(
+      /\.\s*(?:mock|doMock)\s*(?:<[\s\S]*?>\s*)?\(\s*(?:import\s*\(\s*)?["'`]([^"'`]+)["'`]/gu,
+    )) {
+      if (!mocks.includes(match[1]!)) {
+        mocks.push(match[1]!);
+      }
+    }
+  }
   let runtimeSource: string | undefined;
   let unresolvedJsx = false;
   if (possibleJsx && !uncertain && classifyTypes) {
@@ -289,7 +909,10 @@ function importFacts(
       unresolvedJsx = true;
     }
   }
-  const imports = new Set<string>();
+  const workers = source.includes("sourceWorkerName")
+    ? runtimeWorkerFacts(tokens)
+    : { imports: [], workerExports: [] };
+  const imports = new Set<string>(workers.imports);
   let needsTypeStrip = false;
   const add = (token: SourceToken | undefined, fileUrl = false) => {
     if (token?.literal) {
@@ -334,7 +957,11 @@ function importFacts(
     if (token.value !== "import" && token.value !== "export") {
       continue;
     }
-    if (next(1) === "." || next(1) === "(" || tokens[index - 1]?.value === ".") {
+    if (
+      next(1) === "." ||
+      next(1) === "(" ||
+      (tokens[index - 1]?.value === "." && !tokens[index - 1]?.literal)
+    ) {
       continue;
     }
     if (token.value === "import" && tokens[index + 1]?.literal) {
@@ -358,6 +985,9 @@ function importFacts(
     }
   }
   if (uncertain || unresolvedJsx) {
+    for (const match of source.matchAll(/\bsourceWorkerName\s*:\s*["'`]([^"'`]+)["'`]/gu)) {
+      imports.add(runtimeWorkerSpecifier(match[1]!));
+    }
     // JSX or a quote swallowed by an unfamiliar regex context is not proof of no
     // imports. Retain the broad literal scan, including possible fixture edges.
     for (const match of source.matchAll(CONSERVATIVE_IMPORT_PATTERN)) {
@@ -366,10 +996,18 @@ function importFacts(
         imports.add(specifier);
       }
     }
-    return { imports: [...imports], typeOnlyImports: [] };
+    // JSX cannot invalidate erased header imports; later runtime uses still retain the edge.
+    const typeOnlyImports =
+      classifyTypes && possibleJsx ? leadingTypeOnlyImports(source, tokens) : [];
+    return { imports: [...imports], typeOnlyImports, mocks, workerExports: [] };
   }
   if (!classifyTypes || (!needsTypeStrip && runtimeSource === undefined)) {
-    return { imports: [...imports], typeOnlyImports: [] };
+    return {
+      imports: [...imports],
+      typeOnlyImports: [],
+      mocks,
+      workerExports: workers.workerExports,
+    };
   }
   try {
     // Node's parser distinguishes import types from calls and preserves named
@@ -377,12 +1015,19 @@ function importFacts(
     runtimeSource ??= nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
   } catch {
     // JSX and transform-required syntax remain conservatively connected.
-    return { imports: [...imports], typeOnlyImports: [] };
+    return {
+      imports: [...imports],
+      typeOnlyImports: [],
+      mocks,
+      workerExports: workers.workerExports,
+    };
   }
   const runtime = new Set(importFacts(runtimeSource, false).imports);
   return {
     imports: [...imports],
     typeOnlyImports: [...imports].filter((specifier) => !runtime.has(specifier)),
+    mocks,
+    workerExports: workers.workerExports,
   };
 }
 
@@ -506,14 +1151,31 @@ function parseFacts(value: unknown) {
     !value ||
     typeof value !== "object" ||
     !("imports" in value) ||
+    !("mocks" in value) ||
     !("typeOnlyImports" in value) ||
     !("matches" in value) ||
     !("references" in value)
   ) {
     throw new Error("Invalid test selector source facts");
   }
+  // Rows omit the rare descriptor exports; the full-inventory payload is large.
+  const exported: unknown = "workerExports" in value ? value.workerExports : [];
+  if (
+    !Array.isArray(exported) ||
+    !exported.every(
+      (entry: unknown) =>
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        entry.every((part: unknown) => typeof part === "string"),
+    )
+  ) {
+    throw new Error("Invalid runtime worker exports in test selector source scan");
+  }
+  const workerExports: [string, string][] = exported.map((entry) => [entry[0], entry[1]]);
   return {
+    workerExports,
     imports: parseStrings(value.imports),
+    mocks: parseStrings(value.mocks),
     typeOnlyImports: parseStrings(value.typeOnlyImports),
     matches: parseStrings(value.matches),
     references: parseStrings(value.references),
@@ -539,14 +1201,31 @@ export function readTestSelectorSourceFacts(
   if (!executable) {
     throw new Error("A Node executable is required for test selection; add node to PATH.");
   }
-  const result = spawnSync(executable, [fileURLToPath(import.meta.url)], {
-    cwd,
-    env,
-    input: JSON.stringify({ files, terms, matchingOnly: options.matchingOnly === true }),
-    encoding: "utf8",
-    maxBuffer,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const scan = (singleThreaded = false) =>
+    spawnSync(executable, [fileURLToPath(import.meta.url)], {
+      cwd,
+      env,
+      input: JSON.stringify({
+        files,
+        terms,
+        matchingOnly: options.matchingOnly === true,
+        singleThreaded,
+      }),
+      encoding: "utf8",
+      maxBuffer,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  let result = scan();
+  // Recover only the observed V8 JIT-page assertion, without scan workers.
+  // Node 24 has a related concurrent WASM teardown defect (nodejs/node#66366).
+  // Parser errors, output overflow, and cancellation must remain fatal.
+  if (
+    !result.error &&
+    result.signal === "SIGTRAP" &&
+    result.stderr.includes("Check failed: jit_page.has_value()")
+  ) {
+    result = scan(true);
+  }
   if (result.error || result.status !== 0 || result.signal) {
     throw new Error(
       `Test selector source scan failed (${result.signal ?? result.status}): ${result.stderr}`,
@@ -599,11 +1278,14 @@ async function readSourceFacts() {
   };
   // Tokenizing the full inventory is CPU-bound; stripe large scans across
   // worker threads and reassemble rows in request order.
-  const workerCount = Math.min(
-    availableParallelism(),
-    MAX_SCAN_WORKERS,
-    Math.floor(files.length / MIN_FILES_PER_SCAN_WORKER),
-  );
+  const workerCount =
+    "singleThreaded" in request && request.singleThreaded === true
+      ? 1
+      : Math.min(
+          availableParallelism(),
+          MAX_SCAN_WORKERS,
+          Math.floor(files.length / MIN_FILES_PER_SCAN_WORKER),
+        );
   const facts =
     workerCount > 1
       ? await scanSourceFactsInWorkers(scan, workerCount)
@@ -663,7 +1345,9 @@ async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
     if (matchingOnly && matches.length === 0) {
       return null;
     }
-    const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };
+    const facts = parseImports
+      ? importFacts(source)
+      : { imports: [], typeOnlyImports: [], mocks: [], workerExports: [] };
     if (parseImports) {
       // Vitest loads these modules from config values instead of JavaScript imports.
       const configured = new Set(configuredRuntimeImports(source, file));
@@ -672,13 +1356,15 @@ async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
         (specifier) => !configured.has(specifier),
       );
     }
+    const { workerExports, ...rest } = facts;
     return {
-      ...facts,
+      ...rest,
+      ...(workerExports.length > 0 ? { workerExports } : {}),
       matches,
       references,
     };
   };
-  const facts: (ReturnType<typeof parseFacts> | null)[] = files.map(() => null);
+  const facts: Awaited<ReturnType<typeof readFacts>>[] = files.map(() => null);
   const failures: unknown[] = [];
   let next = 0;
   await Promise.all(

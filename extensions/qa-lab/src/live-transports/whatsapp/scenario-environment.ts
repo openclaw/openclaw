@@ -35,19 +35,6 @@ export type WhatsAppQaScenarioEnvironment = {
   sutAccountId: string;
 };
 
-function resolveWhatsAppQaReplacePaths(accountId: string): string[] {
-  return [
-    "agents",
-    "approvals",
-    "broadcast",
-    "channels.whatsapp",
-    `channels.whatsapp.accounts.${accountId}.allowFrom`,
-    "messages",
-    "plugins",
-    "tools",
-  ];
-}
-
 export function createWhatsAppQaScenarioEnvironment(params: {
   accountId: string;
   driverAuthDir: string;
@@ -109,7 +96,16 @@ export function createWhatsAppQaScenarioEnvironment(params: {
       await patchLiveQaGatewayConfig({
         gateway: input.gateway,
         patch: cfg as Record<string, unknown>,
-        replacePaths: resolveWhatsAppQaReplacePaths(params.accountId),
+        replacePaths: [
+          "agents",
+          "approvals",
+          "broadcast",
+          "channels.whatsapp",
+          `channels.whatsapp.accounts.${params.accountId}.allowFrom`,
+          "messages",
+          "plugins",
+          "tools",
+        ],
         timeoutMs: input.timeoutMs,
         waitForConfigRestartSettle: input.waitForConfigRestartSettle,
       });

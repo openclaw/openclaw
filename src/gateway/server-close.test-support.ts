@@ -19,6 +19,13 @@ type GatewayCloseFixtureMocks = Pick<
 };
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 
+/** Read the captured first close-effect call without changing its mock behavior. */
+export function firstMockCall<T extends readonly unknown[]>(mock: {
+  mock: { calls: readonly T[] };
+}) {
+  return mock.mock.calls[0];
+}
+
 export function createGatewayCloseTestHandlerFactory({
   prepareGatewayClose,
   completeGatewayClose,
@@ -35,9 +42,12 @@ export function createTestChatRunState() {
 }
 
 export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMocks) {
+  const resolveGatewayContext = () => undefined;
   return (overrides: Partial<GatewayCloseParams> = {}): GatewayCloseParams => {
     return {
-      resolveGatewayContext: () => undefined,
+      resolveGatewayContext,
+      preparePluginRegistryClose: async () => [],
+      drainWorktreeRunEnd: vi.fn(async () => {}),
       closePluginRegistry: async (onRetirement) => {
         let retirement: ReturnType<GatewayCloseParams["pluginMetadata"]["close"]> | undefined;
         const retire = () =>
@@ -65,6 +75,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       tailscaleCleanup: null,
       stopChannel: vi.fn(async () => undefined),
       pluginServices: null,
+      stopScheduler: vi.fn(async () => {}),
       disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
       drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
       stopGmailWatcher: mocks.stopGmailWatcher,
@@ -86,8 +97,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       restartRecoveryCandidates: new Map(),
       removeChatRun: vi.fn(),
       agentRunSeq: new Map(),

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import {
   childTurnCompletedNotification,
@@ -10,6 +14,8 @@ import {
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks();
 
 it("settles delayed close writes without consuming a replacement monitor's resumed assignment", async () => {
@@ -134,7 +140,7 @@ it("settles delayed close writes without consuming a replacement monitor's resum
     .toBe(false);
   expect
     .soft(
-      f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner()),
+      await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner()),
       "The previous monitor must not consume the resumed assignment",
     )
     .toEqual([
@@ -158,7 +164,7 @@ it("settles delayed close writes without consuming a replacement monitor's resum
       result: "Resumed result",
     }),
   );
-  expect(f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+  expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
   nextClient.close();
   const duplicate = await f.register(createClient());
   await duplicate.ready;

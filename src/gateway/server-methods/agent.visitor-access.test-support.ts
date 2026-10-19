@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
@@ -5,7 +6,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { activatePluginRegistry } from "../../plugins/loader-shared.js";
 import { clearActivePluginRegistry } from "../../plugins/runtime.js";
-import { startPluginServices, type PluginServicesHandle } from "../../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../../plugins/services.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -32,8 +36,9 @@ export const visitorTestStateOptions = {
 
 export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig {
   return {
-    agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] },
+    agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     gateway: {
+      controlUi: { github: { token: "synthetic-visitor-github-token" } },
       roles: {
         default: "guest",
         definitions: {
@@ -57,11 +62,7 @@ export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig
       entries: {
         "visitor-access": {
           enabled: true,
-          config: {
-            accountId: "test-account",
-            appId: "test-app",
-            apiToken: "synthetic-visitor-token",
-          },
+          config: { accountId: "test-account", appId: "test-app", apiToken: "test-token" },
         },
       },
     },
@@ -81,6 +82,7 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
   const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
   let targets: Array<string | number> = [...initialEmails];
   const writes: string[] = [];
+  const response = (result: unknown) => Response.json({ success: true, result });
   const policy = () => ({
     id: "visitors",
     name: "Visitors (openclaw-managed)",
@@ -101,32 +103,28 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     if (url.href === "https://api.github.com/users/fresh-account" && method === "GET") {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer synthetic-visitor-github-token",
+      );
       return Response.json({ id: 42, login: "fresh-account", email: null });
     }
     const collection = url.pathname === policiesPath;
-    if (
-      url.origin !== "https://api.cloudflare.com" ||
-      (!collection && url.pathname !== `${policiesPath}/visitors`)
-    ) {
-      throw new Error("Unexpected provider request in visitor authority probe");
-    }
+    assert(
+      url.origin === "https://api.cloudflare.com" &&
+        (collection || url.pathname === `${policiesPath}/visitors`),
+      "Unexpected provider request in visitor authority probe",
+    );
     if (method === "GET") {
-      return Response.json({
-        success: true,
-        result: collection ? (targets.length ? [policy()] : []) : policy(),
-      });
+      return response(collection ? (targets.length ? [policy()] : []) : policy());
     }
     const bodyText = init?.body;
-    if (
-      !((collection && method === "POST") || (!collection && method === "PUT")) ||
-      typeof bodyText !== "string"
-    ) {
-      throw new Error("Unexpected visitor policy mutation");
-    }
+    assert(
+      ((collection && method === "POST") || (!collection && method === "PUT")) &&
+        typeof bodyText === "string",
+      "Unexpected visitor policy mutation",
+    );
     const body: unknown = JSON.parse(bodyText);
-    if (!isRecord(body) || !Array.isArray(body.include)) {
-      throw new Error("Expected an email policy");
-    }
+    assert(isRecord(body) && Array.isArray(body.include), "Expected an email policy");
     targets = body.include.map((rule: unknown) => {
       if (
         isRecord(rule) &&
@@ -137,41 +135,40 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
       ) {
         return 42;
       }
-      if (!isRecord(rule) || !isRecord(rule.email) || typeof rule.email.email !== "string") {
-        throw new Error("Expected an email policy rule");
-      }
+      assert(
+        isRecord(rule) && isRecord(rule.email) && typeof rule.email.email === "string",
+        "Expected an email policy rule",
+      );
       return rule.email.email;
     });
     writes.push(method);
-    return Response.json({ success: true, result: policy() });
+    return response(policy());
   });
   return { fetcher, writes, emails: () => targets.filter((target) => typeof target === "string") };
 }
 
-export async function startVisitorGateway({
-  config,
-  state,
-  context,
-  resolveGatewayContext,
-}: {
+export async function startVisitorGateway(options: {
   config: OpenClawConfig;
   state: OpenClawTestState;
   context: GatewayRequestContext;
   resolveGatewayContext: GatewayContextResolver;
 }) {
+  const {
+    config,
+    state: { workspaceDir, env },
+    context,
+    resolveGatewayContext,
+  } = options;
   const handlers = {
     agent: expectDefined(agentHandlers.agent, "agent handler missing"),
-    "tools.invoke": expectDefined(
-      toolsInvokeHandlers["tools.invoke"],
-      "tools.invoke handler missing",
-    ),
+    "tools.invoke": expectDefined(toolsInvokeHandlers["tools.invoke"], "tools.invoke missing"),
     "users.list": expectDefined(usersHandlers["users.list"], "users.list handler missing"),
   };
-  const loaded = loadGatewayPlugins({
+  const loaded = await loadGatewayPlugins({
     cfg: config,
     autoEnabledReasons: {},
-    workspaceDir: state.workspaceDir,
-    env: state.env,
+    workspaceDir,
+    env,
     coreGatewayHandlers: handlers,
     baseMethods: Object.keys(handlers),
     pluginIds: ["visitor-access"],
@@ -199,7 +196,7 @@ export async function startVisitorGateway({
       registry,
     );
     context.getGatewayMethodRegistry = () => methods;
-    activatePluginRegistry(registry, null, "gateway-bindable", state.workspaceDir);
+    activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
     expect(registry.plugins.find(({ id }) => id === "visitor-access")).toMatchObject({
       origin: "bundled",
       status: "loaded",
@@ -211,7 +208,7 @@ export async function startVisitorGateway({
     await startPluginServices({
       registry,
       config,
-      workspaceDir: state.workspaceDir,
+      workspaceDir,
       throwOnStartError: true,
       onHandle: (handle) => {
         services = handle;

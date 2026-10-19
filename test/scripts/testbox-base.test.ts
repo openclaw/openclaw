@@ -20,7 +20,6 @@ const workflows = [
 
 type Step = {
   name: string;
-  id?: string;
   run?: string;
   uses?: string;
   env?: Record<string, string>;
@@ -30,6 +29,11 @@ type Step = {
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
+function steps(file: string): Step[] {
+  const jobs = Object.values(parse(fs.readFileSync(file, "utf8")).jobs) as { steps: Step[] }[];
+  return jobs.flatMap((job) => job.steps);
+}
+const fetchArgs = (...args: string[]) => ["fetch", "--filter=blob:none", "--no-tags", ...args];
 
 beforeAll(() => {
   source = seedDirs.make("openclaw-testbox-source-");
@@ -69,8 +73,6 @@ function runBasePreparation(
   trace: string,
   eventName: string,
 ) {
-  const workflow = parse(fs.readFileSync(workflowName, "utf8"));
-  const jobs = Object.values(workflow.jobs) as { steps: Step[] }[];
   const values = new Map([
     ["github.event.pull_request.base.sha", base],
     ["github.event.pull_request.base.ref", "main"],
@@ -91,17 +93,16 @@ function runBasePreparation(
     });
   const renderEnv = (env: Record<string, string> = {}) =>
     Object.fromEntries(Object.entries(env).map(([key, value]) => [key, interpolate(value)]));
-  const bin = path.join(createTempDir("openclaw-testbox-tools-"), "bin");
-  fs.mkdirSync(bin);
+  const bin = createTempDir("openclaw-testbox-tools-");
   // System-wide Node links are unrelated to Git preparation and must stay fixture-local.
   fs.writeFileSync(
     path.join(bin, "sudo"),
     '#!/bin/sh\nif [ "$1" = tee ]; then cat >/dev/null; fi\n',
   );
   fs.chmodSync(path.join(bin, "sudo"), 0o755);
-  const step = jobs
-    .flatMap((job) => job.steps)
-    .find((entry) => entry.uses === "./.github/actions/prepare-testbox-shell");
+  const step = steps(workflowName).find(
+    (entry) => entry.uses === "./.github/actions/prepare-testbox-shell",
+  );
   if (!step?.uses) {
     throw new Error("Missing Testbox preparation action");
   }
@@ -134,44 +135,39 @@ function runBasePreparation(
 }
 
 describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
+  it("uses two commits for PR preparation and one for a manual shell", () => {
+    const checkout = steps(workflowName).find((step) => step.name === "Checkout");
+    expect(checkout?.with?.["fetch-depth"]).toBe(
+      "${{ github.event_name == 'pull_request' && '2' || '1' }}",
+    );
+  });
+
   it.each([
-    { shape: "merge", branch: "main", depth: 2, passes: true, eventName: "pull_request" },
+    ["merge", "main", 2, "pull_request"],
     ...(workflowName === workflows[0]
       ? [
-          { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
-          {
-            shape: "merge without parents",
-            branch: "main",
-            depth: 1,
-            passes: false,
-            eventName: "pull_request",
-          },
+          ["linear", "feature", 2, "pull_request"] as const,
+          ["merge without parents", "main", 1, "pull_request"] as const,
         ]
       : []),
-    {
-      shape: "manual",
-      branch: "feature",
-      depth: workflowName.endsWith("/ci-check-testbox.yml") ? 1 : 0,
-      passes: true,
-      eventName: "workflow_dispatch",
-    },
-  ])("pins the correct base in a $shape checkout", ({ branch, depth, passes, eventName }) => {
+    ["manual", "feature", 1, "workflow_dispatch"],
+  ] as const)("pins the correct base in a %s checkout", (shape, branch, depth, eventName) => {
     const repo = createTempDir("openclaw-testbox-shallow-");
     git(
       source,
       "clone",
       "--quiet",
       "--no-local",
-      ...(depth ? [`--depth=${depth}`] : []),
+      `--depth=${depth}`,
       "--branch",
       branch,
       source,
       repo,
     );
-    expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe(String(depth > 0));
+    expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
     expect(
       spawnSync("git", ["cat-file", "-e", `${eventBase}^{commit}`], { cwd: repo }).status === 0,
-    ).toBe(depth === 0 || (branch === "feature" && depth > 1));
+    ).toBe(branch === "feature" && depth > 1);
     const before = spawnSync("git", ["rev-parse", "refs/remotes/origin/main"], {
       cwd: repo,
       encoding: "utf8",
@@ -186,7 +182,7 @@ describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
     const fetches = traceEvents.filter(
       (event) => event.event === "cmd_name" && event.name === "fetch",
     );
-    if (!passes) {
+    if (shape === "merge without parents") {
       expect(result.status).not.toBe(0);
       expect(result.stdout).toContain("Base commit still unavailable");
       expect(fetches).toHaveLength(6);
@@ -199,17 +195,9 @@ describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
           return start.argv.slice(start.argv.indexOf("fetch"));
         }),
       ).toEqual([
-        ["fetch", "--filter=blob:none", "--no-tags", "--depth=1", "origin", eventBase],
-        ...[25, 100, 300, 1000].map((deepenBy) => [
-          "fetch",
-          "--filter=blob:none",
-          "--no-tags",
-          `--deepen=${deepenBy}`,
-          "origin",
-          "--",
-          "main",
-        ]),
-        ["fetch", "--filter=blob:none", "--no-tags", "--unshallow", "origin", "--", "main"],
+        fetchArgs("--depth=1", "origin", eventBase),
+        ...[25, 100, 300, 1000].map((n) => fetchArgs(`--deepen=${n}`, "origin", "--", "main")),
+        fetchArgs("--unshallow", "origin", "--", "main"),
       ]);
       expect(git(repo, "rev-parse", "refs/remotes/origin/main")).toBe(before.stdout.trim());
       return;
@@ -218,9 +206,7 @@ describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
     expect(fetches).toEqual([]);
     expect(git(repo, "rev-parse", "refs/remotes/origin/main")).toBe(
       eventName === "workflow_dispatch"
-        ? depth === 1
-          ? git(repo, "rev-parse", "HEAD")
-          : git(source, "rev-parse", "main")
+        ? git(repo, "rev-parse", "HEAD")
         : branch === "main"
           ? mainBase
           : eventBase,

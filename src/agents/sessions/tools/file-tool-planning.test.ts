@@ -1,11 +1,70 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAgentToolExecutionBudget } from "../../agent-tool-source-execution-guard.js";
+import { isTrustedToolInputError } from "../../tool-input-error.js";
 import { createEditTool } from "./edit.js";
 import * as planning from "./file-tool-planning.js";
 import { createWriteTool } from "./write.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  { name: "missing", oldText: "absent", message: "Could not find the exact text" },
+  { name: "ambiguous", oldText: "target", message: "Found 2 occurrences" },
+  { name: "empty", oldText: "", message: "oldText must not be empty" },
+])(
+  "preserves trusted $name edit input errors across planning workers",
+  async ({ oldText, message }) => {
+    const content = "target\ntarget\n";
+    const writeFile = vi.fn(async () => {});
+    const tool = createEditTool("/workspace", {
+      operations: {
+        resolveQueueKey: (target) => target,
+        access: async () => {},
+        readFile: async () => Buffer.from(content),
+        writeFile,
+        statFile: async () => ({ type: "file", size: content.length, mtimeMs: 1 }),
+      },
+    });
+    const error = await tool
+      .execute("invalid-edit", {
+        path: "example.txt",
+        edits: [{ oldText, newText: "replacement" }],
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty("message", expect.stringContaining(message));
+    expect(isTrustedToolInputError(error)).toBe(true);
+    if (oldText === "absent") {
+      expect(error).toHaveProperty("message", expect.stringContaining(content));
+      expect(error).toHaveProperty("cause.message", expect.not.stringContaining(content));
+    }
+    expect(writeFile).not.toHaveBeenCalled();
+  },
+);
+
+it("does not classify filesystem failures as edit input errors", async () => {
+  const fileError = new Error("Synthetic storage unavailable");
+  const tool = createEditTool("/workspace", {
+    operations: {
+      resolveQueueKey: (target) => target,
+      access: async () => {
+        throw fileError;
+      },
+      readFile: async () => Buffer.from("target\n"),
+      writeFile: async () => {},
+      statFile: async () => null,
+    },
+  });
+  const error = await tool
+    .execute("storage-error", {
+      path: "example.txt",
+      edits: [{ oldText: "target", newText: "replacement" }],
+    })
+    .catch((caught: unknown) => caught);
+  expect(error).toHaveProperty("cause", fileError);
+  expect(isTrustedToolInputError(error)).toBe(false);
+});
 
 it.each(
   (["edit", "write"] as const).flatMap((kind) =>
@@ -88,8 +147,9 @@ it.each(
         expect(writeFile).toHaveBeenCalledOnce();
         expect(content).toBe("after\n");
       } else {
+        const abortedMessage = kind === "write" ? "Operation aborted" : "Planning cancelled";
         await expect(pending).rejects.toThrow(
-          authority === "aborted" ? "Planning cancelled" : "execution scope is no longer active",
+          authority === "aborted" ? abortedMessage : "execution scope is no longer active",
         );
         expect(mkdir).not.toHaveBeenCalled();
         expect(writeFile).not.toHaveBeenCalled();

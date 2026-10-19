@@ -13,16 +13,27 @@ struct ChatSessionSidebarFiltersModelTests {
          {"key":"grandchild","owner":{"actor":{"type":"human","id":"alice"}}}]
         """#.utf8))
         let sections = ChatSessionSidebarModel.sections(
-            sessions: rows, currentSessionKey: "parent", query: "",
+            sessions: rows,
+            currentSessionKey: "parent",
+            query: "",
             viewOptions: .init(ownerFilter: "owner:alice"))
         let parent = try #require(sections.flatMap(\.nodes).first { $0.id == "parent" })
         #expect(parent.badges.hasUnread)
         #expect(parent.badges.failedCount == 1)
         #expect(ChatSessionSidebarModel.nodes(parent.children, matchingOwner: "alice").map(\.id) == ["grandchild"])
-        #expect(ChatSessionSidebarModel.nodes([parent], matchingOwner: "bob").map(\.id) == ["child"])
+        let bobSections = ChatSessionSidebarModel.sections(
+            sessions: rows,
+            currentSessionKey: "parent",
+            query: "",
+            viewOptions: .init(ownerFilter: "owner:bob"))
+        #expect(bobSections.flatMap(\.nodes).map(\.id) == ["child"])
         #if os(macOS)
         let facts = ChatSessionSidebarRowFacts(
-            node: parent, isChild: false, attention: nil, showPreview: false, preview: nil,
+            node: parent,
+            isChild: false,
+            attention: nil,
+            showPreview: false,
+            preview: nil,
             now: Date(timeIntervalSince1970: 1))
         #expect(facts.unreadDescendants && facts.failedDescendants)
         #expect(facts.attentionLabel == "Child session Child work failed: Needs repair")
@@ -41,23 +52,29 @@ struct ChatSessionSidebarFiltersModelTests {
         ]}
         """#.utf8)).sessions
         let sections = ChatSessionSidebarModel.sections(
-            sessions: rows, currentSessionKey: "plain",
+            sessions: rows,
+            currentSessionKey: "plain",
             groups: [.init(name: "Research", position: 0), .init(name: "Ops", position: 1)],
-            query: "", viewOptions: .init(status: .all))
+            query: "",
+            viewOptions: .init(status: .all))
         #expect(sections.map(\.id) == ["group:Research", "group:Ops", "recent", "groups", "work"])
         #expect(sections.first(where: { $0.id == "work" })?.nodes.map(\.id) == ["coding"])
         #expect(sections.first?.nodes.first?.children.map(\.id) == ["release-child"])
         #expect(!sections.flatMap(\.nodes).flatMap { [$0.id] + $0.children.map(\.id) }.contains("hidden-child"))
     }
 
-    @Test func `sidebar grouping uses canonical projects identities and flat mode without changing shared callers`() throws {
+    @Test
+    func `sidebar grouping uses canonical projects identities and flat mode without changing shared callers`() throws {
         let page = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"owners":[{"type":"human","id":"self","label":"Zed"},{"type":"human","id":"other","label":"Amy"}],
          "sessions":[
           {"key":"pin","pinned":true,"pinnedAt":10},
-          {"key":"self","createdAt":1,"owner":{"actor":{"type":"human","id":"self","label":"Zed","identity":{"type":"profile","id":"self"}}}},
-          {"key":"other","createdAt":2,"owner":{"actor":{"type":"human","id":"other","label":"Zoe","identity":{"type":"profile","id":"other"}}}},
-          {"key":"agent","owner":{"actor":{"type":"agent","id":"self","label":"Agent","identity":{"type":"agent","id":"self"}}}},
+          {"key":"self","createdAt":1,"owner":{"actor":{"type":"human","id":"self","label":"Zed",
+            "identity":{"type":"profile","id":"self"}}}},
+          {"key":"other","createdAt":2,"owner":{"actor":{"type":"human","id":"other","label":"Zoe",
+            "identity":{"type":"profile","id":"other"}}}},
+          {"key":"agent","owner":{"actor":{"type":"agent","id":"self","label":"Agent",
+            "identity":{"type":"agent","id":"self"}}}},
           {"key":"repo","spawnedCwd":"/repo/.claude/worktrees/task/subdir/"},
           {"key":"remote","execNode":"worker","execCwd":"/node","worktree":{"repoRoot":"/wrong"}},
           {"key":"cloud","repository":{"url":"https://example.test/project.git"}},
@@ -131,15 +148,19 @@ struct ChatSessionSidebarFiltersModelTests {
     ])
     func `Coding classification follows web display key parsing`(key: String, coding: Bool) {
         let sections = ChatSessionSidebarModel.sections(
-            sessions: [self.entry(key: "ordinary"), self.entry(key: key)], currentSessionKey: "ordinary",
-            query: "", viewOptions: .init())
+            sessions: [self.entry(key: "ordinary"), self.entry(key: key)],
+            currentSessionKey: "ordinary",
+            query: "",
+            viewOptions: .init())
         #expect((sections.first(where: { $0.id == "work" })?.nodes.contains { $0.id == key } ?? false) == coding)
     }
 
     @Test func `Person headers retain the first sorted row owner projection`() throws {
         let rows = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data(#"""
-        [{"key":"newer","createdAt":2,"owner":{"actor":{"type":"human","id":"person","label":"Current name","identity":{"type":"profile","id":"person"}}}},
-         {"key":"older","createdAt":1,"owner":{"actor":{"type":"human","id":"person","label":"Old name","identity":{"type":"profile","id":"person"}}}}]
+        [{"key":"newer","createdAt":2,"owner":{"actor":{"type":"human","id":"person","label":"Current name",
+          "identity":{"type":"profile","id":"person"}}}},
+         {"key":"older","createdAt":1,"owner":{"actor":{"type":"human","id":"person","label":"Old name",
+           "identity":{"type":"profile","id":"person"}}}}]
         """#.utf8))
         let sections = ChatSessionSidebarModel.sections(
             sessions: rows,

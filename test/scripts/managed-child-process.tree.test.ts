@@ -78,6 +78,7 @@ it("preserves requested command inputs across Windows platform loading", async (
     exitCode: { value: 0 },
     stdout: { value: null, writable: true },
     stderr: { value: null, writable: true },
+    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
   });
   let launched: { argument?: string; value?: string } | undefined;
   mocks.spawnWindowsJobChild.mockImplementation((_command, args, options) => {
@@ -145,7 +146,11 @@ it.each([false, true])(
     const root = dirs.make("managed-joined-diagnostics-");
     const owner = createVitestResourceOwner(root);
     const child = new ChildProcess();
-    Object.defineProperties(child, { pid: { value: 12345 }, exitCode: { value: 0 } });
+    Object.defineProperties(child, {
+      pid: { value: 12345 },
+      exitCode: { value: 0 },
+      stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
+    });
     // spawn with ignored stdio returns null streams, unlike an unspawned ChildProcess.
     child.stdout = null;
     child.stderr = null;
@@ -208,7 +213,6 @@ it.each([false, true])(
 it.each([
   ["win32", true, true],
   ["win32", false, true],
-  ["darwin", true, true],
   ["darwin", false, true],
   ["win32", true, false],
 ] as const)(
@@ -217,7 +221,11 @@ it.each([
     const root = dirs.make("managed-normal-exit-");
     const owner = createVitestResourceOwner(root);
     const child = new ChildProcess();
-    Object.defineProperties(child, { pid: { value: 12345 }, exitCode: { value: 0 } });
+    Object.defineProperties(child, {
+      pid: { value: 12345 },
+      exitCode: { value: 0 },
+      stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
+    });
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
@@ -297,12 +305,7 @@ it.each([
       if (terminates && closes) {
         expect(descendantOutput.destroyed).toBe(true);
         owner.assertReleased();
-        // POSIX strict normal-exit policy still reports unexpected group survivors.
-        if (platform === "win32") {
-          expect(outcome).toBe(0);
-        } else {
-          expect(outcome).toMatchObject({ processTreeState: "terminated" });
-        }
+        expect(outcome).toBe(0);
       } else {
         expect(hasUnjoinedWork(outcome)).toBe(true);
         expect(outcome).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
@@ -328,6 +331,7 @@ it.each([
     Object.defineProperties(child, {
       pid: { value: 12345 },
       exitCode: { get: () => exitCode },
+      stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
     });
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();

@@ -2,15 +2,15 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import OpenAI from "openai";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
@@ -24,6 +24,7 @@ import {
   expectHttpForeignSessionAuthority,
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
+import * as httpCommon from "./http-common.js";
 import {
   registerOpenResponsesHttpUploadTests,
   registerOpenResponsesHttpMediaInputTests,
@@ -31,12 +32,14 @@ import {
 import {
   incompatibleReplacementCases,
   emitIncompatibleAssistantReplacement,
+  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseEvents,
   collectSseEventTypes,
   findSseEvent,
   parseSseData,
 } from "./http-stream.test-support.js";
+import * as httpUtils from "./http-utils.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -64,26 +67,24 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-installGatewayTestHooks({ scope: "suite" });
-
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
-beforeAll(async () => {
-  const started = await startGatewayServerWithRetries({
-    port: await getGatewayTestPort(),
-    opts: {
-      host: "127.0.0.1",
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      openResponsesEnabled: true,
-    },
-  });
-  enabledPort = started.port;
-  enabledServer = started.server;
-});
-
-afterAll(async () => {
-  await enabledServer?.close({ reason: "openresponses enabled suite done" });
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openResponsesEnabled: true,
+      },
+    });
+    enabledPort = started.port;
+    enabledServer = started.server;
+  },
+  cleanup: async () => enabledServer?.close({ reason: "openresponses enabled suite done" }),
 });
 
 beforeEach(() => {
@@ -182,7 +183,7 @@ const WEATHER_TOOL = [
 const STREAM_FAILURE_CASES = [
   {
     name: "a reserved client tool",
-    createError: () => createClientToolNameConflictError(["read"]),
+    createError: () => new Error("client tool name conflict: read"),
     tools: [{ type: "function", name: "read" }],
     expectedCode: "invalid_request_error",
     expectedMessage: "invalid tool configuration",
@@ -338,6 +339,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
+  it("keeps embedded late commentary append-only while the final answer streams", async () => {
+    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
+    const stream = createStream();
+    const content: string[] = [];
+    const terminals: string[] = [];
+    stream.on("response.output_text.delta", ({ delta }) => content.push(delta));
+    stream.on("response.failed", () => terminals.push("failed"));
+    stream.on("response.completed", () => terminals.push("completed"));
+    const response = await stream.finalResponse();
+    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
+    expect(response.output_text).toBe(content.join(""));
+    expect(terminals).toEqual(["completed"]);
+    expect(response.status).toBe("completed");
+  });
+
   it.each(
     incompatibleReplacementCases.filter(({ name }) =>
       [
@@ -403,7 +419,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const request = { model: "openclaw", input: "hi" };
     const admin = { "x-openclaw-scopes": "operator.admin, operator.write" };
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       const nonPost = await fetch(`http://127.0.0.1:${enabledPort}/v1/responses`);
       expect(nonPost.status).toBe(405);
@@ -415,7 +431,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           "x-openclaw-session-key": `agent:main:${key}`,
         });
       }
-      testState.agentsConfig = { ownership: "explicit", list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
       await accept(
         {},
@@ -434,7 +450,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { model: "openclaw/beta" },
         { sessionKey: expect.stringMatching(/^agent:beta:/) },
       );
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       await accept(
         { model: "openclaw/default" },
@@ -472,7 +488,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         error: { type: "forbidden", message: "missing scope: operator.admin" },
       });
       expect(agentCommandMock).not.toHaveBeenCalled();
-      agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+      agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
       const conflict = await postResponses(enabledPort, { ...request, tools: WEATHER_TOOL });
       expect(conflict.status).toBe(400);
       expect(await conflict.json()).toMatchObject({
@@ -1601,5 +1617,70 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
     },
   );
+
+  it("releases stream observation when its client disconnects during session authorization", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const authorized = createDeferred();
+    const finishAuthorization = createDeferred();
+    const disconnected = createDeferred();
+    const subscriptions = new Set<() => void>();
+    const authorizeSession = httpUtils.authorizeOpenAiCompatibleHttpSession;
+    const watchDisconnect = httpCommon.watchClientDisconnect;
+    const observeRun = agentEvents.onAgentEventForRun;
+    const authorizationSpy = vi
+      .spyOn(httpUtils, "authorizeOpenAiCompatibleHttpSession")
+      .mockImplementationOnce(async (params) => {
+        const result = await authorizeSession(params);
+        authorized.resolve();
+        await finishAuthorization.promise;
+        return result;
+      });
+    const disconnectSpy = vi
+      .spyOn(httpCommon, "watchClientDisconnect")
+      .mockImplementationOnce((req, res, controller, onDisconnect) => {
+        res.once("close", () => disconnected.resolve());
+        return watchDisconnect(req, res, controller, onDisconnect);
+      });
+    const observationSpy = vi
+      .spyOn(agentEvents, "onAgentEventForRun")
+      .mockImplementation((runId, listener) => {
+        const stop = observeRun(runId, listener);
+        const release = () => {
+          subscriptions.delete(release);
+          stop();
+        };
+        subscriptions.add(release);
+        return release;
+      });
+    agentCommandMock.mockClear();
+    const clientReq = http.request({
+      hostname: "127.0.0.1",
+      port: enabledPort,
+      path: "/v1/responses",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    clientReq.on("error", () => {});
+    clientReq.end(JSON.stringify({ stream: true, model: "openclaw", input: "hi" }));
+    try {
+      await authorized.promise;
+      clientReq.destroy();
+      await disconnected.promise;
+      finishAuthorization.resolve();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(subscriptions.size).toBe(0);
+    } finally {
+      clientReq.destroy();
+      finishAuthorization.resolve();
+      for (const release of subscriptions) {
+        release();
+      }
+      observationSpy.mockRestore();
+      disconnectSpy.mockRestore();
+      authorizationSpy.mockRestore();
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

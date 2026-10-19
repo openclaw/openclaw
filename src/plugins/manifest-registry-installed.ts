@@ -24,7 +24,11 @@ import {
 } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
-import { normalizeManifestObjectList } from "./manifest-capability-normalizers.js";
+import {
+  normalizeManifestObjectList,
+  omitUndefinedManifestFields,
+  optionalManifestFields,
+} from "./manifest-capability-normalizers.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRecord,
@@ -131,20 +135,16 @@ function normalizePackageChannelConfiguredState(
   if (!isRecord(configuredState)) {
     return undefined;
   }
-  const rawEnv = isRecord(configuredState.env) ? configuredState.env : undefined;
-  const allOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.allOf) : undefined;
-  const anyOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.anyOf) : undefined;
-  const env =
-    allOf || anyOf ? { ...(allOf ? { allOf } : {}), ...(anyOf ? { anyOf } : {}) } : undefined;
-  const specifier = normalizeOptionalString(configuredState.specifier);
-  const exportName = normalizeOptionalString(configuredState.exportName);
-  return specifier || exportName || env
-    ? {
-        ...(specifier ? { specifier } : {}),
-        ...(exportName ? { exportName } : {}),
-        ...(env ? { env } : {}),
-      }
-    : undefined;
+  return optionalManifestFields({
+    specifier: normalizeOptionalString(configuredState.specifier),
+    exportName: normalizeOptionalString(configuredState.exportName),
+    env: isRecord(configuredState.env)
+      ? optionalManifestFields({
+          allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf),
+          anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf),
+        })
+      : undefined,
+  });
 }
 
 function normalizePackageChannelPersistedAuthState(
@@ -155,14 +155,17 @@ function normalizePackageChannelPersistedAuthState(
   }
   const specifier = normalizeOptionalString(persistedAuthState.specifier);
   const exportName = normalizeOptionalString(persistedAuthState.exportName);
-  return specifier || exportName
-    ? {
-        ...(specifier ? { specifier } : {}),
-        ...(exportName ? { exportName } : {}),
-        ...(persistedAuthState.backingStore === "plugin-state"
-          ? { backingStore: "plugin-state" as const }
-          : {}),
-      }
+  const exportNameAsync = normalizeOptionalString(persistedAuthState.exportNameAsync);
+  return specifier || exportName || exportNameAsync
+    ? omitUndefinedManifestFields({
+        specifier,
+        exportName,
+        exportNameAsync,
+        backingStore:
+          persistedAuthState.backingStore === "plugin-state"
+            ? ("plugin-state" as const)
+            : undefined,
+      })
     : undefined;
 }
 
@@ -205,18 +208,17 @@ function normalizePackageChannelCliOptions(
     if (!flags || !description) {
       return undefined;
     }
-    const defaultValue =
-      typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
-        ? option.defaultValue
-        : undefined;
     const valueType =
       option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
-    return {
+    return omitUndefinedManifestFields<PluginPackageChannelCliOption>({
       flags,
       description,
-      ...(defaultValue !== undefined ? { defaultValue } : {}),
-      ...(valueType ? { valueType } : {}),
-    };
+      defaultValue:
+        typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
+          ? option.defaultValue
+          : undefined,
+      valueType,
+    });
   });
 }
 
@@ -460,31 +462,23 @@ function toPluginCandidate(
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, env);
   return recordPluginCandidateInstallOwner(
-    {
+    omitUndefinedManifestFields({
       idHint: record.pluginId,
       effectivePluginId: record.pluginId,
       source: record.source ?? resolveFallbackPluginSource(record),
-      ...(record.setupSource ? { setupSource: record.setupSource } : {}),
+      setupSource: record.setupSource || undefined,
       rootDir,
       origin: record.origin,
-      ...(record.format ? { format: record.format } : {}),
-      ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
-      ...(record.packageName ? { packageName: record.packageName } : {}),
-      ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-      ...(packageMetadata.packageDescription
-        ? { packageDescription: packageMetadata.packageDescription }
-        : {}),
-      ...(packageMetadata.packageManifest
-        ? { packageManifest: packageMetadata.packageManifest }
-        : {}),
-      ...(packageMetadata.packageDependencies
-        ? { packageDependencies: packageMetadata.packageDependencies }
-        : {}),
-      ...(packageMetadata.packageOptionalDependencies
-        ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
-        : {}),
+      format: record.format || undefined,
+      bundleFormat: record.bundleFormat || undefined,
+      packageName: record.packageName || undefined,
+      packageVersion: record.packageVersion || undefined,
+      packageDescription: packageMetadata.packageDescription || undefined,
+      packageManifest: packageMetadata.packageManifest || undefined,
+      packageDependencies: packageMetadata.packageDependencies || undefined,
+      packageOptionalDependencies: packageMetadata.packageOptionalDependencies || undefined,
       packageDir: rootDir,
-    },
+    }),
     resolveInstalledPluginIndexInstallOwner(record),
     isInstalledPluginIndexInstallOwnerAmbiguous(record),
   );

@@ -285,21 +285,18 @@ it("runs hosted ask_user through the real router with its original narrow operat
   });
 });
 
-it("does not create a hosted question on another person's shared session", async () => {
+it.each([
+  [true, "session is shared for this connection"],
+  [false, "original question source revoked"],
+] as const)("rejects hosted creation (foreign session: %s) with %s", async (foreign, error) => {
   await withHostedQuestion(async (fixture) => {
-    await expect(fixture.ask()).rejects.toThrow("session is shared for this connection");
-    expect(fixture.request).toHaveBeenCalledOnce();
+    if (!foreign) {
+      fixture.revoke();
+    }
+    await expect(fixture.ask()).rejects.toThrow(error);
+    expect(fixture.request).toHaveBeenCalledTimes(foreign ? 1 : 0);
     expect(fixture.manager.list()).toEqual([]);
-  }, true);
-});
-
-it("does not register another hosted question after the original operator source closes", async () => {
-  await withHostedQuestion(async (fixture) => {
-    fixture.revoke();
-    await expect(fixture.ask()).rejects.toThrow("original question source revoked");
-    expect(fixture.request).not.toHaveBeenCalled();
-    expect(fixture.manager.list()).toEqual([]);
-  });
+  }, foreign);
 });
 
 it.each(["write", "view", "none"] as const)(

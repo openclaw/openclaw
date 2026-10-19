@@ -1,15 +1,14 @@
 import { expect, it, vi } from "vitest";
 import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
-import {
-  clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
+import { persistRegistryFixture } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { createEmbeddedCallGateway } from "../../agents/tools/embedded-gateway-stub.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
+import { lookupPluginStateInWorker } from "../../plugin-state/plugin-state-worker-client.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -50,7 +49,7 @@ it.each(["replaced", "made private"])(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           gateway: {
             roles: {
               default: "reader",
@@ -87,10 +86,7 @@ it.each(["replaced", "made private"])(
           swarmRequesterSessionKey: controller,
           collectorCompletion: { status: "done" },
         });
-        persistSubagentRunsToDiskOrThrow(
-          new Map([child, collector].map((entry) => [entry.runId, entry])),
-          [child.runId, collector.runId],
-        );
+        persistRegistryFixture(new Map([child, collector].map((entry) => [entry.runId, entry])));
         clearSubagentRunsReadCacheForTest();
         const context = requestContext(cfg);
         await initializeSessionReadContext(context);
@@ -158,7 +154,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
     async () => {
       clearSubagentRunsReadCacheForTest();
       const cfg = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         // Session reads need the real embedded host, but no bundled plugin runtimes.
         plugins: { enabled: false },
       };
@@ -185,10 +181,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
           { sessionId: key, updatedAt, visibility: "shared", spawnedBy },
         );
       }
-      persistSubagentRunsToDiskOrThrow(
-        new Map([child, collector].map((entry) => [entry.runId, entry])),
-        [child.runId, collector.runId],
-      );
+      persistRegistryFixture(new Map([child, collector].map((entry) => [entry.runId, entry])));
       const key = { pluginId: "session-list-proof", namespace: "mixed-progress", key: "written" };
       const context = requestContext(cfg);
       await initializeSessionReadContext(context);
@@ -255,11 +248,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
         } finally {
           await backend.stop();
         }
-        expect(
-          await runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
-            worker.execute({ type: "pluginState.lookup", input: key }),
-          ),
-        ).toEqual({ ok: true, value: true });
+        expect(await lookupPluginStateInWorker(key)).toBe(true);
       } finally {
         getSessionRowProjection(context)?.dispose();
         clearSubagentRunsReadCacheForTest();

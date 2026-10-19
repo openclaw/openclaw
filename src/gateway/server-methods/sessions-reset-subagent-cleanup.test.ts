@@ -1,6 +1,8 @@
 import path from "node:path";
+import type { WorkerOptions } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   listRegisteredAgentHarnesses,
@@ -10,11 +12,11 @@ import { restoreRegisteredAgentHarnesses } from "../../agents/harness/registry.t
 import * as completionOwner from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   settleSubagentRegistryPersistenceWork,
 } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   claimSubagentRunKill,
@@ -22,6 +24,7 @@ import {
   settleFailedQueuedSubagentLaunch,
   resetSubagentRegistryForTests,
   testing,
+  withSubagentKillOwner,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { waitForCollectorCompletion } from "../../agents/tools/agents-wait-tool.js";
 import {
@@ -31,27 +34,82 @@ import {
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import * as sessionLifecycleOwner from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { callGateway } from "../call.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+
+const writeFault = vi.hoisted(() => new Int32Array(new SharedArrayBuffer(4)));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  // TEMP triggers belong on the admitted writer connection, including an already warm worker.
+  const preload = `
+    import { DatabaseSync } from "node:sqlite";
+    import { workerData } from "node:worker_threads";
+    const fault = new Int32Array(workerData.resetCleanupFault);
+    const installed = new WeakSet();
+    const prepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function(sql) {
+      const registry = sql.startsWith('insert into "subagent_runs"');
+      const reset = sql.startsWith('update "session_nodes"') || sql.startsWith('insert into "session_nodes"');
+      if ((registry || reset) && !installed.has(this)) {
+        this.function('reset_cleanup_fault', () => Atomics.load(fault, 0));
+        this.exec(registry
+          ? "CREATE TEMP TRIGGER reject_revocation BEFORE UPDATE ON main.subagent_runs " +
+            "WHEN reset_cleanup_fault() = 1 AND NEW.run_id = 'reset-cleanup-run' " +
+            "AND json_extract(NEW.payload_json, '$.execution.suppressSessionEffects') = 1 " +
+            "BEGIN SELECT RAISE(ABORT, 'revocation write rejected'); END"
+          : "CREATE TEMP TRIGGER reject_reset BEFORE UPDATE ON main.session_nodes " +
+            "WHEN reset_cleanup_fault() = 2 AND NEW.session_key = 'agent:main:subagent:reset-cleanup' " +
+            "AND json_extract(NEW.entry_json, '$.lifecycleRevision') != json_extract(OLD.entry_json, '$.lifecycleRevision') " +
+            "BEGIN SELECT RAISE(ABORT, 'reset store rejected'); END");
+        installed.add(this);
+      }
+      return prepare.call(this, sql);
+    };
+  `;
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        super(
+          filename,
+          String(filename).includes("sqlite-store.worker")
+            ? {
+                ...options,
+                workerData: { ...options?.workerData, resetCleanupFault: writeFault.buffer },
+                execArgv: [
+                  ...(options?.execArgv ?? []),
+                  "--import",
+                  `data:text/javascript,${encodeURIComponent(preload)}`,
+                ],
+              }
+            : options,
+        );
+      }
+    },
+  };
+});
 
 const registryGateway = vi.hoisted(() => vi.fn<typeof callGateway>());
 vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
@@ -85,7 +143,7 @@ async function request(
     context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
     respond: (ok, payload, error) => {
       if (!ok) {
-        throw new Error(error?.message ?? "request failed");
+        throw new GatewayClientRequestError(error ?? { message: "request failed" });
       }
       result = payload;
     },
@@ -96,9 +154,9 @@ async function request(
 beforeEach(async () => {
   stateDir = tempDirs.make("openclaw-reset-cleanup-");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  cfg = { agents: { list: [{ id: "main", default: true, workspace: stateDir }] } };
+  cfg = { agents: { entries: { main: { workspace: stateDir } } } };
   setRuntimeConfigSnapshot(cfg);
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   attempts = 0;
   harnesses = listRegisteredAgentHarnesses();
   registryGateway.mockReset().mockImplementation(async (options) => {
@@ -117,7 +175,7 @@ beforeEach(async () => {
     },
   );
   await registerCollector(runId);
-  expect(settleFailedQueuedSubagentLaunch(runId, "launch failed")).toBe(true);
+  expect(await settleFailedQueuedSubagentLaunch(runId, "launch failed")).toBe(true);
   await testing.sweepOnceForTests();
   expect(attempts).toBe(1);
   expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(true);
@@ -128,9 +186,14 @@ async function registerCollector(id: string, childSessionKey = key, agentId = "m
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: agentId,
+    sessionEntry: loadSessionEntry({
+      storePath: cfg.session?.store,
+      agentId,
+      sessionKey: childSessionKey,
+    }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    agentId,
     requesterDisplayKey: "main",
     task: "failed collector launch",
     cleanup: "delete",
@@ -143,14 +206,25 @@ async function registerCollector(id: string, childSessionKey = key, agentId = "m
 }
 
 afterEach(async () => {
+  Atomics.store(writeFault, 0, 0);
   // Preserve failures from the accepted prefix before imports can retire their entries.
-  await settleSubagentRegistryPersistenceWork();
-  vi.restoreAllMocks();
-  restoreRegisteredAgentHarnesses(harnesses);
+  try {
+    await settleSubagentRegistryPersistenceWork();
+  } finally {
+    vi.restoreAllMocks();
+    restoreRegisteredAgentHarnesses(harnesses);
+  }
   await cleanupSubagentRegistryPersistenceTest({
     stateDir,
     resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
     closeDatabases: () => {
+      memorySessionActorOwners.closeDatabase({
+        agentId: "worker",
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: "worker",
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        }),
+      });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     },
@@ -160,30 +234,28 @@ afterEach(async () => {
   env.restore();
 });
 
-test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
-  "collector cleanup retry: %s",
-  async (mode) => {
-    const reset = mode !== "unchanged";
-    if (mode === "reopen-reset-reopen") {
-      await reopen();
-    }
-    if (reset) {
-      await request("sessions.reset", { key });
-      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
-    }
-    const beforeRetry = loadSessionEntry({ sessionKey: key });
-    if (mode.endsWith("reopen")) {
-      await reopen();
-    }
-    await testing.sweepOnceForTests();
-    expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
-    expect(attempts).toBe(reset ? 1 : 2);
-    await expectResultRetained();
-  },
-);
+test.each(["unchanged", "reopen-reset-reopen"])("collector cleanup retry: %s", async (mode) => {
+  const reset = mode !== "unchanged";
+  if (mode === "reopen-reset-reopen") {
+    await reopen();
+  }
+  if (reset) {
+    await request("sessions.reset", { key });
+    expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
+  }
+  const beforeRetry = loadSessionEntry({ sessionKey: key });
+  if (mode.endsWith("reopen")) {
+    await reopen();
+  }
+  await testing.sweepOnceForTests();
+  expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
+  expect(attempts).toBe(reset ? 1 : 2);
+  await expectResultRetained();
+});
 
 async function reopen() {
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
+  await cleanupSessionStateForTest({ stateDir });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await initSubagentRegistry();
@@ -198,22 +270,16 @@ async function expectResultRetained() {
       currentAgentId: "main",
       config: cfg,
     }),
-  ).resolves.toMatchObject({ runId, status: "failed", result: "launch failed" });
-}
-
-function agentDatabase() {
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
-  return openOpenClawAgentDatabase({
-    agentId: "main",
-    path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+  ).resolves.toMatchObject({
+    runId,
+    status: "failed",
+    result: "launch failed",
+    error: "launch failed",
   });
 }
 
 test("a real registry write failure blocks reset publication and leaves cleanup retryable", async () => {
-  const database = openOpenClawStateDatabase();
-  database.db.exec(`CREATE TEMP TRIGGER reject_revocation BEFORE UPDATE ON subagent_runs
-    WHEN json_extract(NEW.payload_json, '$.execution.suppressSessionEffects') = 1
-    BEGIN SELECT RAISE(ABORT, 'revocation write rejected'); END`);
+  Atomics.store(writeFault, 0, 1);
   const before = loadSessionEntry({ sessionKey: key });
   await expect(request("sessions.reset", { key })).rejects.toThrow("revocation write rejected");
   expect(loadSessionEntry({ sessionKey: key })).toEqual(before);
@@ -221,7 +287,7 @@ test("a real registry write failure blocks reset publication and leaves cleanup 
   expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).not.toBe(
     true,
   );
-  database.db.exec("DROP TRIGGER reject_revocation");
+  Atomics.store(writeFault, 0, 0);
   await reopen();
   await testing.sweepOnceForTests();
   expect(loadSessionEntry({ sessionKey: key })).toBeUndefined();
@@ -230,11 +296,10 @@ test("a real registry write failure blocks reset publication and leaves cleanup 
 });
 
 test("durable revocation survives reset-store failure and reopen without reviving deletion", async () => {
-  agentDatabase().db.exec(`CREATE TEMP TRIGGER reject_reset BEFORE UPDATE ON session_nodes
-    WHEN json_extract(NEW.entry_json, '$.lifecycleRevision') != json_extract(OLD.entry_json, '$.lifecycleRevision')
-    BEGIN SELECT RAISE(ABORT, 'reset store rejected'); END`);
+  Atomics.store(writeFault, 0, 2);
   const before = loadSessionEntry({ sessionKey: key });
   await expect(request("sessions.reset", { key })).rejects.toThrow("reset store rejected");
+  Atomics.store(writeFault, 0, 0);
   expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(true);
   await reopen();
   await testing.sweepOnceForTests();
@@ -266,15 +331,16 @@ test("postcommit failure cannot restore cleanup authority after a successful res
 
 async function startCollector(id: string) {
   await registerCollector(id);
-  emitSubagentStart(id);
+  await emitSubagentStart(id);
 }
 
-function emitSubagentStart(id: string) {
+async function emitSubagentStart(id: string) {
   emitAgentEvent({
     runId: id,
     stream: "lifecycle",
     data: { phase: "start", startedAt: Date.now() },
   });
+  await waitForRegistryPublication(() => subagentRuns.get(id)?.execution.status === "running");
   expect(subagentRuns.get(id)?.execution.status).toBe("running");
 }
 
@@ -282,16 +348,17 @@ async function startAnnouncingSubagent(id: string) {
   await registerSubagentRun({
     runId: id,
     childSessionKey: key,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: key }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    agentId: "main",
     requesterDisplayKey: "main",
     task: "announced subagent",
     cleanup: "delete",
     queued: true,
     expectsCompletionMessage: true,
   });
-  emitSubagentStart(id);
+  await emitSubagentStart(id);
 }
 
 /**
@@ -301,33 +368,38 @@ async function startAnnouncingSubagent(id: string) {
  * remaining bookkeeping tails.
  */
 async function settleCollectorCleanup(id: string) {
-  const cleanupMarked = createDeferredCore();
-  const isCleanupMarked = () => typeof subagentRuns.get(id)?.cleanupCompletedAt === "number";
+  await waitForRegistryPublication(
+    () => typeof subagentRuns.get(id)?.cleanupCompletedAt === "number",
+  );
+  await settleSubagentRegistryPersistenceWork();
+}
+
+async function waitForRegistryPublication(isPublished: () => boolean) {
+  const published = createDeferredCore();
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-    if (isCleanupMarked()) {
-      cleanupMarked.resolve();
+    if (isPublished()) {
+      published.resolve();
     }
   });
   try {
-    if (isCleanupMarked()) {
-      cleanupMarked.resolve();
+    if (isPublished()) {
+      published.resolve();
     }
-    await cleanupMarked.promise;
+    await published.promise;
   } finally {
     unsubscribe();
   }
-  await settleSubagentRegistryPersistenceWork();
 }
 
 test("same-turn reset keeps its active continuation unsuppressed", async () => {
   const activeId = "active-continuation";
   await registerCollector(activeId);
   const interrupt = vi.fn();
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
-    emitSubagentStart(activeId);
+    await emitSubagentStart(activeId);
     await settleSubagentRegistryPersistenceWork();
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       identities: [key, "reset-cleanup-session"],
       assertAllowed: () => {},
@@ -408,38 +480,59 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
   const id = "late-terminal-owner";
   await registerCollector(id);
   let settled = false;
+  let settlement: Promise<{ value: boolean } | { error: unknown }> | undefined;
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     if (!settled && subagentRuns.get(runId)?.execution.suppressSessionEffects) {
       settled = true;
       queueMicrotask(() => {
-        settleFailedQueuedSubagentLaunch(id, "late launch failed");
+        settlement = settleFailedQueuedSubagentLaunch(id, "late launch failed").then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
       });
     }
   });
+  const reset = sessionLifecycleOwner.resetSessionEntryLifecycle;
+  vi.spyOn(sessionLifecycleOwner, "resetSessionEntryLifecycle").mockImplementation((params) =>
+    reset({
+      ...params,
+      buildNextEntry: async (current) => {
+        const next = await params.buildNextEntry(current);
+        await settlement;
+        return next;
+      },
+    }),
+  );
   try {
     await request("sessions.reset", { key });
     expect(settled).toBe(true);
+    expect(await settlement).toEqual({ value: true });
     expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
   } finally {
     unsubscribe();
+    await settlement;
   }
 });
 
 test.each([false, true])(
   "custom-store reset revokes only its worker child (incognito: %s)",
   async (incognito) => {
+    await testing.sweepOnceForTests();
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(false);
     const agentId = "worker";
     cfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: stateDir },
-          { id: "worker", workspace: stateDir },
-        ],
+        entries: {
+          main: { workspace: stateDir },
+          worker: { workspace: stateDir },
+        },
       },
       session: { store: path.join(stateDir, "custom-sessions.json") },
     };
     setRuntimeConfigSnapshot(cfg);
-    const childSessionKey = `agent:${agentId}:${incognito ? "incognito" : "subagent"}:scoped-cleanup`;
+    const childSessionKey = incognito
+      ? `agent:${agentId}:dashboard:incognito-scoped-cleanup`
+      : `agent:${agentId}:subagent:scoped-cleanup`;
     const scope = {
       agentId,
       sessionKey: childSessionKey,
@@ -447,7 +540,7 @@ test.each([false, true])(
     };
     const id = "scoped-collector";
     const siblingKey = "agent:main:subagent:scoped-cleanup";
-    replaceSessionEntrySync(scope, {
+    await replaceSessionEntry(scope, {
       sessionId: "scoped-original",
       lifecycleRevision: "scoped-original",
       updatedAt: Date.now(),
@@ -458,7 +551,7 @@ test.each([false, true])(
       { sessionId: "sibling", lifecycleRevision: "sibling", updatedAt: Date.now() },
     );
     await registerCollector(id, childSessionKey, agentId);
-    expect(settleFailedQueuedSubagentLaunch(id, "scoped launch failed")).toBe(true);
+    expect(await settleFailedQueuedSubagentLaunch(id, "scoped launch failed")).toBe(true);
     attempts = 0;
     await testing.sweepOnceForTests();
     expect(attempts).toBe(1);
@@ -466,7 +559,7 @@ test.each([false, true])(
     expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
     if (incognito) {
       expect(loadSessionEntry(scope)).toBeUndefined();
-      replaceSessionEntrySync(scope, {
+      await replaceSessionEntry(scope, {
         sessionId: "private-successor",
         lifecycleRevision: "private-successor",
         updatedAt: Date.now(),
@@ -510,7 +603,15 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
   });
   const id = "completing-owner";
   await startCollector(id);
-  emitAgentEvent({ runId: id, stream: "lifecycle", data: { phase: "end", endedAt: Date.now() } });
+  // Leave producer metadata absent to hold the completion lock during transcript capture.
+  emitAgentEvent({
+    runId: id,
+    stream: "lifecycle",
+    data: {
+      phase: "end",
+      endedAt: Date.now(),
+    },
+  });
   await entered.promise;
   const original = loadSessionEntry({ sessionKey: key });
   try {
@@ -528,39 +629,82 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
   }
 });
 
-test("a retained kill claim cannot revive durably revoked session cleanup", async () => {
-  const id = "kill-claim-owner";
-  await registerCollector(id);
-  expect(
-    await claimSubagentRunKill({
-      runId: id,
-      expected: expectDefined(subagentRuns.get(id), "registered collector"),
-      sessionId: "reset-cleanup-session",
-      sessionLifecycleRevision: "original",
-    }),
-  ).toBeDefined();
-  expect(settleFailedQueuedSubagentLaunch(id, "launch failed during cancellation")).toBe(true);
-  await request("sessions.reset", { key });
-  const successor = loadSessionEntry({ sessionKey: key });
-  emitAgentEvent({
-    runId: id,
-    stream: "lifecycle",
-    data: { phase: "end", aborted: true, stopReason: "aborted", endedAt: Date.now() },
-  });
-  await settleSubagentRegistryPersistenceWork();
-  expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
-  await testing.sweepOnceForTests();
-  expect(loadSessionEntry({ sessionKey: key })).toEqual(successor);
-});
+test.each([false, true])(
+  "a settled kill claim retains session cleanup revocation (reset: %s)",
+  async (reset) => {
+    const id = "kill-claim-owner";
+    await registerCollector(id);
+    let successor: ReturnType<typeof loadSessionEntry>;
+    let lateEndedAt = 0;
+    // The kill owner holds its claim across both completions; the kill confirms when it settles.
+    await withSubagentKillOwner(id, async () => {
+      const claim = expectDefined(
+        await claimSubagentRunKill({
+          runId: id,
+          expected: expectDefined(subagentRuns.get(id), "registered collector"),
+          sessionId: "reset-cleanup-session",
+          sessionLifecycleRevision: "original",
+        }),
+        "retained cancellation claim",
+      );
+      // Keep the original session available so the no-reset case proves live cleanup authority.
+      registryGateway.mockRejectedValue(new Error("cleanup transport unavailable"));
+      const complete = completionOwner.completeSubagentRunAttempt;
+      const emitKilledCompletion = async (endedAt: number) => {
+        const observed = createDeferredCore<{ completion: Promise<void> }>();
+        vi.spyOn(completionOwner, "completeSubagentRunAttempt").mockImplementationOnce(
+          (...args) => {
+            const completion = complete(...args);
+            observed.resolve({ completion });
+            return completion;
+          },
+        );
+        emitAgentEvent({
+          runId: id,
+          stream: "lifecycle",
+          data: { phase: "end", aborted: true, stopReason: "aborted", endedAt },
+        });
+        // Row publication precedes terminal effects and the retained session's release.
+        await (
+          await observed.promise
+        ).completion;
+      };
+      await emitKilledCompletion(Date.now());
+      await settleSubagentRegistryPersistenceWork();
+      expect(subagentRuns.get(id)?.killReconciliation?.killedAt).toBe(claim.requestedAt);
+      expect(subagentRuns.get(id)?.killIntent).toBeUndefined();
+      expect(subagentRuns.get(id)?.execution.suppressSessionEffects).not.toBe(true);
+      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("original");
+      if (reset) {
+        await request("sessions.reset", { key });
+      }
+      successor = loadSessionEntry({ sessionKey: key });
+      lateEndedAt = Date.now();
+      await emitKilledCompletion(lateEndedAt);
+      await settleSubagentRegistryPersistenceWork();
+      const stored = expectDefined(
+        loadSubagentRegistryFromSqlite().get(id),
+        "settled cancellation",
+      );
+      expect(stored.killReconciliation).toMatchObject({ killedAt: claim.requestedAt });
+      expect(stored.execution.suppressSessionEffects === true).toBe(reset);
+    });
+    await testing.sweepOnceForTests();
+    expect(loadSessionEntry({ sessionKey: key })).toEqual(
+      reset ? successor : { ...successor, endedAt: lateEndedAt },
+    );
+  },
+);
 
-test("reset persists earlier best-effort suppression", async () => {
+test("reset persists suppression after a rejected cleanup write", async () => {
   await request("sessions.delete", { key });
   const database = openOpenClawStateDatabase();
-  database.db.exec(`CREATE TEMP TRIGGER reject_best_effort BEFORE UPDATE ON subagent_runs
+  database.db.exec(`CREATE TRIGGER reject_best_effort BEFORE UPDATE ON subagent_runs
     WHEN json_extract(NEW.payload_json, '$.execution.suppressSessionEffects') = 1
     BEGIN SELECT RAISE(ABORT, 'best effort write rejected'); END`);
-  await testing.sweepOnceForTests();
-  expect(subagentRuns.get(runId)?.execution.suppressSessionEffects).toBe(true);
+  await expect(testing.sweepOnceForTests()).rejects.toThrow("best effort write rejected");
+  expect(subagentRuns.get(runId)?.execution.suppressSessionEffects).not.toBe(true);
+  expect(subagentRuns.get(runId)?.collectorLaunchCleanupPending).toBe(true);
   expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).not.toBe(
     true,
   );
@@ -583,6 +727,7 @@ test("reset preserves a yielded continuation instead of revoking it as completed
     stream: "lifecycle",
     data: { phase: "end", yielded: true, endedAt: Date.now() },
   });
+  await waitForRegistryPublication(() => subagentRuns.get(id)?.pauseReason === "sessions_yield");
   expect(subagentRuns.get(id)?.pauseReason).toBe("sessions_yield");
   await request("sessions.reset", { key });
   expect(loadSubagentRegistryFromSqlite().get(id)).toMatchObject({ pauseReason: "sessions_yield" });

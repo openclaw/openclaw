@@ -24,7 +24,6 @@ function material(ca?: TlsOptions["ca"]) {
   };
   return {
     enabled: true,
-    required: true,
     certPath: "/synthetic/cert.pem",
     keyPath: "/synthetic/key.pem",
     fingerprintSha256: "same-leaf-fingerprint",

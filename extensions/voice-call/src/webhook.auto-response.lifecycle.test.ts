@@ -1,7 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionSessionCreateRequest } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createEventManagerHarness,
@@ -75,7 +76,7 @@ const pendingResponses: ReturnType<typeof createDeferred<ResponseResult>>[] = []
 const responseCompletions: ReturnType<typeof createDeferred<void>>[] = [];
 
 async function startCall(streaming = false) {
-  const config = VoiceCallConfigSchema.parse({
+  const config = normalizeVoiceCallConfig({
     enabled: true,
     provider: streaming ? "twilio" : "telnyx",
     fromNumber: "+15550000000",
@@ -103,7 +104,15 @@ async function startCall(streaming = false) {
   await manager.initialize(provider, "https://example.test/voice/webhook");
   const started = await manager.initiateCall("+15550000001", undefined, { mode: "conversation" });
   expect(started.success).toBe(true);
-  const server = new VoiceCallWebhookServer(config, manager, provider, {}, undefined, {} as never);
+  const server = new VoiceCallWebhookServer(
+    createTestPluginServiceScheduler(),
+    config,
+    manager,
+    provider,
+    {},
+    undefined,
+    {} as never,
+  );
   servers.push(server);
   const url = await server.start();
   let eventId = 0;

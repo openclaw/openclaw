@@ -1,7 +1,8 @@
 // Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseCustomId, serializePayload } from "../internal/discord.js";
+import { describe, expect, it } from "vitest";
+import { parseCustomId } from "../internal/components.base.js";
+import { serializePayload } from "../internal/discord.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,
@@ -9,7 +10,6 @@ import {
   createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
-  findProviderBucketId,
   findProviderBucketLocation,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
@@ -31,22 +31,6 @@ function parseDiscordModelPickerCustomId(customId: string) {
     ? parseDiscordModelPickerData(parsed.data)
     : null;
 }
-
-const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
-
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
-  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
-  return {
-    ...sdk,
-    get getModelsRuntimeChoices() {
-      return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
-    },
-  };
-});
-
-afterEach(() => {
-  hostSdk.runtimeChoicesAvailable = true;
-});
 
 type SerializedComponent = {
   type: number;
@@ -288,7 +272,7 @@ describe("provider paging", () => {
     expect(secondBucket.hasPrev).toBe(false);
   });
 
-  it("caps custom provider page size at Discord-safe max", () => {
+  it("uses Discord-safe provider pages with and without buckets", () => {
     const compactData = createModelsProviderData({
       anthropic: ["claude-sonnet-4-5"],
       openai: ["gpt-4o"],
@@ -297,7 +281,6 @@ describe("provider paging", () => {
     const compactPage = getDiscordModelPickerProviderPage({
       data: compactData,
       page: 1,
-      pageSize: 999,
     });
     expect(compactPage.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX);
     expect(compactPage.buckets).toHaveLength(1);
@@ -313,7 +296,6 @@ describe("provider paging", () => {
     const pagedPage = getDiscordModelPickerProviderPage({
       data: pagedData,
       page: 1,
-      pageSize: 999,
     });
     expect(pagedPage.buckets.length).toBeGreaterThan(1);
     expect(pagedPage.items.length).toBeLessThanOrEqual(
@@ -356,10 +338,10 @@ describe("model paging", () => {
     expect(secondBucket.items).toHaveLength(9);
   });
 
-  it("caps custom model page size at Discord select-option max", () => {
+  it("uses Discord select-option max for model pages", () => {
     const data = createModelsProviderData({ openai: ["gpt-4o", "gpt-4.1"] });
     const page = requireValue(
-      getDiscordModelPickerModelPage({ data, provider: "openai", pageSize: 999 }),
+      getDiscordModelPickerModelPage({ data, provider: "openai" }),
       "expected model page when provider exists",
     );
     expect(page.pageSize).toBe(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
@@ -796,7 +778,7 @@ describe("Discord model picker rendering", () => {
     );
     const data = createModelsProviderData({ ...providerEntries, vllm: models });
     const providerBucket = requireValue(
-      findProviderBucketId(data, "vllm"),
+      findProviderBucketLocation(data, "vllm")?.bucket,
       "test data should bucket the selected provider",
     );
 
@@ -836,6 +818,37 @@ describe("Discord model picker rendering", () => {
       DISCORD_CUSTOM_ID_MAX_CHARS,
     );
   });
+
+  it.each(["llama3.2:latest", "a".repeat(100), "a".repeat(101), "😀".repeat(80), "😀".repeat(101)])(
+    "bounds select labels by code point and tokenizes model %s",
+    (model) => {
+      const data = createModelsProviderData({ ollama: [model] });
+      const select = requireValue(
+        renderModelsViewRows({
+          command: "model",
+          userId: "owner",
+          data,
+          provider: "ollama",
+          currentModel: `ollama/${model}`,
+        })
+          .flatMap((row) => row.components ?? [])
+          .find((component) =>
+            component.options?.some(
+              (option) => option.label === Array.from(model).slice(0, 100).join(""),
+            ),
+          ),
+        "model select should be rendered",
+      );
+      expect(select.options).toEqual([
+        {
+          label: Array.from(model).slice(0, 100).join(""),
+          value: createDiscordModelPickerModelToken("ollama", model),
+          default: true,
+        },
+      ]);
+      expect(parseDiscordModelPickerCustomId(select.custom_id ?? "")?.action).toBe("pick");
+    },
+  );
 
   it("renders model view with select menu and explicit submit button", () => {
     const data = createModelsProviderData({
@@ -883,11 +896,13 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a model select");
     }
     expect(modelSelect.options?.length).toBe(3);
-    const o3ModelOption = modelSelect.options?.find((option) => option.value === "o3");
+    const o3ModelOption = modelSelect.options?.find(
+      (option) => option.value === createDiscordModelPickerModelToken("openai", "o3"),
+    );
     expect(o3ModelOption?.default).toBe(true);
 
     const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect.custom_id ?? "");
-    expect(parsedModelSelectState?.action).toBe("model");
+    expect(parsedModelSelectState?.action).toBe("pick");
     expect(parsedModelSelectState?.provider).toBe("openai");
 
     const navButtons = rows[2]?.components ?? [];
@@ -1342,31 +1357,4 @@ describe("model-specific runtime view", () => {
       ).toBe(true);
     },
   );
-});
-
-describe("declared minimum host", () => {
-  it("keeps model-only Submit available without the new SDK helper", () => {
-    hostSdk.runtimeChoicesAvailable = false;
-    const data = createModelsProviderData({ openai: ["gpt-4o"] });
-    delete data.runtimeChoicesByModel;
-    delete data.isCurrent;
-
-    const rows = renderModelsViewRows({
-      command: "model",
-      userId: "owner",
-      data,
-      provider: "openai",
-      pendingModel: "openai/gpt-4o",
-      pendingModelIndex: 1,
-    });
-
-    const submit = rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit");
-    expect(submit).toBeDefined();
-    expect(submit?.disabled).not.toBe(true);
-    expect(
-      rows
-        .flatMap((row) => row.components ?? [])
-        .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime"),
-    ).toBeUndefined();
-  });
 });

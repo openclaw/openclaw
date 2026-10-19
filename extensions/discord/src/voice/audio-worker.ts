@@ -250,7 +250,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs
@@ -289,12 +289,11 @@ export class DiscordAudioWorker {
           break;
         }
         const writable = this.fileInput.stream.write(Buffer.from(command.audio));
+        const onDrain = () => this.post({ type: "stream-drain", id: command.id });
         if (writable) {
-          this.post({ type: "stream-drain", id: command.id });
+          onDrain();
         } else {
-          this.fileInput.stream.once("drain", () =>
-            this.post({ type: "stream-drain", id: command.id }),
-          );
+          this.fileInput.stream.once("drain", onDrain);
         }
         break;
       }
@@ -357,34 +356,30 @@ export class DiscordAudioWorker {
       sdk: this.sdk,
       reason,
       expirySeconds,
-      onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
       onWarn: (message) => this.post({ type: "log", level: "warn", message }),
     });
   }
 
-  private readonly onSpeakingStart = (userId: string) => {
-    if (this.stopped) {
-      return;
-    }
-    for (const capture of this.captures.values()) {
-      if (capture.userId === userId) {
-        clearTimeout(capture.timer);
-        capture.timer = undefined;
-      }
-    }
-    this.post({ type: "speaking", userId, speaking: true });
-  };
-  private readonly onSpeakingEnd = (userId: string) => {
+  private readonly onSpeakingStart = (userId: string) => this.onSpeaking(userId, true);
+  private readonly onSpeakingEnd = (userId: string) => this.onSpeaking(userId, false);
+
+  private onSpeaking(userId: string, speaking: boolean): void {
     if (this.stopped) {
       return;
     }
     for (const [id, capture] of this.captures) {
-      if (capture.userId === userId) {
+      if (capture.userId !== userId) {
+        continue;
+      }
+      if (speaking) {
+        clearTimeout(capture.timer);
+        capture.timer = undefined;
+      } else {
         this.finalizeLater(id, capture);
       }
     }
-    this.post({ type: "speaking", userId, speaking: false });
-  };
+    this.post({ type: "speaking", userId, speaking });
+  }
   private stopCapture(capture: Capture): void {
     if (capture.closed) {
       return;
@@ -520,7 +515,6 @@ export class DiscordAudioWorker {
           }
         },
         onError,
-        onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
         onWarn: (message) => this.post({ type: "log", level: "warn", message }),
       });
     } finally {

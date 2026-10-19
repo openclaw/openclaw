@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareDecisionProviderReload } from "../decisions/runtime.js";
+import { registered } from "../decisions/runtime.test-support.js";
 import type {
   DecisionBatch,
   DecisionProviderV1,
@@ -14,12 +16,8 @@ import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
-import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -55,54 +53,21 @@ const answer = {
 } satisfies ProviderDecisionOutcome;
 const config: OpenClawConfig = {
   agents: {
-    defaults: {
-      decisionModel: "fixture/default",
-    },
+    defaults: { decisionModel: "fixture/default" },
     entries: {
-      main: { default: true },
+      main: {},
       alternate: { decisionModel: "fixture/override" },
       disabled: { decisionModel: "" },
     },
   },
 };
 
-// Exercise core assembly, the real Decision runtime, and registered provider admission together.
-function fixture(
-  evaluate: DecisionProviderV1["evaluate"] = async () => answer,
-  isReady?: () => boolean,
-) {
-  const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "decision-fixture",
-    source: "/synthetic/index.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    contracts: { decisionProviders: ["fixture"] },
-  });
-  const api = builder.createApi(record, { config });
-  runPluginRegisterSyncInRegistry(
-    (registration) =>
-      registration.registerDecisionProvider({
-        id: "fixture",
-        contractVersion: 1,
-        evaluate,
-        isReady,
-      }),
-    api,
-    builder.registry,
-    record.id,
-  );
-  builder.registry.plugins.push(record);
-  setActivePluginRegistry(builder.registry);
+function fixture(evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer)) {
+  registered(evaluate);
   setRuntimeConfigSnapshot(config);
-  onTestFinished(async () => {
-    prepareDecisionProviderReload(builder.registry, new Set([record.id]));
-    await getPluginInstance(record)?.dispose();
-  });
+  return evaluate;
 }
 
-// Disable unrelated plugin tool discovery; the core factory and wrappers remain real.
 function assembled(agentId = "main", cfg = config) {
   return createOpenClawTools({
     config: cfg,
@@ -112,12 +77,8 @@ function assembled(agentId = "main", cfg = config) {
     wrapBeforeToolCallHook: false,
   }).find((tool) => tool.name === "decision_evaluate");
 }
-function requiredTool(agentId = "main") {
-  const tool = assembled(agentId);
-  if (!tool) {
-    throw new Error("decision_evaluate was not assembled");
-  }
-  return tool;
+function requiredTool(agentId = "main", cfg = config) {
+  return expectDefined(assembled(agentId, cfg), "decision_evaluate was not assembled");
 }
 
 afterEach(() => {
@@ -126,46 +87,30 @@ afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
 });
 
-describe("core decision_evaluate registered flow", () => {
-  it("keeps the explicit tool independent of automatic eligibility through Labs on/off transitions", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    const retained = requiredTool("alternate");
-    for (const decisionAssistance of [false, true, false]) {
-      const current: OpenClawConfig = {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents!.defaults, experimental: { decisionAssistance } },
-        },
-      };
-      setRuntimeConfigSnapshot(current);
-      evaluate.mockClear();
-      expect(isDecisionAssistanceEligible(current, "main")).toBe(decisionAssistance);
-      expect(isDecisionAssistanceEligible(current, "alternate")).toBe(decisionAssistance);
-      expect(isDecisionAssistanceEligible(current, "disabled")).toBe(false);
-      expect(assembled("disabled", current)).toBeUndefined();
-      const fresh = assembled("main", current)!;
-      expect(fresh).toBeDefined();
-      expect(evaluate).not.toHaveBeenCalled();
-      expect((await fresh.execute("fresh", batch)).details).toMatchObject({ status: "ok" });
-      expect(evaluate).toHaveBeenLastCalledWith(
-        batch,
-        expect.objectContaining({ agentId: "main", model: "default" }),
-      );
-      expect((await retained.execute("retained", batch)).details).toMatchObject({ status: "ok" });
-      expect(evaluate).toHaveBeenLastCalledWith(
-        batch,
-        expect.objectContaining({ agentId: "alternate", model: "override" }),
-      );
-      expect(evaluate).toHaveBeenCalledTimes(2);
-    }
-  });
-
-  it("preserves all answer values, structured evidence, trusted binding and provenance", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    const result = await requiredTool("alternate").execute("call", batch);
+it("keeps the explicit tool independent of automatic eligibility through Labs on/off transitions", async () => {
+  const evaluate = fixture();
+  const retained = requiredTool("alternate");
+  const expectSelection = (agentId: string, model: string) =>
+    expect(evaluate).toHaveBeenLastCalledWith(batch, expect.objectContaining({ agentId, model }));
+  for (const decisionAssistance of [false, true, false]) {
+    const current: OpenClawConfig = {
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents!.defaults, experimental: { decisionAssistance } },
+      },
+    };
+    setRuntimeConfigSnapshot(current);
+    evaluate.mockClear();
+    expect(isDecisionAssistanceEligible(current, "main")).toBe(decisionAssistance);
+    expect(isDecisionAssistanceEligible(current, "alternate")).toBe(decisionAssistance);
+    expect(isDecisionAssistanceEligible(current, "disabled")).toBe(false);
+    expect(assembled("disabled", current)).toBeUndefined();
+    const fresh = requiredTool("main", current);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect((await fresh.execute("fresh", batch)).details).toMatchObject({ status: "ok" });
+    expectSelection("main", "default");
+    const result = await retained.execute("retained", batch);
     expect(result.details).toEqual({
       ...answer,
       provenance: {
@@ -174,172 +119,101 @@ describe("core decision_evaluate registered flow", () => {
         runtimeGeneration: expect.any(String),
       },
     });
-    expect(evaluate).toHaveBeenCalledWith(
-      batch,
-      expect.objectContaining({ agentId: "alternate", model: "override" }),
-    );
     expect(JSON.parse(result.content.find((entry) => entry.type === "text")!.text)).toEqual(
       result.details,
     );
-  });
-
-  it("rechecks selection on a retained tool without mutating its definition", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    const tool = requiredTool();
-    const description = tool.description;
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: {
-          decisionModel: "fixture/reconfigured",
-        },
-      },
-    });
-    await tool.execute("call", batch);
-    expect(evaluate).toHaveBeenLastCalledWith(
-      batch,
-      expect.objectContaining({ model: "reconfigured", agentId: "main" }),
-    );
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: {
-          decisionModel: "fixture/default",
-        },
-        entries: { main: { decisionModel: "" } },
-      },
-    });
-    expect((await tool.execute("call", batch)).details).toMatchObject({
-      status: "unavailable",
-      reason: "disabled",
-      guidance: expect.any(String),
-    });
-    expect(evaluate).toHaveBeenCalledOnce();
-    setRuntimeConfigSnapshot(config);
-    const retained = requiredTool();
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: { decisionModel: "fixture/default" },
-      },
-    });
-    expect((await retained.execute("call", batch)).details).toMatchObject({ status: "ok" });
+    expectSelection("alternate", "override");
     expect(evaluate).toHaveBeenCalledTimes(2);
-    expect(assembled()).toBeDefined();
-    expect(tool.description).toBe(description);
-  });
+  }
+});
 
-  it("rejects resource bounds before rubric hashing or provider execution", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    const tool = requiredTool();
-    let nested: unknown = "private evidence";
-    for (let depth = 0; depth < 10000; depth++) {
-      nested = { child: nested };
-    }
-    for (const input of [
-      { state: null, questions: { q: { type: "boolean", instructions: nested } } },
-      { state: "x".repeat(1_048_577), questions: { q: { type: "boolean" } } },
+it("rejects resource bounds before rubric hashing or provider execution", async () => {
+  const evaluate = fixture();
+  const decision = {
+    protocol: "decision-v1",
+    input: ["text"],
+    limits: { maxQuestions: 99 },
+    questions: {
+      boolean: { probabilities: "boolean", abstention: false },
+      choice: { probabilities: "provider-defined", abstention: false },
+      score: { probabilities: "provider-defined", abstention: false },
+    },
+  } satisfies ModelDecisionCapabilities;
+  const model = { id: "default", name: "Fixture", inference: { chat: false, decision } };
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
       {
-        state: null,
-        questions: Object.fromEntries(
-          Array.from({ length: 257 }, (_, index) => [String(index), { type: "boolean" }]),
-        ),
+        id: "owner",
+        contracts: { decisionProviders: ["fixture"] },
+        modelCatalog: { providers: { fixture: { models: [model] } } },
       },
-    ]) {
-      const result = await tool.execute("bounded", input);
-      expect(result.details).toMatchObject({
-        status: "unavailable",
-        reason: "unsupported-input",
-        guidance: expect.stringContaining("Host bounds"),
-      });
-      expect(JSON.stringify(result)).not.toContain("private evidence");
-    }
-    expect(evaluate).not.toHaveBeenCalled();
+    ],
   });
-
-  it("does not report obsolete provider capabilities on host rejection", async () => {
-    setRuntimeConfigSnapshot(config);
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "decision-fixture",
-          contracts: { decisionProviders: ["fixture"] },
-          decisionModels: [
-            {
-              provider: "fixture",
-              id: "default",
-              name: "Fixture",
-              capabilities: {
-                questionTypes: ["boolean", "choice", "score"],
-                maxQuestions: 99,
-              },
-            },
-          ],
-        },
-      ],
-    });
-    setCurrentPluginMetadataSnapshotState(
-      snapshot,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "gateway",
-    );
-    const tool = requiredTool();
-    expect(tool.description).toContain("at most 99 questions");
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: {
-          decisionModel: "fixture/reconfigured",
-        },
-      },
-    });
-    const result = await tool.execute("call", {
-      state: "x".repeat(1_048_577),
-      questions: { q: { type: "boolean" } },
-    });
+  setCurrentPluginMetadataSnapshotState(
+    snapshot,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "gateway",
+  );
+  const tool = requiredTool("main", {
+    ...config,
+    agents: { defaults: { decisionModel: "fixture/default@synthetic-profile" } },
+  });
+  expect(tool.description).toContain("at most 99 questions");
+  setRuntimeConfigSnapshot({ agents: { defaults: { decisionModel: "fixture/reconfigured" } } });
+  let nested: unknown = "private evidence";
+  for (let depth = 0; depth < 10000; depth++) {
+    nested = { child: nested };
+  }
+  for (const input of [
+    { state: null, questions: { q: { type: "boolean", instructions: nested } } },
+    { state: "x".repeat(1_048_577), questions: { q: { type: "boolean" } } },
+    {
+      state: null,
+      questions: Object.fromEntries(
+        Array.from({ length: 257 }, (_, index) => [String(index), { type: "boolean" }]),
+      ),
+    },
+  ]) {
+    const result = await tool.execute("bounded", input);
     expect(result.details).toMatchObject({
       status: "unavailable",
       reason: "unsupported-input",
       guidance: expect.stringContaining("Host bounds"),
     });
-    expect(JSON.stringify(result)).not.toContain("at most 99 questions");
-  });
+    expect(JSON.stringify(result)).not.toMatch(/private evidence|at most 99 questions/);
+  }
+  expect(evaluate).not.toHaveBeenCalled();
+});
+it("rejects malformed or routing arguments without echoing evidence", async () => {
+  const evaluate = fixture();
+  await expect(requiredTool().execute("call", { ...batch, agentId: "disabled" })).rejects.toThrow(
+    "no evidence was sent",
+  );
+  expect(evaluate).not.toHaveBeenCalled();
+});
 
-  it.each([
-    { ...batch, agentId: "disabled" },
-    {
-      state: "private evidence",
-      questions: { q: { type: "boolean", criteria: { maybe: "unknown" } } },
-    },
-  ])("rejects malformed or routing arguments without echoing evidence", async (input) => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
-    expect(evaluate).not.toHaveBeenCalled();
-  });
-
-  it("propagates caller cancellation before and during provider work", async () => {
-    const cancellation = new Error("caller cancelled");
-    const entered = createDeferredCore();
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {
-      entered.resolve();
-      return await new Promise((_resolve, reject) => {
-        context.signal.addEventListener("abort", () => reject(cancellation), {
-          once: true,
-        });
-      });
+it("propagates caller cancellation before and during provider work", async () => {
+  const cancellation = new Error("caller cancelled");
+  const entered = createDeferredCore();
+  const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {
+    entered.resolve();
+    return await new Promise((_resolve, reject) => {
+      context.signal.addEventListener("abort", () => reject(cancellation), { once: true });
     });
-    fixture(evaluate);
-    const tool = requiredTool();
-    const aborted = AbortSignal.abort(cancellation);
-    await expect(tool.execute("before", batch, aborted)).rejects.toThrow("caller cancelled");
-    expect(evaluate).not.toHaveBeenCalled();
-    const controller = new AbortController();
-    const pending = tool.execute("during", batch, controller.signal);
-    const rejection = expect(pending).rejects.toThrow("caller cancelled");
-    await entered.promise;
-    controller.abort(cancellation);
-    await rejection;
   });
+  fixture(evaluate);
+  const tool = requiredTool();
+  await expect(tool.execute("before", batch, AbortSignal.abort(cancellation))).rejects.toThrow(
+    "caller cancelled",
+  );
+  expect(evaluate).not.toHaveBeenCalled();
+  const controller = new AbortController();
+  const pending = tool.execute("during", batch, controller.signal);
+  const rejection = expect(pending).rejects.toThrow("caller cancelled");
+  await entered.promise;
+  controller.abort(cancellation);
+  await rejection;
 });

@@ -11,7 +11,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import {
@@ -19,16 +19,14 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
-import {
-  isAuthorizedTextSlashCommandTurn,
-  isNativeCommandTurn,
-  resolveCommandTurnContext,
-} from "../command-turn-context.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { isAuthorizedTextSlashCommandTurn, isNativeCommandTurn } from "../command-turn-context.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
+import { resolveSlashCommandName } from "./commands-slash-parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
@@ -42,29 +40,27 @@ import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
-type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
 
-const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
-const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
+const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.js"));
+const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
-  const commandText = stripStructuralPrefixes(ctx.commandText ?? "").trim();
-  const match = commandText.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const commandName = normalizeOptionalString(match?.[1])?.toLowerCase();
+  const commandName = resolveSlashCommandName(stripStructuralPrefixes(ctx.commandText ?? ""));
   if (
     !commandName ||
     commandName === "new" ||
     commandName === "reset" ||
-    // Dashboard creates an agent prompt with exact skill selections. The full
-    // reply pipeline must consume that command once, without re-resolving its text.
-    commandName === "dashboard"
+    // Prompt-producing commands must be consumed once by the full reply pipeline;
+    // their resulting text is not another command or directive invocation.
+    commandName === "dashboard" ||
+    commandName === "followup"
   ) {
     return false;
   }
@@ -105,7 +101,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: false };
   }
 
-  const sessionState = initFastReplySessionState({
+  const sessionState = await initFastReplySessionState({
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -134,7 +130,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }
     const persistedInitialEntry = persistence.entry;
     if (creatingSession) {
-      recordSessionCreated(params.cfg, {
+      await recordSessionCreated(params.cfg, {
         sessionKey: sessionState.sessionKey,
         agentId: params.agentId,
         entry: persistedInitialEntry,
@@ -146,7 +142,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionEntryHandle.replaceCurrent(persistedInitialEntry);
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
-  const command = buildCommandContext({
+  const commandContext = {
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -154,6 +150,19 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     isGroup: sessionState.isGroup,
     triggerBodyNormalized: sessionState.triggerBodyNormalized,
     commandAuthorized: params.commandAuthorized,
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
+  const commandScope = () => ({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: sessionState.sessionKey,
+    sessionScope: sessionState.sessionScope,
+    storePath: sessionState.storePath,
+    workspaceDir: params.workspaceDir,
+    isGroup: sessionState.isGroup,
   });
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
@@ -161,7 +170,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const canApplyStoredModel =
       params.provider === params.defaultProvider && params.model === params.defaultModel;
     const storedModelOverride = canApplyStoredModel
-      ? resolveStoredModelOverride({
+      ? await resolveStoredModelOverrideAsync({
           sessionEntry: targetSessionEntry,
           sessionStore: sessionState.sessionStore,
           sessionKey: sessionState.sessionKey,
@@ -246,17 +255,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       handled: true,
       reply: markCommandReplyForDelivery(
         await buildStatusReply({
-          cfg: params.cfg,
-          agentId: params.agentId,
+          ...commandScope(),
           command,
           sessionEntry: targetSessionEntry,
-          sessionKey: sessionState.sessionKey,
           parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
-          sessionScope: sessionState.sessionScope,
-          storePath: sessionState.storePath,
           provider: statusProvider,
           model: statusModel,
-          workspaceDir: params.workspaceDir,
           thinkingCatalog,
           resolvedThinkLevel,
           resolvedVerboseLevel: "off",
@@ -271,7 +275,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
               ...selection,
               catalog: thinkingCatalog,
             }),
-          isGroup: sessionState.isGroup,
           defaultGroupActivation: () => "always",
           mediaDecisions: params.ctx.MediaUnderstandingDecisions,
         }),
@@ -294,21 +297,21 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  // Compact needs the canonical model owner before consuming a provider-specific transcript.
-  const compactNeedsModelSelection =
+  // These commands need the selected model's transcript or context budget.
+  const needsModelSelection =
     command.isAuthorizedSender &&
     (command.commandBodyNormalized === "/compact" ||
-      command.commandBodyNormalized.startsWith("/compact "));
-  const commandResult = compactNeedsModelSelection
+      command.commandBodyNormalized.startsWith("/compact ") ||
+      command.commandBodyNormalized.startsWith("/context "));
+  const commandResult = needsModelSelection
     ? { shouldContinue: true, reply: undefined }
     : await (
         await commandsRuntimeLoader.load()
       ).handleCommands({
+        ...commandScope(),
         ctx: sessionState.sessionCtx,
         rootCtx: params.ctx,
-        cfg: params.cfg,
         command,
-        agentId: params.agentId,
         agentDir: params.agentDir,
         directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
         elevated: {
@@ -319,15 +322,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         sessionEntry: sessionState.sessionEntry,
         previousSessionEntry: sessionState.previousSessionEntry,
         sessionStore: sessionState.sessionStore,
-        sessionKey: sessionState.sessionKey,
-        storePath: sessionState.storePath,
-        sessionScope: sessionState.sessionScope,
-        workspaceDir: params.workspaceDir,
         opts: params.opts,
         defaultGroupActivation: () => "always",
         resolveModelLevels: async () => ({
           resolvedThinkLevel: undefined,
           resolvedReasoningLevel: "off",
+          thinkingExplicit: false,
         }),
         resolvedVerboseLevel: "off",
         resolvedElevatedLevel: "off",
@@ -341,7 +341,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           provider: params.provider,
           model: params.model,
         }),
-        isGroup: sessionState.isGroup,
         ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
@@ -367,38 +366,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   const continuationTriggerBodyNormalized = command.rawBodyNormalized;
 
   const directiveResult = await resolveReplyDirectives({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    agentCfg: params.agentCfg,
-    sessionCtx: sessionState.sessionCtx,
-    sessionEntry: sessionState.sessionEntry,
-    sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
+    ...params,
+    ...sessionState,
     conversation: prepareReplyConversation({
       ctx: sessionState.sessionCtx,
       sessionEntry: sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry,
       groupResolution: sessionState.groupResolution,
     }),
-    isGroup: sessionState.isGroup,
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
-    commandAuthorized: params.commandAuthorized,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
-    provider: params.provider,
-    model: params.model,
     hasResolvedHeartbeatModelOverride: false,
-    // Native selections reuse the admitted catalog just like ordinary turns.
-    preparedModelCatalog: params.preparedModelCatalog,
-    typing: params.typing,
-    opts: params.opts,
-    skillFilter: params.skillFilter,
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.
@@ -415,10 +392,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 
   const inlineActionResult = await handleInlineActions({
     ...directiveResult.result,
+    ...commandScope(),
     ctx: params.ctx,
     sessionCtx: sessionState.sessionCtx,
-    cfg: params.cfg,
-    agentId: params.agentId,
     agentDir: params.agentDir,
     sessionEntry: sessionState.sessionEntry,
     ...(sessionState.initialSessionEntry
@@ -427,11 +403,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     allowCreateSessionEntry: sessionState.initialSessionEntry === undefined,
     previousSessionEntry: sessionState.previousSessionEntry,
     sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
-    workspaceDir: params.workspaceDir,
-    isGroup: sessionState.isGroup,
     opts: params.opts,
     typing: params.typing,
     skillCommands: loadedSkillCommands ?? directiveResult.result.skillCommands,

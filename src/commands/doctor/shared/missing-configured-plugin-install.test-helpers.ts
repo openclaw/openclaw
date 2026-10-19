@@ -2,9 +2,14 @@ import path from "node:path";
 import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
+import type { OpenClawConfig } from "../../../config/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 
 const DEFAULT_RESOLVED_AT = "2026-05-01T00:00:00.000Z";
+
+export function configuredPlugin(id: string): OpenClawConfig {
+  return { plugins: { entries: { [id]: { enabled: true } } } };
+}
 
 export function setupPluginInstallTestState(): {
   testEnv: NodeJS.ProcessEnv;

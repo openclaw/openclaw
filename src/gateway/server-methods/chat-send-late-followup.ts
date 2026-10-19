@@ -19,10 +19,15 @@ type DropReason =
 /** One Gateway admission owns the outcome of its queued reply, including concurrent duplicates. */
 export function createChatSendLateFollowupDisposition(params: {
   runId: string;
+  retainSourceIdentity?: boolean;
   originatingChannel: string;
   logGateway: GatewayRequestContext["logGateway"];
+  onTerminalDrop?: (
+    completion: Exclude<QueuedFollowupReplyBatch["completion"], { kind: "progress" }>,
+  ) => void;
   deliver: (params: {
     runId: string;
+    clientRunId: string;
     payloads: ReplyPayload[];
     completion: QueuedFollowupReplyBatch["completion"];
     isCurrent: () => boolean;
@@ -37,8 +42,11 @@ export function createChatSendLateFollowupDisposition(params: {
   let terminal: TerminalDisposition = "pending";
   const progressPayloads: ReplyPayload[] = [];
   const recordDrop = (batch: QueuedFollowupReplyBatch, reason: DropReason, settle = true) => {
-    if (settle) {
+    if (settle && batch.completion.kind !== "progress") {
       terminal = "settled";
+      if (reason === "non-webchat-origin" || reason === "origin-mismatch") {
+        params.onTerminalDrop?.(batch.completion);
+      }
     }
     params.logGateway.info("webchat late reply disposition", {
       runId: params.runId,
@@ -73,13 +81,18 @@ export function createChatSendLateFollowupDisposition(params: {
         }
         if (batch.completion.kind === "progress") {
           progressPayloads.push(...batch.payloads);
-          await params.deliver({ ...batch, isCurrent: () => terminal === "deliver" });
+          await params.deliver({
+            ...batch,
+            clientRunId: params.retainSourceIdentity === false ? batch.runId : params.runId,
+            isCurrent: () => terminal === "deliver",
+          });
           return;
         }
         terminal = "delivering";
         try {
           const result = await params.deliver({
             ...batch,
+            clientRunId: params.retainSourceIdentity === false ? batch.runId : params.runId,
             payloads: [...progressPayloads, ...batch.payloads],
             isCurrent: () => terminal === "delivering",
           });
@@ -106,7 +119,11 @@ export function createChatSendLateFollowupDisposition(params: {
           if (terminal === "pending") {
             terminal = "settled";
           }
-          const retry = createChatSendLateFollowupDisposition(params);
+          const retry = createChatSendLateFollowupDisposition({
+            ...params,
+            retainSourceIdentity: false,
+            onTerminalDrop: undefined,
+          });
           retry.recordQueued();
           return retry.deliver;
         },

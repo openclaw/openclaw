@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -13,229 +13,116 @@ import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
 
 const pluginId = "hook-owner";
+type SessionKeys = [string | undefined, string | undefined];
 
-function createAgentBinding(params: {
-  agentId: string;
-  bindingId: string;
-  boundAt: number;
-  sessionKey: string;
-}): SessionBindingRecord {
+function createAgentBinding(agentId: string, boundAt = 1): SessionBindingRecord {
   return {
-    bindingId: params.bindingId,
-    boundAt: params.boundAt,
+    bindingId: `${agentId}-owner`,
+    boundAt,
     targetKind: "session",
-    targetSessionKey: params.sessionKey,
+    targetSessionKey: `agent:${agentId}:main`,
     conversation,
     status: "active",
-    metadata: { agentId: params.agentId },
+    metadata: { agentId },
   };
 }
 
-it("refuses an early none-to-agent change before handled before_dispatch", async () => {
-  let phase = "first";
-  const effects: Array<{
-    phase: string;
-    eventSessionKey: string | undefined;
-    contextSessionKey: string | undefined;
-  }> = [];
-  const harness = await createHookHarness({
-    label: "ordinary-hook-none-to-agent",
-    messageId: "ordinary-hook-none-to-agent",
-    beforeDispatch: async (event, context) => {
-      effects.push({
-        phase,
-        eventSessionKey: event.sessionKey,
-        contextSessionKey: context.sessionKey,
-      });
-      return { handled: true };
-    },
-  });
-  const workBinding = createAgentBinding({
-    agentId: "work",
-    bindingId: "work-owner",
-    boundAt: 1,
-    sessionKey: "agent:work:main",
-  });
-  let current: SessionBindingRecord | null = null;
-  registerCurrentAdapter(() => current);
+it.each(["runtime-loader", "before-dispatch"] as const)(
+  "revalidates ownership after %s before a claiming hook",
+  async (checkpoint) => {
+    const early = checkpoint === "runtime-loader";
+    let phase = "first";
+    const beforeEffects: SessionKeys[] = [];
+    const replyEffects: [...SessionKeys, string | undefined][] = [];
+    const entered = createDeferred();
+    const release = createRouteChangeBarrier();
+    const harness = await createHookHarness({
+      label: `ordinary-hook-${checkpoint}`,
+      messageId: `ordinary-hook-${checkpoint}`,
+      beforeDispatch: async (event, context) => {
+        beforeEffects.push([event.sessionKey, context.sessionKey]);
+        if (early) {
+          return { handled: true };
+        }
+        if (phase === "first") {
+          entered.resolve();
+          await release.promise;
+        }
+        return undefined;
+      },
+      replyDispatch: early
+        ? undefined
+        : async (event, context) => {
+            replyEffects.push([event.sessionKey, event.ctx.SessionKey, event.ctx.AgentId]);
+            context.recordProcessed("completed", { reason: "synthetic-ordinary-hook" });
+            context.markIdle("message_completed");
+            return {
+              handled: true,
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            };
+          },
+    });
+    const mainBinding = createAgentBinding("main");
+    const workBinding = createAgentBinding("work", early ? 1 : 2);
+    let current: SessionBindingRecord | null = early ? null : mainBinding;
+    registerCurrentAdapter(() => current);
 
-  const firstContext = await harness.buildContext();
-  expect(firstContext).toMatchObject({ AgentId: "main", SessionKey: "global" });
-  const firstObservation = readConversationBindingRouteFacts(firstContext);
-  expect(firstObservation?.kind).toBe("none");
-  expect(Object.isFrozen(firstObservation)).toBe(true);
-
-  const entered = createDeferred();
-  const release = createRouteChangeBarrier();
-  const loadRuntimePlugins = runtimeLoaders.loadRuntimePlugins;
-  vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
-    entered.resolve();
-    await release.promise;
-    return await loadRuntimePlugins();
-  });
-  const first = harness.invoke(firstContext).then(
-    () => ({ error: undefined }),
-    (error: unknown) => ({ error }),
-  );
-  await Promise.race([
-    entered.promise,
-    first.then(() => {
-      throw new Error("Dispatch completed before reaching the real runtime loader barrier");
-    }),
-  ]);
-  current = workBinding;
-  release.resolve();
-  const firstOutcome = await first;
-
-  expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect.soft(effects).toEqual([]);
-  releaseDedupeForRetry(firstContext);
-
-  phase = "retry";
-  const retryContext = await harness.buildContext();
-  expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
-  expect(readConversationBindingRouteFacts(retryContext)).toMatchObject({
-    kind: "agent",
-    bindingId: "work-owner",
-  });
-  await harness.invoke(retryContext);
-
-  expect(effects).toEqual([
-    {
-      phase: "retry",
-      eventSessionKey: "agent:work:main",
-      contextSessionKey: "agent:work:main",
-    },
-  ]);
-  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
-});
-
-it("revalidates an agent route after nonclaiming before_dispatch and before reply_dispatch", async () => {
-  let phase = "first";
-  const beforeEffects: Array<{
-    phase: string;
-    eventSessionKey: string | undefined;
-    contextSessionKey: string | undefined;
-  }> = [];
-  const replyEffects: Array<{
-    phase: string;
-    agentId: string | undefined;
-    contextSessionKey: string | undefined;
-    eventSessionKey: string | undefined;
-  }> = [];
-  const beforeEntered = createDeferred();
-  const release = createRouteChangeBarrier();
-  const harness = await createHookHarness({
-    label: "ordinary-hook-agent-replacement",
-    messageId: "ordinary-hook-agent-replacement",
-    beforeDispatch: async (event, context) => {
-      beforeEffects.push({
-        phase,
-        eventSessionKey: event.sessionKey,
-        contextSessionKey: context.sessionKey,
-      });
-      if (phase === "first") {
-        beforeEntered.resolve();
+    const firstContext = await harness.buildContext();
+    expect(firstContext).toMatchObject({
+      AgentId: "main",
+      SessionKey: early ? "global" : "agent:main:main",
+    });
+    const observation = readConversationBindingRouteFacts(firstContext);
+    if (early) {
+      expect(observation?.kind).toBe("none");
+      expect(Object.isFrozen(observation)).toBe(true);
+      const loadRuntimePlugins = runtimeLoaders.loadRuntimePlugins;
+      vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
+        entered.resolve();
         await release.promise;
-      }
-    },
-    replyDispatch: async (event, context) => {
-      replyEffects.push({
-        phase,
-        agentId: event.ctx.AgentId,
-        contextSessionKey: event.ctx.SessionKey,
-        eventSessionKey: event.sessionKey,
+        return await loadRuntimePlugins();
       });
-      context.recordProcessed("completed", { reason: "synthetic-ordinary-hook" });
-      context.markIdle("message_completed");
-      return {
-        handled: true,
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      };
-    },
-  });
-  const mainBinding = createAgentBinding({
-    agentId: "main",
-    bindingId: "main-owner",
-    boundAt: 1,
-    sessionKey: "agent:main:main",
-  });
-  const workBinding = createAgentBinding({
-    agentId: "work",
-    bindingId: "work-owner",
-    boundAt: 2,
-    sessionKey: "agent:work:main",
-  });
-  let current: SessionBindingRecord | null = mainBinding;
-  registerCurrentAdapter(() => current);
+    } else {
+      expect(observation).toMatchObject({ kind: "agent", bindingId: "main-owner" });
+    }
 
-  const firstContext = await harness.buildContext();
-  expect(firstContext).toMatchObject({ AgentId: "main", SessionKey: "agent:main:main" });
-  expect(readConversationBindingRouteFacts(firstContext)).toMatchObject({
-    kind: "agent",
-    bindingId: "main-owner",
-  });
+    const first = harness.invoke(firstContext).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      first,
+      `Dispatch completed before the ${checkpoint} barrier`,
+    );
+    current = workBinding;
+    release.resolve();
+    expect.soft(await first).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    const firstEffect = ["agent:main:main", "agent:main:main"];
+    expect.soft(beforeEffects).toEqual(early ? [] : [firstEffect]);
+    releaseDedupeForRetry(firstContext);
 
-  const first = harness.invoke(firstContext).then(
-    () => ({ error: undefined }),
-    (error: unknown) => ({ error }),
-  );
-  await Promise.race([
-    beforeEntered.promise,
-    first.then(() => {
-      throw new Error("Dispatch completed before the registered before_dispatch barrier");
-    }),
-  ]);
-  current = workBinding;
-  release.resolve();
-  const firstOutcome = await first;
+    phase = "retry";
+    const retryContext = await harness.buildContext();
+    expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
+    expect(readConversationBindingRouteFacts(retryContext)).toMatchObject({
+      kind: "agent",
+      bindingId: "work-owner",
+    });
+    await harness.invoke(retryContext);
 
-  expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect.soft(beforeEffects).toEqual([
-    {
-      phase: "first",
-      eventSessionKey: "agent:main:main",
-      contextSessionKey: "agent:main:main",
-    },
-  ]);
-  expect.soft(replyEffects).toEqual([]);
-  releaseDedupeForRetry(firstContext);
-
-  phase = "retry";
-  const retryContext = await harness.buildContext();
-  expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
-  expect(readConversationBindingRouteFacts(retryContext)).toMatchObject({
-    kind: "agent",
-    bindingId: "work-owner",
-  });
-  await harness.invoke(retryContext);
-
-  expect(beforeEffects).toEqual([
-    {
-      phase: "first",
-      eventSessionKey: "agent:main:main",
-      contextSessionKey: "agent:main:main",
-    },
-    {
-      phase: "retry",
-      eventSessionKey: "agent:work:main",
-      contextSessionKey: "agent:work:main",
-    },
-  ]);
-  expect(replyEffects).toEqual([
-    {
-      phase: "retry",
-      agentId: "work",
-      contextSessionKey: "agent:work:main",
-      eventSessionKey: "agent:work:main",
-    },
-  ]);
-  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
-});
+    const retryEffect = ["agent:work:main", "agent:work:main"];
+    expect(beforeEffects).toEqual(early ? [retryEffect] : [firstEffect, retryEffect]);
+    if (!early) {
+      expect(replyEffects).toEqual([[...retryEffect, "work"]]);
+    }
+    expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
+  },
+);
 
 it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
-  "revalidates between registered before_dispatch handlers before a later handler claims: %s",
+  "revalidates between before_dispatch handlers (%s)",
   async (input) => {
     let phase = "first";
     const registeredCommand = input !== "ordinary";
@@ -245,12 +132,8 @@ it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
       throw new Error("before_dispatch must handle this turn before command execution");
     });
     const inboundClaim = vi.fn(async () => ({ handled: true }));
-    const preparations: Array<{ phase: string; sessionKey: string | undefined }> = [];
-    const claims: Array<{
-      phase: string;
-      eventSessionKey: string | undefined;
-      contextSessionKey: string | undefined;
-    }> = [];
+    const preparations: (string | undefined)[] = [];
+    const claims: SessionKeys[] = [];
     const entered = createDeferred();
     const release = createRouteChangeBarrier();
     const harness = await createHookHarness({
@@ -273,30 +156,16 @@ it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
             entered.resolve();
             await release.promise;
           }
-          preparations.push({ phase, sessionKey: event.sessionKey });
+          preparations.push(event.sessionKey);
         },
         async (event, context) => {
-          claims.push({
-            phase,
-            eventSessionKey: event.sessionKey,
-            contextSessionKey: context.sessionKey,
-          });
+          claims.push([event.sessionKey, context.sessionKey]);
           return { handled: true };
         },
       ],
     });
-    const mainBinding = createAgentBinding({
-      agentId: "main",
-      bindingId: "main-owner",
-      boundAt: 1,
-      sessionKey: "agent:main:main",
-    });
-    const workBinding = createAgentBinding({
-      agentId: "work",
-      bindingId: "work-owner",
-      boundAt: 2,
-      sessionKey: "agent:work:main",
-    });
+    const mainBinding = createAgentBinding("main");
+    const workBinding = createAgentBinding("work", 2);
     let current: SessionBindingRecord | null = stable
       ? {
           ...mainBinding,
@@ -317,18 +186,14 @@ it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
       });
     }
     const first = harness.invoke(firstContext).then(
-      () => ({ error: undefined }),
-      (error: unknown) => ({ error }),
+      () => undefined,
+      (error: unknown) => error,
     );
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       entered.promise,
-      first.then(() => {
-        if (registeredCommand) {
-          expect(harness.preparedCatalogs).toEqual([expect.arrayContaining(["routeproof"])]);
-        }
-        throw new Error("Dispatch completed before the first registered handler barrier");
-      }),
-    ]);
+      first,
+      "Dispatch completed before the first registered handler barrier",
+    );
     expect(claims).toEqual([]);
     if (registeredCommand) {
       expect(harness.preparedCatalogs).toEqual([expect.arrayContaining(["routeproof"])]);
@@ -341,18 +206,15 @@ it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
     expect(commandHandler).not.toHaveBeenCalled();
     expect(inboundClaim).not.toHaveBeenCalled();
     if (stable) {
-      expect(firstOutcome.error).toBeUndefined();
-      expect(preparations).toEqual([{ phase: "first", sessionKey: firstSessionKey }]);
-      expect(claims).toEqual([
-        { phase: "first", eventSessionKey: firstSessionKey, contextSessionKey: firstSessionKey },
-      ]);
+      expect(firstOutcome).toBeUndefined();
+      expect(preparations).toEqual([firstSessionKey]);
+      expect(claims).toEqual([[firstSessionKey, firstSessionKey]]);
       expect(claimInboundDedupe(firstContext).status).toBe("duplicate");
       return;
     }
 
-    expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    expect.soft(preparations).toEqual([{ phase: "first", sessionKey: "agent:main:main" }]);
-    expect.soft(claims).toEqual([]);
+    expect.soft(firstOutcome).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    expect.soft(preparations).toEqual(["agent:main:main"]);
     releaseDedupeForRetry(firstContext);
 
     phase = "retry";
@@ -361,17 +223,8 @@ it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
     expect(retryContext).toMatchObject({ AgentId: "work", SessionKey: "agent:work:main" });
     await harness.invoke(retryContext);
 
-    expect(preparations).toEqual([
-      { phase: "first", sessionKey: "agent:main:main" },
-      { phase: "retry", sessionKey: "agent:work:main" },
-    ]);
-    expect(claims).toEqual([
-      {
-        phase: "retry",
-        eventSessionKey: "agent:work:main",
-        contextSessionKey: "agent:work:main",
-      },
-    ]);
+    expect(preparations).toEqual(["agent:main:main", "agent:work:main"]);
+    expect(claims).toEqual([["agent:work:main", "agent:work:main"]]);
     expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
     expect(commandHandler).not.toHaveBeenCalled();
     expect(inboundClaim).not.toHaveBeenCalled();

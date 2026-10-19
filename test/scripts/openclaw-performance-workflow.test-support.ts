@@ -7,7 +7,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import path from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { afterAll } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -27,6 +27,7 @@ afterAll(() => {
 
 export type PerformanceFixtureOptions = {
   mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
+  successfulGitTrees?: boolean;
   baseline?: "absent" | "invalid" | "trailing-newline";
   duplicate?: boolean;
   race?: boolean;
@@ -34,14 +35,15 @@ export type PerformanceFixtureOptions = {
 };
 
 export function preparePerformanceFixture(root: string, options: PerformanceFixtureOptions) {
-  const workspace = path.join(root, "workspace");
-  const temp = path.join(workspace, "performance-temp");
-  const remote = path.join(workspace, "reports.git");
-  const seed = path.join(workspace, "seed");
-  const reports = path.join(temp, "reports");
-  const input = path.join(temp, "input");
+  const workspace = join(root, "workspace");
+  const temp = join(workspace, "performance-temp");
+  const remote = join(workspace, "reports.git");
+  const seed = join(workspace, "seed");
+  const reports = join(temp, "reports");
+  const input = join(temp, "input");
+  const publish = options.mode === "publish";
   const reuseDefault = !options.baseline && !options.duplicate;
-  const templateKind = options.mode === "publish" ? "publish" : "base";
+  const templateKind = publish ? "publish" : "base";
   const template = reuseDefault ? performanceTemplates.get(templateKind) : undefined;
   const git = template?.git ?? execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const gitEnv = {
@@ -61,16 +63,16 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   const write = (file: string, value: string) => {
-    mkdirSync(path.dirname(file), { recursive: true });
+    mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, value);
   };
   const dest = "openclaw-performance/main/123-1/mock-provider";
   const previous = "openclaw-performance/main/100-1/mock-provider";
   const pointer = "openclaw-performance/main/latest-mock-provider.json";
   const commitReport = (cwd: string, report: string) => {
-    write(path.join(cwd, report, "report.json"), JSON.stringify({ path: report }));
-    write(path.join(cwd, report, "source/index.md"), "source fixture\n");
-    write(path.join(cwd, pointer), JSON.stringify({ path: report }));
+    write(join(cwd, report, "report.json"), JSON.stringify({ path: report }));
+    write(join(cwd, report, "source/index.md"), "source fixture\n");
+    write(join(cwd, pointer), JSON.stringify({ path: report }));
     run(cwd, "add", ".");
     run(cwd, "commit", "-m", "fixture report");
   };
@@ -82,39 +84,38 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     mkdirSync(seed);
     run(workspace, "init", "--bare", "--initial-branch=main", remote);
     run(seed, "init", "--initial-branch=main");
-    write(path.join(seed, "README.md"), "fixture\n");
+    write(join(seed, "README.md"), "fixture\n");
     if (options.baseline !== "absent") {
       commitReport(seed, options.duplicate ? dest : previous);
       if (options.baseline === "invalid") {
-        write(path.join(seed, pointer), "{invalid");
+        write(join(seed, pointer), "{invalid");
       }
       if (options.baseline === "trailing-newline") {
-        write(path.join(seed, pointer), JSON.stringify({ path: previous + "\n" }));
+        write(join(seed, pointer), JSON.stringify({ path: previous + "\n" }));
       }
     }
     run(seed, "add", ".");
     run(seed, "commit", "--allow-empty", "-m", "fixture seed");
     run(seed, "push", remote, "HEAD:main");
     run(workspace, "init", "--initial-branch=main");
-    write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
+    write(join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
     run(workspace, "add", "src");
     run(workspace, "commit", "-m", "fixture target");
     mkdirSync(reports);
-    if (options.mode === "publish") {
+    if (publish) {
       run(reports, "init", "--initial-branch=main");
       run(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git");
       // Keep FETCH_HEAD's source description valid when the snapshot is copied.
-      run(reports, "fetch", "--depth=1", path.relative(reports, remote), "main");
+      run(reports, "fetch", "--depth=1", relative(reports, remote), "main");
       run(reports, "checkout", "-B", "main", "FETCH_HEAD");
       run(reports, "config", "core.hooksPath", "/dev/null");
       commitReport(reports, dest);
-      write(path.join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
+      write(join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
     }
   }
   const target = template?.target ?? run(workspace, "rev-parse", "HEAD");
   const reportCommit =
-    template?.reportCommit ??
-    (options.mode === "publish" ? run(reports, "rev-parse", "HEAD") : "a".repeat(40));
+    template?.reportCommit ?? (publish ? run(reports, "rev-parse", "HEAD") : "a".repeat(40));
   if (!template && reuseDefault) {
     // Snapshot complete repositories and their identities before scenario mutation.
     // Copies own their refs, index and objects; no live process or remote is shared.
@@ -122,20 +123,21 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     cpSync(workspace, templateRoot, copyOptions);
     performanceTemplates.set(templateKind, { root: templateRoot, git, target, reportCommit });
   }
-  if (options.mode === "publish" && options.race) {
+  if (publish && options.race) {
     commitReport(seed, "openclaw-performance/main/200-1/mock-provider");
     run(seed, "push", remote, "HEAD:main");
   }
-  write(path.join(input, "kova/reports/mock-provider/report.json"), "{}\n");
-  write(path.join(input, "kova/reports/mock-provider/report.md"), "report\n");
-  write(path.join(input, "kova/summaries/mock-provider.md"), "summary\n");
-  write(path.join(input, "kova/bundles/mock-provider/bundle.json"), "{}\n");
-  write(path.join(input, "kova/bundles/mock-provider/bundle.tar.gz.sha256"), "fixture\n");
-  write(path.join(input, "kova/bundles/mock-provider/bundle.tar.gz"), "private archive fixture\n");
-  write(
-    path.join(input, "openclaw-performance-source-123-1/mock-provider/index.md"),
-    "source fixture\n",
-  );
+  for (const [file, value] of Object.entries({
+    "kova/reports/mock-provider/report.json": "{}\n",
+    "kova/reports/mock-provider/report.md": "report\n",
+    "kova/summaries/mock-provider.md": "summary\n",
+    "kova/bundles/mock-provider/bundle.json": "{}\n",
+    "kova/bundles/mock-provider/bundle.tar.gz.sha256": "fixture\n",
+    "kova/bundles/mock-provider/bundle.tar.gz": "private archive fixture\n",
+    "openclaw-performance-source-123-1/mock-provider/index.md": "source fixture\n",
+  })) {
+    write(join(input, file), value);
+  }
   const env = {
     ...Object.fromEntries(Object.entries(gitEnv).filter(([key]) => key.startsWith("GIT_"))),
     RUNNER_TEMP: temp,
@@ -147,7 +149,7 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     KOVA_TRUSTED_LIVE_REF: "fixture",
     KOVA_REPOSITORY: "fixture/kova",
     KOVA_REF: "main",
-    KOVA_HOME: path.join(temp, "kova-home"),
+    KOVA_HOME: join(temp, "kova-home"),
     OCM_VERSION: "fixture",
     OCM_LINUX_X64_SHA256: "fixture",
     TARGET_REF: "main",
@@ -171,34 +173,21 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     DEST_REL: dest,
     REPORT_URL: `https://github.com/openclaw/clawgrit-reports/tree/main/${dest}`,
     REPORT_PUBLISH_REQUIRED: "true",
-    PERFORMANCE_REPORT_SELECTOR: path.resolve("scripts/lib/kova-report-selector.mjs"),
-    PERFORMANCE_PUBLISHER_HELPER: path.resolve("scripts/lib/kova-report-publish-files.mjs"),
+    PERFORMANCE_REPORT_SELECTOR: resolve("scripts/lib/kova-report-selector.mjs"),
+    PERFORMANCE_PUBLISHER_HELPER: resolve("scripts/lib/kova-report-publish-files.mjs"),
     PUBLISHED_REPORT_MAX_FILE_BYTES: "50000000",
-    ...(options.mode === "publish"
-      ? { CLAWGRIT_REPORTS_APP_TOKEN: "fixture-performance-token" }
-      : {}),
+    ...(publish ? { CLAWGRIT_REPORTS_APP_TOKEN: "fixture-performance-token" } : {}),
   };
+  const remoteGit = (...args: string[]) => run(workspace, "--git-dir", remote, ...args);
+  const configPath = join(reports, ".git/config");
   return {
     env,
     proxy: { git, remote, ...options },
     inspect() {
       return {
-        remoteFiles: run(
-          workspace,
-          "--git-dir",
-          remote,
-          "ls-tree",
-          "-r",
-          "--name-only",
-          "main",
-        ).split("\n"),
-        pointer:
-          options.baseline === "absent"
-            ? ""
-            : run(workspace, "--git-dir", remote, "show", `main:${pointer}`),
-        config: existsSync(path.join(reports, ".git/config"))
-          ? readFileSync(path.join(reports, ".git/config"), "utf8")
-          : "",
+        remoteFiles: remoteGit("ls-tree", "-r", "--name-only", "main").split("\n"),
+        pointer: options.baseline === "absent" ? "" : remoteGit("show", `main:${pointer}`),
+        config: existsSync(configPath) ? readFileSync(configPath, "utf8") : "",
       };
     },
   };

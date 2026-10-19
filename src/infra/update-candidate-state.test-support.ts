@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
+import * as absoluteDeadline from "../utils/absolute-deadline.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
@@ -20,6 +21,24 @@ type Admission = Pick<
   Parameters<typeof snapshotUpdateCandidateState>[0],
   "pluginPlanPath" | "databaseInventory"
 >;
+
+/** Wake the inspection deadline without replacing native process-cleanup timers. */
+export function captureUpdateCandidateDeadline(): () => void {
+  const deadlines = vi.spyOn(absoluteDeadline, "scheduleAbsoluteDeadline");
+  return () => {
+    const call = deadlines.mock.calls.at(-1);
+    const scheduled = deadlines.mock.results.at(-1);
+    if (!call || scheduled?.type !== "return") {
+      throw new Error("Inspection allowance was not scheduled");
+    }
+    const [deadlineAtMs, expire, now = Date.now] = call;
+    if (now() < deadlineAtMs) {
+      throw new Error("Inspection allowance has not expired");
+    }
+    scheduled.value();
+    expire();
+  };
+}
 
 export async function materializeUpdateCandidateStateWorker(candidateRoot: string): Promise<void> {
   const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState);
@@ -53,7 +72,7 @@ function runWorker(input: SnapshotInput, mode: "inventory" | "snapshot", admitte
       ),
     ],
     {
-      input: JSON.stringify({ ...input, mode, ...admitted }),
+      input: JSON.stringify({ ...input, mode, ...admitted, includeLocalStoreVersions: true }),
       timeoutMs: 30_000,
       killGraceMs: 500,
       maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },

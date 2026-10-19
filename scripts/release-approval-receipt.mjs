@@ -63,7 +63,7 @@ function npmApprovals(approvals) {
   );
 }
 
-export function releaseApprovalArtifactName({ parentRunId, parentRunAttempt }) {
+function releaseApprovalArtifactName({ parentRunId, parentRunAttempt }) {
   pattern(parentRunId, ID, "Parent run id");
   pattern(parentRunAttempt, ID, "Parent run attempt");
   return `openclaw-release-approval-v1-${parentRunId}-${parentRunAttempt}`;

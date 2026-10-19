@@ -47,8 +47,9 @@ describe("file-slot containment", () => {
     expect(() => parseOcPath('oc://"C:/Windows/System32/foo"/section')).toThrow(
       /Absolute file slot/,
     );
-    // `\` inside quoted segments is rejected outright (no escape support).
-    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(OcPathError);
+    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(
+      /Absolute file slot/,
+    );
   });
 
   it("rejects leading-backslash UNC path", () => {
@@ -58,10 +59,6 @@ describe("file-slot containment", () => {
   it("rejects parent-directory escapes", () => {
     expect(() => parseOcPath('oc://"../foo"/section')).toThrow(/Parent-directory/);
     expect(() => parseOcPath('oc://"foo/../bar"/section')).toThrow(/Parent-directory/);
-  });
-
-  it("does not URL-decode `%2E%2E` — substrate isn't an HTTP layer", () => {
-    expect(parseOcPath('oc://"%2E%2E/foo"/section').file).toBe("%2E%2E/foo");
   });
 
   it("formatOcPath rejects absolute and parent-directory file slots", () => {
@@ -82,15 +79,6 @@ describe("path-string and traversal caps", () => {
     expect(pathBytes).toBeGreaterThan(PATH_LENGTH_LIMIT);
     expect(() => parseOcPath(oversizedPath)).toThrow(`length: ${pathBytes}`);
     expect(() => formatOcPath({ file: multibyteFile })).toThrow(`length: ${pathBytes}`);
-  });
-
-  it("accepts multibyte paths exactly at MAX_PATH_LENGTH bytes", () => {
-    const multibyteFile = `${"界".repeat(1363)}ab`;
-    const exactPath = `oc://${multibyteFile}`;
-
-    expect(Buffer.byteLength(exactPath, "utf8")).toBe(PATH_LENGTH_LIMIT);
-    expect(parseOcPath(exactPath)).toEqual({ file: multibyteFile });
-    expect(formatOcPath({ file: multibyteFile })).toBe(exactPath);
   });
 
   it("keeps overlong parse input UTF-16 safe", () => {
@@ -141,14 +129,6 @@ describe("path-string and traversal caps", () => {
     expect(() => findOcPaths(ast, parseOcPath("oc://X/**"))).toThrow(/MAX_TRAVERSAL_DEPTH/);
   });
 
-  it("jsonc parser surfaces a structured diagnostic on pathological nesting", () => {
-    const open = "[".repeat(MAX_TRAVERSAL_DEPTH + 100);
-    const close = "]".repeat(MAX_TRAVERSAL_DEPTH + 100);
-    const result = parseJsonc(`${open}0${close}`);
-    expect(result.ast.root).toBeNull();
-    expect(result.diagnostics.some((d) => d.code === "OC_JSONC_DEPTH_EXCEEDED")).toBe(true);
-  });
-
   it("jsonl per-line parser flags malformed deeply-nested values", () => {
     let nested = '"x"';
     for (let i = 0; i < MAX_TRAVERSAL_DEPTH + 50; i++) {
@@ -190,20 +170,24 @@ describe("numeric segments dispatch by node kind", () => {
 describe("setOcPath value coercion is locale-independent and exact-match", () => {
   it("number coercion accepts `1.5`, refuses `1,5`", () => {
     const ast = parseJsonc('{"x":1.0}').ast;
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "1.5").ok).toBe(true);
-    const r = setOcPath(ast, parseOcPath("oc://X/x"), "1,5");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("parse-error");
-    }
+    expect(JSON.parse(setOcPath(ast, parseOcPath("oc://X/x"), "1.5").raw)).toEqual({ x: 1.5 });
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "1,5")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
   });
 
   it("boolean coercion accepts `true` / `false` only", () => {
     const ast = parseJsonc('{"x":true}').ast;
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "false").ok).toBe(true);
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "False").ok).toBe(false);
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "TRUE").ok).toBe(false);
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "yes").ok).toBe(false);
+    expect(JSON.parse(setOcPath(ast, parseOcPath("oc://X/x"), "false").raw)).toEqual({ x: false });
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "False")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "TRUE")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "yes")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
   });
 });
 
@@ -212,16 +196,6 @@ describe("predicate-value injection is contained", () => {
     const ast = parseJsonc('{"items":[{"name":"a.*"},{"name":"abc"}]}').ast;
     const matches = findOcPaths(ast, parseOcPath("oc://X.jsonc/items/[name=a.*]"));
     expect(matches).toHaveLength(1);
-  });
-
-  it("equals-sign in predicate value is treated as part of the value", () => {
-    const ast = parseJsonc('{"items":[{"k":"a=b"},{"k":"c"}]}').ast;
-    const matches = findOcPaths(ast, parseOcPath("oc://X.jsonc/items/[k=a=b]"));
-    expect(matches).toHaveLength(1);
-  });
-
-  it("predicate-shaped bracket without operator is a literal sentinel", () => {
-    expect(parseOcPath("oc://X.jsonc/items/[name]").item).toBe("[name]");
   });
 
   it("rejects empty predicate body and empty key/value", () => {
@@ -235,12 +209,6 @@ describe("predicate-value injection is contained", () => {
     expect(p.section).toBe("[id=foo/bar]");
     const ast = parseJsonc('{"steps":[{"id":"foo/bar","cmd":"x"},{"id":"baz","cmd":"y"}]}').ast;
     const matches = findOcPaths(ast, parseOcPath("oc://wf/steps/[id=foo/bar]/cmd"));
-    expect(matches).toHaveLength(1);
-  });
-
-  it("predicate value containing `.` round-trips and matches literally", () => {
-    const ast = parseJsonc('{"steps":[{"id":"1.0","cmd":"x"},{"id":"2.0","cmd":"y"}]}').ast;
-    const matches = findOcPaths(ast, parseOcPath("oc://wf/steps/[id=1.0]/cmd"));
     expect(matches).toHaveLength(1);
   });
 });

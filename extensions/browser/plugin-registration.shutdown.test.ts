@@ -1,9 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -48,7 +51,7 @@ vi.mock("./src/browser/system-profile-import-state.js", () => ({
 
 function registerLifecycleCallbacks(path: string) {
   let route: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0] | undefined;
-  let service: OpenClawPluginService | undefined;
+  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
   registerBrowserPlugin(
     createTestPluginApi({
       runtime: {
@@ -67,7 +70,15 @@ function registerLifecycleCallbacks(path: string) {
   if (!route?.handleUpgrade || !service?.stop) {
     throw new Error("expected browser relay route and service lifecycle");
   }
-  return { handleUpgrade: route.handleUpgrade, start: service.start, stop: service.stop };
+  const scheduler = createTestPluginServiceScheduler();
+  onTestFinished(() => scheduler.stop());
+  const context = { config: {}, stateDir: "/tmp/browser-startup", logger: console, scheduler };
+  const registeredService = service;
+  return {
+    handleUpgrade: route.handleUpgrade,
+    start: () => registeredService.start(context),
+    stop: () => registeredService.stop?.(context),
+  };
 }
 
 describe("browser websocket shutdown registration", () => {
@@ -79,7 +90,7 @@ describe("browser websocket shutdown registration", () => {
   it("keeps shutdown lazy until direct websocket activity prepares teardown", async () => {
     const coldLifecycle = registerLifecycleCallbacks("/browser/screencast");
 
-    await coldLifecycle.stop({} as never);
+    await coldLifecycle.stop();
 
     expect(runtimeMocks.stopBrowserControlService).not.toHaveBeenCalled();
 
@@ -90,7 +101,7 @@ describe("browser websocket shutdown registration", () => {
     for (const path of ["/browser/screencast", "/browser/extension"]) {
       const { handleUpgrade, stop } = registerLifecycleCallbacks(path);
       await expect(handleUpgrade(req, socket, head)).resolves.toBe(true);
-      await stop({} as never);
+      await stop();
     }
 
     expect(runtimeMocks.handleBrowserScreencastUpgrade).toHaveBeenCalledWith(req, socket, head);
@@ -109,8 +120,7 @@ describe("browser websocket shutdown registration", () => {
         await ready.promise;
       });
       const lifecycle = registerLifecycleCallbacks("/browser/screencast");
-      const context = { config: {}, stateDir: "/tmp/browser-startup", logger: console };
-      const startup = lifecycle.start(context);
+      const startup = lifecycle.start();
       const settled = Promise.resolve(startup).then(
         () => undefined,
         (error: unknown) => error,
@@ -126,7 +136,7 @@ describe("browser websocket shutdown registration", () => {
           ready.reject(failure);
         }
         await settled;
-        await lifecycle.stop(context);
+        await lifecycle.stop();
       }
       expect(await settled).toBe(outcome === "success" ? undefined : failure);
       expect(runtimeMocks.startTabCleanup).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);

@@ -1,43 +1,46 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
-import { AUTOMATION_FAILED_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isExternalHookSession,
+  mapHookExternalContentSource,
+  type HookExternalContentSource,
+} from "../../security/external-content-source.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronJob,
   CronStoredJob,
 } from "../types.js";
-import type { MutableCronSession } from "./run-session-state.js";
+import type { CronSessionRowWriter, MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
+import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
+  /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
+  trigger?: "cron" | "event";
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
+  onLaneWait?: CronLaneWaitCallback;
   sessionKey: string;
   agentId?: string;
   lane?: string;
   executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
-  /** Host-only root for system-owned turns; never persisted in cron state. */
-  executionRoot?: string;
-  /** Explicit instruction set for a host-owned turn, including an empty review context. */
-  skillsSnapshot?: SkillSnapshot;
 };
 
 export type WithRunSession = (
@@ -53,11 +56,57 @@ const cronExternalContentRuntimeLoader = createLazyImportLoader(
 const cronAuthProfileRuntimeLoader = createLazyImportLoader(
   () => import("./run-auth-profile.runtime.js"),
 );
-export async function loadSessionAccessorRuntime() {
+async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
 
-export async function loadCronExternalContentRuntime() {
+export function createCronSessionRowWriter(params: {
+  agentId: string;
+  agentSessionKey: string;
+}): CronSessionRowWriter {
+  const { agentId, agentSessionKey } = params;
+  let baseSessionMaintenanceStarted = false;
+  return async ({ storePath, sessionKey, operation, resetBoundary, assertCommitAllowed }) => {
+    if (resetBoundary) {
+      const [{ applySessionEntryLifecycleMutation }, { projectCronSessionEntry }] =
+        await Promise.all([
+          loadSessionAccessorRuntime(),
+          import("../../config/sessions/session-entry-patch-operation.js"),
+        ]);
+      let entry = operation.next;
+      await applySessionEntryLifecycleMutation({
+        activeSessionKey: sessionKey,
+        agentId,
+        storePath,
+        upserts: [
+          {
+            sessionKey,
+            resetBoundary,
+            buildEntry: ({ currentEntry }) =>
+              (entry = projectCronSessionEntry(operation, currentEntry)),
+          },
+        ],
+        skipMaintenance: true,
+      });
+      return entry;
+    }
+    const { applySessionEntryOperation } =
+      await import("../../config/sessions/session-accessor.sqlite-entry.js");
+    const entry = await applySessionEntryOperation({ storePath, sessionKey, agentId }, operation, {
+      fallbackEntry: operation.next,
+      replaceEntry: true,
+      // The maintenance owner follows later writes through its receipt subscription.
+      skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
+      workerGuard: { assertCurrent: assertCommitAllowed },
+    });
+    if (sessionKey === agentSessionKey) {
+      baseSessionMaintenanceStarted = true;
+    }
+    return entry;
+  };
+}
+
+async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
 }
 
@@ -80,9 +129,6 @@ export async function resolveCronAuthSelection(params: {
   provider: string;
   modelId: string;
   configuredProfileId?: string;
-  harnessRuntime: Parameters<
-    CronAuthProfileRuntime["resolveSessionAuthSelection"]
-  >[0]["harnessRuntime"];
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
@@ -92,7 +138,7 @@ export async function resolveCronAuthSelection(params: {
   if (
     !hasSessionOverride &&
     !hasConfiguredAuthProfiles(params.cfg) &&
-    !hasAnyAuthProfileStoreSource(params.agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(params.agentDir))
   ) {
     return undefined;
   }
@@ -103,7 +149,6 @@ export async function resolveCronAuthSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
-    harnessRuntime: params.harnessRuntime,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,
     sessionStore: params.cronSession.store,
@@ -112,8 +157,6 @@ export async function resolveCronAuthSelection(params: {
     isNewSession: params.isNewSession,
   });
 }
-
-type CronAuthProfileRuntime = typeof import("./run-auth-profile.runtime.js");
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
@@ -138,13 +181,68 @@ export async function retireRolledCronSessionMcpRuntime(params: {
   });
 }
 
-export function appendCronUnattendedRunPreamble(
-  commandBody: string,
-  opts: { externalHook: boolean },
-) {
+/** Builds the cron prompt while preserving hook wrapping and the stable unattended suffix. */
+export async function buildCronCommandBody(params: {
+  job: Pick<CronJob, "id" | "name" | "payload"> & Partial<Pick<CronJob, "state">>;
+  cfg: OpenClawConfig;
+  message: string;
+  baseSessionKey: string;
+  hookExternalContentSource?: HookExternalContentSource;
+  formattedTime: string;
+  timeLine: string;
+}) {
+  const { job, message, baseSessionKey, hookExternalContentSource, timeLine } = params;
+  const sourcePromptPrefix = `[cron:${job.id} ${job.name}]`;
+  const base = `${sourcePromptPrefix} ${message}`.trim();
+  const isExternalHook =
+    hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
+  const allowUnsafeExternalContent =
+    (job.payload.kind === "agentTurn" && job.payload.allowUnsafeExternalContent === true) ||
+    (hookExternalContentSource === "gmail" &&
+      params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
+  const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
+  let commandBody: string;
+
+  if (isExternalHook) {
+    const { detectSuspiciousPatterns } = await loadCronExternalContentRuntime();
+    const suspiciousPatterns = detectSuspiciousPatterns(message);
+    if (suspiciousPatterns.length > 0) {
+      logWarn(
+        `[security] Suspicious patterns detected in external hook content ` +
+          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
+      );
+    }
+  }
+
+  if (shouldWrapExternal) {
+    const { buildSafeExternalPrompt } = await loadCronExternalContentRuntime();
+    const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
+    const safeContent = buildSafeExternalPrompt({
+      content: message,
+      source: hookType,
+      jobName: job.name,
+      jobId: job.id,
+      timestamp: params.formattedTime,
+    });
+    commandBody = `${safeContent}\n\n${timeLine}`.trim();
+  } else {
+    commandBody = `${base}\n${timeLine}`.trim();
+  }
+  commandBody = appendCronUnattendedRunPreamble(commandBody, {
+    externalHook: isExternalHook,
+  });
+  if (job.state?.lastError === STARTUP_INTERRUPTED_ERROR) {
+    commandBody +=
+      "\n\nThe previous attempt was interrupted by a Gateway restart. Continue the unfinished task. " +
+      "Inspect the retained conversation and any tool effects before acting; do not repeat work or deliveries that already completed.";
+  }
+  return { sourcePromptPrefix, isExternalHook, commandBody };
+}
+
+function appendCronUnattendedRunPreamble(commandBody: string, opts: { externalHook: boolean }) {
   // Keep the suffix static for prompt caching. External hooks cannot override
   // this trusted guidance or gain permission to remove jobs through fenced content.
-  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If something failed, start with ${AUTOMATION_FAILED_TOKEN} on its own line, then state what failed and what you tried — the scheduler owns retries and failure alerts.`;
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently. If you cannot complete the task, explain what blocked it and what you tried.`;
   const trustedExtra =
     " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
   return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;

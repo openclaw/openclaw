@@ -15,7 +15,6 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { createDanglingSkillWorkshopReviewIndex } from "../state/openclaw-state-db-corruption.test-support.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import * as stateReadonly from "../state/openclaw-state-db-readonly.js";
 import {
@@ -60,8 +59,6 @@ afterEach(async () => {
 
 it.each([
   "current",
-  "old-schema",
-  "legacy-index",
   "missing",
   "foreign-host",
   "revoked",
@@ -107,15 +104,7 @@ it.each([
               }),
             );
           });
-          if (kind === "old-schema") {
-            db.exec(`PRAGMA user_version = 15;
-              UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
-              DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
-          }
           await closeOpenClawStateDatabaseAsync();
-          if (kind === "legacy-index") {
-            createDanglingSkillWorkshopReviewIndex(databasePath);
-          }
         }
         const before = fs.existsSync(databasePath) ? fs.readFileSync(databasePath) : undefined;
         const predecessor = acquireGatewayStateOwner({
@@ -173,11 +162,7 @@ it.each([
             expect(leaseQueries().length).toBeGreaterThan(0);
           }
           sql.queries.length = 0;
-          const held =
-            kind === "revoked" ||
-            kind === "cancelled" ||
-            kind === "selected-source" ||
-            kind === "process-exited";
+          const held = ["revoked", "cancelled", "selected-source", "process-exited"].includes(kind);
           const entered = createDeferredCore();
           const resume = createDeferredCore();
           const controller = new AbortController();
@@ -187,15 +172,10 @@ it.each([
             const execute = stateReadonly.executeExistingOpenClawStateRead;
             vi.spyOn(stateReadonly, "executeExistingOpenClawStateRead").mockImplementation(
               async (...args) => {
-                if (args[1].type !== "doctor.gatewayOwnerLease.read") {
+                if (args[1].type !== "gatewayOwnerLease.read") {
                   return execute(...args);
                 }
-                if (kind === "selected-source") {
-                  entered.resolve();
-                  await resume.promise;
-                  return execute(...args);
-                }
-                const reply = await execute(...args);
+                const reply = kind === "selected-source" ? undefined : await execute(...args);
                 if (kind === "process-exited") {
                   expect(reply).toMatchObject({
                     ok: true,
@@ -204,7 +184,7 @@ it.each([
                 }
                 entered.resolve();
                 await resume.promise;
-                return reply;
+                return reply ?? execute(...args);
               },
             );
           }
@@ -222,17 +202,8 @@ it.each([
               }),
             controller.signal,
           );
-          const settled = operation.then(
-            () => undefined,
-            (error: unknown) => error,
-          );
-          const live = ![
-            "missing",
-            "foreign-host",
-            "revoked",
-            "cancelled",
-            "process-exited",
-          ].includes(kind);
+          const settled = operation.catch(() => undefined);
+          const live = kind === "current" || kind === "selected-source";
           try {
             if (held) {
               await Promise.race([

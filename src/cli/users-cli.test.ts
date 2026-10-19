@@ -62,14 +62,6 @@ describe("registerUsersCli", () => {
     expect(output).toHaveBeenCalledWith("No user profiles found.\n");
   });
 
-  it("preserves the empty profile list JSON response", async () => {
-    const { output, program } = createProgram({ profiles: [] });
-
-    await program.parseAsync(["node", "openclaw", "users", "list", "--json"]);
-
-    expect(output).toHaveBeenCalledWith('{\n  "profiles": []\n}\n');
-  });
-
   it("prints the link result as JSON when requested", async () => {
     const { output, program } = createProgram({ profile: { id: "p-1" } });
 

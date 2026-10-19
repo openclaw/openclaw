@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { ACTIVE_PLACEMENT } from "./placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
@@ -32,6 +36,8 @@ function reader(
 }
 
 describe("createWorkerPlacementRedispatch", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
   it.each([
     { providerId: "fake", nodeDeviceId: null, executionMode: "worker-turn", state: "reclaimed" },
     {
@@ -108,32 +114,24 @@ describe("createWorkerPlacementRedispatch", () => {
     },
   );
 
-  it("rejects nodes without a runtime requirement owner", async () => {
-    const dispatch = vi.fn();
-    const redispatch = createWorkerPlacementRedispatch({
-      placements: reader(placement, {
+  it.each([
+    {
+      environment: {
         ...ready,
         environmentId: placement.environmentId,
         providerId: "device",
         nodeDeviceId: "paired-node",
-      }),
-      dispatch,
-    });
-    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
-      "authoritative runtime requirement",
-    );
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing prior environment", async () => {
+      },
+      reason: "authoritative runtime requirement",
+    },
+    { environment: undefined, reason: "has no environment record" },
+  ])("rejects redispatch without $reason", async ({ environment, reason }) => {
     const dispatch = vi.fn();
     const redispatch = createWorkerPlacementRedispatch({
-      placements: reader(placement, undefined),
+      placements: reader(placement, environment),
       dispatch,
     });
-    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
-      "has no environment record",
-    );
+    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(reason);
     expect(dispatch).not.toHaveBeenCalled();
   });
 });
