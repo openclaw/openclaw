@@ -156,6 +156,8 @@ type CustodyCase = [
   holder: boolean,
 ];
 const custodyCases: CustodyCase[] = [
+  [["/usr/lib/systemd/systemd", "--user"], { cwd: new Error("denied") }, false],
+  [["/lib/systemd/systemd", "--user"], { cwd: new Error("denied") }, false],
   [["node", "dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "/unrelated-app/dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "dist/index.js"], { cwd: "/app" }, true],
@@ -184,7 +186,7 @@ const custodyCases: CustodyCase[] = [
 ];
 it.each(custodyCases)("classifies artifact custody of %j with %j", (argv, facts, holder) => {
   rows.set(peer, { ppid: 1, argv, ...facts });
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: holder ? [peer] : [] });
+  expect(inspectOtherOpenClawProcesses()).toMatchObject({ pids: holder ? [peer] : [] });
 });
 
 const foreignArgvs = [
@@ -202,6 +204,7 @@ const foreignArgvs = [
 
 it.each([
   ["node", "/standalone/server.mjs"],
+  ["node", "/standalone/dist/index.js"],
   ["node", "-e", "setInterval(() => {}, 1e9)"],
   ["node", "-p", "1"],
   ["node"],
@@ -221,29 +224,117 @@ it.each([
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
 });
 
+it("retains unknown relative entrypoints without losing scoped holders later in the census", () => {
+  const held = "/tmp/openclaw-update-runtime-Held01";
+  const free = "/tmp/openclaw-update-runtime-Free01";
+  rows.set(peer, { ppid: 1, argv: ["node", "worker.js"], cwd: denied() });
+  rows.set(peer + 1, { ppid: 1, argv: ["node", `${held}/worker.js`] });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: [peer, peer + 1],
+    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
+  });
+  expect(inspectOtherOpenClawProcesses(free)).toEqual({
+    pids: [peer],
+    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
+  });
+  expect(inspectOtherOpenClawProcesses(held)).toEqual({
+    pids: [peer, peer + 1],
+    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
+  });
+  rows.delete(peer);
+  expect(inspectOtherOpenClawProcesses(free)).toEqual({ pids: [] });
+});
+
+it.each(["relative", "alias", "cwd-and-preload"])(
+  "scopes all resolved runtime references (%s)",
+  (source) => {
+    const held = "/tmp/openclaw-update-runtime-Held01";
+    const other = "/tmp/openclaw-update-runtime-Free01";
+    const alias = "/tmp/openclaw-update-runtime-Alias1/worker.js";
+    realpath.mockImplementation((file: string) => {
+      if (file.includes("--require=")) {
+        throw Object.assign(new Error("option is not a path"), { code: "ENOENT" });
+      }
+      return source === "alias" && file === alias ? `${held}/worker.js` : file;
+    });
+    rows.set(peer, {
+      ppid: 1,
+      argv:
+        source === "relative"
+          ? ["node", "../openclaw-update-runtime-Held01/worker.js"]
+          : source === "alias"
+            ? ["node", alias]
+            : ["node", `--require=${held}/preload.js`, `${held}/worker.js`],
+      cwd: source === "cwd-and-preload" ? other : "/tmp/launch",
+    });
+    expect(inspectOtherOpenClawProcesses(held)).toEqual({ pids: [peer] });
+    expect(inspectOtherOpenClawProcesses(other)).toEqual({
+      pids: source === "cwd-and-preload" ? [peer] : [],
+    });
+    expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-None01")).toEqual({
+      pids: [],
+    });
+  },
+);
+
+it("preserves unresolved artifact evidence when cwd proves foreign", () => {
+  rows.set(peer, {
+    ppid: 1,
+    cwd: "/unrelated-app",
+    argv: [
+      "node",
+      "--future-option",
+      "-r",
+      "/unrelated-app/preload.js",
+      "-e",
+      "require('/tmp/openclaw-update-runtime-Held01/worker.js')",
+    ],
+  });
+  realpath.mockImplementation((file: string) => {
+    if (file.includes("require(")) {
+      throw Object.assign(new Error("not a path"), { code: "ENOENT" });
+    }
+    return file;
+  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: [peer],
+    warnings: [expect.stringContaining("could not resolve script")],
+  });
+});
+
 it.each([
   ["/app/dist/index.js", "denied"],
   ["/app/dist/index.js", "unnamed"],
   ["/app/service.js", "missing"],
-])("does not retain runtimes for entrypoint %s with %s package evidence", (script, failure) => {
-  rows.set(peer, { ppid: 1, argv: ["node", script] });
-  const inspect = read.getMockImplementation()!;
-  read.mockImplementation((file: string) => {
-    if (!file.endsWith("/package.json")) {
-      return inspect(file);
-    }
-    if (failure === "unnamed") {
-      return JSON.stringify({});
-    }
-    throw Object.assign(new Error("unreadable manifest"), {
-      code: failure === "denied" ? "EACCES" : "ENOENT",
+])(
+  "distinguishes absent from unreadable entrypoint %s package evidence (%s)",
+  (script, failure) => {
+    rows.set(peer, { ppid: 1, argv: ["node", script] });
+    const inspect = read.getMockImplementation()!;
+    read.mockImplementation((file: string) => {
+      if (!file.endsWith("/package.json")) {
+        return inspect(file);
+      }
+      if (failure === "unnamed") {
+        return JSON.stringify({});
+      }
+      throw Object.assign(new Error("unreadable manifest"), {
+        code: failure === "denied" ? "EACCES" : "ENOENT",
+      });
     });
-  });
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
-});
+    expect(inspectOtherOpenClawProcesses()).toEqual(
+      failure === "missing"
+        ? { pids: [] }
+        : {
+            pids: [peer],
+            warnings: [expect.stringContaining(`PID ${peer}:`)],
+          },
+    );
+  },
+);
 
 it.each(["script", "service-marker", "module-package", "directory-package"])(
-  "does not turn unreadable %s evidence into a runtime holder",
+  "retains uncertain runtime custody with unreadable %s evidence",
   (source) => {
     rows.set(peer, {
       ppid: 1,
@@ -270,13 +361,16 @@ it.each(["script", "service-marker", "module-package", "directory-package"])(
       read.mockImplementation((file: string) => {
         if (file === (source.endsWith("package") ? "/app/package.json" : `/proc/${peer}/environ`)) {
           throw Object.assign(new Error("inspection failed"), {
-            code: source === "directory-package" ? "ENOENT" : "EACCES",
+            code: "EACCES",
           });
         }
         return inspect(file);
       });
     }
-    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+    expect(inspectOtherOpenClawProcesses()).toEqual({
+      pids: [peer],
+      warnings: [expect.stringContaining(`PID ${peer}:`)],
+    });
   },
 );
 
@@ -342,7 +436,10 @@ it.each([
   if (isDirectory) {
     stat.mockImplementation((file: string) => ({ isDirectory: () => file === "/app" }));
   }
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: error ? [] : [peer] });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: [peer],
+    ...(error ? { warnings: [expect.stringContaining(error)] } : {}),
+  });
 });
 
 afterEach(() => {
@@ -526,7 +623,7 @@ it.each([
   { script: "dist/index.js", partial: false },
   { script: "/unrelated-app/dist/index.js", partial: true },
 ])(
-  "does not retain runtimes for an unrelated script with unavailable cwd ($script)",
+  "retains only unresolved entrypoints when cwd is unavailable ($script)",
   ({ script, partial }) => {
     rows.set(peer, { ppid: 1, argv: ["node", script] });
     mockDarwinBatch(
@@ -538,41 +635,19 @@ it.each([
             stdout: "",
           },
     );
-    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+    expect(inspectOtherOpenClawProcesses()).toEqual(
+      partial
+        ? { pids: [] }
+        : {
+            pids: [peer],
+            warnings: [expect.stringContaining("working directory is unavailable")],
+          },
+    );
   },
 );
 
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
-
-it.each(["/usr/lib/systemd/systemd", "/lib/systemd/systemd"])(
-  "does not let the user manager pin abandoned runtimes when cwd is denied (%s)",
-  (executable) => {
-    rows.set(peer, { ppid: 1, argv: [executable, "--user"], uid: 1000, cwd: denied() });
-    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
-    rows.get(peer)!.cwd = "/tmp/openclaw-update-runtime-Ab1234";
-    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
-    rows.get(peer)!.cwd = denied();
-    rows.get(peer)!.argv.push("/tmp/openclaw-update-runtime-Ab1234");
-    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
-  },
-);
-
-it("excludes PAM helpers without artifact evidence", () => {
-  rows.set(peer, {
-    ppid: 1,
-    argv: ["/usr/lib/systemd/systemd", "--user"],
-    uid: 1000,
-    cwd: denied(),
-  });
-  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
-  rows.get(peer + 1)!.cwd = "/tmp/openclaw-update-runtime-Ab1234";
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer + 1] });
-  rows.get(peer + 1)!.cwd = denied();
-  rows.get(peer + 1)!.ppid = 1;
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
-});
 
 it("does not let protected systemd login processes block update-repair evidence", () => {
   rows.set(peer, {
@@ -603,37 +678,16 @@ it("does not let protected systemd login processes block update-repair evidence"
   });
 });
 
-it.each(["foreign", "same", "unknown process", "unknown inspector"])(
-  "does not retain runtimes for systemd with denied cwd (%s)",
-  (owner) => {
-    rows.set(1, {
-      ppid: 0,
-      argv: ["/usr/lib/systemd/systemd", "--system"],
-      uid: owner === "same" ? 1000 : 0,
-      cwd: denied(),
-    });
-    if (owner === "unknown process") {
-      const inspect = read.getMockImplementation()!;
-      read.mockImplementation((file: string) => {
-        if (file === "/proc/1/status") {
-          throw denied();
-        }
-        return inspect(file);
-      });
-    } else if (owner === "unknown inspector") {
-      Reflect.deleteProperty(process, "getuid");
-    }
-    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
-  },
-);
-
 it.each([
   ["node", "--eval", "1"],
   ["bun", "run", "--silent", "start"],
   ["tsx", "--foreign-runtime-option", "watch", "worker.ts"],
-])("does not retain runtimes for unrelated processes without cwd for %j", (...argv) => {
+])("retains unresolved runtime processes without cwd for %j", (...argv) => {
   rows.set(peer, { ppid: 1, argv, uid: 0, cwd: denied() });
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: [peer],
+    warnings: [expect.stringContaining(`PID ${peer}:`)],
+  });
 });
 
 it.each([
