@@ -86,7 +86,11 @@ export function requestUrl(input: RequestInfo | URL): URL {
 }
 
 export function stubMeetArtifactsApi(
-  options: { failSmartNoteDocumentBody?: boolean; participantDisplayName?: string } = {},
+  options: {
+    failSmartNoteDocumentBody?: boolean;
+    participantDisplayName?: string;
+    noTranscripts?: boolean;
+  } = {},
 ) {
   vi.stubGlobal(
     "fetch",
@@ -168,6 +172,9 @@ export function stubMeetArtifactsApi(
         });
       }
       if (url.pathname === "/v2/conferenceRecords/rec-1/transcripts") {
+        if (options.noTranscripts) {
+          return jsonResponse({ transcripts: [] });
+        }
         return jsonResponse({
           transcripts: [
             {
