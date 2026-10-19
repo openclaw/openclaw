@@ -507,9 +507,14 @@ describe("admitted SQLite schema facts", () => {
     observation.expectNone(/data_version/iu);
   });
 
-  it.each([false, true])(
-    "keeps an ended schema pin local until its transaction ends, sibling catalog published=%s",
-    (publishCatalog) => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "keeps ended schema pins local until their transaction ends, sibling catalog published=%s, local TEMP DDL=%s",
+    (publishCatalog, localTempDdl) => {
       const filename = databaseFile("sqlite-ended-schema-pin-");
       // A cold writer publishes the DDL generation before admitting its new catalog.
       const writer = openDatabase(
@@ -530,6 +535,16 @@ describe("admitted SQLite schema facts", () => {
         expect(
           reader.prepare("SELECT name FROM sqlite_schema WHERE name = 'newly_committed'").all(),
         ).toEqual([]);
+        expect(tableExists(reader, "newly_committed")).toBe(false);
+        if (localTempDdl) {
+          reader.exec("CREATE TEMP TABLE local_tmp(value)");
+        }
+        // Consecutive pins also retain the outer catalog without an admission between them.
+        for (let pin = 0; pin < 2; pin++) {
+          runSqliteSchemaReadSnapshotSync(reader, () => {
+            expect(tableExists(reader, "newly_committed")).toBe(false);
+          });
+        }
         expect(tableExists(reader, "newly_committed")).toBe(false);
       });
 

@@ -234,12 +234,13 @@ function trackSchemaChanges(
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
     if (newSnapshot) {
       if (
-        !owner.transactionCatalogBound &&
         database.isTransaction &&
-        owner.transactionRead &&
+        (owner.transactionRead || owner.transactionCatalogBound) &&
         owner.processRevision !== getSqliteDatabaseSchemaRevision(database)
       ) {
-        invalidate(owner);
+        if (!owner.transactionCatalogBound) {
+          invalidate(owner);
+        }
         owner.transactionalFacts = true;
       } else {
         // The pin marker precedes its first native step. Adopt committed facts now;
