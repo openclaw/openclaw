@@ -2,18 +2,8 @@ import type { SessionBranch } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { scopedAgentParamsForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { chatHistoryRequests } from "./chat-history-state.ts";
+import { chatHistoryRequests, type ChatBranchesQueryState } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-
-export type ChatBranchesQueryState =
-  | { readonly status: "idle" }
-  | { readonly status: "loading" | "ready" }
-  | { readonly status: "error"; readonly message: string };
-
-export type ChatBranchesQueryReceipt = {
-  readonly isCurrent: () => boolean;
-  readonly query: ChatBranchesQueryState;
-};
 
 const pendingBranchLoads = new WeakMap<
   ChatState,
