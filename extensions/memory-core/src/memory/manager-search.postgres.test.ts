@@ -154,14 +154,14 @@ function createFixture(
       sourceName: string,
       text: string,
       embedding: number[],
-      options: { model?: string; source?: MemorySource } = {},
+      options: { model?: string; source?: MemorySource; path?: string } = {},
     ) {
       const input: MemorySourceIndexReplacement = {
         ...(options.source === "sessions"
           ? { source: "sessions", agentId: "fixture", sessionId: sourceName }
           : { source: "memory" }),
         entry: {
-          path: `memory/${sourceName}.md`,
+          path: options.path ?? `memory/${sourceName}.md`,
           hash: sourceName,
           mtimeMs: 100,
           size: text.length,
@@ -299,8 +299,10 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
         expect(fixture.ensureVector()).toMatchObject({ ok: true });
         fixture.publish("recall", "recall", [1, 0, 0], { source: "sessions" });
         fixture.publish("recall", "recall lunch", [0.8, 0.6, 0]);
-        fixture.publish("recall-ordinary", "recall lunch tomorrow", [0.9, 0.4, 0], {
+        fixture.publish("ordinary-recall", "recall lunch tomorrow", [0.9, 0.4, 0], {
           source: "sessions",
+          // Exact filename recall, ordered after the excluded path before LIMIT.
+          path: "memory/z-ordinary/recall.md",
         });
       });
       const excludedSessionPaths = [
