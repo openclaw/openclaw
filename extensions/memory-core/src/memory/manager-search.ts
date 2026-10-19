@@ -5,7 +5,6 @@ import {
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -27,6 +26,7 @@ import {
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
+import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
 
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
@@ -296,7 +296,7 @@ export async function searchKeyword(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: MemorySource[] };
+  sourceFilter: MemorySourceFilter;
   boostFallbackRanking?: boolean;
   matchAny?: boolean;
 }): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
@@ -313,6 +313,7 @@ export async function searchKeyword(params: {
     return [];
   }
 
+  const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, params.ftsTable);
   const search = admitStoreSearch(params.db, {
     text: { body: { table: params.ftsTable, fields: ["text"], hiddenRank: true } },
   });
@@ -343,7 +344,7 @@ export async function searchKeyword(params: {
     const columns = "id, path, source, start_line, end_line, text";
     const ranked = `SELECT ${columns}, ${rank} AS rank
       FROM ${params.ftsTable}
-      WHERE ${matchClause}${liveChunkClause}${params.sourceFilter.sql}
+      WHERE ${matchClause}${liveChunkClause}${sourceFilter.sql}
       ORDER BY rank ${rankOrder} LIMIT ?`;
     // SQLite cannot combine MATCH with scalar OR predicates. Bound the BM25
     // leg first; substring-only trigram hits fill spare capacity without a score.
@@ -351,7 +352,7 @@ export async function searchKeyword(params: {
     const sql = mixedOr
       ? `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
            SELECT ${columns}, NULL AS rank FROM ${params.ftsTable}
-           WHERE 1=1${filter}${liveChunkClause}${params.sourceFilter.sql}
+           WHERE 1=1${filter}${liveChunkClause}${sourceFilter.sql}
              AND id NOT IN (SELECT id FROM matches)
            LIMIT max(0, ? - (SELECT count(*) FROM matches))
          )
@@ -359,15 +360,15 @@ export async function searchKeyword(params: {
          ORDER BY rank ${rankOrder} NULLS LAST`
       : `SELECT ${columns}, ${matchQuery ? rank : "NULL"} AS rank
          FROM ${params.ftsTable}
-         WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}
+         WHERE ${matchClause}${filter}${liveChunkClause}${sourceFilter.sql}
          ${matchQuery ? `ORDER BY rank ${rankOrder}` : ""} LIMIT ?`;
     return executeSqliteQuerySync<MemorySearchRow & { rank: number | null }>(params.db, {
       compile: () =>
         CompiledQuery.raw(sql, [
           ...(match?.parameters ?? []),
-          ...(mixedOr ? [...params.sourceFilter.params, params.limit] : []),
+          ...(mixedOr ? [...sourceFilter.params, params.limit] : []),
           ...terms,
-          ...params.sourceFilter.params,
+          ...sourceFilter.params,
           params.limit,
         ]),
     }).rows;
@@ -438,11 +439,12 @@ export async function searchPathKeyword(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: MemorySource[] };
+  sourceFilter: MemorySourceFilter;
 }): Promise<PathKeywordSearchResult[]> {
   if (params.limit <= 0) {
     return [];
   }
+  const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, params.pathFtsTable);
   const snippet = resolveSnippetProjection("c.text", params.snippetMaxChars);
   const search = admitStoreSearch(params.db, {
     text: { path: { table: params.pathFtsTable, fields: ["path"] } },
@@ -519,7 +521,7 @@ export async function searchPathKeyword(params: {
       ? `candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
         `    FROM ${params.pathFtsTable}\n` +
-        `   WHERE ${match?.sql ?? "1=1"}${planSubstringFilter}${params.sourceFilter.sql}\n` +
+        `   WHERE ${match?.sql ?? "1=1"}${planSubstringFilter}${sourceFilter.sql}\n` +
         `), pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT path, source FROM candidates\n` +
         `   WHERE (${exactCandidatePatterns.map(() => "path LIKE ? ESCAPE '\\'").join(" OR ")})\n` +
@@ -527,16 +529,16 @@ export async function searchPathKeyword(params: {
       : `pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
         `    FROM ${params.pathFtsTable}\n` +
-        `   WHERE (${qualifiedPatternClause})${params.sourceFilter.sql}\n` +
+        `   WHERE (${qualifiedPatternClause})${sourceFilter.sql}\n` +
         `)`;
     const candidateParams = useLexicalCandidates
       ? [
           ...(match?.parameters ?? []),
           ...plan.substringTerms,
-          ...params.sourceFilter.params,
+          ...sourceFilter.params,
           ...exactCandidatePatterns,
         ]
-      : [...exactCandidatePatterns, ...params.sourceFilter.params];
+      : [...exactCandidatePatterns, ...sourceFilter.params];
     const statement =
       `WITH ${candidateCtes}, scored_paths AS MATERIALIZED (\n` +
       `  SELECT path, source,\n` +
@@ -586,7 +588,7 @@ export async function searchPathKeyword(params: {
     const match = matchQuery ? fullText.match(index, matchQuery).compile(dialect) : undefined;
     const specificityOperator = specificity === "exact" ? ">" : "=";
     const qualifiedSpecificityClause = ` AND ${EXACT_PATH_SPECIFICITY_SQL_FUNCTION}(${pathColumn}) ${specificityOperator} 0`;
-    const queryParams = [...(match?.parameters ?? []), ...terms, ...params.sourceFilter.params];
+    const queryParams = [...(match?.parameters ?? []), ...terms, ...sourceFilter.params];
     // Filter empty sources before LIMIT, then resolve first chunks only for the
     // retained paths. Keep both phases in the same statement's read snapshot.
     const statement =
@@ -594,7 +596,7 @@ export async function searchPathKeyword(params: {
       `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source,\n` +
       `         ${matchQuery ? rank : "0"} AS rank\n` +
       `    FROM ${params.pathFtsTable}\n` +
-      `   WHERE ${match?.sql ?? "1=1"}${filter}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
+      `   WHERE ${match?.sql ?? "1=1"}${filter}${sourceFilter.sql}${qualifiedSpecificityClause}\n` +
       `     AND EXISTS (SELECT 1 FROM memory_index_chunks live\n` +
       `                  WHERE live.path = ${params.pathFtsTable}.path\n` +
       `                    AND live.source = ${params.pathFtsTable}.source)\n` +

@@ -9,6 +9,7 @@ import {
   acquirePluginCapabilityProviders,
   finishCapabilityOperation,
 } from "../plugins/capability-provider-acquisition.js";
+import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   createSpeechProviderRegistry,
@@ -34,7 +35,6 @@ import {
 import type { TtsProviderAttempt } from "./tts-runtime-types.js";
 import {
   readTtsPrefs,
-  normalizeConfiguredSpeechProviderId,
   resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
@@ -221,23 +221,16 @@ export async function acquireTtsRequest(
   try {
     const setup = await queries.run(async () => {
       const catalog = queries.providers;
-      const defaultLookups = new Map<string, SpeechProviderPlugin | undefined>();
-      let defaultCatalog: SpeechProviderPlugin[] = [];
       const preferred = normalizeSpeechProviderId(prefs.tts?.provider);
+      let preferredProvider = preferred;
       if (preferred) {
         const provider = await queries.resolveProvider({ providerId: preferred });
-        defaultLookups.set(preferred, provider);
-        if (!provider) {
-          defaultCatalog = await queries.resolveProviders({});
-        }
+        preferredProvider =
+          provider?.id ??
+          buildCapabilityProviderIndex(await queries.resolveProviders({}), "aliases").get(preferred)
+            ?.id ??
+          preferred;
       }
-      const defaults = createSpeechProviderRegistry({
-        getProvider: (providerId) => defaultLookups.get(providerId),
-        listProviders: () => defaultCatalog,
-      });
-      const preferredProvider =
-        defaults.canonicalizeSpeechProviderId(prefs.tts?.provider) ??
-        normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
       const overrideProvider = normalizeSpeechProviderId(params.providerOverride);
       const requestedInputs = [
         overrideProvider,
@@ -281,12 +274,8 @@ export async function acquireTtsRequest(
                 await queries.resolveProviders({ cfg: runtimeConfig }),
               );
         // Policy helpers use the request config or the applicable config prepared for this phase.
-        const selectRegistry = (queryConfig: OpenClawConfig | undefined) => {
-          if (queryConfig === undefined) {
-            return defaults;
-          }
-          return queryConfig === cfg ? inputView : runtimeView;
-        };
+        const selectRegistry = (queryConfig: OpenClawConfig | undefined) =>
+          queryConfig === cfg ? inputView : runtimeView;
         return {
           runtimeConfig,
           getSpeechProvider: (id, queryConfig) => selectRegistry(queryConfig).getSpeechProvider(id),
@@ -296,12 +285,9 @@ export async function acquireTtsRequest(
         };
       };
       const providerRegistry = await prepareProviderRegistry();
-      const userProvider = await resolveTtsProviderAsync(
-        config,
-        prefsPath,
-        providerRegistry,
-        prefs,
-      );
+      const userProvider =
+        preferredProvider ??
+        (await resolveTtsProviderAsync(config, prefsPath, providerRegistry, prefs));
       const provider =
         providerRegistry.canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
       return {

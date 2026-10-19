@@ -18,7 +18,7 @@ const sandboxMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn<() => Promise<SandboxContext | null>>(),
 }));
 // mock-isolation: Prevent real SSH provisioning; media loading and read policy stay real.
-vi.mock("../../agents/sandbox.js", () => sandboxMocks);
+vi.mock("../../agents/sandbox/context.js", () => sandboxMocks);
 
 describe("SSH reply media", () => {
   let state: OpenClawTestState;

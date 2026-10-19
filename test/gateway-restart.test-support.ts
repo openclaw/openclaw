@@ -109,7 +109,7 @@ export function readRestartSession(agentDir: string, sessionKey: string) {
   return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
 }
 
-export function readRestartRow(databasePath: string, sql: string, key: string) {
+function readRestartRow(databasePath: string, sql: string, key: string) {
   const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
     return database.prepare(sql).get(key);

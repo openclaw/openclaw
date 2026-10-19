@@ -104,8 +104,8 @@ function prepareTranscriptIndexSchema(schema: SqliteTempTrackingSchema): {
   // Update before the conflict-free insert preserves an outer INSERT OR REPLACE policy.
   const createSql = (existingTriggers: ReadonlySet<string>) => `
     CREATE TEMP TABLE IF NOT EXISTS ${statusTable};
-    INSERT OR IGNORE INTO temp.${status} VALUES (1, -1, -1, 0, NULL, 0);
-    UPDATE temp.${status} SET sibling_write_revision = -1;
+    INSERT INTO temp.${status} VALUES (1, -1, -1, 0, NULL, 0)
+      ON CONFLICT(id) DO UPDATE SET sibling_write_revision = -1;
     CREATE TEMP TABLE IF NOT EXISTS ${pendingTable};
     CREATE INDEX IF NOT EXISTS temp.${pendingIndex};
     ${triggers

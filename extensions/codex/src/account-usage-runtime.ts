@@ -2,7 +2,11 @@ import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
-import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { ensureAuthProfileStore, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isUserModelAuthProfileId,
+  withPersonalAuthProfileStore,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
@@ -36,62 +40,85 @@ export async function handleCodexAccountUsage({
   }
   try {
     const agentDir = resolveAgentDir(config, agentId);
-    const store = structuredClone(
-      await resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config }),
-    );
-    const credential = store.profiles[profileId];
-    if (!credential || credential.provider !== "openai" || credential.type === "api_key") {
-      invalid("Select a saved Codex subscription login.");
-      return;
-    }
-    // Recheck the selected credential at disclosure, after the asynchronous usage request.
-    const assertCurrent = () => {
+    // Shared accounts retain their native owner; personal accounts supply published authority.
+    const assertCurrent = (
+      credential: AuthProfileStore["profiles"][string],
+      readCurrentCredential?: () => AuthProfileStore["profiles"][string] | undefined,
+    ) => {
       if (
         signal?.aborted ||
         hasCurrentClientAuthority?.() === false ||
         context.getRuntimeConfig() !== config ||
         !isDeepStrictEqual(
-          ensureAuthProfileStore(agentDir, {
-            profileId,
-            allowKeychainPrompt: false,
-            config,
-            externalCliProviderIds: ["openai"],
-            externalCliProfileIds: [profileId],
-          }).profiles[profileId],
-          store.profiles[profileId],
+          readCurrentCredential
+            ? readCurrentCredential()
+            : ensureAuthProfileStore(agentDir, {
+                profileId,
+                allowKeychainPrompt: false,
+                config,
+                externalCliProviderIds: ["openai"],
+                externalCliProfileIds: [profileId],
+              }).profiles[profileId],
+          credential,
         )
       ) {
         throw new Error("Account credentials changed. Refresh Models and try again.");
       }
     };
-    assertCurrent();
-    const { start } = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: readCodexPluginConfig(config.plugins?.entries?.codex?.config),
-    });
-    if (isCodexAppServerProxyLaunch(start.args)) {
-      throw new Error(
-        "Account usage is unavailable through a Codex proxy. Configure a direct app-server launch.",
+    const readUsage = async (
+      preparedStore: AuthProfileStore,
+      readCurrentCredential?: () => AuthProfileStore["profiles"][string] | undefined,
+    ) => {
+      const store = structuredClone(preparedStore);
+      const credential = store.profiles[profileId];
+      if (!credential || credential.provider !== "openai" || credential.type === "api_key") {
+        invalid("Select a saved Codex subscription login.");
+        return;
+      }
+      const assertPrepared = () => assertCurrent(credential, readCurrentCredential);
+      assertPrepared();
+      const { start } = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: readCodexPluginConfig(config.plugins?.entries?.codex?.config),
+      });
+      if (isCodexAppServerProxyLaunch(start.args)) {
+        throw new Error(
+          "Account usage is unavailable through a Codex proxy. Configure a direct app-server launch.",
+        );
+      }
+      const usage = await readCodexAppServerUsage({
+        agentDir,
+        config,
+        timeoutMs: 20_000,
+        preparedAuth: { kind: "profile", profileId, store },
+        authRequirement: "subscription",
+        assertCurrent: assertPrepared,
+        // Account rows must never log into the operator's native Codex home or daemon.
+        startOptions: {
+          ...start,
+          transport: "stdio",
+          homeScope: "agent",
+        },
+      });
+      assertPrepared();
+      const snapshot = buildCodexAppServerUsageSnapshot(usage.rateLimits, {
+        accountDetails: true,
+      });
+      respond(true, { updatedAt: Date.now(), providers: [snapshot] });
+    };
+
+    if (isUserModelAuthProfileId(profileId)) {
+      const handled = await withPersonalAuthProfileStore(profileId, async (owner) => {
+        await readUsage(await owner.read(), owner.readCurrentCredential);
+        return true;
+      });
+      if (!handled) {
+        invalid("Select a saved Codex subscription login.");
+      }
+    } else {
+      await readUsage(
+        await resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config }),
       );
     }
-    const usage = await readCodexAppServerUsage({
-      agentDir,
-      config,
-      timeoutMs: 20_000,
-      preparedAuth: { kind: "profile", profileId, store },
-      authRequirement: "subscription",
-      assertCurrent,
-      // Account rows must never log into the operator's native Codex home or daemon.
-      startOptions: {
-        ...start,
-        transport: "stdio",
-        homeScope: "agent",
-      },
-    });
-    assertCurrent();
-    const snapshot = buildCodexAppServerUsageSnapshot(usage.rateLimits, {
-      accountDetails: true,
-    });
-    respond(true, { updatedAt: Date.now(), providers: [snapshot] });
   } catch (error) {
     respond(
       false,

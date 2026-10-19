@@ -1,4 +1,3 @@
-/** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
@@ -67,7 +66,6 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   return opts;
 }
 
-/** Resolves the requested session and exports its trajectory summary or JSON result. */
 export async function exportTrajectoryCommand(
   opts: ExportTrajectoryCommandOptions,
   runtime: RuntimeEnv,

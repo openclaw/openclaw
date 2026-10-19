@@ -1,6 +1,54 @@
 import { expect, it } from "vitest";
 import { createMetricsHarness, untrusted } from "./service.test-helpers.js";
 
+it("counts trusted baseline retirements and successful base misses with bounded labels", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const cause of [
+      "projection-revision",
+      "config",
+      "identity",
+      "selection-reset",
+      "view-evicted",
+      "history-evicted",
+    ] as const) {
+      const event = { type: "sessions.list.baseline.retired", cause } as const;
+      metrics.record(event);
+      metrics.record(event, untrusted);
+      expect(metrics.render()).toContain(
+        `openclaw_sessions_list_baseline_retirements_total{cause="${cause}"} 1\n`,
+      );
+    }
+    for (const reason of ["unknown-base", "all-rows-changed"] as const) {
+      const event = {
+        type: "gateway.rpc",
+        method: "sessions.list",
+        phase: "response",
+        outcome: "ok",
+        durationMs: 1,
+        sessionsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          callerSource: "sidebar",
+          rowMode: "sidebar",
+          filter: "general",
+          rowsOutcome: "full-with-base",
+          baseMissReason: reason,
+        },
+      } as const;
+      metrics.record(event);
+      metrics.record(event, untrusted);
+      metrics.record({ ...event, firstResponse: false });
+      metrics.record({ ...event, outcome: "unavailable" });
+      expect(metrics.render()).toContain(
+        `openclaw_sessions_list_base_misses_total{reason="${reason}"} 1\n`,
+      );
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("accounts for session response bytes by sidebar row outcome", () => {
   const metrics = createMetricsHarness();
   try {

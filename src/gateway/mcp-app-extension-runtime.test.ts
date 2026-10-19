@@ -218,6 +218,8 @@ describe("cold App request admission", () => {
       expect(active.assertCurrent).not.toThrow();
       expect(view.assertCurrent).not.toThrow();
       expect(mocks.native).toHaveBeenCalledOnce();
+      accessController.abort(new Error("view revoked"));
+      expect(view.assertCurrent).toThrow("view revoked");
       view.release();
       await active.dispose();
     },

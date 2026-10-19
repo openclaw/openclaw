@@ -75,7 +75,7 @@ function resolveSubagentAttachmentRequest(params: {
   config: OpenClawConfig;
   attachments?: SubagentInlineAttachment[];
 }) {
-  const requestedAttachments = Array.isArray(params.attachments) ? params.attachments : [];
+  const requestedAttachments = params.attachments ?? [];
   if (requestedAttachments.length === 0) {
     return null;
   }

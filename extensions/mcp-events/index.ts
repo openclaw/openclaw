@@ -16,6 +16,42 @@ function currentCron(context: OpenClawPluginServiceContextV2): EventCron {
   return { readEventSources: cron.readEventSources, runEvent: cron.runEvent };
 }
 
+export function getMcpEventsDiagnostics(service: McpEventsService) {
+  return [
+    ...[...service.bindings.values()].map(({ facts, live }) => ({
+      bindingId: facts.bindingId,
+      jobId: facts.jobId,
+      sourceIdentity: facts.sourceIdentity,
+      serverName: facts.serverName,
+      name: facts.definition.name,
+      profile: MCP_EVENTS_PROFILE,
+      status: !live
+        ? "revoked"
+        : facts.refreshBefore && facts.refreshBefore <= service.now
+          ? "expired"
+          : facts.status,
+      refreshBefore: facts.refreshBefore,
+      replayAvailable: facts.cursor !== null,
+      truncated: facts.truncated,
+      failures: facts.failures,
+      nextAttemptAt: facts.nextAttemptAt,
+      cleanupPending: facts.cleanupPending,
+      lastError: facts.lastError,
+      updatedAt: facts.updatedAt,
+    })),
+    ...[...service.unavailable.values()].map(({ source, attempts }) => ({
+      jobId: source.jobId,
+      sourceIdentity: source.sourceIdentity,
+      serverName: typeof source.options.server === "string" ? source.options.server : undefined,
+      name: typeof source.options.name === "string" ? source.options.name : undefined,
+      profile: MCP_EVENTS_PROFILE,
+      status: "unavailable",
+      lastError: "source_unavailable",
+      failures: attempts,
+    })),
+  ];
+}
+
 export default definePluginEntry({
   id: "mcp-events",
   name: "MCP Events",
@@ -93,7 +129,7 @@ export default definePluginEntry({
         respond(true, {
           running: Boolean(service),
           profile: MCP_EVENTS_PROFILE,
-          subscriptions: service?.diagnostics() ?? [],
+          subscriptions: service ? getMcpEventsDiagnostics(service) : [],
         });
       },
       { scope: "operator.admin" },

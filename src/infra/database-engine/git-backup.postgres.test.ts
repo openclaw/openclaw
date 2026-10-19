@@ -5,7 +5,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -75,6 +76,10 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
   let workboard: string;
   const namespaces = new Map<string, string>();
   let databaseCreated = false;
+  const lifetime = createFixtureLifetime();
+  let initialRepositoryPath: string;
+  let databases: Parameters<typeof createGitBackup>[0]["databases"];
+  let result: Awaited<ReturnType<typeof createGitBackup>>;
   const gitEnv = {
     GIT_AUTHOR_NAME: "Backup fixture",
     GIT_AUTHOR_EMAIL: "backup@example.invalid",
@@ -113,14 +118,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
     };
-    for (const key of [
-      "HOME",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    ] as const) {
-      vi.stubEnv(key, env[key]);
-    }
+    installFixtureEnvironment();
     const stateDescriptor = await statePortProvider.loadDescriptor();
     const agentDescriptor = await agentPortProvider.loadDescriptor();
     const stateSeed = `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION};
@@ -198,7 +196,52 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     installDatabaseEngineSelection(await resolveDatabaseEngineSelection(config, env));
   }, 120_000);
 
+  function installFixtureEnvironment() {
+    const env = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+    };
+    for (const key of [
+      "HOME",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    ] as const) {
+      vi.stubEnv(key, env[key]);
+    }
+  }
+
+  // Vitest restores env stubs before every test, including the first.
+  beforeEach(installFixtureEnvironment);
+
+  // The initial six-store export is shared fixture setup for refresh/history assertions.
+  beforeAll(
+    () =>
+      lifetime.run(async () => {
+        initialRepositoryPath = path.join(root, "all-repository");
+        databases = [
+          { path: shared, identity: { role: "global" } as const },
+          { path: agent, identity: { role: "agent", agentId: "main" } as const },
+        ];
+        result = await createGitBackup({
+          repositoryPath: initialRepositoryPath,
+          stateDir,
+          databases,
+          all: true,
+          excludeSecrets: true,
+          gitEnv,
+        });
+      }),
+    120_000,
+  );
+
+  // Join the original body before Vitest resets its env or starts another owner.
+  afterEach(() => lifetime.cleanup());
+
   afterAll(async () => {
+    await lifetime.cleanup();
     await closeOpenClawStateDatabaseAsync();
     clearRuntimeConfigSnapshot();
     authoredConfig.config = undefined;
@@ -214,20 +257,14 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     }
   });
 
-  it("keeps distinct scopes, preserves degraded agents, and prunes removed Matrix stores without losing extras or history", async () => {
-    const repositoryPath = path.join(root, "all-repository");
-    const databases = [
-      { path: shared, identity: { role: "global" } as const },
-      { path: agent, identity: { role: "agent", agentId: "main" } as const },
-    ];
-    const result = await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases,
-      all: true,
-      excludeSecrets: true,
-      gitEnv,
-    });
+  it(
+    "keeps distinct scopes, preserves degraded agents, and prunes removed Matrix stores without losing extras or history",
+    () => lifetime.run(checkDiscoveryAndRefresh),
+    120_000,
+  );
+
+  async function checkDiscoveryAndRefresh() {
+    const repositoryPath = initialRepositoryPath;
     expect(result.manifests).toHaveLength(6);
     const ids = result.manifests.map(({ identity }) =>
       identity.role === "generic" ? identity.id : identity.role,
@@ -342,9 +379,15 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
         .split("\n")
         .toSorted(),
     ).toEqual(extras.toSorted());
-  }, 120_000);
+  }
 
-  it("verifies without namespaces, restores legacy exports, and rejects swapped or corrupt capsules", async () => {
+  it(
+    "verifies without namespaces, restores legacy exports, and rejects swapped or corrupt capsules",
+    () => lifetime.run(checkVerificationAndRestore),
+    120_000,
+  );
+
+  async function checkVerificationAndRestore() {
     const repositoryPath = path.join(root, "verify-repository");
     const identity = { role: "global" } as const;
     await createGitBackup({
@@ -419,12 +462,14 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       .toEqual(beforeInvalid);
     await fs.appendFile(path.join(repositoryPath, "global/postgres/database.sqlite"), "corrupt");
     await requireGitCommand(repositoryPath, ["add", "."]);
-    await requireGitCommand(repositoryPath, ["commit", "-m", "corrupt fixture"], { env: gitEnv });
+    await requireGitCommand(repositoryPath, ["commit", "-m", "corrupt fixture"], {
+      env: gitEnv,
+    });
     await expect(verifyGitBackupRef({ repositoryPath, identity })).rejects.toThrow(
       "artifact verification failed",
     );
     expect((await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows).toEqual(
       beforeInvalid,
     );
-  }, 120_000);
+  }
 });

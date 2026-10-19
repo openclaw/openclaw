@@ -28,6 +28,7 @@ export type ResolvedCliBackend = Pick<
   | "resolveExecutionArgs"
   | "resolveModelId"
   | "parseJsonlEvent"
+  | "classifyErrorCode"
   | "parseJsonlLifecycleEvent"
   | "toolAvailabilityEnforcement"
   | "projectNativeToolAuthority"
@@ -256,6 +257,7 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,
+    classifyErrorCode: backend.classifyErrorCode,
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,

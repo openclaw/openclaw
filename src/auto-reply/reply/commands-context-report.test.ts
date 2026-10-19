@@ -36,6 +36,7 @@ function makeParams(
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
     nativeUnverified?: boolean;
     estimated?: boolean;
+    layeredAgents?: boolean;
   },
 ): HandleCommandsParams {
   const totalTokensFresh = options?.totalTokensFresh ?? true;
@@ -87,6 +88,18 @@ function makeParams(
             injectedChars: options?.nativeUnverified ? null : truncated ? 12_000 : 10_000,
             truncated: options?.nativeUnverified ? null : truncated,
           },
+          ...(options?.layeredAgents
+            ? [
+                {
+                  name: "AGENTS.md",
+                  path: "/tmp/workspace/main/AGENTS.md",
+                  missing: false,
+                  rawChars: 3_000,
+                  injectedChars: 3_000,
+                  truncated: false,
+                },
+              ]
+            : []),
         ],
         skills: {
           promptChars: 10,
@@ -294,6 +307,19 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("read the relevant scoped file directly");
     expect(result.text).not.toContain("Bootstrap context is over configured limits");
     expect(result.text).not.toContain("agents.entries.*.bootstrapMaxChars");
+  });
+
+  it("names the source path when two injected files share a basename", async () => {
+    const result = await buildContextReply(
+      makeParams("/context detail", false, { layeredAgents: true }),
+    );
+
+    expect(result.text).toContain(
+      "- AGENTS.md (/tmp/workspace/AGENTS.md): OK | raw 10,000 chars (~2,500 tok) | injected 10,000 chars (~2,500 tok)",
+    );
+    expect(result.text).toContain(
+      "- AGENTS.md (/tmp/workspace/main/AGENTS.md): OK | raw 3,000 chars (~750 tok) | injected 3,000 chars (~750 tok)",
+    );
   });
 
   it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {

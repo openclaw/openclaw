@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -14,6 +17,44 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("cancels an idle reconciliation's owner lookup before joining the guard", async () => {
+    const environment = await support.seedReady("shutdown-owner-read");
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const entered = createDeferred();
+    const release = createDeferred<undefined>();
+    vi.spyOn(placements, "readEnvironmentOwner").mockImplementation(async (_id, signal) => {
+      entered.resolve();
+      return racePromiseWithAbortSignal(release.promise, signal);
+    });
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const service = support.createService(support.createProvider({ inspect }));
+    installWorkerPlacementReconcileGuard({
+      placements,
+      environments: service,
+      dispatch: {
+        resumeProvisioning: async () => {
+          throw new Error("Idle environment must not provision");
+        },
+        hasPendingPlacementLifecycleOperation: () => false,
+      },
+      isStopping: service.isStopping,
+    });
+    const reconciliation = service.reconcileEnvironment(environment.environmentId);
+    await entered.promise;
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
+    try {
+      await support.waitForFast(() => expect(stopped).toBe(true));
+      expect(inspect).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
+    } finally {
+      release.resolve(undefined);
+      await Promise.all([reconciliation, stopping]);
+    }
+  });
 
   it.each([false, true])(
     "withdraws dedicated access before persistence settles (rejected=%s)",
@@ -715,54 +756,108 @@ describe("worker environment service", () => {
     }
   });
 
-  it("retains a bootstrap lease when scheduler shutdown precedes service teardown", async () => {
-    const environmentId = "worker-scheduler-bootstrap";
-    const initial = await support.seedBootstrapping(environmentId);
-    const entered = createDeferred();
-    const finishProducer = createDeferred();
-    let signal: AbortSignal | undefined;
-    support.testState.bootstrapWorker = vi.fn(async (input) => {
-      signal = input.signal;
-      entered.resolve();
-      await finishProducer.promise;
-      input.signal.throwIfAborted();
-      return support.BOOTSTRAP_RECEIPT;
-    });
-    const destroy = vi.fn(async () => {});
-    const scheduler = createTestGatewayScheduler();
-    const workerService = support.createService(support.createProvider({ destroy }), { scheduler });
-    const reconciliation = workerService.reconcileEnvironment(environmentId).catch(() => undefined);
-    try {
-      await entered.promise;
-      scheduler.beginClose();
-      expect(signal?.aborted).toBe(true);
-      finishProducer.resolve();
-      await reconciliation;
-      expect(destroy).not.toHaveBeenCalled();
-      expect(support.testState.store.get(environmentId)).toMatchObject({
-        state: initial.state,
-        leaseId: initial.leaseId,
-        ownerEpoch: initial.ownerEpoch,
-        destroyRequestedAtMs: null,
-        lastError: initial.lastError,
-      });
-    } finally {
-      finishProducer.resolve();
-      await reconciliation;
-      await workerService.stop();
-    }
-  });
+  it.each(["ssh", "node"] as const)(
+    "retains a %s bootstrap lease when scheduler shutdown precedes service teardown",
+    async (transport) => {
+      const environmentId = "worker-scheduler-bootstrap";
+      const initial = await (transport === "ssh"
+        ? support.seedBootstrapping(environmentId)
+        : (async () => {
+            await support.testState.store.createIntent({
+              environmentId,
+              providerId: "fake",
+              profileId: "development",
+              profileSnapshot: { settings: { region: "test" } },
+              provisionOperationId: `provision:${environmentId}`,
+            });
+            return support.testState.store.transition({
+              environmentId,
+              from: "requested",
+              to: "provisioning",
+            });
+          })());
+      const entered = createDeferred();
+      const finishProducer = createDeferred();
+      let activeSignal: AbortSignal | undefined;
+      const install = async (workSignal?: AbortSignal) => {
+        activeSignal = workSignal;
+        entered.resolve();
+        await finishProducer.promise;
+        workSignal?.throwIfAborted();
+        return support.BOOTSTRAP_RECEIPT;
+      };
+      support.testState.bootstrapWorker = vi.fn(({ signal }) => install(signal));
+      const destroy = vi.fn(async () => {});
+      const scheduler = createTestGatewayScheduler();
+      const workerService = support.createService(
+        support.createProvider({
+          provision: async () => ({
+            leaseId: "lease:provisioning",
+            node: { deviceId: "node:provisioning" },
+          }),
+          destroy,
+        }),
+        { scheduler, ensureNodeWorkerBundle: ({ signal }) => install(signal) },
+      );
+      const reconciliation = workerService
+        .reconcileEnvironment(environmentId)
+        .catch(() => undefined);
+      try {
+        await entered.promise;
+        scheduler.beginClose();
+        expect(activeSignal?.aborted).toBe(true);
+        finishProducer.resolve();
+        await reconciliation;
+        expect(destroy).not.toHaveBeenCalled();
+        expect(support.testState.store.get(environmentId)).toMatchObject({
+          state: initial.state,
+          leaseId: initial.leaseId,
+          ownerEpoch: initial.ownerEpoch,
+          provisionOperationId: initial.provisionOperationId,
+          destroyRequestedAtMs: null,
+          lastError: initial.lastError,
+        });
+      } finally {
+        finishProducer.resolve();
+        await reconciliation;
+        await workerService.stop();
+      }
+    },
+  );
 
-  it.each(["bootstrap", "inspection", "bundle", "npm", "refresh"] as const)(
+  it.each([
+    "provision",
+    "provision-node",
+    "bootstrap",
+    "inspection",
+    "bundle",
+    "npm",
+    "refresh",
+  ] as const)(
     "cancels startup %s before teardown and retains its actual producer until settlement",
     async (kind) => {
       const environmentId = "worker-owner-cancellation";
       const preparing = kind === "bundle" || kind === "npm";
-      const initial = await (kind === "refresh"
-        ? support.seedReadyNodeDesktop(environmentId)
-        : kind === "bootstrap" || preparing
-          ? support.seedBootstrapping(environmentId, kind === "npm" ? "npm" : "bundle")
-          : support.seedReady(environmentId));
+      const initial = await (kind === "provision" || kind === "provision-node"
+        ? (async () => {
+            await support.testState.store.createIntent({
+              environmentId,
+              providerId: "fake",
+              profileId: "development",
+              profileSnapshot: { settings: { region: "test" } },
+              provisionOperationId: `provision:${environmentId}`,
+            });
+            return support.testState.store.transition({
+              environmentId,
+              from: "requested",
+              to: "provisioning",
+            });
+          })()
+        : kind === "refresh"
+          ? support.seedReadyNodeDesktop(environmentId)
+          : kind === "bootstrap" || preparing
+            ? support.seedBootstrapping(environmentId, kind === "npm" ? "npm" : "bundle")
+            : support.seedReady(environmentId));
       const entered = createDeferred();
       const finishProducer = createDeferred();
       let activeSignal: AbortSignal | undefined;
@@ -792,6 +887,14 @@ describe("worker environment service", () => {
       }
       const destroy = vi.fn(async () => {});
       const provider = support.createProvider({
+        provision: async (_profile, _operationId, options) => {
+          if (kind === "provision-node") {
+            return { leaseId: "lease:provisioning", node: { deviceId: "node:provisioning" } };
+          }
+          await holdProducer(options?.signal);
+          options?.signal?.throwIfAborted();
+          return { leaseId: "lease:unexpected", ssh: support.SSH_ENDPOINT };
+        },
         inspect: async ({ signal }) => {
           if (kind === "inspection") {
             await holdProducer(signal);

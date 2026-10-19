@@ -1,15 +1,10 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
+import { withExistingOpenClawStateSchema as withSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as leaseWorker from "../../state/openclaw-state-lease-worker-operation.js";
 import * as stateLeases from "../../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -20,15 +15,40 @@ import {
   WorktreeCapacityContentionError,
   WORKTREE_CAPACITY_RESERVATION_SCOPE,
 } from "./capacity.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
-const roots = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const roots = useWorktreeStateRoots();
+const lost = { code: "OPENCLAW_STATE_LEASE_LOST" };
+type DiskAdmission = Pick<ReturnType<typeof createWorktreeDiskAdmission>, "requireDiskSpace">;
+const reserve = (capacity: DiskAdmission, root: string, bytes = 1, retained = true) =>
+  capacity.requireDiskSpace([{ path: root, bytes }], "fixture", retained);
+
+function atWorkerCommit(beforeCommit: () => void, preserveAuthority = true) {
+  const run = leaseWorker.runWithOpenClawStateLeasesWorker;
+  vi.spyOn(leaseWorker, "runWithOpenClawStateLeasesWorker").mockImplementation(
+    (leases, context, operation, authority) =>
+      run(leases, context, operation, {
+        ...(preserveAuthority ? authority : {}),
+        assertCurrent: () => authority?.assertCurrent(),
+        beforeCommit: () => {
+          beforeCommit();
+          authority?.beforeCommit?.();
+        },
+      }),
+  );
+}
+
+async function expectOffThread(run: () => Promise<void>, checkDisk = false) {
+  const sql = observeHostDataSql();
+  const disk = checkDisk ? vi.spyOn(fs, "statfsSync") : undefined;
+  await run();
+  expect(sql.queries).toEqual([]);
+  if (disk) {
+    expect(disk).not.toHaveBeenCalled();
+  }
+  disk?.mockRestore();
+  sql.restore();
+}
 
 function fixture() {
   const root = roots.make("worktree-capacity-worker-");
@@ -45,10 +65,10 @@ function fixture() {
   return { root, env, database, debts };
 }
 
-it("admits disk debt off-thread and releases it after caller and schema admission end", async () => {
+it("releases off-thread disk debt after caller and schema admission end", async () => {
   const f = fixture();
   const caller = new AbortController();
-  await withExistingOpenClawStateSchema({ path: f.database.path }, () => {
+  await withSchema({ path: f.database.path }, () => {
     const leaseContext = captureOpenClawStateWorkerContext({ env: f.env });
     return stateLeases.withOpenClawStateLeaseAsync(
       {
@@ -60,72 +80,36 @@ it("admits disk debt off-thread and releases it after caller and schema admissio
       },
       leaseContext,
       async (lease) => {
-        const { capacity: retainedCapacity, context: expiredContext } =
-          await withExistingOpenClawStateSchema({ path: f.database.path }, async () => {
-            const context = captureOpenClawStateWorkerContext({ env: f.env });
-            const capacity = createWorktreeDiskAdmission({
-              env: f.env,
-              workerAuthority: {
-                leaseSet: { context: leaseContext, leases: [lease] },
-                assertCurrent: () => caller.signal.throwIfAborted(),
-              },
+        const ended = await withSchema({ path: f.database.path }, async () => {
+          const context = captureOpenClawStateWorkerContext({ env: f.env });
+          const capacity = createWorktreeDiskAdmission({
+            env: f.env,
+            workerAuthority: {
+              leaseSet: { context: leaseContext, leases: [lease] },
               assertCurrent: () => caller.signal.throwIfAborted(),
-            });
-            const sql = observeHostDataSql();
-            const disk = vi.spyOn(fs, "statfsSync");
-            try {
-              await capacity.requireDiskSpace(
-                [{ path: f.root, bytes: 1 }],
-                "snapshot fixture",
-                true,
-              );
-              expect(sql.queries).toEqual([]);
-              expect(disk).not.toHaveBeenCalled();
-            } finally {
-              disk.mockRestore();
-              sql.restore();
-            }
-            return { capacity, context };
+            },
+            assertCurrent: () => caller.signal.throwIfAborted(),
           });
+          await expectOffThread(() => reserve(capacity, f.root), true);
+          return { capacity, context };
+        });
         expect(f.debts()).toHaveLength(1);
         caller.abort(new Error("caller cancelled"));
-        expect(() => expiredContext.admission.assertCurrent()).toThrow(
-          "schema admission has ended",
-        );
-        const releaseSql = observeHostDataSql();
-        try {
-          await retainedCapacity.release();
-          expect(releaseSql.queries).toEqual([]);
-        } finally {
-          releaseSql.restore();
-        }
+        expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
+        await expectOffThread(() => ended.capacity.release());
         expect(f.debts()).toEqual([]);
       },
     );
   });
 });
 
-it("rolls back disk admission when its live owner is revoked at the worker commit grant", async () => {
+it("rolls back disk admission on owner revocation at worker commit", async () => {
   const f = fixture();
   const caller = new AbortController();
-  const run = leaseWorker.runWithOpenClawStateLeasesWorker;
-  vi.spyOn(leaseWorker, "runWithOpenClawStateLeasesWorker").mockImplementation(
-    (leases, context, operation, authority) =>
-      run(leases, context, operation, {
-        ...authority,
-        assertCurrent: () => authority?.assertCurrent(),
-        beforeCommit: () => {
-          caller.abort(new Error("caller revoked at commit"));
-          authority?.beforeCommit?.();
-        },
-      }),
-  );
+  atWorkerCommit(() => caller.abort(new Error("caller revoked at commit")));
   await expect(
-    withWorktreeMutationLease(
-      { env: f.env, id: "refused", signal: caller.signal },
-      async (guard) => {
-        await guard.requireDiskSpace([{ path: f.root, bytes: 1 }], "snapshot fixture", true);
-      },
+    withWorktreeMutationLease({ env: f.env, id: "refused", signal: caller.signal }, (guard) =>
+      reserve(guard, f.root),
     ),
   ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
   expect(caller.signal.aborted).toBe(true);
@@ -147,19 +131,11 @@ it.for(["parent", "child"] as const)(
           body,
         ),
     );
-    const runWorker = leaseWorker.runWithOpenClawStateLeasesWorker;
     let restoreClock: (() => void) | undefined;
-    vi.spyOn(leaseWorker, "runWithOpenClawStateLeasesWorker").mockImplementation(
-      (leases, context, operation, authority) =>
-        runWorker(leases, context, operation, {
-          assertCurrent: () => authority?.assertCurrent(),
-          beforeCommit: () => {
-            const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 90_000);
-            restoreClock = () => clock.mockRestore();
-            authority?.beforeCommit?.();
-          },
-        }),
-    );
+    atWorkerCommit(() => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 90_000);
+      restoreClock = () => clock.mockRestore();
+    }, false);
     await expect(
       withWorktreeAllocationLease({ env: f.env, id: "nested-restore" }, async (guard) => {
         const capacity = createWorktreeDiskAdmission({
@@ -169,13 +145,7 @@ it.for(["parent", "child"] as const)(
           assertCurrent: () => {},
         });
         try {
-          await expect(
-            capacity.requireDiskSpace(
-              [{ path: f.root, bytes: 1 }],
-              "nested snapshot fixture",
-              true,
-            ),
-          ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+          await expect(reserve(capacity, f.root)).rejects.toMatchObject(lost);
           expect(restoreClock).toBeDefined();
           expect(f.debts()).toEqual([]);
         } finally {
@@ -183,22 +153,19 @@ it.for(["parent", "child"] as const)(
           await capacity.release();
         }
       }),
-    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+    ).rejects.toMatchObject(lost);
   },
 );
 
 it("preserves typed capacity contention across the worker result boundary", async () => {
   const f = fixture();
   await withWorktreeMutationLease({ env: f.env, id: "removal" }, async (guard) => {
-    await guard.requireDiskSpace([{ path: f.root, bytes: 1 }], "snapshot fixture", true);
+    await reserve(guard, f.root);
     const [held] = f.debts();
     await expect(
-      withWorktreeAllocationLease({ env: f.env }, async (creation) => {
-        await creation.requireDiskSpace(
-          [{ path: f.root, bytes: Number.MAX_SAFE_INTEGER }],
-          "creation fixture",
-        );
-      }),
+      withWorktreeAllocationLease({ env: f.env }, (creation) =>
+        reserve(creation, f.root, Number.MAX_SAFE_INTEGER, false),
+      ),
     ).rejects.toMatchObject({
       name: WorktreeCapacityContentionError.name,
       reservationKey: held?.lease_key,

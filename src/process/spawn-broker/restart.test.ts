@@ -54,6 +54,8 @@ function markReady() {
   child.emit("message", { type: "ready", pid: child.pid });
 }
 function fail() {
+  Object.defineProperty(currentChild().child, "connected", { value: false });
+  currentChild().child.emit("disconnect");
   currentChild().emitExit(1);
   currentChild().emitClose(1);
 }

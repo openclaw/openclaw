@@ -1,5 +1,11 @@
 // Registered at their original suite positions to retain hook and shared-state ordering.
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  getRpcSource,
+  getRpcSourceIdentity,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   buildExistingMainStoreEntry,
@@ -199,6 +205,7 @@ export function registerAgentSendEventTests(): void {
       agentId: "main",
       dropIfSlow: true,
       sessionKeys: ["agent:main:main"],
+      sessionEventSubscriptionKeys: ["agent:main:main"],
       prepareSessionProjection: expect.any(Function),
     });
   });
@@ -236,42 +243,62 @@ export function registerAgentGlobalGoalEventTest(): void {
       goal,
     } satisfies GatewaySessionRow;
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
+    const finishRun = createDeferred();
+    const runId = "idem-agent-global-goal-event";
+    let acceptedSource: RpcSourceRef | undefined;
+    let ownerSettlement: Promise<void> | undefined;
+    mocks.agentCommand.mockImplementation(async () => {
+      acceptedSource = getRpcSource(runId);
+      ownerSettlement = acceptedSource?.input.claim?.operation?.ownerSettlement;
+      await finishRun.promise;
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 1 } };
+    });
 
     const context = makeContext({ agentId: "work", row: sessionRow });
     context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
-    const runId = "idem-agent-global-goal-event";
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "work",
-        idempotencyKey: runId,
-      },
-      { context, reqId: runId },
-    );
-
-    await waitForAssertion(() => {
-      expect(context.addChatRun).toHaveBeenCalledWith(
-        runId,
-        expect.objectContaining({ sessionKey: "global", agentId: "work" }),
-      );
-      expect(context.chatAbortControllers.get(runId)?.agentId).toBe("work");
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: "global",
-          agentId: "work",
-          goal: expect.objectContaining({ id: "goal-work-global" }),
-          session: expect.objectContaining({ key: "global", sessionId: "global-session-id", goal }),
-        }),
-        new Set(["conn-1"]),
+    try {
+      await invokeAgent(
         {
+          message: "hi",
           agentId: "work",
-          dropIfSlow: true,
-          sessionKeys: ["global"],
-          prepareSessionProjection: expect.any(Function),
+          idempotencyKey: runId,
         },
+        { context, reqId: runId },
       );
-    });
+
+      await waitForAssertion(() => {
+        expect(mocks.agentCommand).toHaveBeenCalledOnce();
+        expect(context.addChatRun).toHaveBeenCalledWith(
+          runId,
+          expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+        );
+        const source = getRpcSource(runId);
+        expect(source && getRpcSourceIdentity(source).agentId).toBe("work");
+        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            sessionKey: "global",
+            agentId: "work",
+            goal: expect.objectContaining({ id: "goal-work-global" }),
+            session: expect.objectContaining({
+              key: "global",
+              sessionId: "global-session-id",
+              goal,
+            }),
+          }),
+          new Set(["conn-1"]),
+          {
+            agentId: "work",
+            dropIfSlow: true,
+            sessionKeys: ["global"],
+            sessionEventSubscriptionKeys: ["agent:work:global"],
+            prepareSessionProjection: expect.any(Function),
+          },
+        );
+      });
+    } finally {
+      finishRun.resolve();
+      await Promise.all([acceptedSource?.input.settlement.promise, ownerSettlement]);
+    }
   });
 }

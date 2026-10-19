@@ -15,8 +15,14 @@ export function DependencyDetailList(props: { dependencies: WorkboardDependencyS
         <ul class="workboard-detail__list workboard-detail__dependencies">
           <For each={props.dependencies.parents} keyed={(parent) => parent.id}>
             {(parent) => (
-              <li class={parent().done ? "is-done" : "is-blocked"}>
-                {parent().done ? (
+              <li
+                class={{
+                  "is-done": parent().done,
+                  "is-blocked":
+                    !parent().done && (parent().missing || parent().status !== undefined),
+                }}
+              >
+                {parent().done || (!parent().missing && parent().status === undefined) ? (
                   <span class="workboard-detail__dependency-spacer" />
                 ) : (
                   icons.alertTriangle
@@ -27,7 +33,7 @@ export function DependencyDetailList(props: { dependencies: WorkboardDependencyS
                     ? t("workboard.dependencyStatusMissing")
                     : parent().status
                       ? formatStatusLabel(parent().status!)
-                      : t("workboard.unknownStatus")}
+                      : t("workboard.dependencyStatusNotLoaded")}
                 </span>
               </li>
             )}

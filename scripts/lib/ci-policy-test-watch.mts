@@ -328,6 +328,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
+    "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -524,7 +525,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
     watchGlobs: [
-      "src/agents/embedded-agent-runner/active-run-projections.ts",
+      "src/sessions/session-controller.admission.ts",
+      "src/sessions/session-controller.queries.ts",
+      "src/sessions/session-controller.state.ts",
       "src/agents/embedded-agent-runner/runs.ts",
       "src/channels/message/ingress-drain.ts",
       "src/channels/message/ingress-queue.ts",
@@ -593,7 +596,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "extensions/minimax/index.ts",
       "extensions/minimax/oauth.runtime.ts",
       "extensions/minimax/oauth.ts",
-      "extensions/minimax/provider-registration.ts",
     ],
   },
   {

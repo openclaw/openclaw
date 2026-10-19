@@ -103,7 +103,6 @@ export class RequestClient {
   protected token: string;
   protected customFetch: DiscordEndpointRuntime["fetch"] | undefined;
   private readonly guardedEndpoint: boolean;
-  protected requestControllers = new Set<AbortController>();
   private scheduler: RestScheduler<RequestDispatchData>;
 
   constructor(token: string, options?: RequestClientOptions) {
@@ -204,7 +203,6 @@ export class RequestClient {
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
-    this.requestControllers.add(controller);
     try {
       assertCurrent?.();
       const init = { method, headers, body, signal };
@@ -245,7 +243,6 @@ export class RequestClient {
       return parsed;
     } finally {
       clearTimeout(timeout);
-      this.requestControllers.delete(controller);
     }
   }
 
@@ -255,14 +252,6 @@ export class RequestClient {
 
   get queueSize(): number {
     return this.scheduler.queueSize;
-  }
-
-  abortAllRequests(): void {
-    this.scheduler.abortPending();
-    for (const controller of this.requestControllers) {
-      controller.abort();
-    }
-    this.requestControllers.clear();
   }
 }
 

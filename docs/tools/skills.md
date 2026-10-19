@@ -770,12 +770,12 @@ below apply to ordinary file-backed skill roots.
 
 One background worker discovers local file-backed skills across managed,
 bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
-enabled, it checks for passive on-disk changes about once per minute. Edits made
-outside OpenClaw may therefore take up to about a minute to appear, including
+enabled, filesystem events trigger discovery after on-disk changes, including
 adding or removing a skill and creating, removing, or replacing a skill root or
-workspace. Each discovery pass reads a shared root once for matching discovery
+workspace. A safety rescan every 30 minutes catches missed events, including on
+filesystems without reliable native notifications. Each discovery pass reads a shared root once for matching discovery
 limits and file policies, then applies each workspace's precedence separately.
-The next pass reads those roots again to observe changes.
+Unchanged roots need no discovery work between events and safety rescans.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
@@ -798,6 +798,8 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
   <Accordion title="Automatic skill refresh">
     The background discovery worker scans configured skill roots, so ordinary
     source edits elsewhere in a workspace do not trigger skill rescans.
+    Missing skill roots observe their nearest existing ancestor; unrelated
+    sibling writes and ancestor metadata changes do not trigger discovery.
     Configure under `skills.load`:
 
     ```json5
@@ -812,7 +814,7 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
     }
     ```
 
-    Passive edits are coalesced into the next periodic scan. Supporting-file
+    Native file events are coalesced into a discovery pass. Supporting-file
     changes refresh sandbox copies without changing the skill catalog. Unchanged
     names, configuration keys, sources, precedence winners, and `SKILL.md` content
     keep the same snapshot version and do not notify chat metadata consumers.
@@ -918,8 +920,14 @@ If bodies are unreadable, omitted, or shortened,
 An empty result with partial coverage does not prove that no applicable skill exists.
 Indexing never executes skill content, and index limits do not truncate `skills_read`.
 
-Sandbox search includes only readable, delivered skills. Discovery does not
-expand the existing worker transfer selection or its 8 MiB total resource limit.
+Sandbox search includes only readable, delivered skills. Remote-exec turns
+transfer eligible discovery skills as well as prompt-listed skills, within the
+existing 8 MiB total resource limit. Delivery includes at most 256 skills;
+prompt-listed, explicitly selected, and pinned library resources take priority
+over additional discovery-only skills. On paired nodes, prompt references, search,
+and instruction reads use the same verified delivery for the admitted turn,
+even without a filesystem bridge. A different placement or a retired turn cannot
+reuse that delivery.
 Dedicated remote workers retain their existing tool protocol; the new search
 tools are not added to that protocol. Use a Gateway run to search its full
 eligible catalog.

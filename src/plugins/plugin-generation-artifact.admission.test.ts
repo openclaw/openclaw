@@ -12,6 +12,7 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture, nativeSize } from "./plugin-generation-artifact.admission.test-support.js";
+import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import {
   captureResources,
   createSdkHost,
@@ -22,6 +23,7 @@ import {
   type Artifact,
   type Cache,
 } from "./plugin-generation-capture.test-support.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
   preparePluginNativeAdmissions,
@@ -31,10 +33,8 @@ import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
-import {
-  createPluginSourceAdmissionPublisher,
-  withPluginSourceAdmissionPublisher,
-} from "./plugin-source-admission-store.js";
+import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
+import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -216,6 +216,42 @@ it("keeps deferred native admission publication with its original state director
         resolveOpenClawStateSqlitePath({ ...state.env, OPENCLAW_STATE_DIR: replacementState }),
       );
     }
+  });
+});
+
+it("pins a custody fork's publisher before deferred native materialization", async () => {
+  await withOpenClawTestState({ label: "native-custody-publisher" }, async (state) => {
+    await using resources = captureResources();
+    const fixture = createFixture(state.path("installed"), true);
+    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+    const cache = resources.cache();
+    preparePluginNativeAdmissions(fixture.index, cache);
+    const publish = createPluginSourceAdmissionPublisher({ stateDir: state.stateDir });
+    const original = vi.fn(
+      async (publication: Parameters<NonNullable<typeof publish>>[0]) =>
+        (await publish?.(publication)) ?? false,
+    );
+    const replacement = vi.fn(async () => false);
+    await withPluginCache(cache, () =>
+      withPluginGenerationSourceCustody(async () => {
+        const artifact = resources.keep(
+          withPluginSourceAdmissionPublisher(original, () =>
+            capturePluginGenerationArtifact(fixture.root, fixture.entry, (run) => run()),
+          ),
+        );
+        expect(original).not.toHaveBeenCalled();
+        await withPluginSourceAdmissionPublisher(replacement, async () => {
+          const captured = artifact.captureResolvedModule(fixture.filename);
+          expect(captured).toBeDefined();
+          expectBytes(captured!, fixture.bytes);
+          await settlePluginNativeAdmissions(cache);
+        });
+        expect(original).toHaveBeenCalledTimes(1);
+        expect(replacement).not.toHaveBeenCalled();
+      }),
+    );
+    const persisted = await readIndex(resources.cache(), state.stateDir);
+    expect(Object.keys(persisted!.plugins[0]!.sourceAdmissions ?? {})).toHaveLength(1);
   });
 });
 

@@ -169,11 +169,10 @@ export function prepareAgentAuthProfileRowsRead(options: {
       });
       try {
         unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-          close: async (closedIdentity) => {
-            if (!closedIdentity || closedIdentity.key === root.admission.identity.key) {
-              revoke();
-              await dispose();
-            }
+          admission: root.admission,
+          close: async () => {
+            revoke();
+            await dispose();
           },
         });
       } catch (error) {

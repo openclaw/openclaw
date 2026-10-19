@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type {
   McpAppMentionResult,
   McpAppResourceLink,
@@ -27,10 +27,8 @@ export type McpAppResourceMentionDetail = {
 type McpAppResourcesProps = { sessionKey: string; agentId: string };
 type McpAppResourcesElement = SolidBridgeElement<McpAppResourcesProps>;
 
-function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElement }) {
+function McpAppResourcesContent(props: McpAppResourcesProps, host: HTMLElement) {
   const context = useApplication();
-  // The bridge host is fixed for this mounted content lifetime.
-  const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);
   let generation = 0;
   let mounted = true;
@@ -88,7 +86,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
   async function search() {
     const client = context.gateway.snapshot.client;
     const selectedServer = serverSelect?.value ?? serverName();
-    if (!client || !selectedServer) {
+    if (!client || !catalog().available || !selectedServer) {
       return;
     }
     const searchGeneration = ++generation;
@@ -216,7 +214,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
                 }));
               }}
             />
-            <button class="btn" type="submit" disabled={view().busy}>
+            <button class="btn" type="submit" disabled={view().busy || !catalog().available}>
               {t("mcpApp.resourceSearch")}
             </button>
           </form>
@@ -226,7 +224,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
                 <button
                   type="button"
                   class="btn mcp-app-resources__result"
-                  disabled={view().busy}
+                  disabled={view().busy || !catalog().available}
                   onClick={() => attach(resource)}
                 >
                   <span>{resource.title || resource.name}</span>
@@ -247,16 +245,12 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
   );
 }
 
-defineSolidBridge<McpAppResourcesProps>(
-  "openclaw-mcp-app-resources",
-  (props, host) => <McpAppResourcesContent {...props} host={host} />,
-  {
-    properties: {
-      sessionKey: { default: "", attribute: false },
-      agentId: { default: "", attribute: false },
-    },
+defineSolidBridge<McpAppResourcesProps>("openclaw-mcp-app-resources", McpAppResourcesContent, {
+  properties: {
+    sessionKey: { default: "", attribute: false },
+    agentId: { default: "", attribute: false },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

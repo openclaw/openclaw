@@ -154,6 +154,7 @@ export function insertRepositoryGitHubPublicationInDatabase(
         "identity_login",
         "title",
         "body",
+        "draft",
         "claim_id",
         "run_id",
         "placement_generation",

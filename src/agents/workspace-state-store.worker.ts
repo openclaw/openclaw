@@ -4,7 +4,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
@@ -199,7 +199,7 @@ export const workspaceStateOperations = {
   ) => {
     const database = context.open();
     const initial = withSqlitePostCommitPublications(database.db, () =>
-      runSqliteDeferredTransactionSync(database.db, () =>
+      runSqliteReadSnapshotSync(database.db, () =>
         captureWorkspaceStateReceipt(database.db, () => {
           assertAgentDeletionRecoveryHoldPredicate(database, input.recoveryHoldPredicate);
           const resolution = resolveWorkspaceIdentityFromDatabase({

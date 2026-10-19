@@ -92,6 +92,7 @@ export async function patchSessionEntryInWorker(params: {
         sourceChecks[candidate.refusedSource.index]?.refuse(candidate.refusedSource.facts);
         throw new Error("Session source refusal omitted its prepared assertion");
       }
+      // Omitted results still need authority; only absent/refused selections skip this grant.
       if (candidate.entry !== null) {
         params.assertCommitAllowed?.();
         params.guard?.assertCurrent?.();
@@ -154,7 +155,6 @@ export async function patchSessionEntryInWorker(params: {
             params.guard?.assertCurrent?.();
           },
           beforeWrite() {},
-          async release() {},
         }),
     async run(worker, commit) {
       const prepared = input;
@@ -209,7 +209,7 @@ export async function patchSessionEntryInWorker(params: {
       }
       // This write may change its source; callers authorize subsequent effects separately.
       await releaseSource();
-      return { entry: committed.entry, wrote: Boolean(committed.publication) };
+      return { entry: committed.entry ?? null, wrote: Boolean(committed.publication) };
     },
   }).catch((error: unknown) => {
     if (error === commitRefusal) {
@@ -437,6 +437,7 @@ export async function runSessionEntryWorkerOperation<
               ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
             ),
           ),
+          receipt.conversationPublication,
         );
       }
     },

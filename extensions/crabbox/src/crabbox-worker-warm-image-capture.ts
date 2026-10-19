@@ -338,10 +338,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (!sourceRunning && created.state === "pending") {
           // Without a capture-point attestation, keep enrollment credentials out of
           // the source until this exact checkpoint is available, as for a waited create.
-          const deadline = Date.now() + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS;
+          const deadline = performance.now() + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS;
           while (created.state === "pending") {
             assertCurrent(context);
-            const remainingMs = deadline - Date.now();
+            const remainingMs = deadline - performance.now();
             if (remainingMs <= 0) {
               throw new Error("Crabbox waited checkpoint is not available");
             }
@@ -352,7 +352,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             } else if (!nonBlocking) {
               throw new Error("Crabbox waited checkpoint is not available");
             } else {
-              await sleepWithAbort(Math.min(5_000, deadline - Date.now()), context.signal);
+              await sleepWithAbort(Math.min(5_000, deadline - performance.now()), context.signal);
             }
           }
         }

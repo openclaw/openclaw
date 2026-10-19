@@ -206,6 +206,14 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(body.clientHeight).toBeGreaterThan(0);
         expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+        const expand = requireButton(".md-preview-expand-btn");
+        expect(expand.getAttribute("aria-pressed")).toBe("false");
+        expect(panel.classList.contains("fullscreen")).toBe(false);
+        await userEvent.click(expand);
+        expect(expand.getAttribute("aria-pressed")).toBe("true");
+        expect(expand.getAttribute("aria-label")).toBe("Collapse preview");
+        expect(panel.classList.contains("fullscreen")).toBe(true);
+        expect(modal.classList.contains("fullscreen")).toBe(true);
         const closed = afterOwnTransition(modal, "overlay-after-hide");
         await userEvent.click(
           requireButton(

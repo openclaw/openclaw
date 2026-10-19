@@ -107,9 +107,6 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
       ageChanges: pending.changes,
     },
   });
-  if (result.kind !== "maintenance-age" && result.kind !== "maintenance-plan-stale") {
-    throw new Error("SQLite automatic maintenance returned another age result");
-  }
   pending.acknowledge();
   return result;
 }
@@ -509,11 +506,11 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                   settlement = capture(
                     entries.filter(({ sessionKey }) => removedKeys.has(sessionKey)),
                   );
-                  settlement.beforeCommit();
+                  return settlement.beforeCommit();
                 },
+                settled: (settledOutcome) => settlement?.settle(settledOutcome.kind),
               },
             );
-            settlement?.settle(outcome.kind);
             const result = readSessionActorStorageResult(outcome);
             return new Set(result.removedSessionKeys);
           },
@@ -624,9 +621,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               });
         },
       );
-      if (result.kind !== "maintenance-finalize") {
-        throw new Error("SQLite maintenance returned another operation's result");
-      }
       archivedTranscripts = result.value.archivedTranscripts;
       const committedIndices = new Set(result.value.committedEntryIndices);
       changedEntryRemovals = removalOutcomes.filter((_, index) => !committedIndices.has(index));

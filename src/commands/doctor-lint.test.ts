@@ -1,8 +1,8 @@
 // Doctor lint tests cover health-check registry integration and lint warning output.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
@@ -11,10 +11,12 @@ import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-c
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv } from "../test-utils/env.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import {
   createDoctorLintSemanticIndex,
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   actualOpenNodeSqliteDatabase: vi.fn(),
   actualPrepareSqliteReadOnlyLocationSync: vi.fn(),
   actualReadConfigFileSnapshot: vi.fn(),
+  actualResolveDoctorContributionHealthChecks: vi.fn(),
   buildGatewayProbeConnectionDetails: vi.fn(),
   callGateway: vi.fn(),
   openNodeSqliteDatabase: vi.fn(),
@@ -71,7 +74,7 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
 });
 vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../flows/doctor-health-contributions.js")>();
-  mocks.resolveDoctorContributionHealthChecks.mockImplementation(
+  mocks.actualResolveDoctorContributionHealthChecks.mockImplementation(
     actual.resolveDoctorContributionHealthChecks,
   );
   return {
@@ -91,11 +94,61 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
 const runtime = createTestRuntime();
 
 const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stdout: MockInstance<typeof process.stdout.write>;
+const outputText = () => stdout.mock.calls.map(([line]) => String(line)).join("");
+const outputReport = () => JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+const originalIsTTY = process.stdout.isTTY;
+const originalEnv = captureEnv([
+  "HOME",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE",
+]);
+
+async function seedSemanticState(config: OpenClawConfig, sourceConfig = config) {
+  const rootDir = tempDirs.make("openclaw-doctor-lint-");
+  const stateDir = path.join(rootDir, "operator-state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(sourceConfig)}\n`);
+  const env = {
+    ...process.env,
+    HOME: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  await seedInstalledPluginIndex({}, { config, env, stateDir, workspaceDir: rootDir });
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  await closeOpenClawStateDatabaseByPathAsync(databasePath);
+  createDoctorLintSemanticIndex(stateDir);
+  Object.assign(process.env, {
+    HOME: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+  });
+  mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
+    mocks.actualReadConfigFileSnapshot(...args),
+  );
+  return { stateDir, configPath, env, databasePath };
+}
+
+function useDirectChecks() {
+  vi.spyOn(bundledHealthChecks, "registerBundledHealthChecks").mockImplementation(() => []);
+  vi.spyOn(bundledHealthChecks, "resolveBundledHealthCheckPluginStateMode").mockReturnValue(
+    "direct",
+  );
+}
 
 describe("runDoctorLintCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockReset();
+    mocks.resolveDoctorContributionHealthChecks
+      .mockReset()
+      .mockImplementation((...args: unknown[]) =>
+        mocks.actualResolveDoctorContributionHealthChecks(...args),
+      );
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "ws://127.0.0.1:18789",
     });
@@ -108,6 +161,12 @@ describe("runDoctorLintCli", () => {
       mocks.actualPrepareSqliteReadOnlyLocationSync(...args),
     );
     clearHealthChecksForTest();
+    stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    originalEnv.restore();
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTTY });
   });
 
   it.each([
@@ -122,26 +181,16 @@ describe("runDoctorLintCli", () => {
       (check) => check.id === "core/doctor/gateway-health",
     );
     expect(gatewayCheck).toBeDefined();
-    const previousResolveChecks =
-      mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([gatewayCheck]);
-    const registerChecks = vi
-      .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
-      .mockImplementation(() => []);
-    const resolveStateMode = vi
-      .spyOn(bundledHealthChecks, "resolveBundledHealthCheckPluginStateMode")
-      .mockReturnValue("direct");
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {
+    useDirectChecks();
+    mocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         gateway: {
           mode: "local",
           auth: { mode: "token", token: "SYNTHETIC_GATEWAY_SECRET" },
         },
-      },
-      path: "/tmp/openclaw.json",
-    });
+      }),
+    );
     mocks.callGateway.mockResolvedValue({
       secretEgressProxy: {
         state: "degraded",
@@ -160,78 +209,65 @@ describe("runDoctorLintCli", () => {
         },
       ],
     });
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const originalIsTTY = process.stdout.isTTY;
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: !entry.json });
+    const exitCode = await runDoctorLintCli(runtime, {
+      ...(entry.json ? { json: true } : {}),
+      ...(entry.selection === "only"
+        ? { onlyIds: ["core/doctor/gateway-health"] }
+        : entry.selection === "all"
+          ? { includeAllChecks: true }
+          : {}),
+    });
+    const output = outputText();
 
-    try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        ...(entry.json ? { json: true } : {}),
-        ...(entry.selection === "only"
-          ? { onlyIds: ["core/doctor/gateway-health"] }
-          : entry.selection === "all"
-            ? { includeAllChecks: true }
-            : {}),
-      });
-      const output = stdout.mock.calls.map(([line]) => String(line)).join("");
-
-      if (entry.selection === "default") {
-        expect(exitCode).toBe(0);
-        if (entry.json) {
-          expect(JSON.parse(output)).toMatchObject({
-            checksRun: 1,
-            checksSkipped: 1,
-            findings: [],
-          });
-        } else {
-          expect(output).toContain("0 finding(s)");
-          expect(output).toContain("  no findings\n");
-        }
-        expect(mocks.buildGatewayProbeConnectionDetails).not.toHaveBeenCalled();
-        expect(mocks.callGateway).not.toHaveBeenCalled();
-        return;
-      }
-
-      expect(exitCode).toBe(1);
-      expect(output).toContain("core/doctor/gateway-health");
-      expect(output).toContain("cold account:discord:ops");
-      expect(output).toContain("Secret egress proxy: Check OpenSSL, then retry the request.");
-      expect(output).toContain("channels.discord.accounts.ops.token");
-      expect(output).toContain("openclaw secrets reload");
-      expect(output).not.toContain("SYNTHETIC_GATEWAY_SECRET");
-      expect(output).not.toContain("SYNTHETIC_OWNER_SECRET");
-      expect(output).not.toContain("PRIVATE_REF_ID");
-      expect(mocks.callGateway).toHaveBeenCalledOnce();
+    if (entry.selection === "default") {
+      expect(exitCode).toBe(0);
       if (entry.json) {
         expect(JSON.parse(output)).toMatchObject({
-          ok: false,
-          checksRun: entry.selection === "only" ? 1 : 2,
-          findings: [
-            {
-              checkId: "core/doctor/gateway-health",
-              severity: "warning",
-              path: "channels.discord.accounts.ops.token",
-              target: "account:discord:ops",
-            },
-            {
-              checkId: "core/doctor/gateway-health",
-              severity: "warning",
-              path: "secrets.egressProxy.enabled",
-              target: "capability:secret-egress-proxy",
-            },
-          ],
+          checksRun: 1,
+          checksSkipped: 1,
+          findings: [],
         });
       } else {
-        expect(output).toContain("[warning] core/doctor/gateway-health");
+        expect(output).toContain("0 finding(s)");
+        expect(output).toContain("  no findings\n");
       }
-    } finally {
-      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTTY });
-      stdout.mockRestore();
-      registerChecks.mockRestore();
-      resolveStateMode.mockRestore();
-      if (previousResolveChecks) {
-        mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks);
-      }
+      expect(mocks.buildGatewayProbeConnectionDetails).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(exitCode).toBe(1);
+    expect(output).toContain("core/doctor/gateway-health");
+    expect(output).toContain("cold account:discord:ops");
+    expect(output).toContain("Secret egress proxy: Check OpenSSL, then retry the request.");
+    expect(output).toContain("channels.discord.accounts.ops.token");
+    expect(output).toContain("openclaw secrets reload");
+    expect(output).not.toContain("SYNTHETIC_GATEWAY_SECRET");
+    expect(output).not.toContain("SYNTHETIC_OWNER_SECRET");
+    expect(output).not.toContain("PRIVATE_REF_ID");
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    if (entry.json) {
+      expect(JSON.parse(output)).toMatchObject({
+        ok: false,
+        checksRun: entry.selection === "only" ? 1 : 2,
+        findings: [
+          {
+            checkId: "core/doctor/gateway-health",
+            severity: "warning",
+            path: "channels.discord.accounts.ops.token",
+            target: "account:discord:ops",
+          },
+          {
+            checkId: "core/doctor/gateway-health",
+            severity: "warning",
+            path: "secrets.egressProxy.enabled",
+            target: "capability:secret-egress-proxy",
+          },
+        ],
+      });
+    } else {
+      expect(output).toContain("[warning] core/doctor/gateway-health");
     }
   });
 
@@ -242,8 +278,6 @@ describe("runDoctorLintCli", () => {
         { family: "state", observed: "sqlite", mismatch: false },
         { family: "agent", observed: "unknown", mismatch: null },
       ];
-      const previousResolveChecks =
-        mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
       mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
         {
           id: "core/doctor/database-engine",
@@ -258,36 +292,19 @@ describe("runDoctorLintCli", () => {
             })),
         },
       ]);
-      const registration = vi
-        .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
-        .mockImplementation(() => []);
-      const stateMode = vi
-        .spyOn(bundledHealthChecks, "resolveBundledHealthCheckPluginStateMode")
-        .mockReturnValue("direct");
+      useDirectChecks();
       mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
-      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      try {
-        await runDoctorLintCli(runtime, {
-          json: true,
-          severityMin,
-          onlyIds: ["core/doctor/database-engine"],
-        });
-        const output = JSON.parse(stdout.mock.calls.map(([line]) => String(line)).join(""));
-        expect(output.databaseStores).toHaveLength(databaseStores.length);
-        expect(output.databaseStores).toEqual(expect.arrayContaining(databaseStores));
-        expect(output.findings).toEqual(
-          severityMin === "warning"
-            ? [expect.objectContaining({ details: databaseStores[1] })]
-            : [],
-        );
-      } finally {
-        stdout.mockRestore();
-        registration.mockRestore();
-        stateMode.mockRestore();
-        if (previousResolveChecks) {
-          mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks);
-        }
-      }
+      await runDoctorLintCli(runtime, {
+        json: true,
+        severityMin,
+        onlyIds: ["core/doctor/database-engine"],
+      });
+      const output = JSON.parse(outputText());
+      expect(output.databaseStores).toHaveLength(databaseStores.length);
+      expect(output.databaseStores).toEqual(expect.arrayContaining(databaseStores));
+      expect(output.findings).toEqual(
+        severityMin === "warning" ? [expect.objectContaining({ details: databaseStores[1] })] : [],
+      );
     },
   );
 
@@ -305,22 +322,16 @@ describe("runDoctorLintCli", () => {
       detect,
     });
     const registration = vi.spyOn(bundledHealthChecks, "registerBundledHealthChecks");
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      expect(
-        await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/captured-config"] }),
-      ).toBe(0);
-      expect(detect).toHaveBeenCalledOnce();
-      const captured = detect.mock.calls[0]?.[0].cfg;
-      expect(captured).toEqual(config);
-      expect(captured).not.toBe(config);
-      expect(registration.mock.calls[0]?.[0].cfg).toBe(captured);
-      config.agents.entries.main.name = "changed";
-      expect(captured?.agents?.entries?.main?.name).toBe("original");
-    } finally {
-      registration.mockRestore();
-      stdout.mockRestore();
-    }
+    expect(await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/captured-config"] })).toBe(
+      0,
+    );
+    expect(detect).toHaveBeenCalledOnce();
+    const captured = detect.mock.calls[0]?.[0].cfg;
+    expect(captured).toEqual(config);
+    expect(captured).not.toBe(config);
+    expect(registration.mock.calls[0]?.[0].cfg).toBe(captured);
+    config.agents.entries.main.name = "changed";
+    expect(captured?.agents?.entries?.main?.name).toBe("original");
   });
 
   it("does not expose deep mode to extension health check context", async () => {
@@ -333,29 +344,20 @@ describe("runDoctorLintCli", () => {
       detect,
     });
 
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      await runDoctorLintCli(runtime, {
-        deep: true,
-        onlyIds: ["test/deep-context"],
-      });
+    await runDoctorLintCli(runtime, {
+      deep: true,
+      onlyIds: ["test/deep-context"],
+    });
 
-      expect(detect).toHaveBeenCalledWith(
-        expect.objectContaining({
-          mode: "lint",
-        }),
-      );
-      expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("deep");
-      expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("lintConfigSnapshot");
-    } finally {
-      stdout.mockRestore();
-    }
+    expect(detect).toHaveBeenCalledWith(expect.objectContaining({ mode: "lint" }));
+    expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("deep");
+    expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("lintConfigSnapshot");
   });
 
   it("rejects unknown --only health check ids instead of reporting a false-clean run", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
 
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const outputSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
@@ -363,7 +365,7 @@ describe("runDoctorLintCli", () => {
       });
 
       expect(exitCode).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      const payload = JSON.parse(String(outputSpy.mock.calls.at(-1)?.[0]));
       expect(payload).toMatchObject({
         ok: false,
         checksRun: 0,
@@ -376,67 +378,46 @@ describe("runDoctorLintCli", () => {
         ],
       });
     } finally {
-      stdout.mockRestore();
+      outputSpy.mockRestore();
     }
   });
 
   it("reports disabled Codex plugin routes through doctor lint", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {
-        plugins: {
-          entries: {
-            codex: { enabled: false },
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              primary: "gpt-5.5",
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      path: "/tmp/openclaw.json",
+    mocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        plugins: { entries: { codex: { enabled: false } } },
+        agents: { defaults: { model: { primary: "gpt-5.5" } } },
+      }),
+    );
+    const exitCode = await runDoctorLintCli(runtime, {
+      json: true,
+      onlyIds: ["core/doctor/codex-session-routes"],
     });
 
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        onlyIds: ["core/doctor/codex-session-routes"],
-      });
-
-      expect(exitCode).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload).toMatchObject({
-        ok: false,
-        checksRun: 1,
-        findings: [
-          {
-            checkId: "core/doctor/codex-session-routes",
-            severity: "warning",
-            path: "agents.defaults.model.primary",
-            target: "openai/gpt-5.5",
-          },
-        ],
-      });
-      expect(payload.findings[0].message).toContain("Codex plugin is disabled by config");
-      // Explicit plugins.entries.codex.enabled=false blocks auto-repair, so the
-      // hint names the manual action instead of promising doctor --fix.
-      expect(payload.findings[0].fixHint).toContain("Enable plugins.entries.codex");
-    } finally {
-      stdout.mockRestore();
-    }
+    expect(exitCode).toBe(1);
+    const payload = outputReport();
+    expect(payload).toMatchObject({
+      ok: false,
+      checksRun: 1,
+      findings: [
+        {
+          checkId: "core/doctor/codex-session-routes",
+          severity: "warning",
+          path: "agents.defaults.model.primary",
+          target: "openai/gpt-5.5",
+        },
+      ],
+    });
+    expect(payload.findings[0].message).toContain("Codex plugin is disabled by config");
+    // Explicit plugins.entries.codex.enabled=false blocks auto-repair, so the
+    // hint names the manual action instead of promising doctor --fix.
+    expect(payload.findings[0].fixHint).toContain("Enable plugins.entries.codex");
   });
 
   it("reports an actionable Crabbox profile finding before dispatch", async () => {
     const binary = "/nonexistent/path/to/crabbox";
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {
+    mocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         gateway: { mode: "local", port: 19_001 },
         cloudWorkers: {
           profiles: {
@@ -447,59 +428,42 @@ describe("runDoctorLintCli", () => {
             },
           },
         },
-      },
-      path: "/tmp/openclaw.json",
-    });
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      for (let run = 0; run < 2; run++) {
-        const exitCode = await runDoctorLintCli(runtime, {
-          json: true,
-          onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
-        });
-        expect(exitCode).toBe(1);
-      }
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload).toMatchObject({
-        ok: false,
-        checksRun: 1,
-        findings: [
-          {
-            checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-            severity: "warning",
-            path: binary,
-            target: "aws",
-          },
-        ],
+      }),
+    );
+    for (let run = 0; run < 2; run++) {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
       });
-      expect(payload.findings[0].message).toContain('profile "aws"');
-      expect(payload.findings[0].fixHint).toContain("cloudWorkers.profiles.aws.settings.binary");
-    } finally {
-      stdout.mockRestore();
+      expect(exitCode).toBe(1);
     }
+    const payload = outputReport();
+    expect(payload).toMatchObject({
+      ok: false,
+      checksRun: 1,
+      findings: [
+        {
+          checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
+          severity: "warning",
+          path: binary,
+          target: "aws",
+        },
+      ],
+    });
+    expect(payload.findings[0].message).toContain('profile "aws"');
+    expect(payload.findings[0].fixHint).toContain("cloudWorkers.profiles.aws.settings.binary");
   });
 
   it.each([false, true])(
     "runs post-plugin readiness against an isolated state snapshot (inline inspections: %s)",
     async (includeOptionalInspections) => {
-      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-relevant-"));
-      const stateDir = path.join(rootDir, "operator-state");
-      const configPath = path.join(stateDir, "openclaw.json");
       const config = {
         gateway: { mode: "local" },
         agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
         memory: { search: { provider: "local", fallback: "none" } },
       } satisfies OpenClawConfig;
-      fs.mkdirSync(stateDir, { recursive: true });
       const sourceConfig = { ...config, legacyPluginState: { directory: "retained-input" } };
-      fs.writeFileSync(configPath, `${JSON.stringify(sourceConfig)}\n`);
-      const env = {
-        ...process.env,
-        HOME: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_STATE_DIR: stateDir,
-      };
-      await seedInstalledPluginIndex({}, { config, env, stateDir, workspaceDir: rootDir });
+      const { env, databasePath, configPath } = await seedSemanticState(config, sourceConfig);
       await recordDeferredPluginMigrations({
         env,
         pending: [
@@ -512,11 +476,10 @@ describe("runDoctorLintCli", () => {
           },
         ],
       });
-      const databasePath = resolveOpenClawStateSqlitePath(env);
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       clearLoadInstalledPluginIndexInstallRecordsCache();
-      createDoctorLintSemanticIndex(stateDir);
       const before = snapshotDoctorLintSqliteFamily(databasePath);
+      const fork = vi.spyOn(snapshotSource, "forkSqlitePrivateSnapshot");
       mocks.openNodeSqliteDatabase.mockClear();
       const sourceOpenStacks: string[] = [];
       mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
@@ -525,21 +488,7 @@ describe("runDoctorLintCli", () => {
         }
         return mocks.actualOpenNodeSqliteDatabase(...args);
       });
-      const originalEnv = {
-        HOME: process.env.HOME,
-        OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE,
-      };
-      process.env.HOME = stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE = "1";
-      mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
-        mocks.actualReadConfigFileSnapshot(...args),
-      );
-      const previousResolveChecks =
-        mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
       const inspectOptionalDiagnostic = vi.fn(async () => [
         {
           checkId: "core/doctor/deferred-inspection",
@@ -558,86 +507,53 @@ describe("runDoctorLintCli", () => {
         },
       ]);
 
-      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      try {
-        await expect(
-          runDoctorLintCli(runtime, {
-            json: true,
-            severityMin: "error",
-            includeAllChecks: includeOptionalInspections,
-          }),
-        ).resolves.toBe(1);
-        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
-          ok: false,
-          findings: [
-            {
-              checkId: "memory-core/managed-local-embedding-setup",
-              severity: "error",
-              requirement: "managed-llama-cpp-setup",
-            },
-          ],
-        });
-        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-        expect(inspectOptionalDiagnostic).toHaveBeenCalledTimes(includeOptionalInspections ? 1 : 0);
-        const inspectionWarnings = (report.warnings ?? []).filter(
-          (finding: { checkId: string }) => finding.checkId === "core/doctor/deferred-inspection",
-        );
-        expect(inspectionWarnings).toEqual(
-          includeOptionalInspections
-            ? [
-                expect.objectContaining({
-                  severity: "warning",
-                  message: "Optional inspection needs attention.",
-                }),
-              ]
-            : [],
-        );
-        expect(
-          mocks.prepareSqliteReadOnlyLocationSync.mock.calls.map(([pathname]) => pathname),
-        ).toEqual([databasePath]);
-        expect(sourceOpenStacks).toEqual([]);
-        expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
-        expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(sourceConfig);
-      } finally {
-        mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks!);
-        stdout.mockRestore();
-        restoreDoctorLintTestEnv(originalEnv);
-        fs.rmSync(rootDir, { recursive: true, force: true });
-      }
+      await expect(
+        runDoctorLintCli(runtime, {
+          json: true,
+          severityMin: "error",
+          includeAllChecks: includeOptionalInspections,
+        }),
+      ).resolves.toBe(1);
+      const report = outputReport();
+      expect(report).toMatchObject({
+        ok: false,
+        findings: [
+          {
+            checkId: "memory-core/managed-local-embedding-setup",
+            severity: "error",
+            requirement: "managed-llama-cpp-setup",
+          },
+        ],
+      });
+      expect(inspectOptionalDiagnostic).toHaveBeenCalledTimes(includeOptionalInspections ? 1 : 0);
+      const inspectionWarnings = (report.warnings ?? []).filter(
+        (finding: { checkId: string }) => finding.checkId === "core/doctor/deferred-inspection",
+      );
+      expect(inspectionWarnings).toEqual(
+        includeOptionalInspections
+          ? [
+              expect.objectContaining({
+                severity: "warning",
+                message: "Optional inspection needs attention.",
+              }),
+            ]
+          : [],
+      );
+      expect(mocks.prepareSqliteReadOnlyLocationSync).not.toHaveBeenCalled();
+      expect(fork).toHaveBeenCalledOnce();
+      expect(fork.mock.calls[0]?.[0]).not.toBe(databasePath);
+      expect(sourceOpenStacks).toEqual([]);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(sourceConfig);
     },
   );
 
   it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-failure-"));
-    const stateDir = path.join(rootDir, "operator-state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const config = {
       gateway: { mode: "local" },
       memory: { search: { provider: "local", fallback: "none" } },
     } satisfies OpenClawConfig;
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`);
-    const env = {
-      ...process.env,
-      HOME: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    await seedInstalledPluginIndex({}, { config, env, stateDir, workspaceDir: rootDir });
-    const pluginDatabasePath = resolveOpenClawStateSqlitePath(env);
-    await closeOpenClawStateDatabaseByPathAsync(pluginDatabasePath);
-    createDoctorLintSemanticIndex(stateDir);
-    const originalEnv = {
-      HOME: process.env.HOME,
-      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    };
-    process.env.HOME = stateDir;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
-      mocks.actualReadConfigFileSnapshot(...args),
-    );
+    const { databasePath: pluginDatabasePath } = await seedSemanticState(config);
     mocks.prepareSqliteReadOnlyLocationSync.mockImplementation((...args: unknown[]) => {
       if (args[0] === pluginDatabasePath) {
         throw new Error("shared state did not stabilize");
@@ -645,35 +561,28 @@ describe("runDoctorLintCli", () => {
       return mocks.actualPrepareSqliteReadOnlyLocationSync(...args);
     });
 
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        severityMin: "error",
-        onlyIds: ["memory-core/managed-local-embedding-setup"],
-      });
+    const exitCode = await runDoctorLintCli(runtime, {
+      json: true,
+      severityMin: "error",
+      onlyIds: ["memory-core/managed-local-embedding-setup"],
+    });
 
-      expect(exitCode).toBe(1);
-      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
-        ok: false,
-        checksRun: 1,
-        findings: [
-          {
-            checkId: "memory-core/managed-local-embedding-setup",
-            severity: "error",
-            target: "memory-core",
-            requirement: "memory-index-inspection",
-            message: expect.stringContaining("shared state did not stabilize"),
-          },
-        ],
-      });
-      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mocks.prepareSqliteReadOnlyLocationSync).toHaveBeenCalledWith(pluginDatabasePath);
-    } finally {
-      stdout.mockRestore();
-      restoreDoctorLintTestEnv(originalEnv);
-      fs.rmSync(rootDir, { recursive: true, force: true });
-    }
+    expect(exitCode).toBe(1);
+    expect(outputReport()).toMatchObject({
+      ok: false,
+      checksRun: 1,
+      findings: [
+        {
+          checkId: "memory-core/managed-local-embedding-setup",
+          severity: "error",
+          target: "memory-core",
+          requirement: "memory-index-inspection",
+          message: expect.stringContaining("shared state did not stabilize"),
+        },
+      ],
+    });
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.prepareSqliteReadOnlyLocationSync).toHaveBeenCalledWith(pluginDatabasePath);
   });
 
   it("rejects registered checks that claim reserved core doctor ids", async () => {
@@ -698,32 +607,3 @@ describe("runDoctorLintCli", () => {
     );
   });
 });
-
-function restoreDoctorLintTestEnv(values: {
-  HOME: string | undefined;
-  OPENCLAW_CONFIG_PATH: string | undefined;
-  OPENCLAW_STATE_DIR: string | undefined;
-  OPENCLAW_UPDATE_POST_CORE_CONVERGENCE?: string | undefined;
-}): void {
-  if (values.HOME === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = values.HOME;
-  }
-  if (values.OPENCLAW_CONFIG_PATH === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = values.OPENCLAW_CONFIG_PATH;
-  }
-  if (values.OPENCLAW_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = values.OPENCLAW_STATE_DIR;
-  }
-  if (values.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === undefined) {
-    delete process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE;
-  } else {
-    process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE =
-      values.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE;
-  }
-}

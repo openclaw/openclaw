@@ -24,6 +24,7 @@ const enCommandPalette = {
     filterLabel: "Filter search results",
     filters: { all: "All", sessions: "Sessions", messages: "Messages" },
     searchFailed: "Chat search failed — check the gateway logs and retry",
+    searchOffline: "Reconnect to search Gateway content.",
     modelSearchFailed: "Model search unavailable. Change your search to retry.",
     searchPartial: "Transcript search unavailable — showing chat titles and metadata",
     searchIndexing: "Indexing older messages — search again shortly.",

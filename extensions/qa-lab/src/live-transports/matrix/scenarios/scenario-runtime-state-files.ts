@@ -11,9 +11,6 @@ import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_SYNC_CACHE_NAMESPACE = "sync-cache";
-// Mirrors the matrix plugin's core claimable-dedupe state namespace:
-// `matrix.inbound-dedupe.<hash>` (extensions/matrix monitor/inbound-dedupe.ts).
-const MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE = "matrix.inbound-dedupe.%";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 const MATRIX_SYNC_CACHE_MAX_ENTRIES = 20_000;
 const MATRIX_SYNC_CACHE_MAX_CHUNKS = Math.floor((MATRIX_SYNC_CACHE_MAX_ENTRIES - 1) / 2);
@@ -433,15 +430,11 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
   );
 }
 
-async function hasPersistedMatrixPluginStateDedupeEntry(params: {
+async function hasPersistedMatrixIngressCompletion(params: {
+  accountId: string;
   eventId: string;
-  roomId: string;
   stateDir: string;
 }): Promise<string | null> {
-  // Mirrors extensions/matrix monitor/inbound-dedupe.ts: the persisted entry
-  // value records the NUL-joined (account, room, event) dedupe key; suffix
-  // matching keeps the probe independent of the runtime account id.
-  const expectedKeySuffix = `\0${params.roomId.trim()}\0${params.eventId.trim()}`;
   const databasePaths = await findFilesByName({
     filename: "openclaw.sqlite",
     rootDir: params.stateDir,
@@ -451,26 +444,15 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        const rows = db
+        const completed = db
           .prepare(
-            `SELECT value_json AS valueJson
-               FROM plugin_state_entries
-              WHERE plugin_id = ?
-                AND namespace LIKE ?
-                AND (expires_at IS NULL OR expires_at > ?)`,
+            `SELECT 1 FROM channel_ingress_events
+              WHERE channel_id = ? AND account_id = ? AND event_id = ?
+                AND status = 'completed'
+              LIMIT 1`,
           )
-          .all(MATRIX_PLUGIN_ID, MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE, Date.now()) as Array<{
-          valueJson?: unknown;
-        }>;
-        const matched = rows.some((row) => {
-          const entry = parsePluginStateJson(row.valueJson);
-          return (
-            isRecord(entry) &&
-            typeof entry.key === "string" &&
-            entry.key.endsWith(expectedKeySuffix)
-          );
-        });
-        if (matched) {
+          .get(MATRIX_PLUGIN_ID, params.accountId, params.eventId);
+        if (completed) {
           return databasePath;
         }
       } finally {
@@ -483,17 +465,18 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
   return null;
 }
 
-export async function waitForMatrixInboundDedupeEntry(params: {
+export async function waitForMatrixIngressCompletion(params: {
+  accountId?: string;
   eventId: string;
-  roomId: string;
   stateDir: string;
   timeoutMs: number;
 }) {
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
-    const sqlitePath = await hasPersistedMatrixPluginStateDedupeEntry({
+    const sqlitePath = await hasPersistedMatrixIngressCompletion({
+      accountId,
       eventId: params.eventId,
-      roomId: params.roomId,
       stateDir: params.stateDir,
     });
     if (sqlitePath) {
@@ -502,6 +485,6 @@ export async function waitForMatrixInboundDedupeEntry(params: {
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }
   throw new Error(
-    `timed out waiting for Matrix inbound dedupe commit for ${params.roomId}|${params.eventId}`,
+    `timed out waiting for Matrix ingress completion for ${accountId}|${params.eventId}`,
   );
 }

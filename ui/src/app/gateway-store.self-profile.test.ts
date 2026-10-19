@@ -36,7 +36,14 @@ function presence(user: AuthenticatedUser) {
   return { presence: [{ ts: 0, instanceId: current().instanceId, user }] };
 }
 function publishPresence(user: AuthenticatedUser) {
-  current().opts.onEvent?.(createGatewayEvent("presence", presence(user)));
+  current().opts.onEvent?.(
+    createGatewayEvent("presence", {
+      ...presence(user),
+      reset: true,
+      version: 1,
+      keys: ["self"],
+    }),
+  );
 }
 
 beforeEach(() => {

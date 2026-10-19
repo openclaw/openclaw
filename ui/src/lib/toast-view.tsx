@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { formatUiExternalText } from "./format-error.ts";
@@ -10,11 +10,13 @@ export function ToastView(props: {
   active: boolean;
   host: HTMLElement;
   bodyRef(element: HTMLElement): void;
+  ready(): void;
   hover(value: boolean): void;
   focus(value: boolean): void;
   dismiss(reason: ToastDismissReason): void;
   transitionEnd(): void;
 }) {
+  onSettled(() => props.ready());
   const anchor = createMemo(() => resolveToastAnchorRect(props.toast?.anchor));
   const content = createMemo(() => props.toast?.message);
   const message = createMemo(() => {

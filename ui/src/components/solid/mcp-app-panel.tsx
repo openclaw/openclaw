@@ -21,9 +21,8 @@ registerMcpAppEnglish();
 type McpAppPanelProps = { launch?: McpAppOpenDetail };
 export type McpAppPanelElement = SolidBridgeElement<McpAppPanelProps>;
 
-function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
+function McpAppPanelContent(props: McpAppPanelProps, host: HTMLElement) {
   const context = useApplication();
-  const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);
   const [viewId, setViewId] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -76,7 +75,7 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
       mounted &&
       host.isConnected &&
       generation === currentGeneration &&
-      untrack(launchIdentity) === identity &&
+      launchIdentity() === identity &&
       props.launch?.owner === client &&
       context.gateway.snapshot.client === client &&
       gatewayPresentationScope(context.gateway).key === scope;
@@ -87,7 +86,7 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
       if (loadView) {
         View = (await import("../mcp-app-view-registration.ts")).McpAppView;
         // Loading presentation yields; recheck the live target before invoking a tool.
-        if (!untrack(current)) {
+        if (!current()) {
           return;
         }
       }
@@ -198,19 +197,17 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
     gateway.read();
     return JSON.stringify([launchIdentity(), gatewayPresentationScope(context.gateway).key]);
   });
-  createEffect(openIdentity, () =>
+  createEffect(openIdentity, () => {
     // The memo schedules work; each operation samples its live admission target.
-    untrack(() => {
-      generation++;
-      setViewId("");
-      setSettings(null);
-      setBusy(false);
-      setError(null);
-      if (props.launch && props.launch.owner === context.gateway.snapshot.client) {
-        void open();
-      }
-    }),
-  );
+    generation++;
+    setViewId("");
+    setSettings(null);
+    setBusy(false);
+    setError(null);
+    if (props.launch && props.launch.owner === context.gateway.snapshot.client) {
+      void open();
+    }
+  });
   return (
     <Show when={props.launch}>
       {(launch) => (
@@ -255,14 +252,14 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
           </Show>
           <McpAppRetirement identity={viewId()} roots={() => [host]}>
             {(id) => {
-              const acceptedLaunch = untrack(launch);
-              const acceptedIdentity = untrack(launchIdentity);
+              // Retiring App content keeps its original target until unmount is acknowledged.
+              const initialLaunch = untrack(launch);
+              const initialIdentity = untrack(launchIdentity);
               const viewLaunch = createMemo<McpAppOpenDetail>((previous) => {
                 const current = launch();
-                return launchIdentity() === acceptedIdentity &&
-                  current.owner === acceptedLaunch.owner
+                return launchIdentity() === initialIdentity && current.owner === initialLaunch.owner
                   ? current
-                  : (previous ?? acceptedLaunch);
+                  : (previous ?? initialLaunch);
               });
               const LoadedView = View;
               return id && LoadedView ? (
@@ -286,6 +283,6 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
 
 export const McpAppPanel = defineSolidBridge<McpAppPanelProps>(
   "openclaw-mcp-app-panel",
-  (props, host) => <McpAppPanelContent {...props} host={host} />,
+  McpAppPanelContent,
   { properties: { launch: { default: undefined, attribute: false } } },
 );

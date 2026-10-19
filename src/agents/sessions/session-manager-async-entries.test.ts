@@ -9,10 +9,15 @@ import {
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
+import { sessionManagerOpenCompaction } from "./session-manager-core.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
@@ -242,6 +247,97 @@ it("propagates queued write revocation and user/custom commit failures without p
     expect(await loadTranscriptEvents(target)).toEqual(before);
     const recovered = await manager.appendCustomEntryAsync("after-failure");
     expect(manager.getEntry(recovered)?.parentId).toBe(seed);
+  });
+});
+
+it("prepares current compaction metadata and retained history in one worker read", async () => {
+  await withOpenClawTestState({ label: "compaction-preparation" }, async (state) => {
+    const target = sessionScope(
+      path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      "compaction-preparation",
+    );
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
+    const retained = await manager.appendMessageAsync({
+      role: "user",
+      content: "Retained user content",
+      timestamp: 1,
+    });
+    const opaque = await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
+    await replaceSessionEntry(target, {
+      sessionId: target.sessionId,
+      updatedAt: 2,
+      label: "Updated after opening",
+      compactionCount: 3,
+    });
+    await waitForDiagnosticEventsDrained();
+    const requests: string[] = [];
+    const unsubscribe = onInternalDiagnosticEvent(
+      (event) => {
+        if (
+          event.type === "worker.request" &&
+          event.phase === "queued" &&
+          event.kind === "sessionTranscript"
+        ) {
+          requests.push(event.requestClass);
+        }
+      },
+      { include: ["worker.request"] },
+    );
+    const sql = observeHostDataSql();
+    try {
+      const prepared = await SessionManager[sessionManagerOpenCompaction](target);
+      await waitForDiagnosticEventsDrained();
+      expect(requests).toEqual(["task"]);
+      expect(sql.queries).toEqual([]);
+      expect(prepared.sessionTarget).toEqual(target);
+      expect(prepared.entry).toMatchObject({
+        sessionId: target.sessionId,
+        label: "Updated after opening",
+        compactionCount: 3,
+      });
+      expect(prepared.runtimeEntry).toEqual(prepared.entry);
+      expect(prepared.sessionManager.getEntries()).toMatchObject([
+        { id: retained, type: "message", message: { content: "Retained user content" } },
+        { id: opaque, type: "custom", data: { value: 42 } },
+      ]);
+    } finally {
+      sql.restore();
+      unsubscribe();
+    }
+  });
+});
+
+it("keeps the requested entry separate from the persisted compaction window owner", async () => {
+  await withOpenClawTestState({ label: "compaction-window-owner" }, async (state) => {
+    const requested = {
+      agentId: "main",
+      sessionId: "window-owner",
+      sessionKey: "agent:main:window-alias",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await replaceSessionEntry(requested, {
+      sessionId: requested.sessionId,
+      updatedAt: 2,
+      label: "Alias metadata",
+    });
+    // A newly created entry claims the shared window, so create its intended owner last.
+    const target = sessionScope(requested.storePath, requested.sessionId);
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
+    const retained = await manager.appendMessageAsync({
+      role: "user",
+      content: "Window-owned content",
+      timestamp: 1,
+    });
+    const prepared = await SessionManager[sessionManagerOpenCompaction](requested);
+    expect(prepared.sessionTarget).toEqual(target);
+    expect(prepared.entry).toMatchObject({ label: "Alias metadata" });
+    expect(prepared.runtimeEntry?.label).toBeUndefined();
+    expect(prepared.sessionManager.getEntry(retained!)).toMatchObject({
+      type: "message",
+      message: { content: "Window-owned content" },
+    });
   });
 });
 

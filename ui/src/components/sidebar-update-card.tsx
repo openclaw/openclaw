@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
+import { Show, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
@@ -21,8 +21,10 @@ import {
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createInterval } from "../lib/reactive/timers.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-update-card.css";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import { SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -62,37 +64,25 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
   host.style.display = "contents";
   const [holdingCampaignId, setHoldingCampaignId] = createSignal<string | null>(null);
   const [nativeUpdateAvailable, setNativeUpdateAvailable] = createSignal(hasNativeUpdateBridge());
+  const refreshScope = createMemo(() => ({ required: props.refreshRequired }));
   const [refreshState, setRefreshState] = createSignal(() => {
     // Re-entering recovery starts with a fresh retry surface.
-    void props.refreshRequired;
+    refreshScope();
     return { inFlight: false, failed: false };
   });
   const [checkingTarget, setCheckingTarget] = createSignal(false);
   const [targetCheckFailed, setTargetCheckFailed] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
   const [now, setNow] = createSignal(Date.now());
-  let refreshAttempt = 0;
-  let refreshPending = false;
+  let refreshPending: ReturnType<typeof refreshScope> | undefined;
   let targetCheckPending = false;
   const updateNativeAvailability = () => setNativeUpdateAvailable(hasNativeUpdateBridge());
   onCleanup(listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability));
-  createEffect(
-    () => props.refreshRequired,
-    (required) => {
-      if (!required) {
-        refreshAttempt++;
-        refreshPending = false;
-      }
-    },
-  );
-  createEffect(
-    () => props.updateSchedule?.campaign?.state,
-    (state) => {
-      if (state !== "countdown" && state !== "waiting-for-idle") {
-        return undefined;
-      }
-      const timer = setInterval(() => setNow(Date.now()), 1000);
-      return () => clearInterval(timer);
+  createInterval(
+    () => setNow(Date.now()),
+    () => {
+      const state = props.updateSchedule?.campaign?.state;
+      return state === "countdown" || state === "waiting-for-idle" ? 1000 : undefined;
     },
   );
   const visibleStatusBanner = () =>
@@ -200,23 +190,23 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
   };
 
   const refreshControlUi = async () => {
-    if (refreshPending) {
+    const scope = refreshScope();
+    if (refreshPending === scope) {
       return;
     }
-    refreshPending = true;
+    refreshPending = scope;
     setRefreshState({ inFlight: true, failed: false });
-    const attempt = ++refreshAttempt;
     let reloading = false;
     try {
       reloading = await props.onRefresh();
     } catch {
       // The current document remains the recovery surface when its probe fails.
     }
-    if (attempt !== refreshAttempt || !props.refreshRequired) {
+    if (scope !== refreshScope() || !props.refreshRequired) {
       return;
     }
     if (!reloading) {
-      refreshPending = false;
+      refreshPending = undefined;
       setRefreshState({ inFlight: false, failed: true });
     }
   };
@@ -340,6 +330,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
             </p>
             <div class="sidebar-update-card__compact-actions">
               <button
+                ref={sidebarAttentionFocusRef()}
                 class="sidebar-update-card__review sidebar-update-card__review--primary"
                 type="button"
                 onClick={props.onReviewUpdate}
@@ -371,6 +362,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
       <Show when={campaign()}>
         {(current) => (
           <button
+            ref={sidebarAttentionFocusRef()}
             class="sidebar-update-card__hold"
             type="button"
             disabled={holdingCampaignId() === current().id}
@@ -389,10 +381,11 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
         {renderStatus()}
         {refreshState().failed ? (
           <div class="sidebar-update-card__status sidebar-update-card__status--warn" role="alert">
-            {t("connection.actionsUnavailable")}
+            {t("updates.refreshFailed")}
           </div>
         ) : null}
         <button
+          ref={sidebarAttentionFocusRef()}
           class={[
             "sidebar-update-card__action",
             { "sidebar-update-card__action--busy": refreshState().inFlight },
@@ -425,7 +418,12 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     return (
       <div class="sidebar-update-card" role="status" aria-live="polite">
         {renderStatus()}
-        <button class="sidebar-update-card__action" type="button" onClick={openRun}>
+        <button
+          ref={sidebarAttentionFocusRef()}
+          class="sidebar-update-card__action"
+          type="button"
+          onClick={openRun}
+        >
           <span class="sidebar-update-card__icon" aria-hidden="true">
             <Icon
               name={
@@ -478,6 +476,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     function UpdateAction() {
       return (
         <button
+          ref={sidebarAttentionFocusRef()}
           class={[
             "sidebar-update-card__action",
             { "sidebar-update-card__action--busy": busy() || checking() },
@@ -512,6 +511,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           {renderStatus()}
           <Show when={!actionable() && props.statusBanner?.source === "read"}>
             <button
+              ref={sidebarAttentionFocusRef()}
               type="button"
               class="sidebar-update-card__review"
               disabled={checking() || !props.connected}
@@ -537,6 +537,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           </Show>
           <Show when={props.statusBanner}>
             <button
+              ref={sidebarAttentionFocusRef()}
               class="sidebar-update-card__review"
               type="button"
               onClick={props.onReviewUpdate}
@@ -633,7 +634,12 @@ function renderUpdateGitRevisions(
         <code title={revisions.targetSha}>{revisions.targetSha.slice(0, 8)}</code>
       </span>
       {revisions.compareUrl ? (
-        <a href={revisions.compareUrl} target="_blank" rel="noopener noreferrer">
+        <a
+          ref={sidebarAttentionFocusRef()}
+          href={revisions.compareUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           {t("updates.target.viewChanges")} <span aria-hidden="true">↗</span>
         </a>
       ) : null}

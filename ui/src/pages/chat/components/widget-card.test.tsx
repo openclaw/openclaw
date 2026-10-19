@@ -4,10 +4,18 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
+import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext } from "../../../test-helpers/app-sidebar.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
+import * as widgetExport from "./widget-export.ts";
 
 const canvasPreview = {
   kind: "canvas",
@@ -74,6 +82,14 @@ function initializeWidgetFrame(frame: HTMLIFrameElement) {
   frame.dispatchEvent(new Event("load"));
 }
 
+async function downloadWidget(host: HTMLElement) {
+  host.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
+  await waitForSolid(() =>
+    expect(host.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+  );
+  host.querySelector<HTMLButtonElement>('[role="menuitem"][value="download"]')!.click();
+}
+
 afterEach(async () => {
   // Rendering starts lazy element imports that must finish before this environment retires.
   await vi.dynamicImportSettled();
@@ -84,10 +100,111 @@ afterEach(async () => {
     unmountWidget(host);
   }
   document.body.replaceChildren();
+  delete document.documentElement.dataset.themeMode;
 });
 
 describe("widget-card", () => {
-  it("keeps initialized frames stable but refreshes remounts and new connection generations", () => {
+  it("exports the current raw frame after replacing its URL", async () => {
+    const exportImage = vi.spyOn(widgetExport, "exportWidget").mockResolvedValue("png");
+    onTestFinished(() => exportImage.mockRestore());
+    const host = document.createElement("div");
+    document.body.append(host);
+    const preview = {
+      ...canvasPreview,
+      title: "Raw widget",
+      url: "/__openclaw__/canvas/documents/cv_export_one/index.html",
+      sandbox: "scripts",
+    } as const;
+    mountWidget(preview, undefined, host);
+    const first = host.querySelector("iframe")!;
+    await downloadWidget(host);
+    expect(exportImage).toHaveBeenLastCalledWith("download", first, "Raw widget", {
+      documentHtml: undefined,
+    });
+
+    mountWidget(
+      { ...preview, url: "/__openclaw__/canvas/documents/cv_export_two/index.html" },
+      undefined,
+      host,
+    );
+    const current = host.querySelector("iframe")!;
+    expect(current).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+    await downloadWidget(host);
+    expect(exportImage).toHaveBeenLastCalledWith("download", current, "Raw widget", {
+      documentHtml: undefined,
+    });
+    expect(exportImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the managed export frame and document when the action is selected", async () => {
+    const exportImage = vi.spyOn(widgetExport, "exportWidget").mockResolvedValue("png");
+    onTestFinished(() => exportImage.mockRestore());
+    const { gateway } = createApplicationGateway();
+    const sessions = createTestSessionCapability(gateway);
+    const provider = createApplicationContextProvider(createContext(gateway, sessions));
+    const host = document.createElement("div");
+    provider.append(host);
+    document.body.append(provider);
+    onTestFinished(() => {
+      unmountWidget(host);
+      sessions.dispose();
+      disposeSidebarContextLifecycles();
+    });
+    mountWidget(
+      {
+        ...canvasPreview,
+        title: "Managed widget",
+        viewId: "cv_export_managed",
+        url: "/__openclaw__/canvas/documents/cv_export_managed/index.html",
+        sandbox: "scripts",
+      },
+      undefined,
+      host,
+    );
+    await vi.dynamicImportSettled();
+    const widget = host.querySelector("openclaw-canvas-widget-view")!;
+    const previewFrame = document.createElement("iframe");
+    const documentHtml = "<!doctype html><title>Managed export</title>";
+    Object.defineProperties(widget, {
+      previewFrame: { configurable: true, get: () => previewFrame },
+      documentHtml: { configurable: true, get: () => documentHtml },
+    });
+    // The owner can expose a frame after adoption without placing it beneath the menu.
+    document.body.append(previewFrame);
+    await downloadWidget(host);
+    expect(exportImage).toHaveBeenCalledExactlyOnceWith(
+      "download",
+      previewFrame,
+      "Managed widget",
+      { documentHtml },
+    );
+  });
+
+  it("keeps theme delivery attached to a retained mounted frame", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    mountWidget(
+      { ...canvasPreview, url: "https://example.test/theme-widget", sandbox: "scripts" },
+      { allowExternalEmbedUrls: true },
+      host,
+    );
+    const frame = host.querySelector("iframe")!;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    frame.dispatchEvent(new Event("load"));
+    frame.className = "";
+    post.mockClear();
+
+    document.documentElement.dataset.themeMode = "light";
+    await Promise.resolve();
+    expect(host.querySelector("iframe")).toBe(frame);
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+      "*",
+    );
+  });
+
+  it("keeps initialized frames stable through capability and transport generations", () => {
     const firstPreview = {
       ...canvasPreview,
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
@@ -128,6 +245,7 @@ describe("widget-card", () => {
     const remountedFrame = host.querySelector("iframe");
     expect(remountedFrame).not.toBe(originalFrame);
     expect(remountedFrame?.getAttribute("src")).toContain("/__openclaw__/cap/two/");
+    initializeWidgetFrame(remountedFrame!);
 
     bumpCanvasWidgetFrameConnectionGeneration();
     mountWidget(
@@ -137,8 +255,7 @@ describe("widget-card", () => {
       },
       host,
     );
-    expect(host.querySelector("iframe")).not.toBe(remountedFrame);
-    expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
+    expect(host.querySelector("iframe")).toBe(remountedFrame);
   });
 
   it.each(["failed"] as const)(
@@ -486,11 +603,15 @@ describe("widget-card", () => {
 describe("widget-card presentation", () => {
   it("releases placement observation while a retained widget is hidden", () => {
     const observers: ResizeObserverStub[] = [];
-    class ResizeObserverStub {
+    class ResizeObserverStub implements ResizeObserver {
       observe = vi.fn();
+      unobserve = vi.fn();
       disconnect = vi.fn();
-      constructor() {
+      constructor(private readonly callback: ResizeObserverCallback) {
         observers.push(this);
+      }
+      deliver() {
+        this.callback([], this);
       }
     }
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
@@ -501,13 +622,14 @@ describe("widget-card presentation", () => {
     });
     const cancel = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
     const [presented, setPresented] = createSignal(true);
+    const [options, setOptions] = createSignal({ rawText: "Widget details" });
     const root = mountSolid(() => (
       <ContentPresentation value={presented}>
         <div class="chat-thread">
           <ToolPreview
             preview={{ ...canvasPreview, url: "about:blank", sandbox: "strict" }}
             surface="chat_message"
-            options={{ rawText: "Widget details" }}
+            options={options()}
           />
         </div>
       </ContentPresentation>
@@ -519,20 +641,41 @@ describe("widget-card presentation", () => {
       vi.unstubAllGlobals();
     });
     flush();
-    frames.shift()?.(0);
     expect(observers).toHaveLength(1);
     expect(observers[0]?.observe).toHaveBeenCalledTimes(2);
     const frame = root.container.querySelector("iframe");
+    const thread = root.container.querySelector<HTMLElement>(".chat-thread")!;
+    const preview = root.container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
+    vi.spyOn(thread, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+    Object.defineProperty(thread, "clientWidth", { value: 100 });
+    const geometry = vi
+      .spyOn(preview, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 90, 100));
+    observers[0]?.deliver();
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(false);
+    frames.shift()?.(0);
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(true);
 
+    setOptions({ rawText: "Updated widget details" });
+    flush();
+    expect(observers).toHaveLength(1);
+    expect(observers[0]?.disconnect).not.toHaveBeenCalled();
+
+    geometry.mockReturnValue(new DOMRect(0, 0, 50, 100));
+    observers[0]?.deliver();
     setPresented(false);
     flush();
+    frames.shift()?.(0);
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(true);
     expect(observers[0]?.disconnect).toHaveBeenCalledOnce();
     expect(root.container.querySelector("iframe")).toBe(frame);
 
     setPresented(true);
     flush();
+    observers[1]?.deliver();
     frames.shift()?.(0);
     expect(observers).toHaveLength(2);
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(false);
     expect(root.container.querySelector("iframe")).toBe(frame);
   });
 

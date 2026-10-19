@@ -29,13 +29,6 @@ import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 type ListFrame = { id: number; params: CodexThreadListParams };
 const REQUEST_TIMEOUT_MS = 200;
 
-function page(threadId: string) {
-  return {
-    data: [{ ...threadStartResult(threadId).thread, source: "cli" }],
-    nextCursor: null,
-  };
-}
-
 function observe<T>(pending: Promise<T>) {
   // Observe rejection immediately, including when a failing assertion enters cleanup first.
   void pending.catch(() => undefined);
@@ -95,7 +88,6 @@ async function createCatalogHarness(agentDir: string) {
   const newFactory = (requestTimeoutMs = REQUEST_TIMEOUT_MS, state?: CodexCatalogState) => {
     const created = createCodexSessionCatalogControl({
       getPluginConfig: () => ({
-        ...pluginConfig,
         appServer: { ...pluginConfig.appServer, requestTimeoutMs },
       }),
       getRuntimeConfig: () => config,
@@ -174,7 +166,13 @@ async function createCatalogHarness(agentDir: string) {
       }
     },
     reply(frame: (typeof frames)[number], threadId: string) {
-      frame.transport.send({ id: frame.id, result: page(threadId) });
+      frame.transport.send({
+        id: frame.id,
+        result: {
+          data: [{ ...threadStartResult(threadId).thread, source: "cli" }],
+          nextCursor: null,
+        },
+      });
     },
     async expireWaiter() {
       await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);

@@ -455,12 +455,9 @@ function planTerminalCompletion(
         entry.killReconciliation === undefined &&
         entry.pauseReason === undefined &&
         typeof entry.execution.endedAt === "number" &&
-        Number.isFinite(entry.execution.endedAt) &&
-        typeof entry.cleanupCompletedAt === "number" &&
-        Number.isFinite(entry.cleanupCompletedAt) &&
-        entry.cleanupCompletedAt >= entry.execution.endedAt))
+        Number.isFinite(entry.execution.endedAt)))
   ) {
-    // A delayed abort must not replace a finalized result or reopen a cleaned cancellation.
+    // A delayed abort must not replace a finalized result or reopen a confirmed cancellation.
     return undefined;
   }
   if (shouldPreservePublishedExplicitRunTimeout(entry)) {

@@ -46,7 +46,7 @@ function createFixture(tmpDir: string, storePath: string) {
     runHeartbeatOnce({
       cfg,
       ...options,
-      deps: { getQueueSize: () => 0, nowMs: () => nowMs },
+      deps: { nowMs: () => nowMs },
     });
   return { baseKey, isolatedKey, nowMs, replySpy, seed, run, storePath };
 }

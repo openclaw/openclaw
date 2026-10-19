@@ -78,7 +78,6 @@ describe("runHeartbeatOnce", () => {
         deps: {
           getReplyFromConfig: replySpy,
           telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }),
-          getQueueSize: () => 0,
           nowMs: () => 0,
         },
       });

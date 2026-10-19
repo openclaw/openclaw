@@ -44,14 +44,9 @@ import {
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 
-type ModelsConfigPluginMetadataSnapshot = Pick<
-  PluginMetadataSnapshot,
-  "index" | "manifestRegistry" | "owners" | "pluginIds"
->;
-
 type EnsureOpenClawModelsJsonOptions = {
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   workspaceDir?: string;
   providerDiscoveryProviderIds?: readonly string[];

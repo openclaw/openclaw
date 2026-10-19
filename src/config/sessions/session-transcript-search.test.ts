@@ -349,14 +349,14 @@ describe("searchSessionTranscripts", () => {
       ({ db }) => {
         for (const id of ["permitted", "generation", "dirty", "excluded"]) {
           const insert = createSessionTranscriptFtsInserter(db, id);
-          for (let index = 0; index < 80; index++) {
-            insert({
+          insert(
+            Array.from({ length: 80 }, (_, index) => ({
               messageId: `${id}-${String(index).padStart(3, "0")}`,
               text: `needle common payload${index < 10 ? "" : ` ${"padding ".repeat(40)}`}${index === 79 ? "sparse" : ""}`,
               role: index % 2 ? "assistant" : "user",
               timestamp: String(Math.floor(index / 4)),
-            });
-          }
+            })),
+          );
         }
         db.prepare(
           "UPDATE session_transcript_index_state SET needs_rebuild=1 WHERE session_id='dirty'",
@@ -721,12 +721,14 @@ describe("searchSessionTranscripts", () => {
         createSessionTranscriptFtsInserter(
           database.db,
           "session-ghost",
-        )({
-          text: "ghost payload",
-          messageId: "m-ghost",
-          role: "user",
-          timestamp: "1",
-        }),
+        )([
+          {
+            text: "ghost payload",
+            messageId: "m-ghost",
+            role: "user",
+            timestamp: "1",
+          },
+        ]),
       { agentId: "main", env: env() },
     );
 

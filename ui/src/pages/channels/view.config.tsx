@@ -104,12 +104,18 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
         <div class="settings-row__control">
           <button
             class="btn primary"
-            disabled={disabled() || !params.props.config.configFormDirty}
+            disabled={
+              !params.props.channels.connected || disabled() || !params.props.config.configFormDirty
+            }
             onClick={() => params.props.onConfigSave()}
           >
             {params.props.config.configSaving ? t("common.saving") : t("common.save")}
           </button>
-          <button class="btn" disabled={disabled()} onClick={() => params.props.onConfigReload()}>
+          <button
+            class="btn"
+            disabled={!params.props.channels.connected || disabled()}
+            onClick={() => params.props.onConfigReload()}
+          >
             {t("common.reload")}
           </button>
         </div>

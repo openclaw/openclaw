@@ -1,10 +1,10 @@
-/** Doctor-owned migration and repair of persisted generated provider catalogs. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { parseModelCatalogJson } from "../agents/model-catalog-json.js";
 import { repairPluginModelCatalogTransportMetadata } from "../agents/plugin-model-catalog-repair.js";
 import {
   reviewRootProviderCopies,
@@ -54,7 +54,7 @@ function readRootModelsFile(agentDir: string): RootModelsFile | undefined {
     return undefined;
   }
   try {
-    const root: unknown = JSON.parse(raw);
+    const root = parseModelCatalogJson(raw);
     return isRecord(root) && isRecord(root.providers)
       ? { raw, root, providers: root.providers }
       : undefined;

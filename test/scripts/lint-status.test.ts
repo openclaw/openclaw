@@ -60,6 +60,8 @@ export function waitForFile(file) {
     "lib/check-limits.mts",
     "lib/oxlint-changed-scope.mts",
     "lib/ci-static-check-evidence.mjs",
+    "lib/dev-tool.mts",
+    "lib/pinned-bun.mts",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",

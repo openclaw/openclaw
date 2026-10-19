@@ -13,7 +13,49 @@ import {
   connectPaneTestView,
   createGatewayBrowserClientFixture,
   createTestChatPane,
+  getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+
+it("projects composer capability changes and catches up a parked pane on reveal", async () => {
+  const fixture = createMountedPanes([{ key: "main", kind: "direct", updatedAt: 1 }]);
+  const { pane } = fixture;
+  const capabilities = getPaneTestRuntime(pane).composerCapabilities;
+  const view = () => capabilities.dialogView(pane.context, pane.state, undefined);
+  const rendered: boolean[] = [];
+  const render = vi.fn(() => {
+    rendered.push(view().open);
+    return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
+  });
+  pane.render = render;
+  onTestFinished(() => pane.disconnectedCallback());
+  fixture.mount("main");
+  await pane.updateComplete;
+
+  capabilities.props(pane.context, pane.state, undefined, "main").onAddServer?.();
+  expect(view().open).toBe(true);
+  await waitForSolid(() => expect(rendered.at(-1)).toBe(true));
+
+  pane.presented = false;
+  await Promise.resolve();
+  flush();
+  render.mockClear();
+  view().onCancel();
+  expect(view().open).toBe(false);
+  flush();
+  expect(render).not.toHaveBeenCalled();
+  pane.presented = true;
+  await pane.updateComplete;
+  expect(rendered.at(-1)).toBe(false);
+
+  const state = pane.state;
+  const reopen = capabilities.props(pane.context, state, undefined, "main").onAddServer;
+  pane.disconnectedCallback();
+  render.mockClear();
+  reopen?.();
+  expect(capabilities.dialogView(pane.context, state, undefined).open).toBe(true);
+  flush();
+  expect(render).not.toHaveBeenCalled();
+});
 
 const native = vi.hoisted(() => ({ capability: null as NativeGatewaysCapability | null }));
 vi.mock("../../app/native-gateways.runtime.ts", async (importOriginal) => ({
@@ -153,7 +195,6 @@ it("parks and remounts presentation subscriptions using the runtime's context wi
   const acquired = subscriptions.mock.calls.length;
   render.mockClear();
   navigation.update({ navCollapsed: true });
-  pane.requestUpdate();
   await Promise.resolve();
   flush();
   expect(render).not.toHaveBeenCalled();

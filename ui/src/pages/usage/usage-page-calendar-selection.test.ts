@@ -145,7 +145,10 @@ it("keeps the same calendar interactive while day totals are pending", async () 
   const last = bars().at(-1)!;
   first.click();
   await page.updateComplete;
-  expect(page.querySelector(".usage-metric-badge")).toBeNull();
+  // Badges keep their slots before totals arrive; they show placeholders, never values.
+  expect(
+    [...page.querySelectorAll(".usage-metric-badge strong")].map((node) => node.textContent),
+  ).toEqual(["—", "—", "—"]);
   expect(bars()).toContain(last);
   last.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
   await page.updateComplete;

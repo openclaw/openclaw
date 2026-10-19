@@ -17,7 +17,6 @@ import {
   type GatewayReachability,
   type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
-import { finalizeGatewayRestartSnapshot } from "./restart-health-snapshot.js";
 import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 import { hasListenerAttributionGap, listenerOwnedByRuntimePid } from "./restart-port-ownership.js";
 
@@ -90,6 +89,10 @@ export async function inspectGatewayRestart(params: {
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
+        allowHttpVerification:
+          Boolean(expectedVersion) &&
+          params.requirePluginHealth === false &&
+          params.requireChannelHealth === false,
         timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
         ...(signal ? { signal } : {}),
       }),
@@ -206,6 +209,7 @@ export async function inspectGatewayRestart(params: {
     gatewayVersion,
     gatewayBuildId,
     probeError,
+    authenticationError,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
@@ -213,27 +217,54 @@ export async function inspectGatewayRestart(params: {
     channelProbeTimeouts,
     channelRuntimeWarnings,
   } = reachability ?? {};
-  return finalizeGatewayRestartSnapshot(
-    {
-      runtime,
-      portUsage,
-      healthy,
-      staleGatewayPids,
-      ...(gatewayBootId ? { gatewayBootId } : {}),
-      ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
-      ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
-      ...(startupPhase ? { startupPhase } : {}),
-      ...(probeError ? { probeError } : {}),
-      ...(staleConnection ? { staleConnection } : {}),
-      ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
-      ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
-      ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
-      ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
-      ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
-    },
-    expectedVersion,
-    expectedBuildId,
-    params.requirePluginHealth !== false,
-    params.requireChannelHealth !== false,
-  );
+  const snapshot: GatewayRestartSnapshot = {
+    runtime,
+    portUsage,
+    healthy,
+    staleGatewayPids,
+    ...(gatewayBootId ? { gatewayBootId } : {}),
+    ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+    ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
+    ...(startupPhase ? { startupPhase } : {}),
+    ...(probeError ? { probeError } : {}),
+    ...(authenticationError ? { authenticationError } : {}),
+    ...(staleConnection ? { staleConnection } : {}),
+    ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
+    ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
+    ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
+    ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
+    ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
+  };
+  if (expectedVersion) {
+    snapshot.expectedVersion = expectedVersion;
+    if (snapshot.gatewayVersion !== expectedVersion) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayVersion != null) {
+        snapshot.versionMismatch = {
+          expected: expectedVersion,
+          actual: snapshot.gatewayVersion,
+        };
+      }
+    }
+  }
+  // Runtime identity remains required even with a separately configured UI root.
+  if (expectedBuildId) {
+    snapshot.expectedBuildId = expectedBuildId;
+    if (snapshot.gatewayBuildId !== expectedBuildId) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayBuildId !== undefined) {
+        snapshot.buildIdMismatch = {
+          expected: expectedBuildId,
+          actual: snapshot.gatewayBuildId ?? null,
+        };
+      }
+    }
+  }
+  if (
+    (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
+    (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length)
+  ) {
+    snapshot.healthy = false;
+  }
+  return snapshot;
 }

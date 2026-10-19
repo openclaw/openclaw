@@ -106,9 +106,9 @@ export async function prepareSessionSubagentKillSelection(params: {
       }
     };
     try {
-      const { cancelSubagentRequesterSettleWake } = await import("./subagent-registry.js");
+      const { retireSubagentObligations } = await import("./subagent-registry.js");
       assertCurrent();
-      await cancelSubagentRequesterSettleWake(entry, assertCurrent);
+      await retireSubagentObligations(entry, assertCurrent, { requesterNotified: true });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -398,12 +398,14 @@ function selectControlledSubagentRunFacts(
   sessionKey: string,
   agentId: string,
   cfg?: OpenClawConfig,
+  selectedRunId?: string,
 ): SubagentRunReadRecord[] {
   return [...index.runsByChildSessionKey.values()].flatMap((runs) =>
     runs.filter(
       (entry) =>
         isSubagentRunVisibleToSession(entry, sessionKey, agentId, cfg) &&
-        (resolveSubagentChildAgentId(entry) === undefined ||
+        (entry.runId === selectedRunId ||
+          resolveSubagentChildAgentId(entry) === undefined ||
           latestSubagentRun(runs, (candidate) =>
             matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
           ) === entry),
@@ -473,6 +475,7 @@ export function listControlledSubagentRunFacts(
   controllerSessionKey: string,
   controllerAgentId: string | undefined,
   cfg: OpenClawConfig,
+  selectedRunId?: string,
 ): SubagentRunReadRecord[] {
   if (!controllerAgentId) {
     return [];
@@ -480,7 +483,13 @@ export function listControlledSubagentRunFacts(
   const index = buildSubagentRunReadIndexFromRuns({
     runs: getSubagentControlRunsSnapshotForRead(controllerSessionKey),
   });
-  return selectControlledSubagentRunFacts(index, controllerSessionKey, controllerAgentId, cfg);
+  return selectControlledSubagentRunFacts(
+    index,
+    controllerSessionKey,
+    controllerAgentId,
+    cfg,
+    selectedRunId,
+  );
 }
 
 export function ensureSubagentControllerOwnsRun(params: {

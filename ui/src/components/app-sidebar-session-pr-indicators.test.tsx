@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, For } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -6,6 +6,7 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -22,13 +23,59 @@ const LIFECYCLE_HOST_TAG = "test-session-pr-indicators";
 
 class LifecycleTestHost extends HTMLElement {
   readRows: IndicatorOptions["getRows"] = () => [];
-  gateway!: ApplicationGateway;
-  getSessions: IndicatorOptions["getSessions"] = () => undefined;
-  selectedAgentId = "main";
-  presented = true;
+  private gatewayValue!: ApplicationGateway;
+  private readSessions: IndicatorOptions["getSessions"] = () => undefined;
+  private rowOwner: SessionCapability | undefined;
+  private agentId = "main";
+  private visible = true;
+  private readonly listeners = new Set<() => void>();
   indicators!: ReturnType<typeof createSessionPullRequestIndicators>;
-  invalidate?: () => void;
   private view?: ReturnType<typeof mountSolid>;
+
+  get gateway() {
+    return this.gatewayValue;
+  }
+  set gateway(value: ApplicationGateway) {
+    this.gatewayValue = value;
+    this.publishInputs();
+  }
+  get getSessions() {
+    return this.readSessions;
+  }
+  set getSessions(read: IndicatorOptions["getSessions"]) {
+    this.readSessions = read;
+    this.publishInputs();
+  }
+  get rowsSource() {
+    return this.rowOwner;
+  }
+  set rowsSource(value: SessionCapability | undefined) {
+    this.rowOwner = value;
+    this.publishInputs();
+  }
+  get selectedAgentId() {
+    return this.agentId;
+  }
+  set selectedAgentId(value: string) {
+    this.agentId = value;
+    this.publishInputs();
+  }
+  get presented() {
+    return this.visible;
+  }
+  set presented(value: boolean) {
+    this.visible = value;
+    this.publishInputs();
+  }
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  private publishInputs() {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
 
   connectedCallback(): void {
     this.view = mountSolid(() => createIndicatorView(this), { container: this });
@@ -36,10 +83,6 @@ class LifecycleTestHost extends HTMLElement {
   disconnectedCallback(): void {
     this.view?.unmount();
     this.view = undefined;
-    this.invalidate = undefined;
-  }
-  requestUpdate(): void {
-    this.invalidate?.();
   }
   get updateComplete(): Promise<boolean> {
     return Promise.resolve().then(() => {
@@ -50,28 +93,22 @@ class LifecycleTestHost extends HTMLElement {
 }
 
 function createIndicatorView(host: LifecycleTestHost) {
-  const [revision, invalidate] = createSignal(0);
-  host.invalidate = () => invalidate((value) => value + 1);
+  const inputs = projectOwner(host, (owner) => owner);
+  const sessionRows = createMemo(() => {
+    const sessions = inputs.read().rowsSource;
+    return sessions ? projectOwner(sessions, () => host.readRows()) : null;
+  });
   const rows = createMemo(() => {
-    revision();
-    return host.readRows();
+    const current = inputs.read();
+    return sessionRows()?.read() ?? current.readRows();
   });
   const indicators = createSessionPullRequestIndicators({
     getConnected: () => host.isConnected,
-    getPresented: () => {
-      revision();
-      return host.presented;
-    },
+    getPresented: () => inputs.read().presented,
     getRows: rows,
-    getSelectedAgentId: () => {
-      revision();
-      return host.selectedAgentId;
-    },
-    getGateway: () => {
-      revision();
-      return host.gateway;
-    },
-    getSessions: () => host.getSessions(),
+    getSelectedAgentId: () => inputs.read().selectedAgentId,
+    getGateway: () => inputs.read().gateway,
+    getSessions: () => inputs.read().getSessions(),
   });
   host.indicators = indicators;
   return (
@@ -169,6 +206,9 @@ describe("Passive sidebar PR indicators", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).not.toHaveBeenCalled();
     expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+    const initial = { numbers: [42], state: "open" as const };
+    expect(host.indicators.summary(row.key, "", initial)).toEqual(initial);
+    expect(host.indicators.summary(row.key, row.worktreeId ?? "", initial)).toBeUndefined();
   });
   it("keeps empty rows idle across sidebar updates", async () => {
     vi.useFakeTimers();
@@ -178,8 +218,8 @@ describe("Passive sidebar PR indicators", () => {
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    host.requestUpdate();
-    host.requestUpdate();
+    host.selectedAgentId = "work";
+    host.selectedAgentId = "main";
     expect(await host.updateComplete).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -201,7 +241,11 @@ describe("Passive sidebar PR indicators", () => {
       const host = mountLifecycleHost(harness.gateway, getRows);
       await host.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
-      expect(harness.request).not.toHaveBeenCalled();
+      expect(harness.request).toHaveBeenLastCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        { sessionKeys: [], passiveSessionKeys: [row.key] },
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+      );
 
       harness.emit({
         sessions: {
@@ -257,6 +301,84 @@ describe("Passive sidebar PR indicators", () => {
     },
   );
 
+  it("counts cold task receipts without a worktree or an invented state", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const row = { key: "agent:main:task", isChild: false } as SidebarRecentSession;
+    const host = mountLifecycleHost(harness.gateway, () => [row]);
+    await host.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    const tasks = [41, 42, 43].map((number) => ({
+      owner: "example",
+      repo: "project",
+      number,
+      url: "https://github.com/example/project/pull/" + number,
+      branch: "fix/child",
+      sourceSessionKey: "agent:main:child",
+      sourceAgentId: "main",
+    }));
+    harness.emit({
+      sessions: {
+        [row.key]: {
+          pullRequests: [],
+          taskPullRequests: tasks,
+          taskPullRequestCount: 3,
+          status: "ready",
+          rateLimited: false,
+        },
+      },
+    });
+    await host.updateComplete;
+    expect(host.indicators.count(row.key)).toBe(3);
+    expect(host.indicators.summary(row.key, "")).toBeUndefined();
+    harness.emit({
+      sessions: {
+        [row.key]: {
+          pullRequests: [],
+          taskPullRequests: [],
+          taskPullRequestCount: 0,
+          status: "ready",
+          rateLimited: false,
+        },
+      },
+    });
+    await host.updateComplete;
+    expect(host.indicators.count(row.key)).toBe(0);
+  });
+
+  it("preserves catalog branch facts only while receipt-only hydration leaves the branch unread", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const row = {
+      key: "agent:main:task",
+      isChild: false,
+      worktreeId: "wt",
+    } as SidebarRecentSession;
+    const initial = { numbers: [40], state: "open" as const };
+    const host = mountLifecycleHost(harness.gateway, () => [row]);
+    await host.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, branchRead] of [false, undefined, false].entries()) {
+      harness.emit({
+        sessions: {
+          [row.key]: {
+            ...(branchRead === false ? { branchRead } : {}),
+            pullRequests: [],
+            taskPullRequests: [],
+            taskPullRequestCount: 0,
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      await host.updateComplete;
+      expect(host.indicators.summary(row.key, "wt", initial)).toEqual(
+        index === 0 ? initial : undefined,
+      );
+      expect(host.indicators.count(row.key)).toBe(index === 0 ? undefined : 0);
+    }
+  });
+
   it("clears alias indicators when the selected agent changes", async () => {
     vi.useFakeTimers();
     const harness = createGatewayHarness();
@@ -290,7 +412,6 @@ describe("Passive sidebar PR indicators", () => {
     });
 
     host.selectedAgentId = "work";
-    host.requestUpdate();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
@@ -313,6 +434,7 @@ describe("Passive sidebar PR indicators", () => {
       () => [row],
       () =>
         ({
+          subscribe: () => () => {},
           capturePullRequestEpoch: vi.fn(() => epoch),
           setPullRequestSummary,
         }) as unknown as SessionCapability,
@@ -371,7 +493,6 @@ describe("Passive sidebar PR indicator lifecycle", () => {
       await host.updateComplete;
       expect(host.textContent).toBe("7");
       host.presented = false;
-      host.requestUpdate();
       await host.updateComplete;
 
       const currentSessions =
@@ -394,7 +515,7 @@ describe("Passive sidebar PR indicator lifecycle", () => {
           auth: { role: "operator", scopes: ["operator.sessions.read"] },
         };
       }
-      host.requestUpdate();
+      host.gateway = harness.gateway;
       await host.updateComplete;
       const store = sessionPullRequestsForGateway(harness.gateway);
       expect(store.get("agent:main:global")).toBeUndefined();
@@ -402,10 +523,11 @@ describe("Passive sidebar PR indicator lifecycle", () => {
       await host.updateComplete;
       expect(clearSummary).not.toHaveBeenCalled();
       expect(host.textContent).toBe("7");
-      expect(harness.request).not.toHaveBeenCalled();
+      expect(
+        harness.request.mock.calls.every(([, params]) => params.sessionKeys.length === 0),
+      ).toBe(true);
 
       host.presented = true;
-      host.requestUpdate();
       await host.updateComplete;
       expect(host.textContent).toBe("");
     },
@@ -427,7 +549,7 @@ describe("Passive sidebar PR indicator lifecycle", () => {
       ...snapshot.hello!,
       auth: { role: "operator", scopes: ["operator.sessions.read", "operator.sessions.write"] },
     };
-    host.requestUpdate();
+    host.gateway = harness.gateway;
     await host.updateComplete;
     expect(host.textContent).not.toContain("42");
     expect(host.indicators.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
@@ -436,7 +558,7 @@ describe("Passive sidebar PR indicator lifecycle", () => {
       ...snapshot.hello,
       auth: { role: "operator", scopes: ["operator.read"] },
     };
-    host.requestUpdate();
+    host.gateway = harness.gateway;
     await host.updateComplete;
     expect(host.textContent).toContain("42");
   });
@@ -452,9 +574,13 @@ describe("Passive sidebar PR indicator lifecycle", () => {
     const host = mountLifecycleHost(harness.gateway, () => rows);
 
     await host.updateComplete;
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys: [], passiveSessionKeys: rows.map((row) => row.key).toSorted() },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
 
     const viewer = {};
     const store = sessionPullRequestsForGateway(harness.gateway);
@@ -463,7 +589,13 @@ describe("Passive sidebar PR indicator lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(harness.request).toHaveBeenLastCalledWith(
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      { sessionKeys: [key] },
+      {
+        sessionKeys: [key],
+        passiveSessionKeys: rows
+          .slice(1)
+          .map((row) => row.key)
+          .toSorted(),
+      },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
     harness.emit({
@@ -480,7 +612,7 @@ describe("Passive sidebar PR indicator lifecycle", () => {
     await host.updateComplete;
     expect(harness.request).toHaveBeenLastCalledWith(
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      { sessionKeys: [] },
+      { sessionKeys: [], passiveSessionKeys: rows.map((row) => row.key).toSorted() },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
     expect(host.textContent?.trim()).toBe("7");
@@ -513,7 +645,7 @@ describe("Passive sidebar PR indicator lifecycle", () => {
       ],
       () => sessions,
     );
-    const stop = sessions.subscribe(() => host.requestUpdate());
+    host.rowsSource = sessions;
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     harness.emit({
@@ -540,7 +672,6 @@ describe("Passive sidebar PR indicator lifecycle", () => {
         { foreground: true },
       );
       expect(store.get(key)).toBeUndefined();
-      host.requestUpdate();
       await host.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
       await host.updateComplete;
@@ -554,7 +685,6 @@ describe("Passive sidebar PR indicator lifecycle", () => {
       expect(sessions.pullRequestSummary(key)).toBeUndefined();
       expect(host.textContent?.trim()).toBe("");
     } finally {
-      stop();
       store.unwatch(foregroundOwner);
     }
   });
@@ -570,20 +700,24 @@ describe("Passive sidebar PR indicator lifecycle", () => {
     const host = mountLifecycleHost(harness.gateway, () => [row]);
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
-    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.request.mock.lastCall?.[1]).toEqual(
+      host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
+    );
 
-    host.requestUpdate();
     host.remove();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.request.mock.lastCall?.[1]).toEqual(
+      host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
+    );
 
     document.body.append(host);
-    host.requestUpdate();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.request.mock.lastCall?.[1]).toEqual(
+      host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
+    );
   });
 });

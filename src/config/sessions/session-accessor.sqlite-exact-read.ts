@@ -10,6 +10,7 @@ import {
   classifyOpenClawAgentDatabaseReadError,
   isOpenClawAgentDatabaseReadOpenFailure,
 } from "../../state/openclaw-agent-db-read-error.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -20,15 +21,25 @@ import {
   captureMemoryExactSessionReader,
   assertMemoryExactReadSource,
 } from "./session-accessor.memory-exact-read.js";
-import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  ExactSessionEntry,
+  SessionAccessScope,
+  SessionTranscriptReadScope,
+} from "./session-accessor.sqlite-contract.js";
 import {
   readSessionEntryByIdInDatabase,
+  readSessionKeyBySessionIdInDatabase,
   readExactSessionEntryRow,
   readSessionEntryRow,
   readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import {
+  resolveSqliteScope,
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionReaderContinuation,
@@ -41,6 +52,55 @@ import type {
   SessionEntryReadSource,
 } from "./session-entry-read-source.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+/** Loads one session entry from the additive SQLite session store. */
+export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
+  return resolveSessionEntry(scope).existing;
+}
+
+/** Loads one session entry without opening its agent database writable. */
+export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionEntry | undefined {
+  return resolveSessionEntry(scope, { readOnly: true, projection: scope.projection }).existing;
+}
+
+/** Reuse one reader during synchronous entry work; each read keeps its current admission. */
+export function withSessionEntryReadOnlyScope<T>(
+  scope: Pick<SessionEntryListScope, "agentId" | "defaultAgentId" | "env" | "storePath">,
+  operation: () => T,
+): T {
+  if (getSessionActorStorageBinding(scope)) {
+    return operation();
+  }
+  const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" }));
+  const reader = new OpenClawAgentDatabaseReadOnlyScope();
+  try {
+    return reader.run(
+      { agentId: options.agentId, path: resolveOpenClawAgentSqlitePath(options) },
+      operation,
+    );
+  } finally {
+    reader.close();
+  }
+}
+
+/** Resolves the persisted session key for a SQLite transcript session id. */
+export function resolveSessionKeyBySessionId(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): string | undefined {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.readCurrent(
+      { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+      memory.authority,
+    )?.sessionKey;
+  }
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionKeyBySessionIdInDatabase(database, resolved.sessionId),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
+}
 
 type ResolvedSqliteSessionEntry = {
   existing: SessionEntry | undefined;

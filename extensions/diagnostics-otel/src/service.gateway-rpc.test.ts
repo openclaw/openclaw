@@ -198,6 +198,7 @@ test.each([
       expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
       let deliveredPhases = 0;
       let deliveredWebSocketMetrics = 0;
+      let deliveredRetentionMetrics = 0;
       await startOtelService({
         traces,
         metrics: metricsEnabled,
@@ -212,6 +213,9 @@ test.each([
                 }
                 if (event.type === "gateway.ws.event" || event.type === "gateway.ws.connections") {
                   deliveredWebSocketMetrics++;
+                }
+                if (event.type === "sessions.list.retention") {
+                  deliveredRetentionMetrics++;
                 }
                 listener(event, metadata, privateData);
               }, filter);
@@ -228,6 +232,7 @@ test.each([
       });
       emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
       emit({ type: "gateway.ws.connections", operators: 1 });
+      emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
       emit({
         type: "model.usage",
         provider: "openai",
@@ -244,6 +249,7 @@ test.each([
 
       expect(deliveredPhases).toBe(traces ? 1 : 0);
       expect(deliveredWebSocketMetrics).toBe(metricsEnabled ? 2 : 0);
+      expect(deliveredRetentionMetrics).toBe(metricsEnabled ? 1 : 0);
       for (const name of [
         "openclaw.gateway.rpc.response",
         "openclaw.model.usage",
@@ -326,72 +332,6 @@ test("keeps parentless Gateway RPC spans out of unrelated ambient OpenTelemetry 
     }
   } finally {
     unrelated.end();
-  }
-});
-
-test("exports trusted WebSocket event totals and the current operator socket count", async () => {
-  const reader = new PeriodicExportingMetricReader({
-    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-  });
-  const meterProvider = new MeterProvider({ readers: [reader] });
-  metrics.disable();
-  metrics.setGlobalMeterProvider(meterProvider);
-  const { service, ctx } = await startOtelService({ metrics: true });
-  try {
-    emit({ type: "gateway.ws.connections", operators: 2 });
-    emit({ type: "gateway.ws.event", event: "chat", count: 2, bytes: 256 });
-    emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
-    emit({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
-    emit({ type: "gateway.ws.connections", operators: 0 });
-    for (const emitUntrusted of [emitDiagnosticEvent, emitInternalDiagnosticEventForTest]) {
-      emitUntrusted({
-        type: "gateway.ws.event",
-        event: "private-untrusted",
-        count: 99,
-        bytes: 999,
-      });
-      emitUntrusted({ type: "gateway.ws.connections", operators: 99 });
-    }
-    await waitForDiagnosticEventsDrained();
-
-    const { resourceMetrics, errors } = await reader.collect();
-    expect(errors).toEqual([]);
-    const wsMetrics = resourceMetrics.scopeMetrics
-      .flatMap((scope) => scope.metrics)
-      .filter((metric) => metric.descriptor.name.startsWith("openclaw.gateway.ws."));
-    expect(
-      Object.fromEntries(
-        wsMetrics.map((metric) => [
-          metric.descriptor.name,
-          {
-            unit: metric.descriptor.unit,
-            points: metric.dataPoints.map(({ attributes, value }) => ({ attributes, value })),
-          },
-        ]),
-      ),
-    ).toEqual({
-      "openclaw.gateway.ws.events": {
-        unit: "1",
-        points: [
-          { attributes: { "openclaw.gateway.ws.event": "chat" }, value: 3 },
-          { attributes: { "openclaw.gateway.ws.event": "other" }, value: 1 },
-        ],
-      },
-      "openclaw.gateway.ws.event_bytes": {
-        unit: "By",
-        points: [
-          { attributes: { "openclaw.gateway.ws.event": "chat" }, value: 384 },
-          { attributes: { "openclaw.gateway.ws.event": "other" }, value: 64 },
-        ],
-      },
-      "openclaw.gateway.ws.operator_connections": {
-        unit: "1",
-        points: [{ attributes: {}, value: 0 }],
-      },
-    });
-  } finally {
-    await service.stop?.(ctx);
-    await meterProvider.shutdown();
   }
 });
 

@@ -126,6 +126,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   for (const worker of workers.splice(0)) {
     worker.removeAllListeners();
   }
@@ -263,29 +264,81 @@ describe("local Memory watcher transport", () => {
     await close(replacement.instance, nextWorker);
   });
 
-  it("rejects failed worker startup once and retains its failure after joining exit", async () => {
-    const { instance, onDirty, onUnavailable } = watcher();
-    const starting = expect(instance.start()).rejects.toThrow("worker could not load");
-    const worker = activeWorker();
-    worker.emit("error", new Error("worker could not load"));
-    await starting;
-    let settled = false;
-    const closing = instance.close().catch((error: unknown) => {
-      settled = true;
-      return error;
-    });
-    await yieldToEventLoop();
-    expect(settled).toBe(false);
-    expect(onDirty).toHaveBeenCalledOnce();
-    expect(onUnavailable).toHaveBeenCalledOnce();
+  it("restores live subscriptions after exit and stops after repeated failures within a minute", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const first = watcher();
+    const second = watcher();
+    const worker = await start(first.instance);
+    await start(second.instance, 2);
+    worker.emit("error", new Error("worker crashed"));
     worker.emit("exit", 1);
-    expect(await closing).toMatchObject({ message: "worker could not load" });
-    expect(onDirty).toHaveBeenCalledOnce();
-    expect(onUnavailable).toHaveBeenCalledOnce();
-    expect(instance.health()).toEqual([]);
+    expect(first.instance.health()).toMatchObject([{ state: "unavailable" }]);
+    expect(first.onState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ capacityDegraded: true }),
+    );
+    expect(second.onUnavailable).toHaveBeenCalledOnce();
+    // Closing during backoff must remove the membership before replay.
+    await first.instance.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const recovered = activeWorker();
+    expect(recovered.commands).toHaveLength(1);
+    expect(recovered.commands[0]).toMatchObject({ type: "open", id: 2 });
+    recovered.receive({ type: "started", id: 2, facts: readyFacts });
+    recovered.receive({ type: "change", id: 2 });
+    await yieldToEventLoop();
+    expect(second.onChange).toHaveBeenCalledOnce();
+    expect(second.instance.capacityDegraded).toBe(false);
+    // Readiness alone must not reset a crash-loop budget.
+    for (const delay of [2_000, 5_000]) {
+      activeWorker().emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(delay);
+      activeWorker().receive({ type: "started", id: 2, facts: readyFacts });
+    }
+    activeWorker().emit("exit", 1);
+    expect(second.instance.health()).toMatchObject([
+      {
+        state: "unavailable",
+        failure: {
+          code: "worker-unavailable",
+          error: expect.stringContaining("repeated failures"),
+        },
+      },
+    ]);
+    expect(transport.warn).toHaveBeenLastCalledWith(expect.stringContaining("restart the Gateway"));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(transport.createWorker).toHaveBeenCalledTimes(4);
+    const joining = watcher();
+    await expect(joining.instance.start()).rejects.toThrow("repeated failures");
+    expect(joining.instance.health()).toMatchObject([{ state: "unavailable" }]);
+    await joining.instance.close();
+    await second.instance.close();
+  });
+
+  it("retries failed startup, expires old crashes, and cancels recovery on final close", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    transport.createWorker.mockImplementationOnce(() => {
+      throw new Error("worker could not load");
+    });
+    const { instance } = watcher();
+    const starting = instance.start();
+    expect(instance.health()).toMatchObject([{ state: "unavailable" }]);
+    await vi.advanceTimersByTimeAsync(500);
+    activeWorker().receive({ type: "started", id: 1, facts: readyFacts });
+    await starting;
+    await vi.advanceTimersByTimeAsync(60_000);
+    activeWorker().emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(transport.createWorker).toHaveBeenCalledTimes(3);
+    activeWorker().emit("exit", 1);
+    await instance.close();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(transport.createWorker).toHaveBeenCalledTimes(3);
+    // Explicit retirement/reload receives a fresh owner, not a sticky failed one.
     const replacement = watcher();
-    await expect(replacement.instance.start()).rejects.toThrow("worker could not load");
-    expect(transport.createWorker).toHaveBeenCalledOnce();
+    const nextWorker = await start(replacement.instance);
+    await close(replacement.instance, nextWorker);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(transport.createWorker).toHaveBeenCalledTimes(4);
   });
 
   it("joins a shared worker failure for subscriptions closing before and after the failure", async () => {
@@ -325,17 +378,17 @@ describe("local Memory watcher transport", () => {
     await entered.promise;
     worker.emit("error", new Error("watch transport failed"));
     let settled = false;
-    const closing = instance.close().catch((error: unknown) => {
+    const closing = instance.close().then(() => {
       settled = true;
-      return error;
     });
     worker.emit("exit", 1);
     await yieldToEventLoop();
     expect(settled).toBe(false);
-    expect(onDirty).toHaveBeenCalledOnce();
-    expect(onUnavailable).toHaveBeenCalledOnce();
+    expect(onDirty).not.toHaveBeenCalled();
+    expect(onUnavailable).not.toHaveBeenCalled();
     indexed.resolve();
-    expect(await closing).toMatchObject({ message: "watch transport failed" });
+    await closing;
+    expect(settled).toBe(true);
   });
 
   it("terminates after failed native cleanup, joins exit, and keeps the cleanup failure sticky", async () => {

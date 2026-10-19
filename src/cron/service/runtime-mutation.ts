@@ -27,16 +27,11 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
   params: CronRuntimeMutationParams<Type>,
 ): Promise<void> {
   let settled: "committed" | "not-committed" | "unknown" = "not-committed";
-  const assertCurrent = () => {
-    params.context.admission.assertCurrent();
-    params.assertCurrent();
-  };
   try {
     await runOpenClawStateWorkerOperation(
       params.context,
       async (scope) => {
         // Config or caller authority may change after dispatch; cron accepts that race.
-        assertCurrent();
         const command = {
           type: params.type,
           input: { ...params.input, snapshot: params.snapshot },
@@ -61,7 +56,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           throw new Error("Cron mutation returned an unexpected refusal");
         }
       },
-      { assertCurrent },
+      { assertCurrent: params.assertCurrent },
     );
   } finally {
     params.onSettled?.(settled);

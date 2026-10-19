@@ -180,15 +180,14 @@ serveOwnedWorkerTasks(
       if (request.kind === "historical-eviction-candidates") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
+        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const {
           readHistoricalSessionIdsInDatabase,
           readDiskEvictableArchivedSessionBatchInDatabase,
         } = await import("./session-history-eviction-candidates.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
+            runSqliteReadSnapshotSync(database.db, () =>
               "archived" in request
                 ? {
                     batch: readDiskEvictableArchivedSessionBatchInDatabase(
@@ -445,13 +444,12 @@ serveOwnedWorkerTasks(
       if (request.kind === "projection-status") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
+        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const { sessionTranscriptIndexNeedsReconcile } =
           await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           ({ db }) =>
-            runSqliteDeferredTransactionSync(db, () =>
+            runSqliteReadSnapshotSync(db, () =>
               sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
             ),
           { ...request.database, env: request.env },
@@ -507,6 +505,27 @@ serveOwnedWorkerTasks(
         return {
           kind: "session-pending-input-history",
           snapshot: readPendingInputHistoryInWorker(request),
+        };
+      }
+      if (request.kind === "conversation-bindings") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { selectConversationBindingFacts } =
+          await import("./conversation-binding-facts.worker.js");
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => selectConversationBindingFacts(database, request.conversationRefs),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return {
+          kind: "conversation-bindings",
+          snapshot: read.found
+            ? read.value
+            : {
+                catalogues: [],
+                associations: [],
+                windows: [],
+                nodes: [],
+              },
         };
       }
       if (request.kind === "conversation-rows") {

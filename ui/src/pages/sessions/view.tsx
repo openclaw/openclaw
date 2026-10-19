@@ -129,7 +129,7 @@ export function SessionsView(props: SessionsProps) {
               class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
               type="button"
               aria-label={t("common.refresh")}
-              disabled={props.refreshing}
+              disabled={props.refreshing || props.refreshDisabled}
               onClick={() => props.onRefresh()}
             >
               <Icon name="refresh" />

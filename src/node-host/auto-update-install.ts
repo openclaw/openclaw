@@ -14,6 +14,7 @@ import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integri
 import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import {
   downloadRegistryPackageArchive,
   fetchRegistryPackageManifest,
@@ -105,15 +106,7 @@ export async function prepareNodeRuntimeUpdate(params: {
         params.signal?.throwIfAborted();
       };
       assertCurrent();
-      let retained = false;
-      try {
-        await fs.lstat(packageRoot);
-        retained = true;
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
+      const retained = (await lstatIfExists(packageRoot, "ENOENT")) !== undefined;
       if (retained) {
         // Never reinstall over a retained generation: the launcher may still be running it.
         try {

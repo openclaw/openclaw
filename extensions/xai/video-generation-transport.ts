@@ -7,6 +7,7 @@ import {
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import type { GeneratedVideoAsset } from "openclaw/plugin-sdk/video-generation";
+import { XAI_VIDEO_DEFAULT_TIMEOUT_MS } from "./capability-provider-metadata-factory.js";
 
 export type XaiVideoRequestPolicy = {
   allowPrivateNetwork: boolean;
@@ -21,8 +22,6 @@ export async function fetchXaiVideoResponse(
     requestFailedMessage: string;
     auditContext: string;
     timeoutMs?: ProviderOperationTimeoutMs;
-    defaultTimeoutMs: number;
-    fetchFn: typeof fetch;
   } & XaiVideoRequestPolicy,
 ) {
   return await executeProviderOperationWithRetry({
@@ -34,9 +33,9 @@ export async function fetchXaiVideoResponse(
         params.init,
         resolvePositiveTimerTimeoutMs(
           typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs,
-          params.defaultTimeoutMs,
+          XAI_VIDEO_DEFAULT_TIMEOUT_MS,
         ),
-        params.fetchFn,
+        fetch,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
@@ -58,16 +57,14 @@ export async function downloadXaiVideo(
   params: {
     url: string;
     timeoutMs?: ProviderOperationTimeoutMs;
-    defaultTimeoutMs: number;
-    fetchFn: typeof fetch;
     maxBytes: number;
   } & XaiVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
   return await downloadGeneratedVideoAsset({
     url: params.url,
-    timeoutMs: params.timeoutMs ?? params.defaultTimeoutMs,
-    defaultTimeoutMs: params.defaultTimeoutMs,
-    fetchFn: params.fetchFn,
+    timeoutMs: params.timeoutMs ?? XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+    fetchFn: fetch,
     provider: "xai",
     label: "xAI generated video download",
     requestFailedMessage: "xAI generated video download failed",
@@ -82,10 +79,8 @@ export async function downloadXaiVideo(
         auditContext: "xai-video-download",
         init: { method: "GET" },
         timeoutMs,
-        defaultTimeoutMs: params.defaultTimeoutMs,
         allowPrivateNetwork: params.allowPrivateNetwork,
         dispatcherPolicy: params.dispatcherPolicy,
-        fetchFn: params.fetchFn,
       }),
   });
 }

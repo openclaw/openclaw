@@ -1,5 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
@@ -15,7 +14,6 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -26,11 +24,6 @@ import {
   startScrollProbe,
   readScrollProbe,
 } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
-import {
-  traceCollaboratorVisuals,
-  traceCollaboratorPaints,
-  markCollaboratorVisuals,
-} from "./chat-collaborator-visual-trace.test-support.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -44,35 +37,17 @@ let provider: Awaited<ReturnType<typeof startScrollInferenceFixture>>;
 const proxies: ViteDevServer[] = [];
 const urls: string[] = [];
 const profileIds: string[] = [];
-let artifactDir: string;
-const proof: Record<string, unknown> = {
-  transport: "real WebSocket; passive frame observation only",
-  inference: "credential-free loopback Responses fixture; NOT a live external provider",
-  captures: "separate full browser views; no transcript/footer compositing",
-};
 const suite = createControlUiE2eSuite({
   name: "Real Gateway collaborator scroll",
   startServerBeforeBrowser: true,
   async startServer() {
-    artifactDir = createControlUiE2eArtifactDir("collaborator-scroll-real-gateway");
     provider = await startScrollInferenceFixture();
     const close = async () => {
       await runQaGatewayFixture(
         async () => {},
         ...proxies.map((proxy) => () => proxy.close()),
-        async () => {
-          await instance?.cleanup();
-          proof.gatewayStopped = !instance?.child;
-        },
+        () => instance?.cleanup(),
         () => provider.close(),
-        async () => {
-          proof.providerFailures = provider.failures;
-          proof.providerRequests = provider.requests();
-          await writeFile(
-            path.join(artifactDir, "proof.json"),
-            JSON.stringify(proof, null, 2) + "\n",
-          );
-        },
       );
     };
     try {
@@ -195,7 +170,7 @@ function observe(page: Page) {
             ["chat.history", "chat.startup"].includes(request.method),
         ),
     );
-  return { sent, received, requests, response, history, sockets: () => sockets };
+  return { received, requests, response, history, sockets: () => sockets };
 }
 type Observation = ReturnType<typeof observe>;
 async function send(
@@ -204,7 +179,6 @@ async function send(
   message: string,
   afterDraft?: () => Promise<void>,
 ) {
-  await markCollaboratorVisuals(page, "send:" + message);
   const before = observed.requests("chat.send").length;
   const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
   await composer.fill(message);
@@ -223,7 +197,7 @@ async function send(
   if (typeof runId !== "string") {
     throw new Error("Missing actual send run identity");
   }
-  return { request, runId };
+  return { runId };
 }
 async function identity(page: Page) {
   return evaluateControlUiContext(page, (application) => {
@@ -250,25 +224,18 @@ async function assertAlignment(page: Page, prompt: string, own: boolean) {
       right: viewport.right - rect.right,
     };
   });
-  expect.soft(geometry.peer, prompt).toBe(!own);
-  expect.soft(geometry.alignment, prompt).toBe(own ? "end" : "start");
+  expect.soft(geometry, prompt).toMatchObject({ peer: !own, alignment: own ? "end" : "start" });
   expect
     .soft(own ? geometry.left - geometry.right : geometry.right - geometry.left, prompt)
     .toBeGreaterThan(0);
-  return geometry;
 }
 function paragraphs(prefix: string, count = 14) {
+  const body =
+    "This genuine streamed fixture response provides a stable reading anchor while another authenticated person writes. ";
   return (
     Array.from(
       { length: count },
-      (_, index) =>
-        prefix +
-        " paragraph " +
-        (index + 1) +
-        ". " +
-        "This genuine streamed fixture response provides a stable reading anchor while another authenticated person writes. ".repeat(
-          2,
-        ),
+      (_, index) => `${prefix} paragraph ${index + 1}. ${body.repeat(2)}`,
     ).join("\n\n") + "\n\n"
   );
 }
@@ -294,6 +261,26 @@ function persistedEvent(observed: Observation, runId: string) {
         runId + ":user",
   );
 }
+async function waitForDelta(observed: Observation, text: string, expectedSession?: string) {
+  await expect
+    .poll(() =>
+      observed.received.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event === "chat" &&
+          (expectedSession === undefined ||
+            record(frame.payload)?.sessionKey === expectedSession) &&
+          record(frame.payload)?.state === "delta" &&
+          JSON.stringify(frame.payload).includes(text),
+      ),
+    )
+    .toBe(true);
+}
+async function waitForSettlement(page: Page) {
+  await page
+    .getByRole("button", { name: "Stop generating", exact: true })
+    .waitFor({ state: "detached" });
+}
 async function wheel(page: Page, delta: number) {
   await page.locator(".chat-pane-cache__pane--active .chat-thread").hover();
   await page.mouse.wheel(0, delta);
@@ -309,415 +296,227 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block" as const,
           viewport: { width: 1440, height: 900 },
-          ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? { recordVideo: { dir: artifactDir, size: { width: 1440, height: 900 } } }
-            : {}),
         };
         await suite.withPage(options, async ({ page: reader }) => {
           await suite.withPage(options, async ({ page: writer }) => {
             const pages = [reader, writer];
-            const traceVisuals = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-            const finishVisuals = traceVisuals
-              ? await Promise.all(
-                  pages.map((page, index) =>
-                    traceCollaboratorVisuals(page, artifactDir, index === 0 ? "reader" : "writer"),
-                  ),
-                )
-              : [];
-            const finishPaints = traceVisuals
-              ? await traceCollaboratorPaints(reader, artifactDir)
-              : null;
             const observers = pages.map(observe);
             const [a, b] = observers as [Observation, Observation];
-            const capture = async (stage: string) => {
-              for (const [index, page] of pages.entries()) {
-                await page.screenshot({
-                  path: path.join(
-                    artifactDir,
-                    stage + "-" + (index === 0 ? "ReaderOne" : "WriterTwo") + ".png",
-                  ),
-                });
-              }
-            };
-            try {
-              for (const [index, page] of pages.entries()) {
-                await page.addInitScript(() =>
-                  localStorage.setItem(
-                    "openclaw:control-ui:community-invite:v2",
-                    JSON.stringify({ dismissedAtMs: 1770000000000 }),
-                  ),
-                );
-                const documentResponse = await page.goto(
-                  new URL("settings/profile", urls[index]!).href,
-                );
-                expect(
-                  documentResponse?.status(),
-                  "matching Gateway and UI build must serve the profile document",
-                ).toBe(200);
-                await waitForControlUiGatewayReady(page);
-                if (index === 0) {
-                  proof.session = await evaluateControlUiContext(
-                    page,
-                    async (application, key) => {
-                      const client = application.gateway.snapshot.client;
-                      if (!client) {
-                        throw new Error("Authenticated reader client missing");
-                      }
-                      return await client.request("sessions.create", {
-                        key,
-                        agentId: "main",
-                        label: "Sender-local scroll proof",
-                        visibility: "shared",
-                      });
-                    },
-                    sessionKey,
-                  );
-                }
-                await page.goto(controlUiSessionUrl(urls[index]!, sessionKey));
-                await waitForControlUiGatewayReady(page);
-                await expect
-                  .poll(() => page.locator("openclaw-app-sidebar").textContent())
-                  .toContain(people[index]!.name);
-              }
-              const identities = await Promise.all(pages.map(identity));
-              proof.identities = identities;
-              const clientInstanceIds: string[] = [];
-              for (const [index, observed] of observers.entries()) {
-                expect(identities[index]).toMatchObject({
-                  user: {
-                    id: profileIds[index],
-                    name: people[index]!.name,
-                    identity: { type: "profile", id: profileIds[index] },
-                  },
-                  authMethod: "trusted-proxy",
-                  connId: expect.any(String),
-                });
-                const connect = observed.requests("connect").at(-1);
-                if (!connect || connect.type !== "req") {
-                  throw new Error("No real connect request");
-                }
-                const reply = observed.response(connect.id);
-                if (!reply || reply.type !== "res") {
-                  throw new Error("No real hello response");
-                }
-                const hello = reply.payload as HelloOk;
-                const instanceId = record(record(connect.params)?.client)?.instanceId;
-                if (typeof instanceId !== "string") {
-                  throw new Error("No browser instance identity");
-                }
-                clientInstanceIds.push(instanceId);
-                expect(
-                  hello.snapshot.presence.find((entry) => entry.instanceId === instanceId)?.user
-                    ?.id,
-                ).toBe(profileIds[index]);
-              }
-              proof.clientInstanceIds = clientInstanceIds;
-              expect(new Set(clientInstanceIds).size).toBe(2);
-              expect(identities[0]!.connId).not.toBe(identities[1]!.connId);
-              expect(profileIds[0]).not.toBe(profileIds[1]);
-              proof.servedScripts = await Promise.all(
-                pages.map((page) =>
-                  page
-                    .locator("script[src]")
-                    .evaluateAll((scripts) =>
-                      scripts.map((script) => new URL((script as HTMLScriptElement).src).pathname),
-                    ),
+            for (const [index, page] of pages.entries()) {
+              await page.addInitScript(() =>
+                localStorage.setItem(
+                  "openclaw:control-ui:community-invite:v2",
+                  JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 ),
               );
-              const finishVisibility = await Promise.all(pages.map(startAssistantVisibilityProbe));
-              // Short actual turns qualify both reciprocal sender alignments before scroll assertions.
-              const alignments: unknown[] = [];
-              for (const [index, prompt] of [
-                "Reader's own first message",
-                "Writer's own first message",
-              ].entries()) {
-                const turn = provider.plan();
-                const submitted = await send(pages[index]!, observers[index]!, prompt);
-                await expect.poll(provider.requests).toBe(turn.index);
-                await turn.append("Acknowledged genuine composer turn " + turn.index + ".");
-                await turn.finish();
-                for (const [viewer, page] of pages.entries()) {
-                  await expect
-                    .poll(() => persistedEvent(observers[viewer]!, submitted.runId))
-                    .toBeDefined();
-                  alignments.push({
-                    viewer: people[viewer]!.name,
-                    prompt,
-                    geometry: await assertAlignment(page, prompt, viewer === index),
-                  });
-                  await page
-                    .getByRole("button", { name: "Stop generating", exact: true })
-                    .waitFor({ state: "detached" });
-                }
-              }
-              proof.alignments = alignments;
-              console.info("REAL_GATEWAY_IDENTITIES", JSON.stringify({ identities, alignments }));
-              await capture("01-reciprocal-identities");
-              const scenarios: unknown[] = [];
-              proof.scenarios = scenarios;
-              for (const [mode, awaitTyping] of [
-                ["reading", false],
-                ["tail", false],
-                ["reading-typed", true],
-                ["tail-typed", true],
-              ] as const) {
-                const turn = provider.plan();
-                const own = await send(reader, a, "Reader starts the " + mode + " scenario");
-                await expect.poll(provider.requests).toBe(turn.index);
-                await turn.append(paragraphs(mode));
-                await expect
-                  .poll(() =>
-                    a.received.some(
-                      (frame) =>
-                        frame.type === "event" &&
-                        frame.event === "chat" &&
-                        record(frame.payload)?.sessionKey === sessionKey &&
-                        record(frame.payload)?.state === "delta" &&
-                        JSON.stringify(frame.payload).includes(mode + " paragraph 14."),
-                    ),
-                  )
-                  .toBe(true);
-                await waitForChatScrollIdle(reader);
-                await expect
-                  .poll(() => chatThreadDistanceFromBottom(reader))
-                  .toBeLessThanOrEqual(8);
-                if (mode.startsWith("reading")) {
-                  await wheel(reader, -420);
-                }
-                await markCollaboratorVisuals(reader, mode + ":before-remote");
-                const before = await startScrollProbe(reader);
-                expect(
-                  mode.startsWith("reading") ? before.distance > 8 : before.distance <= 8,
-                ).toBe(true);
-                await capture("02-" + mode + "-before-remote");
-                const finishWriterPresence = await watchExistingReply(
-                  writer,
-                  mode + " paragraph 1.",
-                );
-                const remotePrompt = "Writer follow-up while Reader is at " + mode;
-                const remote = await send(
-                  writer,
-                  b,
-                  remotePrompt,
-                  awaitTyping
-                    ? async () => {
-                        // Observe real remote typing before submission instead of racing
-                        // the presence packet against its queued-custody replacement.
-                        await expect
-                          .poll(() =>
-                            reader
-                              .locator('.chat-virtual-row[data-virtual-row-key="presence:typing"]')
-                              .textContent(),
-                          )
-                          .toContain(remotePrompt);
-                      }
-                    : undefined,
-                );
-                await expect.poll(() => hasPending(a, remote.runId)).toBe(true);
-                const checkpoints: unknown[] = [];
-                const checkpoint = async (stage: string) => {
-                  await markCollaboratorVisuals(reader, mode + ":" + stage);
-                  await waitForChatScrollIdle(reader);
-                  const samples = await readScrollProbe(reader);
-                  const latest = samples.at(-1)!;
-                  checkpoints.push({ stage, ...latest });
-                  console.info(
-                    "REAL_GATEWAY_SCROLL",
-                    JSON.stringify({
-                      mode,
-                      stage,
-                      beforeTop: before.top,
-                      beforeAnchor: before.anchor,
-                      current: latest,
-                    }),
-                  );
-                  if (mode.startsWith("reading")) {
-                    expect
-                      .soft(
-                        Math.abs((latest.anchor ?? Infinity) - before.anchor!),
-                        mode + ": " + stage + " anchor",
-                      )
-                      .toBeLessThanOrEqual(1);
-                    // Persistence can regroup rows above the reader. The visible
-                    // anchor and follow lock must survive that offset correction.
-                    expect
-                      .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
-                      .toBe(true);
-                  } else {
-                    if (latest.distance > 8) {
-                      const locked = samples.findIndex(
-                        (sample, index) =>
-                          sample.policy?.locked && samples[index - 1]?.policy?.locked === false,
-                      );
-                      console.info(
-                        "REAL_GATEWAY_FOLLOW_LOCK",
-                        JSON.stringify({
-                          mode,
-                          stage,
-                          transition:
-                            locked < 0 ? [] : samples.slice(Math.max(0, locked - 2), locked + 3),
-                        }),
-                      );
+              const documentResponse = await page.goto(
+                new URL("settings/profile", urls[index]!).href,
+              );
+              expect(
+                documentResponse?.status(),
+                "matching Gateway and UI build must serve the profile document",
+              ).toBe(200);
+              await waitForControlUiGatewayReady(page);
+              if (index === 0) {
+                await evaluateControlUiContext(
+                  page,
+                  async (application, key) => {
+                    const client = application.gateway.snapshot.client;
+                    if (!client) {
+                      throw new Error("Authenticated reader client missing");
                     }
-                    expect
-                      .soft(latest.distance, mode + ": " + stage + " follows")
-                      .toBeLessThanOrEqual(8);
-                  }
-                };
-                await checkpoint("real-pending-input");
-                await turn.append(paragraphs(mode + " continuing", 3));
+                    return await client.request("sessions.create", {
+                      key,
+                      agentId: "main",
+                      label: "Sender-local scroll proof",
+                      visibility: "shared",
+                    });
+                  },
+                  sessionKey,
+                );
+              }
+              await page.goto(controlUiSessionUrl(urls[index]!, sessionKey));
+              await waitForControlUiGatewayReady(page);
+              await expect
+                .poll(() => page.locator("openclaw-app-sidebar").textContent())
+                .toContain(people[index]!.name);
+            }
+            const identities = await Promise.all(pages.map(identity));
+            const clientInstanceIds: string[] = [];
+            for (const [index, observed] of observers.entries()) {
+              expect(identities[index]).toMatchObject({
+                user: {
+                  id: profileIds[index],
+                  name: people[index]!.name,
+                  identity: { type: "profile", id: profileIds[index] },
+                },
+                authMethod: "trusted-proxy",
+                connId: expect.any(String),
+              });
+              const connect = observed.requests("connect").at(-1);
+              if (!connect || connect.type !== "req") {
+                throw new Error("No real connect request");
+              }
+              const reply = observed.response(connect.id);
+              if (!reply || reply.type !== "res") {
+                throw new Error("No real hello response");
+              }
+              const hello = reply.payload as HelloOk;
+              const instanceId = record(record(connect.params)?.client)?.instanceId;
+              if (typeof instanceId !== "string") {
+                throw new Error("No browser instance identity");
+              }
+              clientInstanceIds.push(instanceId);
+              expect(
+                hello.snapshot.presence.find((entry) => entry.instanceId === instanceId)?.user?.id,
+              ).toBe(profileIds[index]);
+            }
+            expect(new Set(clientInstanceIds).size).toBe(2);
+            expect(identities[0]!.connId).not.toBe(identities[1]!.connId);
+            expect(profileIds[0]).not.toBe(profileIds[1]);
+            const finishVisibility = await Promise.all(pages.map(startAssistantVisibilityProbe));
+            // Short actual turns qualify both reciprocal sender alignments before scroll assertions.
+            for (const [index, prompt] of [
+              "Reader's own first message",
+              "Writer's own first message",
+            ].entries()) {
+              const turn = provider.plan();
+              const submitted = await send(pages[index]!, observers[index]!, prompt);
+              await expect.poll(provider.requests).toBe(turn.index);
+              await turn.append("Acknowledged genuine composer turn " + turn.index + ".");
+              await turn.finish();
+              for (const [viewer, page] of pages.entries()) {
                 await expect
-                  .poll(() =>
-                    a.received.some(
-                      (frame) =>
-                        frame.type === "event" &&
-                        frame.event === "chat" &&
-                        record(frame.payload)?.state === "delta" &&
-                        JSON.stringify(frame.payload).includes(mode + " continuing paragraph 3."),
-                    ),
-                  )
-                  .toBe(true);
-                await checkpoint("assistant-stream-growth");
-                const followup = provider.plan();
-                await markCollaboratorVisuals(reader, mode + ":finish-active");
-                await turn.finish();
-                await expect.poll(provider.requests).toBe(followup.index);
-                await expect.poll(() => persistedEvent(a, remote.runId)).toBeDefined();
-                await checkpoint("pending-to-persisted");
-                await followup.append("Writer follow-up completed in " + mode + ".");
-                await followup.finish();
-                for (const page of pages) {
-                  await page
-                    .getByRole("button", { name: "Stop generating", exact: true })
-                    .waitFor({ state: "detached" });
-                }
-                await checkpoint("settled-history");
-                const writerMissingFrames = await finishWriterPresence();
-                expect
-                  .soft(
-                    writerMissingFrames,
-                    mode + ": queued sender keeps the active reply present",
-                  )
-                  .toEqual([]);
-                const samples = await readScrollProbe(reader, true);
-                let largestStep = 1;
-                for (let i = 2; i < samples.length; i += 1) {
-                  if (
-                    Math.abs(samples[i]!.top - samples[i - 1]!.top) >
-                    Math.abs(samples[largestStep]!.top - samples[largestStep - 1]!.top)
-                  ) {
-                    largestStep = i;
-                  }
-                }
-                console.info(
-                  "REAL_GATEWAY_TRANSITION",
-                  JSON.stringify({ mode, frames: samples.slice(largestStep - 1, largestStep + 2) }),
-                );
-                const maxDrift = Math.max(
-                  ...samples.map((sample) =>
-                    Math.abs((sample.anchor ?? Infinity) - before.anchor!),
-                  ),
-                );
-                scenarios.push({
-                  mode,
-                  ownRunId: own.runId,
-                  remoteRunId: remote.runId,
-                  remoteAck: b.response(remote.request.id),
-                  writerMissingFrames,
-                  before,
-                  checkpoints,
-                  samples,
-                  maxDrift,
-                });
+                  .poll(() => persistedEvent(observers[viewer]!, submitted.runId))
+                  .toBeDefined();
+                await assertAlignment(page, prompt, viewer === index);
+                await waitForSettlement(page);
+              }
+            }
+            for (const [mode, awaitTyping] of [
+              ["reading", false],
+              ["tail", false],
+              ["reading-typed", true],
+              ["tail-typed", true],
+            ] as const) {
+              const turn = provider.plan();
+              await send(reader, a, "Reader starts the " + mode + " scenario");
+              await expect.poll(provider.requests).toBe(turn.index);
+              await turn.append(paragraphs(mode));
+              await waitForDelta(a, mode + " paragraph 14.", sessionKey);
+              await waitForChatScrollIdle(reader);
+              await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
+              if (mode.startsWith("reading")) {
+                await wheel(reader, -420);
+              }
+              const before = await startScrollProbe(reader);
+              expect(mode.startsWith("reading") ? before.distance > 8 : before.distance <= 8).toBe(
+                true,
+              );
+              const finishWriterPresence = await watchExistingReply(writer, mode + " paragraph 1.");
+              const remotePrompt = "Writer follow-up while Reader is at " + mode;
+              const remote = await send(
+                writer,
+                b,
+                remotePrompt,
+                awaitTyping
+                  ? async () => {
+                      // Observe real remote typing before submission instead of racing
+                      // the presence packet against its queued-custody replacement.
+                      await expect
+                        .poll(() =>
+                          reader
+                            .locator('.chat-virtual-row[data-virtual-row-key="presence:typing"]')
+                            .textContent(),
+                        )
+                        .toContain(remotePrompt);
+                    }
+                  : undefined,
+              );
+              await expect.poll(() => hasPending(a, remote.runId)).toBe(true);
+              const checkpoint = async (stage: string) => {
+                await waitForChatScrollIdle(reader);
+                const samples = await readScrollProbe(reader);
+                const latest = samples.at(-1)!;
                 if (mode.startsWith("reading")) {
                   expect
-                    .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
+                    .soft(
+                      Math.abs((latest.anchor ?? Infinity) - before.anchor!),
+                      mode + ": " + stage + " anchor",
+                    )
                     .toBeLessThanOrEqual(1);
+                  // Persistence can regroup rows above the reader. The visible
+                  // anchor and follow lock must survive that offset correction.
+                  expect
+                    .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
+                    .toBe(true);
+                } else {
+                  expect
+                    .soft(latest.distance, mode + ": " + stage + " follows")
+                    .toBeLessThanOrEqual(8);
                 }
-                await capture("03-" + mode + "-after-remote");
-                // A deliberate local submission from real wheel scrollback must resume follow.
-                await wheel(reader, -420);
-                expect(await chatThreadDistanceFromBottom(reader)).toBeGreaterThan(8);
-                const local = provider.plan();
-                await send(reader, a, "Reader deliberately resumes after " + mode);
-                await expect
-                  .poll(() => chatThreadDistanceFromBottom(reader))
-                  .toBeLessThanOrEqual(8);
-                await expect.poll(provider.requests).toBe(local.index);
-                await local.append(paragraphs("local-resume-" + mode, 3));
-                await waitForChatScrollIdle(reader);
-                expect
-                  .soft(
-                    await chatThreadDistanceFromBottom(reader),
-                    "local submit follows its assistant stream",
-                  )
-                  .toBeLessThanOrEqual(8);
-                await local.finish();
-                for (const page of pages) {
-                  await page
-                    .getByRole("button", { name: "Stop generating", exact: true })
-                    .waitFor({ state: "detached" });
-                }
-                await capture("04-" + mode + "-local-resumed");
+              };
+              await checkpoint("real-pending-input");
+              await turn.append(paragraphs(mode + " continuing", 3));
+              await waitForDelta(a, mode + " continuing paragraph 3.");
+              await checkpoint("assistant-stream-growth");
+              const followup = provider.plan();
+              await turn.finish();
+              await expect.poll(provider.requests).toBe(followup.index);
+              await expect.poll(() => persistedEvent(a, remote.runId)).toBeDefined();
+              await checkpoint("pending-to-persisted");
+              await followup.append("Writer follow-up completed in " + mode + ".");
+              await followup.finish();
+              for (const page of pages) {
+                await waitForSettlement(page);
               }
-              const visibilityFailures = await Promise.all(
-                finishVisibility.map((finish) => finish()),
+              await checkpoint("settled-history");
+              const writerMissingFrames = await finishWriterPresence();
+              expect
+                .soft(writerMissingFrames, mode + ": queued sender keeps the active reply present")
+                .toEqual([]);
+              const samples = await readScrollProbe(reader, true);
+              const maxDrift = Math.max(
+                ...samples.map((sample) => Math.abs((sample.anchor ?? Infinity) - before.anchor!)),
               );
-              proof.assistantVisibilityFailures = visibilityFailures;
+              if (mode.startsWith("reading")) {
+                expect
+                  .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
+                  .toBeLessThanOrEqual(1);
+              }
+              // A deliberate local submission from real wheel scrollback must resume follow.
+              await wheel(reader, -420);
+              expect(await chatThreadDistanceFromBottom(reader)).toBeGreaterThan(8);
+              const local = provider.plan();
+              await send(reader, a, "Reader deliberately resumes after " + mode);
+              await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
+              await expect.poll(provider.requests).toBe(local.index);
+              await local.append(paragraphs("local-resume-" + mode, 3));
+              await waitForChatScrollIdle(reader);
               expect
                 .soft(
-                  visibilityFailures,
-                  "assistant text must not disappear or translate during arrival and handoff",
+                  await chatThreadDistanceFromBottom(reader),
+                  "local submit follows its assistant stream",
                 )
-                .toEqual([[], []]);
-              expect(provider.failures).toEqual([]);
-              for (const observed of observers) {
-                // Profile bootstrap and the chat navigation each own a real connection.
-                expect(observed.sockets()).toBe(2);
+                .toBeLessThanOrEqual(8);
+              await local.finish();
+              for (const page of pages) {
+                await waitForSettlement(page);
               }
-            } finally {
-              // Ordinary PR CI retains logs but does not upload the full protocol proof.
-              console.info(
-                "REAL_GATEWAY_TERMINALS",
-                JSON.stringify(
-                  observers.map((observed) => ({
-                    sends: observed
-                      .requests("chat.send")
-                      .map((frame) =>
-                        frame.type === "req" ? record(frame.params)?.idempotencyKey : null,
-                      ),
-                    terminals: observed.received.flatMap((frame) => {
-                      if (frame.type !== "event" || frame.event !== "chat") {
-                        return [];
-                      }
-                      const payload = record(frame.payload);
-                      return payload &&
-                        ["final", "aborted", "error"].includes(String(payload.state))
-                        ? [{ runId: payload.runId, state: payload.state, seq: payload.seq }]
-                        : [];
-                    }),
-                  })),
-                ),
-              );
-              await finishPaints?.();
-              for (const finish of finishVisuals) {
-                await finish();
-              }
-              proof.protocol = observers.map((observed) => ({
-                sockets: observed.sockets(),
-                sends: observed
-                  .requests("chat.send")
-                  .map((frame) => (frame.type === "req" ? frame.params : null)),
-                historyResponses: observed.history().length,
-                events: observed.received
-                  .filter((frame) => frame.type === "event")
-                  .map((frame) => ({ event: frame.event, payload: frame.payload })),
-              }));
-              await writeFile(
-                path.join(artifactDir, "proof.json"),
-                JSON.stringify(proof, null, 2) + "\n",
-              );
-              await writeFile(path.join(artifactDir, "gateway.log"), instance.logs());
+            }
+            const visibilityFailures = await Promise.all(
+              finishVisibility.map((finish) => finish()),
+            );
+            expect
+              .soft(
+                visibilityFailures,
+                "assistant text must not disappear or translate during arrival and handoff",
+              )
+              .toEqual([[], []]);
+            expect(provider.failures).toEqual([]);
+            for (const observed of observers) {
+              // Profile bootstrap and the chat navigation each own a real connection.
+              expect(observed.sockets()).toBe(2);
             }
           });
         });

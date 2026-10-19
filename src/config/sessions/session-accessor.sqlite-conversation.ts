@@ -237,8 +237,11 @@ export function upsertConversationIdentities(
             eb.val(updatedAt).as("updated_at"),
           ])
           .where("field.key", ">=", 0)
-          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", columns.length), "integer"))
-          .orderBy((eb) => eb.cast<number>(eb("field.key", "/", columns.length), "integer")),
+          // Separate bound divisors do not identify the same PostgreSQL grouping expression.
+          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", eb.lit(columns.length)), "integer"))
+          .orderBy((eb) =>
+            eb.cast<number>(eb("field.key", "/", eb.lit(columns.length)), "integer"),
+          ),
       )
       .onConflict((conflict) =>
         conflict.column("conversation_id").doUpdateSet((eb) => ({

@@ -28,7 +28,6 @@ describe("session observer model slots", () => {
     const states = new Map<string, SessionObserverState>();
     const slots = createSessionObserverModelSlots({
       states,
-      maxSessions: 6,
       resolve: () => "openai/gpt-test",
       demote: (state) => {
         state.utilityModelRef = undefined;
@@ -68,7 +67,6 @@ describe("session observer model slots", () => {
       const demote = vi.fn();
       const slots = createSessionObserverModelSlots({
         states,
-        maxSessions: 6,
         resolve: () => "openai/gpt-test",
         demote,
       });
@@ -91,7 +89,6 @@ describe("session observer model slots", () => {
       const demote = vi.fn();
       const slots = createSessionObserverModelSlots({
         states,
-        maxSessions: 6,
         resolve: () => "openai/gpt-test",
         demote,
       });

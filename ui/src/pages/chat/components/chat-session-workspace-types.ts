@@ -27,6 +27,7 @@ export type SessionWorkspaceProps = {
     signal: AbortSignal,
   ) => Promise<SessionFileDownload | null>;
   onBrowsePath: (path: string) => void;
+  onRetry: () => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onSetFilter: (filter: SessionWorkspaceFilter) => void;
@@ -84,6 +85,5 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceDraftScope?: string;
   sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
-  requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };

@@ -9,7 +9,10 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
+import {
+  publishAgentDeletionWorkAdmission,
+  replayAgentDeletionTerminalWrites,
+} from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { captureAgentDatabasePreparationDeletionForIdentity } from "../state/agent-database-admission.js";
@@ -37,10 +40,7 @@ import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-a
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db-contract.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withCurrentOpenClawStateReadScope } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
@@ -498,6 +498,11 @@ function runAgentDeletionWithLease<T>(
                 }
               },
               rollback: async () => {
+                await replayAgentDeletionTerminalWrites({ agentId: id, statePath }, (write) =>
+                  operation.runDatabaseCleanup(write.target, () =>
+                    write.persist(assertCurrentFinal),
+                  ),
+                );
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
                   completeOperation();
@@ -545,16 +550,4 @@ export function isAgentDeletionBlocked(
     }
     return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
   });
-}
-
-/** Keep persisted identity stable until the winning deletion completes or rolls back. */
-export function assertAgentDeletionAllowsMutation(
-  database: OpenClawStateDatabase,
-  agentId: string,
-): void {
-  const id = normalizeAgentId(agentId);
-  const journal = readAgentDeletionJournalInDatabase(database, id);
-  if (journal && !journal.cleanupCompleted) {
-    throw new Error(`Agent ${id} has pending deletion; retry after removal completes.`);
-  }
 }

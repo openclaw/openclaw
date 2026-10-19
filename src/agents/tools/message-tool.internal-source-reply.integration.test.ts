@@ -66,13 +66,6 @@ function createCurrentSourceMessageTool(
     agentSessionKey: "agent:main:webchat:dm:dashboard",
     runId: "webchat-run",
     sandboxRoot: params.sandboxFsBridge ? params.workspaceDir : undefined,
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...params,
   };
   setRuntimeConfigSnapshot(options.config ?? {});

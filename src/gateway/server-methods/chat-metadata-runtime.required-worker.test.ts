@@ -1,4 +1,11 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
+import type { ChatMetadataResponse } from "../../../ui/src/lib/chat/chat-metadata-cache.ts";
+import {
+  beginChatMetadataPublication,
+  revalidateChatMetadata,
+} from "../../../ui/src/lib/chat/chat-metadata-store.ts";
+import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.ts";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 
@@ -18,6 +25,36 @@ const models = ["worker-model", "other-model"].map((id) => ({
   available: false,
   unavailableReason: "missing-auth",
 }));
+
+test("does not retain startup worker policy across a command-only refresh", async () => {
+  const cfg = structuredClone(config);
+  const harness = createChatMetadataHarness(cfg);
+  const scope = { agentId: "main", sessionKey: "agent:main:main" };
+  const client = createTestGatewayClient(async (method, params) => {
+    if (method === "chat.startup") {
+      return (await harness.startup(scope))?.metadata;
+    }
+    expect(method).toBe("chat.metadata");
+    const ifRevision = asOptionalRecord(params)?.ifRevision;
+    return harness.read({
+      includeModels: false,
+      ifRevision: typeof ifRevision === "string" ? ifRevision : undefined,
+    });
+  });
+  try {
+    await harness.refresh();
+    await harness.read();
+    const startup = await client.request<ChatMetadataResponse>("chat.startup", scope);
+    const published = beginChatMetadataPublication(client, scope).publish(startup);
+    expect(published.requiredWorkerInferenceProfileId).toBe("dedicated");
+    delete cfg.cloudWorkers!.requiredProfile;
+    const refreshed = await revalidateChatMetadata(client, scope);
+    expect(refreshed.commands).toEqual(published.commands);
+    expect(refreshed.requiredWorkerInferenceProfileId).toBeUndefined();
+  } finally {
+    await harness.runtime.stop();
+  }
+});
 
 test("required worker chat metadata admits cold main and bookmarked sessions without Gateway auth", async () => {
   const harness = createChatMetadataHarness(config);

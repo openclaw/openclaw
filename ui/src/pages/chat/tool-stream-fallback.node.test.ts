@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 import type { FallbackStatus } from "./tool-stream-contract.ts";
 import { handleSessionOperationEvent } from "./tool-stream-status.ts";
@@ -93,8 +94,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
   it("auto-clears fallback status after toast duration", () => {
     useToolStreamFakeTimers();
-    const requestUpdate = vi.fn();
-    const host = createHost({ requestUpdate });
+    const publication = vi.fn();
+    const host = createHost();
+    chatRunPresentation(host).subscribe(publication);
 
     emitEvent(host, "run-1", 1, "lifecycle", {
       phase: "fallback",
@@ -105,6 +107,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       reasonSummary: "rate limit",
     });
 
+    publication.mockClear();
     let fallbackStatus = requireFallbackStatus(host);
     expect(fallbackStatus.reason).toBe("rate limit");
     expect(fallbackStatus.phase).toBe("active");
@@ -115,10 +118,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(fallbackStatus.phase).toBe("active");
     expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
     expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(publication).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(host.fallbackStatus).toBeNull();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(publication).toHaveBeenCalledOnce();
   });
 
   it("builds previous fallback label from provider + model on fallback_cleared", () => {

@@ -109,8 +109,8 @@ describe("voice transcript membership", () => {
       },
     ];
     const state = getTranscriptState(props.paneId);
-    state.searchOpen = true;
-    state.searchQuery = "unmatched search";
+    state.search.toggle();
+    state.search.setQuery("unmatched search");
     const project = voiceProjection(props);
 
     expect(project()).toEqual([

@@ -65,11 +65,11 @@ export function createSessionRowRefresh(
         const selected = new Set(
           [...batch.keys()].filter((id) => {
             const row = owner.rows.get(id);
-            return row && (owner.dirty.has(id) || isCold(row));
+            return row && (owner.dirty.has(id) || !records.ready(row));
           }),
         );
         if (selected.size > 0) {
-          await owner.runAsOwner(() => readRows(selected, { archived: true }));
+          await owner.runAsOwner(() => readRows(selected, { materializeCold: true }));
           // Retained facts can finish through microtasks; let the loop run between row slices.
           await yieldSessionListWork();
         }
@@ -119,7 +119,7 @@ export function createSessionRowRefresh(
         continue;
       }
       const row = owner.lookup(query);
-      if (row && (owner.dirty.has(records.identity(row)) || isCold(row))) {
+      if (row && (owner.dirty.has(records.identity(row)) || !records.ready(row))) {
         selected.add(records.identity(row));
       }
     }
@@ -171,7 +171,7 @@ export function createSessionRowRefresh(
   }
   function readRows(
     selected: ReadonlySet<string>,
-    options: { archived?: boolean; materialize?: boolean } = {},
+    options: { materializeCold?: boolean; materialize?: boolean } = {},
   ) {
     return withSessionRowDatabaseFacts(
       {

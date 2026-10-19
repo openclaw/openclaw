@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
@@ -39,7 +40,6 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: () => renderChatPropsInto(container, props),
   });
   renderChatPropsInto(container, props);
   const composer = expectDefined(
@@ -56,8 +56,7 @@ function createPane(paneId = "primary") {
     composer.dispatchEvent(
       new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
     );
-    await Promise.resolve();
-    expect(document.activeElement).toBe(search());
+    await waitForSolid(() => expect(document.activeElement).toBe(search()));
     if (query !== null) {
       search().value = query;
       search().dispatchEvent(new Event("input", { bubbles: true }));
@@ -76,6 +75,22 @@ function escape() {
 }
 
 describe("transcript search Escape", () => {
+  it("returns to the composer when the shortcut origin has been removed", async () => {
+    const pane = createPane();
+    const chat = expectDefined(pane.container.querySelector(".chat"), "chat shortcut owner");
+    const trigger = chat.appendChild(document.createElement("button"));
+    trigger.focus();
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.search()));
+    trigger.remove();
+    pane.search().dispatchEvent(escape());
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.composer));
+    expect(pane.onClearReply).not.toHaveBeenCalled();
+    expect(pane.onAbort).not.toHaveBeenCalled();
+  });
+
   it("closes from the search button after its tooltip and restores focus without clearing reply or stopping", async () => {
     const pane = createPane();
     await pane.openSearch();

@@ -86,6 +86,10 @@ Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
 
+Session readers can review changes with `sessions.diff` for conversations they can
+currently read, including their own private sessions. Existing sharing and agent
+access rules still apply; no general Gateway read grant is needed.
+
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within a visible session's workspace. Reads
 outside that root also require the session's file tools to allow Gateway-host
@@ -476,6 +480,8 @@ Connection authority is resolved in this order:
 2. OpenClaw unions a matching server-side identity grant with those scopes.
 3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
    An absent header means no cap. A present-but-empty header yields no scopes.
+   The intersection honors scope implications: an `operator.write` grant with
+   an `operator.read` cap yields only `operator.read`.
 4. If the authenticated profile has an effective named operator role,
    OpenClaw intersects the result with that role's configured scope ceiling.
 

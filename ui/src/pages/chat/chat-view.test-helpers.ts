@@ -12,10 +12,11 @@ import {
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
@@ -29,17 +30,34 @@ import {
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
-export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+export async function renderChatModelControls(
+  props: ChatModelControlsProps,
+  container: HTMLDivElement,
+) {
+  const renderProps: ChatModelControlsProps = {
+    ...props,
+    modelPickerOpen: props.modelPickerOpen ?? true,
+  };
+  if (renderProps.modelPickerOpen) {
+    await import("./components/chat-model-picker-panel.tsx");
+  }
   const update = modelControlsUpdates.get(container);
   if (update) {
-    update(props);
+    update(renderProps);
   } else {
     if (!container.isConnected) {
       document.body.append(container);
       onTestFinished(() => container.remove());
     }
-    const view = mountSolidComponent(ChatModelControls, props, container);
+    const view = mountSolidComponent(ChatModelControls, renderProps, container);
     modelControlsUpdates.set(container, (next) => view.update(next));
+  }
+  if (renderProps.modelPickerOpen) {
+    // The first open compiles the lazy panel under the full CI shard's load.
+    await waitForSolid(
+      () => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      { timeout: 5_000 },
+    );
   }
   return container;
 }
@@ -65,10 +83,7 @@ let nextTestTranscriptId = 0;
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
 ): ChatTranscript {
-  return createChatTranscript(
-    () => undefined,
-    () => paneId,
-  );
+  return createChatTranscript(() => paneId);
 }
 
 export function createPasteEvent(
@@ -212,7 +227,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
     onDraftChange: () => undefined,
-    onRequestUpdate: () => undefined,
     onSend: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
@@ -448,7 +462,6 @@ export function createReactiveDraftHarness({
       draft,
       getDraft: () => draft,
       onDraftChange,
-      onRequestUpdate: renderCurrent,
       ...currentOverrides,
       draftSource: currentOverrides.draftSource ?? draftSource,
       onGoalDraftModeChange: (mode) => {
@@ -489,12 +502,11 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
   const onDraftChange = vi.fn((next: string) => {
     host.draft = next;
   });
-  const onRequestUpdate = vi.fn(() => redraw());
   const onClearReply = vi.fn(() => {
     host.replyTarget = null;
     redraw();
   });
-  function redraw() {
+  const redraw = vi.fn(() => {
     renderChatInto(container, {
       paneId,
       sessionKey: `agent:main:${paneId}`,
@@ -504,18 +516,16 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       canAbort: true,
       runActive: true,
       onDraftChange,
-      onRequestUpdate,
       onClearReply,
       onSend,
       onAbort,
     });
-  }
+  });
   return {
     container,
     host,
     redraw,
     onDraftChange,
-    onRequestUpdate,
     onClearReply,
     onSend,
     onAbort,
@@ -525,4 +535,21 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       resetChatViewState(paneId, container);
     },
   };
+}
+
+export function appendMessageActionFixture(
+  group: HTMLElement,
+  messageKey: string,
+  onCopy?: () => void,
+) {
+  const element = document.createElement("div");
+  element.dataset.messageActionsFor = messageKey;
+  const copy = onCopy ? document.createElement("button") : undefined;
+  if (copy) {
+    copy.className = "chat-copy-btn";
+    copy.addEventListener("click", () => onCopy?.());
+    element.append(copy);
+  }
+  group.append(element);
+  onTestFinished(registerMessageActionElements(element, () => messageKey, { copy }));
 }

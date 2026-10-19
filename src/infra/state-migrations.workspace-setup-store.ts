@@ -20,7 +20,7 @@ import {
 } from "./kysely-sync.js";
 // SQLite import and receipt semantics for retired workspace state.
 import type { EngineConnection } from "./sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
@@ -238,7 +238,7 @@ export function canonicalCoversParsedSource(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);

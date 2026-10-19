@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
@@ -23,8 +23,8 @@ vi.mock("./file-consent.js", async (original) => ({
 function createRuntimeStub(stateDir?: string): PluginRuntime {
   return {
     state: {
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests("msteams", options),
+      openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreV2ForTests("msteams", options, { assertCurrent() {} }),
       resolveStateDir: (env?: NodeJS.ProcessEnv) =>
         env?.OPENCLAW_STATE_DIR?.trim() || (stateDir ?? path.join(os.homedir(), ".openclaw")),
     },

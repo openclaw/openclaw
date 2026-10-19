@@ -45,7 +45,6 @@ export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: Sideb
   }
 }
 
-/** Builds the two rail models and their shared sidebar slot controls. */
 export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;

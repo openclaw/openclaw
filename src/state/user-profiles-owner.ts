@@ -1,5 +1,5 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
@@ -13,24 +13,32 @@ const OWNER_SUBJECT = "owner";
 /** Read raw rows: the shared owner must never inherit a person through a merge. */
 export function readGatewayOwnerProfileRows(db: EngineConnection) {
   const kysely = userProfilesDb(db);
-  const owner = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely.selectFrom("user_profiles").selectAll().where("id", "=", GATEWAY_OWNER_PROFILE_ID),
-  );
-  const identified = executeSqliteQueryTakeFirstSync(
+  const rows = executeSqliteQuerySync(
     db,
     kysely
       .selectFrom("user_profiles")
-      .innerJoin(
-        "user_profile_identities",
-        "user_profile_identities.profile_id",
-        "user_profiles.id",
-      )
-      .selectAll("user_profiles")
-      .where("provider", "=", OWNER_PROVIDER)
-      .where("subject", "=", OWNER_SUBJECT),
-  );
-  return { owner, identified };
+      .selectAll()
+      .select((eb) => eb.val<"owner" | "identified">("owner").as("origin"))
+      .where("id", "=", GATEWAY_OWNER_PROFILE_ID)
+      .unionAll(
+        kysely
+          .selectFrom("user_profiles")
+          .innerJoin(
+            "user_profile_identities",
+            "user_profile_identities.profile_id",
+            "user_profiles.id",
+          )
+          .selectAll("user_profiles")
+          .select((eb) => eb.val<"owner" | "identified">("identified").as("origin"))
+          .where("provider", "=", OWNER_PROVIDER)
+          .where("subject", "=", OWNER_SUBJECT),
+      ),
+  ).rows;
+  const result: { owner?: UserProfileRow; identified?: UserProfileRow } = {};
+  for (const { origin, ...row } of rows) {
+    result[origin] = row;
+  }
+  return result;
 }
 
 export function readGatewayOwnerProfileForEnsure(db: EngineConnection) {

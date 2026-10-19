@@ -185,6 +185,8 @@ describe("composer run status", () => {
         container.querySelector(".chat-working-indicator .chat-reading-indicator"),
       ).not.toBeNull();
       await draw([child]);
+      await vi.dynamicImportSettled();
+      flush();
       if (access === "view-only subagent") {
         expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
           "View-only subagent",

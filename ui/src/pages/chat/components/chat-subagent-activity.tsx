@@ -13,7 +13,8 @@ export type SubagentActivityProps = {
   onOpenSubagent?: (key: string) => void;
   onOpenSession?: (key: string) => void;
   compact?: boolean;
-  /** Renders only the first rows while live activity still tracks all of them. */
+  presented?: boolean;
+  /** Limits rendering and narration subscriptions to the displayed rows. */
   limit?: number;
   turnStartedAt?: number;
 };
@@ -79,6 +80,11 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
         </span>
       </Show>
       <span class="chat-subagent-activity__name">{props.row.label}</span>
+      <Show when={!props.compact}>
+        <span class="chat-subagent-activity__separator" aria-hidden="true">
+          ·
+        </span>
+      </Show>
       <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
       <Show when={props.compact}>
         <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
@@ -112,13 +118,22 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
       <Show
         when={open()}
         fallback={
-          <div class="chat-subagent-activity__row" title={description()}>
+          <div
+            class={[
+              "chat-subagent-activity__row",
+              { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
+            ]}
+            title={description()}
+          >
             {content()}
           </div>
         }
       >
         <button
-          class="chat-subagent-activity__row"
+          class={[
+            "chat-subagent-activity__row",
+            { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
+          ]}
           type="button"
           title={description()}
           aria-label={description()}

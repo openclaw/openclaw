@@ -241,6 +241,15 @@ export function upsertMemoryEmbeddingCache(params: {
   if (retainedRows.length === 0) {
     return cacheSize;
   }
+  if (maxEntries !== undefined && cacheSize + retainedRows.length > maxEntries) {
+    cacheSize = reserveMemoryEmbeddingCacheCapacity({
+      db: params.db,
+      provider,
+      providerKey: params.providerKey,
+      hashes: retainedRows.map(([hash]) => hash),
+      maxEntries,
+    });
+  }
   const now = params.now ?? Date.now();
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
   let batch: MemoryEmbeddingCacheRow[] = [];
@@ -284,15 +293,47 @@ export function upsertMemoryEmbeddingCache(params: {
     }
   }
   flush();
-  // Replacements make this an upper bound. Count only when capacity may require eviction.
-  cacheSize += retainedRows.length;
-  if (maxEntries !== undefined && cacheSize > maxEntries) {
-    cacheSize = countMemoryEmbeddingCache(params.db);
-    if (cacheSize > maxEntries) {
-      cacheSize -= deleteOldestMemoryEmbeddingCacheRows(params.db, cacheSize - maxEntries);
-    }
+  // Replacements make this an upper bound; a reserved write inserts only new rows.
+  return cacheSize + retainedRows.length;
+}
+
+/*
+ * Evicts before inserting so even an uncommitted write never holds more rows than the cap;
+ * a forced rebuild otherwise grows the primary file before the excess is deleted. The
+ * retained size is only an upper bound, so count first: below capacity a direct UPSERT
+ * cannot overflow. At capacity, removing replaced rows makes every UPSERT row a true insert.
+ */
+function reserveMemoryEmbeddingCacheCapacity(params: {
+  db: EngineConnection;
+  provider: { id: string; model: string };
+  providerKey: string;
+  hashes: string[];
+  maxEntries: number;
+}): number {
+  const { hashes, maxEntries } = params;
+  let size = countMemoryEmbeddingCache(params.db);
+  if (size + hashes.length <= maxEntries) {
+    return size;
   }
-  return cacheSize;
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
+  // Chunks stay below SQLite's portable binding limit.
+  for (let start = 0; start < hashes.length; start += 400) {
+    const result = executeSqliteQuerySync(
+      params.db,
+      db
+        .deleteFrom("memory_embedding_cache")
+        .where("provider", "=", params.provider.id)
+        .where("model", "=", params.provider.model)
+        .where("provider_key", "=", params.providerKey)
+        .where("hash", "in", hashes.slice(start, start + 400)),
+    );
+    size -= Number(result.numAffectedRows);
+  }
+  const excess = size + hashes.length - maxEntries;
+  if (excess > 0) {
+    size -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+  }
+  return size;
 }
 
 export function collectMemoryCachedEmbeddings(params: {

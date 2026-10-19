@@ -3,10 +3,10 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
-  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
@@ -15,6 +15,7 @@ import {
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
+  readWebSearchQueryAndCount,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -251,14 +252,7 @@ export async function executePerplexitySearch(
     };
   }
 
-  const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
   const rawFreshness = readStringParam(args, "freshness");
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
   if (rawFreshness && !freshness) {
@@ -408,12 +402,7 @@ export async function executePerplexitySearch(
     provider: "perplexity",
     ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "perplexity",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("perplexity"),
     ...resultFields,
   };
 

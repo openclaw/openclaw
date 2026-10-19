@@ -57,11 +57,12 @@ describe("OpenRouter serialized tool schema policy", () => {
   let captured: { url: string; body: CapturedRequest };
 
   beforeAll(async () => {
-    originalHost = getAiTransportHost();
     const { default: plugin } = await loadBundledPluginFacade<{
       default: Parameters<typeof registerSingleProviderPlugin>[0];
     }>({ pluginId: "openrouter", artifactBasename: "index.js" });
     provider = await registerSingleProviderPlugin(plugin);
+    // Plugin loading can install the runtime host; preserve that initialization on cleanup.
+    originalHost = getAiTransportHost();
     configureAiTransportHost({
       ...originalHost,
       resolveProviderRequestCapabilities,

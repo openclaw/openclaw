@@ -4,6 +4,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -11,8 +12,18 @@ import type { ReadinessChecker } from "./server/readiness.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
+export function createStartupMethodUnlocker(unavailableGatewayMethods: Set<string>) {
+  return (options?: { keepChatSendUnavailable?: boolean }) => {
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
+        unavailableGatewayMethods.delete(method);
+      }
+    }
+  };
+}
+
 export function registerGatewayStartupReadinessTests(params: {
-  start: typeof startGatewayPostAttachRuntime;
+  start: (params: PostAttachParams) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
 }): void {
   it.each([false, true])(

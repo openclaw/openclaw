@@ -371,6 +371,21 @@ function replayMessages(
   return convertResponsesMessages(model, { messages }, testAllowedToolCallProviders, options);
 }
 
+it.each([
+  [null, null],
+  [undefined, "auto"],
+] as const)("sends common Responses summary %s as %s", (reasoningSummary, expected) => {
+  const params = {} as { reasoning?: unknown };
+  applyCommonResponsesParams(
+    params as never,
+    nativeOpenAIModel,
+    { messages: [] },
+    { reasoningEffort: "medium", reasoningSummary },
+  );
+
+  expect(params.reasoning).toEqual({ effort: "medium", summary: expected });
+});
+
 it("drops Responses temperature for the GPT-5.6 family that rejects it", () => {
   const params = {} as never;
   applyCommonResponsesParams(params, gpt56SolModel, { messages: [] }, { temperature: 0.3 });

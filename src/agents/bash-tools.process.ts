@@ -1,8 +1,3 @@
-/**
- * Process-control tool factory.
- * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
- * and removes background exec sessions.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
@@ -52,7 +47,6 @@ import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
 import { failText, textResult } from "./tools/tool-results.js";
 
-/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
@@ -138,6 +132,7 @@ function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): nu
     const sessionState = getDiagnosticSessionState({ sessionId });
     return recordCommandPoll(sessionState, sessionId, hasNewOutput);
   } catch {
+    // Optional retry hints must not prevent observing the process result.
     return undefined;
   }
 }
@@ -249,7 +244,6 @@ function assertSupportedProcessParams(args: unknown): void {
   }
 }
 
-/** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -376,30 +370,6 @@ export function createProcessTool(
           : candidate.finalizing
             ? `Session ${sessionId} is finalizing.`
             : undefined;
-      const resolveBackgroundedWritableStdin = () => {
-        if (!scopedSession) {
-          return {
-            ok: false as const,
-            result: failText(`No active session found for ${sessionId}`),
-          };
-        }
-        const controlError = sessionControlError(scopedSession);
-        if (controlError) {
-          return {
-            ok: false as const,
-            result: failText(controlError),
-          };
-        }
-        const stdin = scopedSession.stdin;
-        if (!isWritableStdin(stdin)) {
-          return {
-            ok: false as const,
-            result: failText(`Session ${sessionId} stdin is not writable.`),
-          };
-        }
-        return { ok: true as const, session: scopedSession, stdin };
-      };
-
       const runningSessionResult = (
         sessionLocal: ProcessSession,
         text: string,
@@ -544,15 +514,22 @@ export function createProcessTool(
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
             assertCurrent();
             const inputAction = params.action;
-            const resolved = resolveBackgroundedWritableStdin();
-            if (!resolved.ok) {
-              return resolved.result;
+            if (!scopedSession) {
+              return failText(`No active session found for ${sessionId}`);
+            }
+            const controlError = sessionControlError(scopedSession);
+            if (controlError) {
+              return failText(controlError);
+            }
+            const stdin = scopedSession.stdin;
+            if (!isWritableStdin(stdin)) {
+              return failText(`Session ${sessionId} stdin is not writable.`);
             }
             if (inputAction === "send-keys") {
               return await handleProcessSendKeys({
                 sessionId,
-                session: resolved.session,
-                stdin: resolved.stdin,
+                session: scopedSession,
+                stdin,
                 keys: params.keys,
                 hex: params.hex,
                 literal: params.literal,
@@ -567,10 +544,10 @@ export function createProcessTool(
             if (inputAction === "paste" && !payload) {
               return failText("No paste text provided.");
             }
-            await writeProcessStdin(resolved.stdin, payload);
+            await writeProcessStdin(stdin, payload);
             if (inputAction === "write" && params.eof) {
               assertCurrent();
-              resolved.stdin.end();
+              stdin.end();
             }
             const text =
               inputAction === "paste"
@@ -580,7 +557,7 @@ export function createProcessTool(
                   : `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${sessionId}${
                       params.eof ? " (stdin closed)" : ""
                     }.`;
-            return runningSessionResult(resolved.session, text);
+            return runningSessionResult(scopedSession, text);
           });
         }
 
@@ -638,5 +615,4 @@ export function createProcessTool(
   };
 }
 
-/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

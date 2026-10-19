@@ -648,7 +648,6 @@ export async function hasSupportedGitHubPublicationTarget(
   const workspaceId = initial.entry.repositoryWorkspaceId;
   if (workspaceId) {
     const prepared = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-    assertCurrent();
     const owner = resolveGitHubPublicationWorkspaceOwner(session, prepared, sessionRead);
     return isSupportedGitHubOrigin(owner.workspace.url);
   }
@@ -656,11 +655,7 @@ export async function hasSupportedGitHubPublicationTarget(
     return false;
   }
   const owner = await preparePublicationWorktreeRead(initial, context, sessionRead)();
-  const assertWorktreeCurrent = () => {
-    assertCurrent();
-    owner.assertCurrent();
-  };
-  assertWorktreeCurrent();
+  owner.assertCurrent();
   const { repoRoot, repoFingerprint } = owner.worktree;
   const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
   const load = async () => {
@@ -673,6 +668,6 @@ export async function hasSupportedGitHubPublicationTarget(
     return isSupportedGitHubOrigin(repository.originUrl);
   };
   const target = await repositoryTargets.read(key, load, { allowStale: false });
-  assertWorktreeCurrent();
+  owner.assertCurrent();
   return target.value;
 }

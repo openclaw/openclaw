@@ -109,7 +109,6 @@ export function createSessionGitHubPublication(host: Host) {
   return {
     attach(
       row: GatewaySessionRow,
-      changed: () => void,
       Owner: typeof GitHubPublicationOwner,
     ): GitHubPublicationBinding | null {
       const connection = host.connection.capture();
@@ -166,7 +165,7 @@ export function createSessionGitHubPublication(host: Host) {
         entries.set(key, entry);
       }
       const operation = entry;
-      return Object.assign(operation.publication.bind(changed), {
+      return Object.assign(operation.publication.bind(), {
         matches: (next: GatewaySessionRow) =>
           operation.current() &&
           !host.deletionState(next) &&

@@ -70,6 +70,7 @@ type WorkerComputerOwnerOptions = {
   store: Pick<WorkerEnvironmentStore, "get">;
   resolveGatewayContext: GatewayContextResolver;
   getNodeTransport: () => NodeWorkerSupervisorTransport | undefined;
+  cleanupSignal?: AbortSignal;
   desktopRegistry?: Pick<
     DesktopSessionRegistry,
     "hasController" | "onControlChanged" | "takeControl"
@@ -523,7 +524,10 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                   executionId: execution.physicalId,
                   reason: reason.slice(0, 64),
                 },
-                { isDispatchAuthorized: resourceBindingIsCurrent },
+                {
+                  signal: options.cleanupSignal,
+                  isDispatchAuthorized: resourceBindingIsCurrent,
+                },
               );
               if (!resourceBindingIsCurrent()) {
                 throw new Error("Session computer cleanup owner changed");

@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { WorkerInferenceTerminalFrame } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -280,6 +284,78 @@ function requireLaunchId(host: PairedNodeWorkerHost, runId: string): string {
   return input.launchId;
 }
 
+async function createWorkerCancellationGate(gatewayUrl: string) {
+  const server = createServer();
+  const sockets = new WebSocketServer({ server });
+  const peers = new Set<{ upstream: WebSocket; downstream: WebSocket }>();
+  let blockedRunId: string | undefined;
+  sockets.on("connection", (downstream, request) => {
+    const upstream = new WebSocket(new URL(request.url ?? "/", gatewayUrl));
+    const peer = { upstream, downstream };
+    peers.add(peer);
+    const pending: RawData[] = [];
+    downstream.on("message", (data) => {
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(data);
+      } else {
+        pending.push(data);
+      }
+    });
+    upstream.on("open", () => {
+      for (const data of pending.splice(0)) {
+        upstream.send(data);
+      }
+    });
+    upstream.on("message", (data) => {
+      const frame = JSON.parse(rawDataToString(data)) as WorkerInferenceTerminalFrame;
+      if (
+        frame.event === "worker.inference.terminal" &&
+        frame.payload.runId === blockedRunId &&
+        frame.payload.outcome.type === "error" &&
+        frame.payload.outcome.reason === "cancelled"
+      ) {
+        return;
+      }
+      if (downstream.readyState === WebSocket.OPEN) {
+        downstream.send(data);
+      }
+    });
+    const close = () => {
+      peers.delete(peer);
+      upstream.terminate();
+      downstream.terminate();
+    };
+    upstream.on("error", close);
+    downstream.on("error", close);
+    upstream.on("close", close);
+    downstream.on("close", close);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("worker cancellation gate did not bind");
+  }
+  return {
+    url: `ws://127.0.0.1:${address.port}`,
+    block(runId: string) {
+      blockedRunId = runId;
+    },
+    async close() {
+      for (const peer of peers) {
+        peer.upstream.terminate();
+        peer.downstream.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        sockets.close(() => resolve());
+      });
+      await closeWireServer(server);
+    },
+  };
+}
+
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -341,12 +417,18 @@ describe("paired node worker lifecycle wire", () => {
     async () => {
       const root = tempDirs.make("openclaw-paired-node-worker-turn-fence-");
       const published = await createPublishedWireWorkspace(root);
+      const cancellationGate = await createWorkerCancellationGate(gateway.wsUrl);
       let workerNode: PairedNodeWorkerHost | undefined;
       let testFailure: unknown;
       let cleanupFailures: unknown[];
       let releaseStopAcknowledgement: (() => void) | undefined;
       try {
-        workerNode = await createPairedNodeWorkerHost({ gateway, operator, root });
+        workerNode = await createPairedNodeWorkerHost({
+          gateway,
+          operator,
+          root,
+          workerGatewayUrl: cancellationGate.url,
+        });
         const nodeId = workerNode.identity.deviceId;
 
         const revokedKey = await createSession({ operator, published, suffix: "revoked" });
@@ -402,6 +484,9 @@ describe("paired node worker lifecycle wire", () => {
         }
         expect(processIsAlive(oldPid)).toBe(true);
 
+        // Lose both cancellation channels: the worker must remain unconfirmed
+        // until the node's real environment stop proves physical cleanup.
+        cancellationGate.block(unconfirmedRunId);
         const commandStart = workerNode.frames.length;
         const stopEntered = createDeferred();
         const stopCompleted = createDeferred();
@@ -541,6 +626,7 @@ describe("paired node worker lifecycle wire", () => {
         provider.release(HOLD_UNCONFIRMED);
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
+          cancellationGate.close(),
           closeWireServer(published.server),
         ]);
         cleanupFailures = cleanup.flatMap((result) =>

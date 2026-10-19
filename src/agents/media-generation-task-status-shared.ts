@@ -1,10 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-/**
- * Shared media generation task status and duplicate-guard helpers.
- *
- * Image/video task modules use this to track recent starts, find active
- * background tasks, and build consistent user/prompt status messages.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -30,7 +24,6 @@ type RecentMediaGenerationTaskStart = {
 const recentMediaGenerationTaskStarts = new Map<string, RecentMediaGenerationTaskStart[]>();
 const RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS = 2 * 60_000;
 
-/** Builds a stable request key for media generation duplicate detection. */
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
   return stableStringify(value);
 }
@@ -212,7 +205,6 @@ function findRecentStartedMediaGenerationTaskForSession(params: {
   return undefined;
 }
 
-/** Clears in-memory duplicate guards between tests. */
 function resetRecentMediaGenerationDuplicateGuardsForTests() {
   recentMediaGenerationTaskStarts.clear();
 }
@@ -223,7 +215,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { resetRecentMediaGenerationDuplicateGuardsForTests };
 }
 
-/** Extracts a provider id from a media task source id with the given prefix. */
 function getMediaGenerationTaskProviderId(
   task: MediaGenerationOperation,
   sourcePrefix: string,
@@ -334,7 +325,6 @@ export function buildActiveMediaGenerationTaskPromptContext(params: {
   return lines.join("\n");
 }
 
-/** Specializes shared task lookup, duplicate guards, and status text for one media tool. */
 export function createMediaGenerationTaskStatusOwner(params: {
   taskKind: string;
   toolName: string;

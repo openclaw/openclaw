@@ -78,7 +78,6 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "src/plugin-sdk/provider-selection-runtime.test.ts",
     "src/talk/provider-resolver.test.ts",
     "src/tts/provider-registry.test.ts",
-    "src/tts/tts-runtime-personas.test.ts",
     "src/plugins/compat/registry.test.ts",
   ],
   releaseNote:

@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   arrayItemSchema,
   arrayItemSchemaIndexes,
@@ -160,9 +160,8 @@ function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
   }
   const required = schema.not.required;
   return (
-    Array.isArray(required) &&
+    isStringArray(required) &&
     required.length > 0 &&
-    required.every((key) => typeof key === "string") &&
     Object.keys(schema.not).every((key) => key === "required" || META_KEYS.has(key))
   );
 }

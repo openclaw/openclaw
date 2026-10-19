@@ -454,24 +454,21 @@ function extractTenantSuggestions(rawMessage: string): Array<{ id: string; label
       continue;
     }
     seen.add(id);
+    const label = normalizeOptionalString(match[2]);
     suggestions.push({
       id,
-      ...(normalizeOptionalString(match[2]) ? { label: normalizeOptionalString(match[2]) } : {}),
+      ...(label ? { label } : {}),
     });
   }
   return suggestions;
 }
 
 function isValidTenantIdentifier(value: string): boolean {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return false;
-  }
   const isTenantUuid =
-    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(trimmed);
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
   const isTenantDomain =
     /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(
-      trimmed,
+      value,
     );
   return isTenantUuid || isTenantDomain;
 }

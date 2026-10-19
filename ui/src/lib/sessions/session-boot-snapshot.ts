@@ -76,7 +76,7 @@ export function createSessionBootSnapshot(
     }
     listen(retirement.signal, "abort", () => resolve(), { once: true });
     void readSidebarBootSnapshot(gateway)
-      .then((snapshot) => {
+      .then(async (snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {
           return;
         }
@@ -90,6 +90,20 @@ export function createSessionBootSnapshot(
           host.readState().result === null
         ) {
           host.publish({ ...host.readState(), ...roster, resultCached: true });
+          // A new task alone can precede paint. Cross a frame before mounting the pane;
+          // the timeout releases routing in background tabs where rAF is suspended.
+          await new Promise<void>((release) => {
+            const timeout = setTimeout(() => {
+              if (frame !== undefined) {
+                cancelAnimationFrame(frame);
+              }
+              release();
+            }, 100);
+            const frame = globalThis.requestAnimationFrame?.(() => {
+              clearTimeout(timeout);
+              setTimeout(release, 0);
+            });
+          });
         }
       })
       .then(resolve, resolve);

@@ -48,13 +48,11 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
   resolvePreferredOpenClawTmpDir: () => "/tmp/openclaw-browser-test",
 }));
 
-// Shrink long launch/bootstrap timeouts so tests don't wait 15s for
-// the CHROME_LAUNCH_READY_WINDOW_MS elapse-on-failure path.
+// Shrink bootstrap polling so failure-path tests stay bounded.
 vi.mock("./cdp-timeouts.js", async () => {
   const actual = await vi.importActual<typeof import("./cdp-timeouts.js")>("./cdp-timeouts.js");
   return {
     ...actual,
-    CHROME_LAUNCH_READY_WINDOW_MS: 20,
     CHROME_LAUNCH_READY_POLL_MS: 5,
     CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS: 120,
     CHROME_BOOTSTRAP_PREFS_POLL_MS: 5,

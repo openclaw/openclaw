@@ -257,7 +257,7 @@ export function createTestGitHubPublicationCoordinator(
 export const SESSION_KEY = "agent:main:dashboard:publication";
 export const SESSION_ID = "session-publication";
 export const BRANCH = "openclaw/publication";
-export const BASE_HEAD = "a".repeat(40);
+const BASE_HEAD = "a".repeat(40);
 export const OLD_HEAD = "b".repeat(40);
 export const NEW_HEAD = "c".repeat(40);
 export const WORKSPACE_TREE = "d".repeat(40);

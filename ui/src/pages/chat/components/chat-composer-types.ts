@@ -29,14 +29,12 @@ import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summ
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { PaneOutboxRecovery } from "../chat-outbox-recovery.tsx";
 import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
+import type { ChatRealtimeView } from "../chat-realtime.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
-import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
-import type { RealtimeTalkStatus } from "../talk/session.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -71,10 +69,26 @@ export type ChatComposerDisabledBanner = {
   disabledReason?: string;
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatComposerProps = Omit<ChatAttachmentControlsProps, "onRequestUpdate"> & {
-  paneId: string;
+export type ChatSessionProgressProps = {
   sessionKey: string;
   currentAgentId: string;
+  progressCard?: ProgressCard | null;
+  progressCardIdentity?: string;
+  progressCardLifetime?: object;
+  progressCardInitialLoading?: boolean;
+  progressCardRefresh?: SessionProgressCardRefreshAction;
+  gatewayScope?: object;
+  runActive?: boolean;
+  collapseTaskProgress?: boolean;
+  onDismissProgressCard?: (card: ProgressCard) => void;
+  onClearSavedProgressCard?: (card: ProgressCard) => void;
+  messages: unknown[];
+};
+
+export type ChatComposerProps = ChatAttachmentControlsProps & {
+  paneId: string;
+  getTranscriptElement?: () => HTMLElement | null;
+  onComposerShellRef?: (element: HTMLElement) => void | (() => void);
   /** Provisional/deleted previews must not mount session-scoped extension controllers. */
   sessionAdmitted?: boolean;
   connected: boolean;
@@ -95,24 +109,13 @@ export type ChatComposerProps = Omit<ChatAttachmentControlsProps, "onRequestUpda
   startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
   fallbackStatus?: FallbackStatus | null;
-  progressCard?: ProgressCard | null;
-  progressCardIdentity?: string;
-  progressCardLifetime?: object;
   progressCardVisibility?: PresentationBinding;
-  progressCardInitialLoading?: boolean;
-  progressCardRefresh?: SessionProgressCardRefreshAction;
-  gatewayScope?: object;
-  runActive?: boolean;
-  collapseTaskProgress?: boolean;
   readingHistory?: boolean;
   onProgressManipulate?: () => void;
   runId?: string | null;
-  onDismissProgressCard?: (card: ProgressCard) => void;
-  onClearSavedProgressCard?: (card: ProgressCard) => void;
   /** The pane scopes Gateway questions to this conversation's agent and session. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
-  messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -140,16 +143,6 @@ export type ChatComposerProps = Omit<ChatAttachmentControlsProps, "onRequestUpda
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
-  realtimeTalkActive?: boolean;
-  realtimeTalkStatus?: RealtimeTalkStatus;
-  realtimeTalkDetail?: string | null;
-  realtimeTalkInputNotice?: string | null;
-  realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
-  realtimeTalkVideoStream?: MediaStream | null;
-  realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
-  realtimeTalkVideoCapable?: boolean;
-  realtimeTalkVideoPending?: boolean;
-  realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
@@ -200,7 +193,8 @@ export type ChatComposerProps = Omit<ChatAttachmentControlsProps, "onRequestUpda
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
-};
+} & ChatSessionProgressProps &
+  Partial<ChatRealtimeView>;
 
 type ScopedComposerDraft = {
   key: string;

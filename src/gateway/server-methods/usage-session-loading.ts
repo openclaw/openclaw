@@ -94,6 +94,7 @@ export function mergeUsageCacheStatus(
         : source.refreshedAt === undefined
           ? target.refreshedAt
           : Math.max(target.refreshedAt, source.refreshedAt),
+    ...((target.partial ?? source.partial) ? { partial: target.partial ?? source.partial } : {}),
   };
 }
 
@@ -105,6 +106,7 @@ export async function loadUsageSessionSummaries(params: {
   endMs: number;
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
+  committedOnly?: boolean;
 }) {
   const {
     entries: mergedEntries,
@@ -161,6 +163,7 @@ export async function loadUsageSessionSummaries(params: {
               dayBucket,
               maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
               reportBudgetBytes,
+              committedOnly: params.committedOnly,
             }),
           () => ({
             summaries: batch.map(() => null),

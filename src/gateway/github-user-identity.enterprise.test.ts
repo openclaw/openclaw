@@ -9,7 +9,10 @@ import {
   resolveGitCoauthorAttribution,
 } from "../agents/git-coauthor-attribution.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -139,6 +142,7 @@ it.each(["ghe.example.test", "code.example.test"])(
           storePath: resolveSessionStorePathForScope(scope, {}),
           accountId: 999,
           assertCurrent: () => {},
+          readCurrentEntry: () => loadSessionEntryReadOnly(scope),
           description: "Synthetic publication",
         };
         const content = await prepareGitHubPublicationContent({
@@ -365,6 +369,7 @@ it("keeps global consent writable without a display primary after merging two en
         storePath: resolveSessionStorePathForScope(scope, {}),
         accountId: 999,
         assertCurrent: () => {},
+        readCurrentEntry: () => loadSessionEntryReadOnly(scope),
         description: "Synthetic publication",
       };
       const firstContent = await prepareGitHubPublicationContent({

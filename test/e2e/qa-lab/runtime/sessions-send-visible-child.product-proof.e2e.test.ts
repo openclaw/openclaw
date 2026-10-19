@@ -3,7 +3,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -15,6 +15,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../../helpers/openai-responses-sse.js";
+import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/qa-parent";
@@ -233,132 +234,118 @@ function withModels(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
-describe("sessions_send to a visible spawn child", () => {
-  const cleanups: Array<() => Promise<void>> = [];
-  afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "visible child proof cleanup failed");
-    }
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(() => runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed()));
+
+it("returns the waited reply inline without an announce run against the child", async () => {
+  const provider = await startProofProvider();
+  cleanups.push(() => provider.stop());
+  const state = createQaBusState();
+  const transport = createQaChannelTransport(state);
+  const bus = await startQaBusServer({ state });
+  cleanups.push(() => bus.stop());
+  const owner = createQaGatewayChild();
+  cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
+  const gateway = await owner.start({
+    repoRoot: REPO_ROOT,
+    // Source-mode startup exceeds the child Gateway's listen deadline.
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: ["dist/index.js"],
+      cwd: REPO_ROOT,
+      usePackagedPlugins: true,
+    },
+    providerBaseUrl: `${provider.baseUrl}/v1`,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: CHILD_MODEL,
+    transport,
+    transportBaseUrl: bus.baseUrl,
+    controlUiEnabled: false,
+    mutateConfig: withModels,
   });
-
-  it("returns the waited reply inline without an announce run against the child", async () => {
-    const provider = await startProofProvider();
-    cleanups.push(() => provider.stop());
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const bus = await startQaBusServer({ state });
-    cleanups.push(() => bus.stop());
-    const owner = createQaGatewayChild();
-    cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
-    const gateway = await owner.start({
-      repoRoot: REPO_ROOT,
-      // Source-mode startup exceeds the child Gateway's listen deadline.
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: ["dist/index.js"],
-        cwd: REPO_ROOT,
-        usePackagedPlugins: true,
-      },
-      providerBaseUrl: `${provider.baseUrl}/v1`,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: CHILD_MODEL,
-      transport,
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
-      mutateConfig: withModels,
+  await transport.waitReady({ gateway });
+  const listSessions = async () =>
+    (await gateway.call("sessions.list", { agentId: "qa", limit: 100 })) as SessionsListResult;
+  const waitUntilIdle = () =>
+    expect
+      .poll(
+        async () => {
+          const { sessions } = await listSessions();
+          return [PARENT_KEY, provider.spawn?.childSessionKey].map(
+            (key) => sessions.find((entry) => entry.key === key)?.hasActiveRun,
+          );
+        },
+        { timeout: 60_000 },
+      )
+      .toEqual([false, false]);
+  const sendTurn = async (text: string, expectedReply: string) => {
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+    await transport.sendInbound({
+      accountId: "default",
+      conversation: CONVERSATION,
+      senderId: CONVERSATION.id,
+      text,
     });
-    await transport.waitReady({ gateway });
-    const listSessions = async () =>
-      (await gateway.call("sessions.list", { agentId: "qa", limit: 100 })) as SessionsListResult;
-    const waitUntilIdle = () =>
-      expect
-        .poll(
-          async () => {
-            const { sessions } = await listSessions();
-            return [PARENT_KEY, provider.spawn?.childSessionKey].map(
-              (key) => sessions.find((entry) => entry.key === key)?.hasActiveRun,
-            );
-          },
-          { timeout: 60_000 },
-        )
-        .toEqual([false, false]);
-    const sendTurn = async (text: string, expectedReply: string) => {
-      const sinceIndex = state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound").length;
-      await transport.sendInbound({
-        accountId: "default",
-        conversation: CONVERSATION,
-        senderId: CONVERSATION.id,
-        text,
-      });
-      await transport.waitForOutbound({
-        conversation: CONVERSATION,
-        sinceIndex,
-        textIncludes: expectedReply,
-        timeoutMs: 120_000,
-      });
-    };
-    const waitForRun = async (receipt: ToolReceipt | undefined) => {
-      expect(receipt?.runId).toBeTypeOf("string");
-      expect(
-        await gateway.call(
-          "agent.wait",
-          { runId: receipt?.runId, timeoutMs: 60_000 },
-          { timeoutMs: 65_000 },
-        ),
-      ).toMatchObject({ status: "ok" });
-    };
-
-    await sendTurn(PROMPT_SPAWN, PARENT_READY);
-    await waitForRun(provider.spawn);
-    await waitUntilIdle();
-    expect(provider.requests.filter((request) => request.kind === "child")).toHaveLength(1);
-
-    await sendTurn(PROMPT_SEND, PARENT_DONE);
-    await waitForRun(provider.send);
-    await waitUntilIdle();
-    const childKey = provider.spawn?.childSessionKey;
-    const child = (await listSessions()).sessions.find((entry) => entry.key === childKey);
-    // Close the owned Gateway before freezing evidence; provider and bus stay live
-    // while its admitted work drains and its process exits.
-    await gateway.stop();
-    const announceLines = gateway
-      .logs()
-      .split("\n")
-      .filter((line) => line.includes("sessions_send announce"));
-    console.log(
-      JSON.stringify({
-        phase: "sessions-send-visible-child",
-        requests: provider.requests,
-        spawn: provider.spawn,
-        send: provider.send,
-        child,
-        announceLines,
-      }),
-    );
-    expect(provider.errors).toEqual([]);
-    expect(childKey).toMatch(CHILD_KEY_PATTERN);
-    expect(child).toMatchObject({ spawnedBy: PARENT_KEY, parentSessionKey: PARENT_KEY });
-    expect(provider.send).toMatchObject({
-      status: "ok",
-      reply: CHILD_MARKER,
-      delivery: { status: "skipped" },
+    await transport.waitForOutbound({
+      conversation: CONVERSATION,
+      sinceIndex,
+      textIncludes: expectedReply,
+      timeoutMs: 120_000,
     });
-    expect(provider.requests.filter((request) => request.kind === "child")).toHaveLength(2);
-    expect(provider.requests.filter((request) => request.kind === "parent")).toHaveLength(4);
+  };
+  const waitForRun = async (receipt: ToolReceipt | undefined) => {
+    expect(receipt?.runId).toBeTypeOf("string");
     expect(
-      provider.requests.filter((request) => request.replyStep || request.announceStep),
-    ).toHaveLength(0);
-    expect(announceLines).toHaveLength(0);
-  }, 400_000);
-});
+      await gateway.call(
+        "agent.wait",
+        { runId: receipt?.runId, timeoutMs: 60_000 },
+        { timeoutMs: 65_000 },
+      ),
+    ).toMatchObject({ status: "ok" });
+  };
+
+  await sendTurn(PROMPT_SPAWN, PARENT_READY);
+  await waitForRun(provider.spawn);
+  await waitUntilIdle();
+  expect(provider.requests.filter((request) => request.kind === "child")).toHaveLength(1);
+
+  await sendTurn(PROMPT_SEND, PARENT_DONE);
+  await waitForRun(provider.send);
+  await waitUntilIdle();
+  const childKey = provider.spawn?.childSessionKey;
+  const child = (await listSessions()).sessions.find((entry) => entry.key === childKey);
+  // Close the owned Gateway before freezing evidence; provider and bus stay live
+  // while its admitted work drains and its process exits.
+  await gateway.stop();
+  const announceLines = gateway
+    .logs()
+    .split("\n")
+    .filter((line) => line.includes("sessions_send announce"));
+  console.log(
+    JSON.stringify({
+      phase: "sessions-send-visible-child",
+      requests: provider.requests,
+      spawn: provider.spawn,
+      send: provider.send,
+      child,
+      announceLines,
+    }),
+  );
+  expect(provider.errors).toEqual([]);
+  expect(childKey).toMatch(CHILD_KEY_PATTERN);
+  expect(child).toMatchObject({ spawnedBy: PARENT_KEY, parentSessionKey: PARENT_KEY });
+  expect(provider.send).toMatchObject({
+    status: "ok",
+    reply: CHILD_MARKER,
+    delivery: { status: "skipped" },
+  });
+  expect(provider.requests.filter((request) => request.kind === "child")).toHaveLength(2);
+  expect(provider.requests.filter((request) => request.kind === "parent")).toHaveLength(4);
+  expect(
+    provider.requests.filter((request) => request.replyStep || request.announceStep),
+  ).toHaveLength(0);
+  expect(announceLines).toHaveLength(0);
+}, 400_000);

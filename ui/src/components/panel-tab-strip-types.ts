@@ -10,6 +10,7 @@ export type PanelTabStripTab<Content = unknown> = {
   badge?: string | null;
   className?: string;
   closeLabel: string;
+  closeDisabled?: boolean;
   group?: string;
   draggable?: boolean;
   reorderId?: string;

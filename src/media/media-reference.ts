@@ -18,13 +18,10 @@ export {
 
 type InboundMediaReference = {
   id: string;
-  normalizedSource: string;
   physicalPath: string;
-  sourceType: "uri" | "path";
 };
 
 type MediaReferenceSourceInfo = {
-  hasScheme: boolean;
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;
   isFileUrl: boolean;
@@ -53,7 +50,6 @@ export function classifyMediaReferenceSource(
     !isMediaStoreUrl &&
     !(allowDataUrl && isDataUrl);
   return {
-    hasScheme,
     hasUnsupportedScheme,
     isDataUrl,
     isFileUrl,
@@ -153,9 +149,8 @@ export async function resolveInboundMediaReference(
   const uri = parseInboundMediaUri(normalizedSource);
   if (uri) {
     return {
-      ...uri,
+      id: uri.id,
       physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
-      sourceType: "uri",
     };
   }
 
@@ -181,9 +176,7 @@ export async function resolveInboundMediaReference(
 
   return {
     id: rel,
-    normalizedSource,
     physicalPath: await resolveInboundMediaPath(rel, normalizedSource),
-    sourceType: "path",
   };
 }
 

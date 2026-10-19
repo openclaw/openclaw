@@ -204,7 +204,6 @@ describe("chat goal status", () => {
           draw();
         },
         onDraftChange,
-        onRequestUpdate: draw,
       });
     draw();
 

@@ -102,7 +102,12 @@ describe("exec completion WebChat publication", () => {
         messages: { visibleReplies: "message_tool" },
         session: { store: storePath },
       };
-      const deviceIdentityPath = path.join(path.dirname(storePath), "exec-web-device.json");
+      const deviceIdentityPath = path.join(
+        path.dirname(storePath),
+        "exec-web-device",
+        "client",
+        "credentials.sqlite",
+      );
       const connect = async () => {
         const ws = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
         await connectOk(ws, {

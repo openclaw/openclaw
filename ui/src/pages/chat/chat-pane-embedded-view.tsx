@@ -6,6 +6,7 @@ import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
@@ -21,20 +22,26 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import type {
+  SidebarPanelDefinition,
+  SidebarPanelHostRegistration,
+} from "./components/chat-sidebar-region-types.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
-type Props = SidebarPanelDefinitionParams;
+type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
+type Props = SidebarPanelDefinitionParams & PanelHostProps;
 
 function TerminalPanel(props: Props) {
   return (
     <openclaw-terminal-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       prop:tabsInHeader={props.terminalTabsInHeader}
       prop:onClose={props.onCloseTerminal}
-      prop:client={props.state.connected ? props.state.client : null}
+      prop:client={props.state.client}
+      prop:gatewayConnected={props.state.connected}
       prop:available={props.state.terminalAvailable}
       prop:agentId={props.agentId}
       prop:sessionKey={props.state.sessionKey}
@@ -49,6 +56,7 @@ function BrowserPanel(props: Props) {
   return (
     <openclaw-browser-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       data-chat-autotype-exempt
       prop:client={props.state.connected ? props.state.client : null}
@@ -74,6 +82,7 @@ function CompanionPanel(props: Props) {
   return (
     <openclaw-chat-session-rail
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:presented={presented()}
       prop:focusRequest={props.companionFocusRequest}
       prop:sessionKey={props.state.sessionKey}
@@ -98,6 +107,7 @@ function DesktopPanel(props: Props) {
   return (
     <openclaw-desktop-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       data-chat-autotype-exempt
       prop:client={props.state.connected ? props.state.client : null}
@@ -115,6 +125,7 @@ function DiscussionPanel(props: Props) {
   return (
     <openclaw-session-discussion
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.discussion!.sessionKey}
       prop:canOpen={props.discussion!.canOpen}
       prop:sourceGeneration={props.discussionSourceGeneration}
@@ -134,6 +145,7 @@ function PortalPanel(props: Props) {
   return (
     <openclaw-portals-page
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       prop:presented={presented()}
       prop:requestedPortalId={portal()?.portalId ?? null}
@@ -151,6 +163,7 @@ function WorkspacePanel(props: Props & { workspaceState: SessionWorkspaceState }
   return (
     <openclaw-chat-files-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:tabsInHeader={sidebarMainPanel(props.state.sidebarLayout)?.slot !== "workspace"}
       prop:previews={presented() ? props.workspaceState.previews : []}
       prop:activeId={presented() ? props.workspaceState.activePreviewId : null}
@@ -167,6 +180,7 @@ function SubagentsPanel(props: Props) {
   return (
     <openclaw-chat-subagents-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.state.sessionKey}
       prop:agentId={props.agentId ?? "main"}
       prop:paneId={props.paneId}
@@ -184,6 +198,7 @@ function ProcessesPanel(props: Props) {
   return (
     <openclaw-chat-processes-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.state.sessionKey}
       prop:agentId={props.agentId ?? "main"}
       prop:presented={presented()}
@@ -196,9 +211,10 @@ function LinkReaderPanel(props: Props) {
   return (
     <openclaw-link-reader-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       data-chat-autotype-exempt
-      prop:client={props.state.connected ? props.state.client : null}
+      prop:client={props.state.client}
       prop:available={props.state.connected}
       prop:readers={props.linkReaders ?? EMPTY_LINK_READERS}
       prop:agentId={props.agentId ?? undefined}
@@ -210,9 +226,14 @@ function LinkReaderPanel(props: Props) {
   );
 }
 
-export function ExternalPanelLink(props: { href: string; label: string }) {
+export function ExternalPanelLink(props: {
+  href: string;
+  label: string;
+  actionRef?: (element: HTMLAnchorElement) => void;
+}) {
   return (
     <a
+      ref={props.actionRef}
       class="rail-header__action"
       href={props.href}
       target="_blank"
@@ -225,10 +246,13 @@ export function ExternalPanelLink(props: { href: string; label: string }) {
   );
 }
 
-export function ClearCompanion(props: Props) {
+export function ClearCompanion(
+  props: Props & { actionRef?: (element: HTMLButtonElement) => void },
+) {
   return (
     <openclaw-tooltip prop:content={t("chat.rail.clear")}>
       <button
+        ref={props.actionRef}
         class="rail-header__action chat-session-rail__clear"
         type="button"
         aria-label={t("chat.rail.clear")}
@@ -257,7 +281,7 @@ function DashboardPanel(props: SidebarPanelData) {
 }
 
 const embeddedPanels: Partial<
-  Record<SidebarSlotId, (props: SidebarPanelData) => SolidJSX.Element>
+  Record<SidebarSlotId, (props: SidebarPanelData & PanelHostProps) => SolidJSX.Element>
 > = {
   terminal: TerminalPanel,
   browser: BrowserPanel,
@@ -273,7 +297,7 @@ const embeddedPanels: Partial<
   dashboard: DashboardPanel,
 };
 
-export function SidebarPanel(props: { definition: SidebarPanelDefinition }) {
+export function SidebarPanel(props: { definition: SidebarPanelDefinition } & PanelHostProps) {
   const Panel = dynamic(() => embeddedPanels[props.definition.slot]);
   return (
     <Switch>
@@ -283,7 +307,10 @@ export function SidebarPanel(props: { definition: SidebarPanelDefinition }) {
       <Match when={props.definition.loadState}>{(error) => <LazyViewError {...error()} />}</Match>
       <Match when={props.definition.view}>
         {(data) => (
-          <Show when={props.definition.slot.startsWith("plugin:")} fallback={<Panel {...data()} />}>
+          <Show
+            when={props.definition.slot.startsWith("plugin:")}
+            fallback={<Panel {...data()} registerPanelHost={props.registerPanelHost} />}
+          >
             <EmbeddedPluginPanel
               contributionKey={props.definition.slot.slice("plugin:".length)}
               props={{

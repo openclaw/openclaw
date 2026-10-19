@@ -50,16 +50,7 @@ export async function readOfficialClawDetail(
     source,
   );
   const detail = result.detail;
-  if (
-    !isOfficialEntry(detail) ||
-    detail.packageName !== source.packageName ||
-    detail.version !== source.version ||
-    !detail.contents ||
-    !Array.isArray(detail.contents.instructions) ||
-    !Array.isArray(detail.contents.skills) ||
-    !Array.isArray(detail.contents.integrations) ||
-    !Array.isArray(detail.contents.automations)
-  ) {
+  if (!isOfficialEntry(detail)) {
     throw new Error("ClawHub did not return the contents of this Claw release.");
   }
   return detail;
@@ -74,9 +65,6 @@ export async function readOfficialClawPreview(
     "claws.catalog.preview",
     { ...source, ...request },
   );
-  if (result.preview.kind !== request.kind || result.preview.name !== request.name) {
-    throw new Error("ClawHub returned a different preview item.");
-  }
   return result.preview;
 }
 

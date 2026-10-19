@@ -14,11 +14,7 @@ import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { readResidentUserProfileId } from "../../../src/state/user-profile-list.ts";
-import {
-  linkEmail,
-  setDisplayName,
-  setUserProfileRole,
-} from "../../../src/state/user-profile-writes.worker.ts";
+import { linkEmail, setUserProfileRole } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import {
   createOpenClawTestState,
@@ -28,7 +24,6 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -37,7 +32,6 @@ const sessionKey = "agent:main:pr-reader-lifetime";
 const checksMethod = "controlUi.sessionPullRequests.checks";
 const viewerEmail = "pr-viewer@example.test";
 const retiringEmail = "retiring-pr-reader@example.test";
-const viewport = { width: 1180, height: 800 };
 const execFileAsync = promisify(execFile);
 const suite = createControlUiE2eSuite({
   name: "Session PR readers through a real Gateway",
@@ -51,9 +45,13 @@ type Repository = {
   headSha: string;
   number: number;
   additions: number;
+  title?: string;
   checkName?: string;
 };
 type Delivery = { number: number; repo: string; branch: string; additions?: number };
+function expectedDelivery({ number, repo, branch, additions }: Repository): Delivery {
+  return { number, repo, branch, additions };
+}
 
 async function createRepository(
   state: OpenClawTestState,
@@ -89,7 +87,7 @@ async function createRepository(
 function pullRequest(repository: Repository) {
   return {
     number: repository.number,
-    title: `Review ${repository.repo}`,
+    title: repository.title ?? `Review ${repository.repo}`,
     html_url: `https://github.com/synthetic/${repository.repo}/pull/${repository.number}`,
     state: "open",
     draft: false,
@@ -124,22 +122,6 @@ function deliveryFrom(payload: unknown): Delivery | undefined {
     : undefined;
 }
 
-function summarizeChecks(ok: boolean, payload?: unknown, errorCode?: string) {
-  const result = isRecord(payload) ? payload : undefined;
-  return {
-    ok,
-    errorCode,
-    repo: typeof result?.repo === "string" ? result.repo : undefined,
-    number: typeof result?.number === "number" ? result.number : undefined,
-    status: typeof result?.status === "string" ? result.status : undefined,
-    checks: Array.isArray(result?.checks)
-      ? result.checks.flatMap((check) =>
-          isRecord(check) && typeof check.name === "string" ? [check.name] : [],
-        )
-      : [],
-  };
-}
-
 async function refreshFromBrowser(page: Page) {
   return evaluateControlUiContext(
     page,
@@ -170,9 +152,15 @@ suite.define(() => {
     const snapshotEntered = createDeferredCore();
     const checksEntered = createDeferredCore();
     const releaseIdentityReads = createDeferredCore();
+    const releaseReads = async () => {
+      releaseProvider.resolve();
+      releaseIdentityReads.resolve();
+    };
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run(signal) {
+        const waitFor = <T>(deferred: { promise: Promise<T> }) =>
+          racePromiseWithAbortSignal(deferred.promise, signal);
         state = await createOpenClawTestState({
           label: "session-pr-reader-lifetime",
           layout: "home",
@@ -195,11 +183,7 @@ suite.define(() => {
         const replacement = await createRepository(state, "replacement-workspace", 202);
         const viewer = ensureProfileForEmail(viewerEmail);
         const retiring = ensureProfileForEmail(retiringEmail);
-        for (const [profile, name] of [
-          [viewer, "Review viewer"],
-          [retiring, "Retiring reader"],
-        ] as const) {
-          setDisplayName(profile.id, name);
+        for (const profile of [viewer, retiring]) {
           setUserProfileRole(profile.id, "reader");
         }
         const port = await getFreePort();
@@ -380,19 +364,19 @@ suite.define(() => {
           },
         });
         retiringReader.start();
-        expect(await racePromiseWithAbortSignal(connected.promise, signal)).toEqual([
-          "operator.read",
-        ]);
+        expect(await waitFor(connected)).toEqual(["operator.read"]);
         const reader = retiringReader;
-        const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-        const artifacts = capture ? suite.artifactDir : undefined;
+        const subscribe = (keys = [sessionKey], refresh = false) =>
+          reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+            sessionKeys: keys,
+            ...(refresh ? { refreshSessionKeys: keys } : {}),
+          });
         await suite.withPage(
           {
-            viewport,
+            viewport: { width: 1180, height: 800 },
             colorScheme: "light",
             locale: "en-US",
             serviceWorkers: "block",
-            ...(artifacts ? { recordVideo: { dir: artifacts, size: viewport } } : {}),
           },
           async ({ page }) => {
             await page.addInitScript(() =>
@@ -405,12 +389,9 @@ suite.define(() => {
             const changedDelivery = createDeferredCore<Delivery>();
             const replacementSummaryDelivery = createDeferredCore<Delivery>();
             const currentReaderDelivery = createDeferredCore<Delivery>();
-            const delivered: Delivery[] = [];
-            const checkResponses: ReturnType<typeof summarizeChecks>[] = [];
-            const retiringCheckResponses: ReturnType<typeof summarizeChecks>[] = [];
+            const checkResponses: { ok: boolean; payload: unknown }[] = [];
             let waitingForReplacement = false;
             let identityReassigned = false;
-            let beforeIdentityReassignment: number | undefined;
             page.on("websocket", (socket) => {
               const checks = new Set<string>();
               socket.on("framesent", ({ payload }) => {
@@ -429,22 +410,13 @@ suite.define(() => {
                   return;
                 }
                 if (typeof frame.id === "string" && checks.delete(frame.id)) {
-                  checkResponses.push(
-                    summarizeChecks(
-                      frame.ok === true,
-                      frame.payload,
-                      isRecord(frame.error) && typeof frame.error.code === "string"
-                        ? frame.error.code
-                        : undefined,
-                    ),
-                  );
+                  checkResponses.push({ ok: frame.ok === true, payload: frame.payload });
                 }
                 const delivery =
                   frame.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT
                     ? deliveryFrom(frame.payload)
                     : undefined;
                 if (delivery) {
-                  delivered.push(delivery);
                   initialDelivery.resolve(delivery);
                   if (waitingForReplacement && delivery.number !== 101) {
                     changedDelivery.resolve(delivery);
@@ -466,61 +438,33 @@ suite.define(() => {
               .getByRole("button", { name: `Switch to ${browserGatewayUrl.host}`, exact: true })
               .click();
             // Finish this browser's initial subscription load before timing the rendered PR state.
-            expect(await racePromiseWithAbortSignal(initialDelivery.promise, signal)).toEqual({
-              number: original.number,
-              repo: original.repo,
-              branch: original.branch,
-              additions: original.additions,
-            });
+            expect(await waitFor(initialDelivery)).toEqual(expectedDelivery(original));
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
             await openDetailsPullRequests(pane);
             const chip = pane.locator(".chat-pr").first();
+            const refreshRoster = async () => {
+              await evaluateControlUiContext(page, async (context) => {
+                await context.sessions.refresh({ agentId: "main", force: true });
+              });
+              await expect
+                .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
+                .toBe(replacement.root);
+            };
             await chip.locator(".chat-pr__number").filter({ hasText: "#101" }).waitFor();
             await chip.locator(".chat-pr__checks-pill").click();
             await pane.getByText("original-workspace check", { exact: true }).waitFor();
             await page.keyboard.press("Escape");
             await pane.locator('.chat-details[role="dialog"]').waitFor();
-            const screenshot = async (name: string) => {
-              if (artifacts) {
-                await writeFile(
-                  path.join(artifacts, name),
-                  await takeControlUiViewportScreenshot(page, page.locator("body"), [chip]),
-                );
-              }
-            };
-            const cue = async (text: string) => {
-              if (artifacts) {
-                await page.evaluate((message) => {
-                  let label = document.getElementById("pr-reader-proof-action");
-                  if (!label) {
-                    label = document.createElement("output");
-                    label.id = "pr-reader-proof-action";
-                    label.style.cssText =
-                      "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border:1px solid currentColor;border-radius:6px;background:Canvas;color:CanvasText;font:13px system-ui;pointer-events:none";
-                    document.body.append(label);
-                  }
-                  label.textContent = `Proof action: ${message}`;
-                }, text);
-              }
-            };
-            await cue("Original workspace loaded");
-            await screenshot("01-original-workspace.png");
-            await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-              sessionKeys: [sessionKey],
-            });
+            await subscribe();
             await expect.poll(() => retiredDeliveries.length).toBe(1);
 
             // Change provider facts so settlement is observable even on the unfixed server.
             original.number = 102;
             holdOriginal = true;
-            await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-              sessionKeys: [sessionKey],
-              refreshSessionKeys: [sessionKey],
-            });
-            await racePromiseWithAbortSignal(providerEntered.promise, signal);
-            await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, { sessionKeys: [] });
+            await subscribe([sessionKey], true);
+            await waitFor(providerEntered);
+            await subscribe([]);
             const retiredCount = retiredDeliveries.length;
-            await cue("Replace the workspace while the earlier GitHub refresh is held");
             waitingForReplacement = true;
             replaceSessionEntrySync(
               { agentId: "main", sessionKey },
@@ -533,183 +477,123 @@ suite.define(() => {
             );
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             releaseProvider.resolve();
-            const settled = await racePromiseWithAbortSignal(changedDelivery.promise, signal);
+            const settled = await waitFor(changedDelivery);
             // PR delivery does not reconcile the pane after the fixture's direct database write.
-            await evaluateControlUiContext(page, async (context) => {
-              await context.sessions.refresh({ agentId: "main", force: true });
-            });
-            await expect
-              .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
-              .toBe(replacement.root);
+            await refreshRoster();
             // A new session incarnation resets the pane-local Details presentation.
             await openDetailsPullRequests(pane);
             await chip
               .locator(".chat-pr__number")
               .filter({ hasText: `#${settled.number}` })
               .waitFor();
-            try {
-              // Capture the real settled value before judging it: the baseline must retain its failure.
-              await cue("Earlier refresh settled after workspace replacement");
-              await screenshot("02-replacement-settled.png");
-              expect(settled).toEqual({
-                number: replacement.number,
-                repo: replacement.repo,
-                branch: replacement.branch,
-                additions: replacement.additions,
-              });
-              expect(retiredDeliveries).toHaveLength(retiredCount);
-              expect(await chip.locator(".chat-pr__link").getAttribute("href")).toBe(
-                `https://github.com/synthetic/${replacement.repo}/pull/${replacement.number}`,
+            expect(settled).toEqual(expectedDelivery(replacement));
+            expect(retiredDeliveries).toHaveLength(retiredCount);
+            expect(await chip.locator(".chat-pr__link").getAttribute("href")).toBe(
+              `https://github.com/synthetic/${replacement.repo}/pull/${replacement.number}`,
+            );
+            await chip.locator(".chat-pr__checks-pill").click();
+            await pane.getByText("replacement-workspace check", { exact: true }).waitFor();
+
+            await chip.locator(".chat-pr__checks-pill").click();
+            // A new PR keeps the details request cold while the real summary is already known.
+            replacement.number = 203;
+            replacement.checkName = "replacement-workspace current-reader check";
+            expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
+            // The subscription acknowledgement precedes the owner's paced refresh.
+            expect(await waitFor(replacementSummaryDelivery)).toEqual(
+              expectedDelivery(replacement),
+            );
+            // A later roster read must not dismiss Details for the already adopted incarnation.
+            await refreshRoster();
+            await chip.locator(".chat-pr__number").filter({ hasText: "#203" }).waitFor();
+            await subscribe();
+            await expect.poll(() => retiredDeliveries.at(-1)?.number).toBe(203);
+            const beforeIdentityReassignment = retiredDeliveries.length;
+
+            let rejectedChecks: unknown;
+            holdChecks = true;
+            const pendingChecks = reader
+              .request(
+                checksMethod,
+                {
+                  sessionKey,
+                  owner: "synthetic",
+                  repo: replacement.repo,
+                  number: replacement.number,
+                  headSha: replacement.headSha,
+                },
+                { signal },
+              )
+              .then(
+                () => {
+                  checksEntered.reject(
+                    new Error("CI details succeeded before the held provider was entered"),
+                  );
+                },
+                (error: unknown) => {
+                  rejectedChecks = error;
+                  checksEntered.reject(
+                    new Error("CI details rejected before the held provider was entered", {
+                      cause: error,
+                    }),
+                  );
+                },
               );
-              await chip.locator(".chat-pr__checks-pill").click();
-              await pane.getByText("replacement-workspace check", { exact: true }).waitFor();
-              await screenshot("03-current-checks.png");
+            await waitFor(checksEntered);
+            holdSnapshot = true;
+            // Change a list-visible metadata field so the shared detail cache admits new facts.
+            replacement.title = "Updated replacement workspace review";
+            replacement.additions = 5;
+            await subscribe([sessionKey], true);
+            await waitFor(snapshotEntered).catch((cause: unknown) => {
+              throw new Error("The held PR snapshot provider was not entered", { cause });
+            });
+            linkEmail(retiringEmail, viewer.id);
+            identityReassigned = readResidentUserProfileId(retiring.id) === viewer.id;
+            expect(identityReassigned).toBe(true);
 
-              await chip.locator(".chat-pr__checks-pill").click();
-              // A new PR keeps the details request cold while the real summary is already known.
-              replacement.number = 203;
-              replacement.checkName = "replacement-workspace current-reader check";
-              expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
-              // The subscription acknowledgement precedes the owner's paced refresh.
-              expect(
-                await racePromiseWithAbortSignal(replacementSummaryDelivery.promise, signal),
-              ).toEqual({
-                number: replacement.number,
-                repo: replacement.repo,
-                branch: replacement.branch,
-                additions: replacement.additions,
+            expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
+            releaseIdentityReads.resolve();
+            const current = await waitFor(currentReaderDelivery).catch((cause: unknown) => {
+              throw new Error("The current reader did not receive PR #203 with additions=5", {
+                cause,
               });
-              // A later roster read must not dismiss Details for the already adopted incarnation.
-              await evaluateControlUiContext(page, async (context) => {
-                await context.sessions.refresh({ agentId: "main", force: true });
-              });
-              await expect
-                .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
-                .toBe(replacement.root);
-              await chip.locator(".chat-pr__number").filter({ hasText: "#203" }).waitFor();
-              await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-                sessionKeys: [sessionKey],
-              });
-              await expect.poll(() => retiredDeliveries.at(-1)?.number).toBe(203);
-              beforeIdentityReassignment = retiredDeliveries.length;
-
-              let rejectedChecks: unknown;
-              holdChecks = true;
-              const pendingChecks = reader
-                .request(
-                  checksMethod,
-                  {
-                    sessionKey,
-                    owner: "synthetic",
-                    repo: replacement.repo,
-                    number: replacement.number,
-                    headSha: replacement.headSha,
-                  },
-                  { signal },
-                )
-                .then(
-                  (result) => summarizeChecks(true, result),
-                  (error: unknown) => {
-                    rejectedChecks = error;
-                    return summarizeChecks(
-                      false,
-                      undefined,
-                      isGatewayProtocolResponseError(error) ? error.code : "CLIENT_ERROR",
-                    );
-                  },
-                )
-                .then((result) => {
-                  retiringCheckResponses.push(result);
-                  return result;
-                });
-              await racePromiseWithAbortSignal(checksEntered.promise, signal);
-              holdSnapshot = true;
-              replacement.additions = 5;
-              await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-                sessionKeys: [sessionKey],
-                refreshSessionKeys: [sessionKey],
-              });
-              await racePromiseWithAbortSignal(snapshotEntered.promise, signal);
-              await cue("Reassign the retiring reader while its PR and CI reads are held");
-              linkEmail(retiringEmail, viewer.id);
-              identityReassigned = readResidentUserProfileId(retiring.id) === viewer.id;
-              expect(identityReassigned).toBe(true);
-
-              expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
-              releaseIdentityReads.resolve();
-              const current = await racePromiseWithAbortSignal(
-                currentReaderDelivery.promise,
-                signal,
-              );
-              await pendingChecks;
-              await chip.locator(".chat-pr__checks-pill").click();
-              await pane.getByText(replacement.checkName, { exact: true }).waitFor();
-              // The response drains earlier frames on this socket after the shared refresh settled.
-              await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, { sessionKeys: [] });
-              await cue("Current reader received PR and CI results after identity reassignment");
-              await screenshot("04-current-reader-after-reassignment.png");
-              expect(current).toEqual({
-                number: 203,
-                repo: replacement.repo,
-                branch: replacement.branch,
-                additions: 5,
-              });
-              expect(isGatewayProtocolResponseError(rejectedChecks)).toBe(true);
-              expect(rejectedChecks).toMatchObject({
-                code: "UNAVAILABLE",
-                message: "Session changed; reopen CI details",
-              });
-              expect(retiredDeliveries).toHaveLength(beforeIdentityReassignment);
-              expect(checkResponses.at(-1)).toMatchObject({
-                ok: true,
+            });
+            await pendingChecks;
+            await chip.locator(".chat-pr__checks-pill").click();
+            await pane.getByText(replacement.checkName, { exact: true }).waitFor();
+            // The response drains earlier frames on this socket after the shared refresh settled.
+            await subscribe([]);
+            expect(current).toEqual(expectedDelivery(replacement));
+            expect(isGatewayProtocolResponseError(rejectedChecks)).toBe(true);
+            expect(rejectedChecks).toMatchObject({
+              code: "UNAVAILABLE",
+              message: "Session changed; reopen CI details",
+            });
+            expect(retiredDeliveries).toHaveLength(beforeIdentityReassignment);
+            expect(checkResponses.at(-1)).toMatchObject({
+              ok: true,
+              payload: {
                 number: 203,
                 repo: replacement.repo,
                 status: "ready",
-                checks: [replacement.checkName],
-              });
-            } finally {
-              if (artifacts) {
-                await writeFile(
-                  path.join(artifacts, "gateway-results.json"),
-                  JSON.stringify(
-                    {
-                      delivered,
-                      retiredDeliveries,
-                      retiredCount,
-                      checkResponses,
-                      identityReassigned,
-                      beforeIdentityReassignment,
-                      retiringCheckResponses,
-                    },
-                    null,
-                    2,
-                  ),
-                  { mode: 0o600 },
-                );
-              }
-            }
+                checks: [{ name: replacement.checkName }],
+              },
+            });
           },
-          async () => {
-            releaseProvider.resolve();
-            releaseIdentityReads.resolve();
-          },
+          releaseReads,
         );
       },
       async close() {
-        releaseProvider.resolve();
-        releaseIdentityReads.resolve();
+        await releaseReads();
         await runQaGatewayFixture(
-          async () => {
-            await retiringReader?.stopAndWait();
-          },
+          async () => retiringReader?.stopAndWait(),
           () => proxy?.close(),
           () => gateway?.close({ reason: "session PR reader proof cleanup" }),
           () => restoreFetch?.(),
         );
       },
-      release: async () => {
-        await state?.cleanup();
-      },
+      release: async () => state?.cleanup(),
     });
   });
 });

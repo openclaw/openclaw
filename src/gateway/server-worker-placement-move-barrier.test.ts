@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
@@ -34,11 +37,9 @@ vi.mock("../auto-reply/reply/queue/drain.js", () => {
   };
 });
 
-import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
-import { clearCommandLane, enqueueCommandInLane } from "../process/command-queue.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementLocalDispatchBarrier } from "./server-worker-placement-local-dispatch.js";
 import {
@@ -133,7 +134,7 @@ describe("worker placement move destination", () => {
       (["current", "revoked after commit"] as const).map((authority) => ({ action, authority })),
     ),
   )(
-    "$action preserves another agent's lane commands under the global key ($authority authority)",
+    "$action preserves another agent's controller work under the global key ($authority authority)",
     async ({ action, authority }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const { sessionKey, sessionId, agentId } = researchSession;
@@ -161,32 +162,63 @@ describe("worker placement move destination", () => {
           workspace: { kind: "local", path: "/gateway/research" },
           [Symbol.dispose]: () => {},
         });
-        const entered = createDeferred();
-        const release = createDeferred();
-        const lane = resolveEmbeddedSessionLane(sessionKey);
-        const blocker = enqueueCommandInLane(lane, async () => {
-          entered.resolve();
-          await release.promise;
-        });
-        await entered.promise;
-        const queued = [
-          enqueueCommandInLane(lane, async () => "main", {
-            sessionTarget: { agentId: "main", sessionKey, sessionId: "main-global" },
-          }),
-          enqueueCommandInLane(lane, async () => "legacy-main"),
-          enqueueCommandInLane(lane, async () => "research", {
-            sessionTarget: researchSession,
-          }),
-        ];
-        const results = Promise.allSettled(queued);
         const effects: string[] = [];
+        const mainStorePath = "/tmp/openclaw-worker-placement-main.sqlite";
+        const mainAdmission = await beginSessionEffect({
+          scope: mainStorePath,
+          identities: [sessionKey, "main-global"],
+          agentId: "main",
+          assertAllowed: () => {},
+          onInterrupt: () => {
+            effects.push("main interrupt");
+          },
+        });
+        const mainFollowup = createQueueTestRun({ prompt: "keep main follow-up" });
+        mainFollowup.run = {
+          ...mainFollowup.run,
+          agentId: "main",
+          sessionId: "main-global",
+          config: { session: { store: mainStorePath } },
+        };
+        enqueueFollowupRun(
+          sessionKey,
+          mainFollowup,
+          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+          "none",
+          undefined,
+          false,
+        );
+        const mainQueue = getExistingFollowupQueue(
+          sessionKey,
+          mainFollowup.controllerInput!.target,
+        );
+        const researchFollowup = createQueueTestRun({ prompt: "keep required first input" });
+        researchFollowup.run = {
+          ...researchFollowup.run,
+          agentId,
+          sessionId,
+          config: { session: { store: target.storePath } },
+        };
+        enqueueFollowupRun(
+          sessionKey,
+          researchFollowup,
+          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+          "none",
+          undefined,
+          false,
+        );
+        const researchQueue = getExistingFollowupQueue(
+          sessionKey,
+          researchFollowup.controllerInput!.target,
+        );
         let releaseAdmission = () => {};
         const admission =
           action === "required"
             ? undefined
-            : await beginSessionWorkAdmission({
+            : await beginSessionEffect({
                 scope: target.storePath,
                 identities: [sessionKey, sessionId],
+                agentId,
                 assertAllowed: () => {},
                 onInterrupt: () => {
                   effects.push("interrupt");
@@ -251,23 +283,21 @@ describe("worker placement move destination", () => {
                     ...(action === "abandon" ? [] : ["claims released"]),
                   ],
           );
-          release.resolve();
-          await blocker;
-          expect(await results).toEqual([
-            { status: "fulfilled", value: "main" },
-            { status: "fulfilled", value: "legacy-main" },
-            action === "required" || action === "dispatch"
-              ? { status: "fulfilled", value: "research" }
-              : {
-                  status: "rejected",
-                  reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
-                },
-          ]);
+          expect(mainAdmission.isActive()).toBe(true);
+          expect(admission?.isActive() ?? false).toBe(action === "dispatch");
+          expect(mainQueue?.items.map((item) => item.prompt)).toEqual(["keep main follow-up"]);
+          expect(researchQueue?.items.map((item) => item.prompt)).toEqual(
+            action === "required" || action === "dispatch" ? ["keep required first input"] : [],
+          );
         } finally {
+          if (mainQueue) {
+            clearFollowupQueue(sessionKey, mainQueue);
+          }
+          if (researchQueue) {
+            clearFollowupQueue(sessionKey, researchQueue);
+          }
           admission?.release();
-          release.resolve();
-          clearCommandLane(lane);
-          await Promise.allSettled([blocker, results]);
+          mainAdmission.release();
         }
       });
     },
@@ -335,7 +365,8 @@ describe("worker placement move destination", () => {
         const { sessionId, sessionKey } = session;
         const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
         const observed: string[] = [];
-        const admission = await beginSessionWorkAdmission({
+        const admission = await beginSessionEffect({
+          agentId: session.agentId,
           scope: target.storePath,
           identities,
           assertAllowed: () => undefined,
@@ -441,9 +472,10 @@ describe("worker placement move destination", () => {
           session.sessionId,
         ];
         const onInterrupt = vi.fn();
-        const admission = await beginSessionWorkAdmission({
+        const admission = await beginSessionEffect({
           scope: target.storePath,
           identities,
+          agentId: "main",
           assertAllowed: () => undefined,
           onInterrupt,
         });

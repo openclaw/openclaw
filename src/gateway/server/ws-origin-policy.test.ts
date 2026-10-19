@@ -243,6 +243,22 @@ describe("committed authentication policy", () => {
       principal: null,
       revoked: false,
     })),
+    ...(
+      [
+        ["operator.admin", "operator.read"],
+        ["operator.write", "operator.read", "operator.talk"],
+        ["operator.read", "operator.sessions.read"],
+        ["operator.sessions.write", "operator.sessions.read"],
+      ] satisfies OperatorScope[][]
+    ).map<AuthPolicyTransition>((scopes) => ({
+      name: `redundant implied identity scopes ${scopes.join(", ")}`,
+      initial: { gateway: { auth: { identityScopes: { [identity]: scopes } } } },
+      next: {
+        gateway: { auth: { identityScopes: { [identity]: [scopes[0]!] } } },
+      },
+      principal: { role: "operator", verifiedIdentity: identity },
+      revoked: false,
+    })),
     ...[
       "allowUsers",
       "proxy removed",
@@ -302,6 +318,37 @@ describe("committed authentication policy", () => {
     if (revoked) {
       expect(client.socket.close).toHaveBeenCalledWith(4001, "gateway policy changed");
     }
+  });
+
+  it("preserves serialized grants across equivalent scope edits without accepting malformed or revoked grants", () => {
+    const policy = {
+      generation: "",
+      grantGeneration:
+        '{"browserOriginAllowed":undefined,"fallbackCredentialGeneration":undefined,"grant":["operator.read","operator.write"],"methodEnabled":true,"proxyUserAllowed":true}',
+      role: "operator",
+      authMethod: "trusted-proxy" as const,
+      verifiedIdentity: identity,
+    };
+    const next: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user", allowUsers: [identity] },
+          identityScopes: { [identity]: ["operator.write"] },
+        },
+      },
+    };
+    expect(isGatewayAuthGrantCurrent(policy, next)).toBe(true);
+    for (const grantGeneration of [
+      "invalid-fingerprint",
+      policy.grantGeneration.replace('["operator.read","operator.write"]', "[1]"),
+      policy.grantGeneration.replace('"methodEnabled":true', '"methodEnabled":false'),
+    ]) {
+      expect(isGatewayAuthGrantCurrent({ ...policy, grantGeneration }, next)).toBe(false);
+    }
+    const revoked = structuredClone(next);
+    revoked.gateway!.auth!.identityScopes![identity] = ["operator.read"];
+    expect(isGatewayAuthGrantCurrent(policy, revoked)).toBe(false);
   });
 
   it.each(["retained@example.test", "other@example.test"])(

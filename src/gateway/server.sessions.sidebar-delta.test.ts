@@ -10,6 +10,7 @@ import {
   requestSessionListParams,
 } from "../../ui/src/lib/sessions/session-requests.js";
 import { writeConfigFile } from "../config/config.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -20,6 +21,10 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   connectReq,
@@ -81,6 +86,12 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     bytes?: number;
   };
   const observations: Observation[] = [];
+  const retirements: string[] = [];
+  const stopDiagnostics = onTrustedInternalDiagnosticEvent((entry) => {
+    if (entry.type === "sessions.list.baseline.retired") {
+      retirements.push(entry.cause);
+    }
+  });
   let event = "initial";
   let query = "general";
   const share = presentation.shareSidebarSessionRows;
@@ -90,8 +101,9 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     .mockImplementation((rows, base, history) => {
       const revision = base?.replace(SESSION_ROWS_DELTA_PREFIX, "");
       const found = revision
-        ? [rows, ...(history ?? [])].find((candidate) => share(candidate).rowsRevision === revision)
-        : undefined;
+        ? share(rows).rowsRevision === revision ||
+          history?.some((candidate) => candidate.revision === revision) === true
+        : false;
       const previous = revision ? servedRows.get(revision) : undefined;
       const result = share(rows, base, history);
       if (result.rowsRevision) {
@@ -101,7 +113,7 @@ test("sidebar wire caches retain deltas across real runtime publications", async
         event,
         query,
         baseSent: base !== undefined,
-        baseFound: found !== undefined,
+        baseFound: found,
         changedRows: previous ? rows.filter((row) => !previous.includes(row)).length : rows.length,
         outcome: result.rowsUnchanged ? "unchanged" : result.rowsDelta ? "delta" : "full",
       });
@@ -275,18 +287,40 @@ test("sidebar wire caches retain deltas across real runtime publications", async
         await read("session-id-run-start", "delta");
         clearAgentRunContext(runIds[1]!);
         await read("session-id-run-end", "delta");
+        await client.request("session.members.add", {
+          sessionKey: target.sessionKey,
+          identityId: peer.id,
+        });
+        await read("member-added", "delta");
+        await client.request("session.members.remove", {
+          sessionKey: target.sessionKey,
+          identityId: peer.id,
+        });
+        await read("member-removed", "delta");
+        await waitForDiagnosticEventsDrained();
+        expect.soft(retirements).toEqual([]);
         await client.request("users.setDisplayName", {
           profileId: viewer.id,
           displayName: "Updated sidebar reader",
         });
         await read("profile-presentation", "full");
+        await waitForDiagnosticEventsDrained();
+        expect.soft(retirements).toEqual(["identity"]);
         await read("profile-idle", "unchanged");
+        setRuntimeConfigSnapshot({
+          ...getRuntimeConfigSnapshot(),
+          ui: { prefs: { sidebarEntries: ["sessions"] } },
+        });
+        await read("config-presentation", "full");
+        await waitForDiagnosticEventsDrained();
+        expect.soft(retirements).toEqual(["identity", "config"]);
       } finally {
         runIds.forEach((runId) => clearAgentRunContext(runId));
         socket.close();
       }
     });
   } finally {
+    stopDiagnostics();
     shareObserver.mockRestore();
     clock.mockRestore();
   }

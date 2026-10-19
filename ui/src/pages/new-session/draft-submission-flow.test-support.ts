@@ -59,14 +59,21 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     ],
   };
   // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
+  const agentListeners = new Set<() => void>();
   const agents = {
-    subscribe: () => () => undefined,
+    subscribe(listener: () => void) {
+      agentListeners.add(listener);
+      return () => agentListeners.delete(listener);
+    },
     state: { agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} } },
     refreshList: async () => {
       // A failed refresh publishes no policy, like the roster owner.
       const policy = await options.placementPolicy?.().catch(() => undefined);
       if (policy) {
         agents.state.agentsList = Object.assign({}, roster, policy);
+        for (const listener of agentListeners) {
+          listener();
+        }
       }
       return agents.state.agentsList;
     },

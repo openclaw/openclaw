@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createRoot, runWithOwner, Show } from "solid-js";
+import { createMemo, createRoot, onSettled, runWithOwner, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -56,26 +56,25 @@ import {
 } from "./sidebar-snapshot-capture.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
-import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
-  readNarration: () => ReturnType<SidebarNarration["read"]> | undefined = () => undefined;
   private readonly emptyNarrationLines = new Map<string, string>();
   private readonly emptyNarrationTools = new Map<string, SidebarToolActivity>();
   private readonly emptyObserverDigests = new Map<string, SessionObserverDigest>();
   override get sidebarNarrationLines() {
-    return this.readNarration()?.lines ?? this.emptyNarrationLines;
+    return this.narration?.read().lines ?? this.emptyNarrationLines;
   }
   override get sidebarTools() {
-    return this.readNarration()?.tools ?? this.emptyNarrationTools;
+    return this.narration?.read().tools ?? this.emptyNarrationTools;
   }
   override get sidebarObserverDigests() {
-    return this.readNarration()?.observerDigests ?? this.emptyObserverDigests;
+    return this.narration?.read().observerDigests ?? this.emptyObserverDigests;
   }
 
-  override readonly sessionOrganizer = new SessionOrganizer(this, () => this.requestUpdate());
+  override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
   // Native sidebar custody outlives provider/view roots.
   private readonly menuRoot = runWithOwner(null, () =>
     createRoot((dispose) => ({
@@ -83,7 +82,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         host: this,
         element: this.hostElement,
         commit: () => {
-          this.requestUpdate();
+          this.invalidate();
           return this.updateComplete;
         },
       }),
@@ -92,7 +91,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   );
   override readonly sidebarMenus = this.menuRoot.menus;
   readonly disposeMenus = this.menuRoot.dispose;
-  readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
+  readonly people = new SidebarPeoplePreferences(() => this.invalidate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
@@ -226,7 +225,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     (module) => {
       this.catalogRenderer = module.renderSessionCatalogGroups;
       if (this.isConnected) {
-        this.requestUpdate();
+        this.invalidate();
       }
     },
   );
@@ -348,20 +347,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         sectionId,
         limit,
       );
-      this.requestUpdate();
+      this.invalidate();
     } else {
       this.sessionData.setVisibleSessionLimit(sectionId, limit);
     }
   }
 
-  preloadCatalogRenderer() {
-    return this.catalogRendererImport.load();
-  }
-
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   hideSessionCatalog(catalogId: string): void {
@@ -397,20 +392,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           ? host().getRouteSessionKey()
           : "";
     });
-    createEffect(
-      () => ({
-        catalog:
-          !host().catalogRenderer &&
-          (catalogs().length > 0 || host().sessionData.sessionCatalogRefreshStatus.error !== null)
-            ? host().catalogRendererImport
-            : null,
-      }),
-      ({ catalog }) => {
-        if (catalog) {
-          void catalog.load().catch(() => undefined);
-        }
-      },
-    );
+    const LoadCatalogRenderer = () => {
+      onSettled(() => {
+        void this.catalogRendererImport.load().catch(() => undefined);
+      });
+      return null;
+    };
     const nativeList = (
       <SessionList
         host={host()}
@@ -435,18 +422,27 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       />
     );
     return (
-      <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
-        <SidebarAgentRoster
-          host={host()}
-          active={
-            host().navigationVisible &&
-            host().navigationView === "sessions" &&
-            !host().contextualSidebar
+      <>
+        <Show
+          when={
+            !host().catalogRenderer &&
+            (catalogs().length > 0 || host().sessionData.sessionCatalogRefreshStatus.error !== null)
           }
-          sections={sections()}
-          involvingMe={host().sessionInvolvingMeFilterActive}
-        />
-      </Show>
+        >
+          <LoadCatalogRenderer />
+        </Show>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+          <SidebarAgentRoster
+            host={host()}
+            active={
+              host().navigationVisible &&
+              host().navigationView === "sessions" &&
+              !host().contextualSidebar
+            }
+            sections={sections()}
+          />
+        </Show>
+      </>
     );
   }
 
@@ -462,6 +458,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);
+      const statusVisible = () =>
+        this.gatewayStatus?.kind &&
+        (this.gatewayStatus.kind !== "connected" || this.connectionRecovery);
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -520,26 +519,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 />
               </Show>
             </div>
-            <div class="sidebar-shell__invite">
-              <Show
-                when={
-                  this.context.theme.branding.communityLinks &&
-                  this.context.config.current.communityInvite
-                }
-              >
-                <SidebarCommunityInvite />
-              </Show>
-            </div>
-            <Show when={this.devGitBranch}>
+            <Show when={statusVisible() || this.devGitBranch}>
               <div class="sidebar-shell__footer">
-                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
-                  <div class="sidebar-footer-branch">
-                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                      <Icon name="gitBranch" />
-                    </span>
-                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                  </div>
-                </openclaw-tooltip>
+                <Show when={statusVisible()}>
+                  <GatewayStatus {...this.gatewayStatus!} row />
+                </Show>
+                <Show when={this.devGitBranch}>
+                  <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
+                    <div class="sidebar-footer-branch">
+                      <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                        <Icon name="gitBranch" />
+                      </span>
+                      <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                    </div>
+                  </openclaw-tooltip>
+                </Show>
               </div>
             </Show>
           </div>

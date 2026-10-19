@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeGitCommand,
   gitNullConfigPath,
@@ -10,6 +11,12 @@ import {
 } from "../infra/git-exec.js";
 import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-network-retry.js";
 import { withGitRepositoryRepair } from "../infra/git-repository-repair.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  readCommandProcessFailure,
+  type SpawnResult,
+} from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 
@@ -115,6 +122,24 @@ function classifyProjectGitFailure(
   );
 }
 
+async function runProjectGitCommand<T extends SpawnResult>(run: () => Promise<T>): Promise<T> {
+  try {
+    const result = await run();
+    if (result.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
+    return result;
+  } catch (error) {
+    if (
+      !hasCommandProcessCleanupError(error) &&
+      readCommandProcessFailure(error)?.cleanup === "uncertain"
+    ) {
+      throw new CommandProcessCleanupError({ cause: error });
+    }
+    throw error;
+  }
+}
+
 /** Clones one already-validated source into an unoccupied managed target. */
 export async function cloneProjectCheckout(
   input: { url: string; target: string; requiredCommit?: string },
@@ -123,7 +148,15 @@ export async function cloneProjectCheckout(
   const env = options.env ?? process.env;
   const existed = await fs.lstat(input.target).then(
     () => true,
-    () => false,
+    (error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+      throw new ProjectCloneError(
+        "clone_failed",
+        "The managed checkout target could not be inspected. Check Gateway filesystem access and retry.",
+      );
+    },
   );
   if (existed) {
     throw new ProjectCloneError(
@@ -142,20 +175,27 @@ export async function cloneProjectCheckout(
       startRun: options.startRun,
     },
     async (timeoutMs) => {
-      const attempt = await withGitProcessOperation("project.clone", () =>
-        runCommandWithTimeout(
-          ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
-          {
-            env: commandEnv,
-            timeoutMs,
-            signal: options.signal,
-            killProcessTree: true,
-            maxOutputBytes: 256 * 1024,
-          },
+      const attempt = await runProjectGitCommand(() =>
+        withGitProcessOperation("project.clone", () =>
+          runCommandWithTimeout(
+            ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+            {
+              env: commandEnv,
+              timeoutMs,
+              signal: options.signal,
+              killProcessTree: true,
+              maxOutputBytes: 256 * 1024,
+            },
+          ),
         ),
       );
       if (attempt.code !== 0 || attempt.termination !== "exit") {
-        await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(input.target, { recursive: true, force: true }).catch(() => {
+          throw new ProjectCloneError(
+            "clone_failed",
+            "Git could not remove the incomplete checkout. Check Gateway filesystem access and remove the partial checkout before retrying.",
+          );
+        });
       }
       return attempt;
     },
@@ -165,6 +205,9 @@ export async function cloneProjectCheckout(
       try {
         await ensureProjectCheckoutCommit({ ...input, commit: input.requiredCommit }, options);
       } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         await fs.rm(input.target, { recursive: true, force: true });
         throw error;
       }
@@ -215,6 +258,7 @@ export async function refreshProjectCheckout(
   }
   const objects = await fs.realpath(objectPath.stdout.trim());
   const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-fetch-"));
+  let retainStaging = false;
   try {
     const initialized = await runProjectCheckoutGit({ target: staging }, options, [
       "init",
@@ -312,8 +356,13 @@ export async function refreshProjectCheckout(
         );
       }
     }
+  } catch (error) {
+    retainStaging = hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
-    await fs.rm(staging, { recursive: true, force: true });
+    if (!retainStaging) {
+      await fs.rm(staging, { recursive: true, force: true });
+    }
   }
 }
 
@@ -366,24 +415,26 @@ function runProjectCheckoutGit(
   args: string[],
   commandOptions: GitCommandOptions = {},
 ) {
-  return executeGitCommand(
-    input.target,
-    ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args],
-    {
-      operation: "project.clone",
-      timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
-      signal: options.signal,
-      killProcessTree: true,
-      maxOutputBytes: 256 * 1024,
-      beforeRun: options.assertCurrent,
-      startRun: options.startRun,
-      ...commandOptions,
-      env: {
-        ...cloneCommandEnv(input.url, options.token, options.env ?? process.env),
-        ...commandOptions.env,
-        ...(options.objectDirectory ? { GIT_OBJECT_DIRECTORY: options.objectDirectory } : {}),
+  return runProjectGitCommand(() =>
+    executeGitCommand(
+      input.target,
+      ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args],
+      {
+        operation: "project.clone",
+        timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
+        signal: options.signal,
+        killProcessTree: true,
+        maxOutputBytes: 256 * 1024,
+        beforeRun: options.assertCurrent,
+        startRun: options.startRun,
+        ...commandOptions,
+        env: {
+          ...cloneCommandEnv(input.url, options.token, options.env ?? process.env),
+          ...commandOptions.env,
+          ...(options.objectDirectory ? { GIT_OBJECT_DIRECTORY: options.objectDirectory } : {}),
+        },
       },
-    },
+    ),
   );
 }
 

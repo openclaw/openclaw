@@ -1,4 +1,3 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
@@ -24,6 +23,7 @@ import {
 import {
   readSessionActorParticipantPostimage,
   readSessionActorProjectionReceiptFromCells,
+  sessionActorReplicaCellsForPath,
   scopedWriteToken,
   scopedWriteTokens,
 } from "./session-actor-replica-receipts.js";
@@ -40,6 +40,7 @@ import {
   sameSessionActorTranscriptVersion,
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
+import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
@@ -125,8 +126,7 @@ export function ensureReplicaSubscription(): void {
       };
       if (
         !pool.cells.has(sessionActorReplicaTargetKey(target)) &&
-        created.source.writeToken ===
-          readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
+        isSessionEntryPublicationSourceCurrent(created.source)
       ) {
         // Creation already owns the complete entry; its first reader need not fetch it again.
         retainSessionActorEntryFacts(
@@ -217,7 +217,15 @@ export function ensureReplicaSubscription(): void {
       if (
         prepared &&
         source.identity === database.physicalIdentity &&
-        prepared.source.writeToken === readSqliteDatabaseWriteTokenForPath(database.nativeLocation)
+        isSessionEntryPublicationSourceCurrent(prepared.source) &&
+        (!prepared.source.admission ||
+          !prepared.actorPostimage ||
+          (prepared.actorPostimage.writeToken !== undefined &&
+            prepared.actorPostimage.writeToken ===
+              scopedWriteToken(
+                { database, sessionKey },
+                prepared.actorPostimage.dependencySessionIds,
+              )))
       ) {
         if (prepared.actorPostimage) {
           retainSnapshot(cell, prepared.actorPostimage, prepared.source.incarnation);
@@ -388,9 +396,11 @@ function touch(cell: ReplicaCell): void {
   }
 }
 
-export function readSessionActorProjectionReceipt(
-  params: Pick<SessionTranscriptProjectionReceipt, "path" | "sessionId"> & { sessionKey?: string },
-): SessionTranscriptProjectionReceipt | undefined {
+export function readSessionActorProjectionReceipt(params: {
+  path: string;
+  sessionId: string;
+  sessionKey?: string;
+}): SessionTranscriptProjectionReceipt | undefined {
   return readSessionActorProjectionReceiptFromCells(pool.cells.values(), touch, params);
 }
 
@@ -463,13 +473,9 @@ function readCurrentEntryCellForPath(
   admitted?: DatabasePathIdentity,
 ) {
   ensureReplicaSubscription();
-  for (const { target } of pool.cells.values()) {
+  for (const { target } of sessionActorReplicaCellsForPath(pool.cells.values(), params.path)) {
     const { database, sessionKey } = target;
-    if (
-      database.kind === "file" &&
-      database.nativeLocation === params.path &&
-      sessionKey === params.sessionKey
-    ) {
+    if (database.kind === "file" && sessionKey === params.sessionKey) {
       return readCurrentEntryCell({ database, sessionKey }, admitted);
     }
   }
@@ -552,6 +558,7 @@ export function readSessionActorRowFacts(params: {
     sessionKey: params.sessionKey,
     entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
+    transcriptAssistantMessage: "unknown",
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
   });
 }

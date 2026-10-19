@@ -16,7 +16,10 @@ import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
-const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
+const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof props>>(
+  renderSessionActivityView,
+  (input) => createSolidApplicationContextProvider(input.context).wrapper,
+);
 
 let container: HTMLDivElement;
 function show(input: Parameters<typeof props>[0] = {}, target = container) {
@@ -26,7 +29,16 @@ function show(input: Parameters<typeof props>[0] = {}, target = container) {
 beforeEach(() => {
   container = document.createElement("div");
   document.body.replaceChildren(container);
+  // Identity and navigation fixtures do not admit viewport-driven media discovery.
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends IntersectionObserver {
+      override observe() {}
+    },
+  );
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("session activity semantics", () => {
   afterEach(() => {

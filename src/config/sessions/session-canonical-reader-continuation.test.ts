@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -25,34 +25,40 @@ import { seedCanonicalSessionValidation } from "./session-canonical-validation.j
 const healthy = "agent:main:healthy";
 const damaged = "agent:main:damaged";
 type FixtureDatabase = ReturnType<typeof openOpenClawAgentDatabase>;
+type FixtureReader = Extract<
+  ReturnType<typeof openOpenClawAgentDatabaseReadOnly>,
+  { found: true }
+>["database"];
+type Held = ReturnType<typeof capture>;
 
 function capture(database: FixtureDatabase) {
   const continuation = captureCanonicalSessionReaderContinuation(database);
-  if (!continuation) {
-    throw new Error("Expected an existing committed reader admission");
-  }
-  return continuation;
+  assert(continuation, "Expected an existing committed reader admission");
+  return Object.assign(continuation, { [Symbol.dispose]: continuation.release });
 }
 
 function corrupt(database: FixtureDatabase) {
   // Keep the held reader receipt while seeding the unvalidated-row fixture.
   runSqliteImmediateTransactionSync(database.db, () => seedCanonicalSessionValidation(database));
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-    .run("{", damaged);
-  database.db
-    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = '{', entry_valid = 1 WHERE session_key = ?")
     .run(damaged);
+}
+
+function readHealthy(reader: FixtureReader, receipt: Held["receipt"], during?: () => void) {
+  return readWithCanonicalSessionReaderContinuation(reader, receipt, () => {
+    const result = readExactSessionEntryRowValidated(reader, healthy);
+    during?.();
+    return result;
+  });
 }
 
 function replaceDatabasePath(pathname: string): () => void {
   const replacementPath = `${pathname}.continuation-new`;
   const displacedPath = `${pathname}.continuation-old`;
-  const replacement = new DatabaseSync(replacementPath);
-  try {
+  {
+    using replacement = new DatabaseSync(replacementPath);
     replacement.exec("CREATE TABLE replacement_marker (value TEXT)");
-  } finally {
-    replacement.close();
   }
   fs.renameSync(pathname, displacedPath);
   try {
@@ -67,10 +73,7 @@ function replaceDatabasePath(pathname: string): () => void {
 async function withReaders(
   run: (fixture: {
     database: FixtureDatabase;
-    reader: Extract<
-      ReturnType<typeof openOpenClawAgentDatabaseReadOnly>,
-      { found: true }
-    >["database"];
+    reader: FixtureReader;
     options: { agentId: string; env: NodeJS.ProcessEnv };
   }) => void,
 ) {
@@ -85,19 +88,18 @@ async function withReaders(
     const database = openOpenClawAgentDatabase(options);
     assertCanonicalSqliteSessionKeysCurrent(database);
     const opened = openOpenClawAgentDatabaseReadOnly(options);
-    if (!opened.found) {
-      throw new Error("Expected the seeded read-only database");
-    }
+    assert(opened.found, "Expected the seeded read-only database");
+    const reader = opened.database;
     try {
-      run({ database, reader: opened.database, options });
+      run({ database, reader, options });
     } finally {
-      opened.database.close();
+      reader.close();
     }
   });
 }
 
-it("captures and revalidates existing admission without host SQL", async () => {
-  await withReaders(({ database, reader, options }) => {
+it("captures and revalidates existing admission without host SQL", () =>
+  withReaders(({ database, reader, options }) => {
     expect(captureCanonicalSessionReaderContinuation(reader)).toBeUndefined();
     runOpenClawAgentWriteTransaction(() => {
       expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
@@ -107,9 +109,7 @@ it("captures and revalidates existing admission without host SQL", async () => {
       ["host"],
       () => "host",
     );
-    const exec = vi.spyOn(database.db, "exec").mockImplementation(() => {
-      throw new Error("host SQL");
-    });
+    using exec = vi.spyOn(database.db, "exec").mockImplementation(() => assert.fail("host SQL"));
     try {
       const held = capture(database);
       held.assertCurrent();
@@ -119,41 +119,32 @@ it("captures and revalidates existing admission without host SQL", async () => {
       expect(exec).not.toHaveBeenCalled();
     } finally {
       queries.restore();
-      exec.mockRestore();
     }
-  });
-});
+  }));
 
 it.each(["release", "readiness", "post-commit release"])(
   "refuses publication when %s changes before publication",
-  async (change) => {
-    await withReaders(({ database, reader }) => {
-      const held = capture(database);
+  (change) =>
+    withReaders(({ database, reader }) => {
+      using held = capture(database);
       corrupt(database);
-      try {
-        expect(() =>
-          readWithCanonicalSessionReaderContinuation(reader, structuredClone(held.receipt), () => {
-            const result = readExactSessionEntryRowValidated(reader, healthy);
-            if (change === "release") {
-              held.release();
-            } else if (change === "readiness") {
-              Atomics.store(new Int32Array(held.receipt.validation.canonicalReady), 0, 0);
-            } else {
-              expect(deferSqlitePostCommitPublication(reader.db, held.release)).toBe(true);
-            }
-            return result;
-          }),
-        ).toThrow("no longer current");
-      } finally {
-        held.release();
-      }
-    });
-  },
+      expect(() =>
+        readHealthy(reader, structuredClone(held.receipt), () => {
+          if (change === "release") {
+            held.release();
+          } else if (change === "readiness") {
+            Atomics.store(new Int32Array(held.receipt.validation.canonicalReady), 0, 0);
+          } else {
+            expect(deferSqlitePostCommitPublication(reader.db, held.release)).toBe(true);
+          }
+        }),
+      ).toThrow("no longer current");
+    }),
 );
 
-it("does not export a proof whose readiness changed at its admission commit", async () => {
-  await withReaders(({ database, options }) => {
-    const before = capture(database);
+it("does not export a proof whose readiness changed at its admission commit", () =>
+  withReaders(({ database, options }) => {
+    using before = capture(database);
     Atomics.store(new Int32Array(before.receipt.validation.canonicalReady), 0, 0);
     runOpenClawAgentWriteTransaction((current) => {
       assertCanonicalSqliteSessionKeysCurrent(current);
@@ -162,9 +153,7 @@ it("does not export a proof whose readiness changed at its admission commit", as
     expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
     assertCanonicalSqliteSessionKeysCurrent(database);
     capture(database).release();
-    before.release();
-  });
-});
+  }));
 
 it.each([
   { ending: "rollback", admitted: false },
@@ -173,9 +162,9 @@ it.each([
   { ending: "rollback", admitted: true },
 ])(
   "retains only committed admission after $ending (previous admission: $admitted)",
-  async ({ ending, admitted }) => {
-    await withReaders(({ database, options }) => {
-      const held = admitted ? capture(database) : undefined;
+  ({ ending, admitted }) =>
+    withReaders(({ database, options }) => {
+      using held = admitted ? capture(database) : undefined;
       if (!admitted) {
         closeOpenClawAgentDatabaseByPath(database.path);
       }
@@ -183,86 +172,73 @@ it.each([
       if (!admitted) {
         expect(captureCanonicalSessionReaderContinuation(current)).toBeUndefined();
       }
-      try {
-        if (ending === "manual commit") {
-          current.db.exec("BEGIN");
-          try {
-            assertCanonicalSqliteSessionKeysCurrent(current);
-            expect(captureCanonicalSessionReaderContinuation(current)).toBeUndefined();
-          } finally {
-            current.db.exec("COMMIT");
-          }
-        } else {
-          const failure = admitted ? "rollback policy" : "abandoned admission";
-          const run = () =>
-            runOpenClawAgentWriteTransaction((writer) => {
-              if (admitted) {
-                setCanonicalSqliteSessionMainKey(writer, "custom");
-              }
-              assertCanonicalSqliteSessionKeysCurrent(writer);
-              expect(captureCanonicalSessionReaderContinuation(writer)).toBeUndefined();
-              if (ending === "rollback") {
-                throw new Error(failure);
-              }
-              setCanonicalSqliteSessionMainKey(writer, "custom");
-            }, options);
-          if (ending === "rollback") {
-            expect(run).toThrow(failure);
-          } else {
-            run();
-          }
-        }
-        if (held) {
-          expect(() => held.assertCurrent()).toThrow("no longer current");
-        }
-        if (admitted && ending === "rollback") {
+      if (ending === "manual commit") {
+        current.db.exec("BEGIN");
+        try {
           assertCanonicalSqliteSessionKeysCurrent(current);
-          const next = capture(current);
-          next.assertCurrent();
-          next.release();
-        } else {
           expect(captureCanonicalSessionReaderContinuation(current)).toBeUndefined();
+        } finally {
+          current.db.exec("COMMIT");
         }
-      } finally {
-        held?.release();
+      } else {
+        const failure = admitted ? "rollback policy" : "abandoned admission";
+        const run = () =>
+          runOpenClawAgentWriteTransaction((writer) => {
+            if (admitted) {
+              setCanonicalSqliteSessionMainKey(writer, "custom");
+            }
+            assertCanonicalSqliteSessionKeysCurrent(writer);
+            expect(captureCanonicalSessionReaderContinuation(writer)).toBeUndefined();
+            if (ending === "rollback") {
+              throw new Error(failure);
+            }
+            setCanonicalSqliteSessionMainKey(writer, "custom");
+          }, options);
+        if (ending === "rollback") {
+          expect(run).toThrow(failure);
+        } else {
+          run();
+        }
       }
-    });
-  },
+      if (held) {
+        expect(() => held.assertCurrent()).toThrow("no longer current");
+      }
+      if (admitted && ending === "rollback") {
+        assertCanonicalSqliteSessionKeysCurrent(current);
+        const next = capture(current);
+        next.assertCurrent();
+        next.release();
+      } else {
+        expect(captureCanonicalSessionReaderContinuation(current)).toBeUndefined();
+      }
+    }),
 );
 
 // POSIX permits replacing a pathname while both native connections remain open.
 it.runIf(process.platform !== "win32").each(["before host publication", "before worker return"])(
   "rejects physical replacement %s while the original handles remain open",
-  async (when) => {
-    await withReaders(({ database, reader }) => {
-      const held = capture(database);
+  (when) =>
+    withReaders(({ database, reader }) => {
+      using held = capture(database);
       let restore: (() => void) | undefined;
       corrupt(database);
       try {
         if (when === "before host publication") {
-          expect(
-            readWithCanonicalSessionReaderContinuation(reader, held.receipt, () =>
-              readExactSessionEntryRowValidated(reader, healthy),
-            )?.entry.sessionId,
-          ).toBe("healthy");
+          expect(readHealthy(reader, held.receipt)?.entry.sessionId).toBe("healthy");
           restore = replaceDatabasePath(database.path);
           expect(database.db.isOpen).toBe(true);
           expect(() => held.assertCurrent()).toThrow("no longer current");
           expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
         } else {
           expect(() =>
-            readWithCanonicalSessionReaderContinuation(reader, held.receipt, () => {
-              const result = readExactSessionEntryRowValidated(reader, healthy);
+            readHealthy(reader, held.receipt, () => {
               restore = replaceDatabasePath(database.path);
               expect(reader.db.isOpen).toBe(true);
-              return result;
             }),
           ).toThrow("no longer current");
         }
       } finally {
         restore?.();
-        held.release();
       }
-    });
-  },
+    }),
 );

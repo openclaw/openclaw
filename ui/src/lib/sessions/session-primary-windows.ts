@@ -60,10 +60,6 @@ export function createSessionPrimaryWindows(
       }
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
-      if (entry.queued?.immediate) {
-        // Keep an unserved create invalidation urgent if this query is observed again.
-        entry.coordinator.schedule(true);
-      }
       entry.queued = null;
       const release = () => {
         if (

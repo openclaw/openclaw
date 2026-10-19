@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import {
+  readMigrationArtifactIdentity,
+  type MigrationArtifactVerification,
+} from "./session-sqlite-migration-artifact.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
   exclusiveCopyPublication,
@@ -177,8 +181,8 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
       userVersion: 0,
       ...snapshotContent(published),
     });
-    // Bound digest IO to capture, staged admission, and final publication.
-    expect(durabilityTestState.hashedBytes).toBeLessThanOrEqual(3 * receipt.sizeBytes);
+    // Only a distinct staged copy adds a digest pass to capture and final publication.
+    expect(durabilityTestState.hashedBytes).toBe((copy ? 3 : 2) * receipt.sizeBytes);
     if (copy) {
       expect(copy).toHaveBeenCalledOnce();
     }
@@ -204,6 +208,36 @@ it("keeps a caller-owned source independent of its published image", async () =>
   });
   expect(await fs.readFile(targetPath)).toEqual(original);
   expect(query("SELECT value FROM records", sourcePath)).toEqual([{ value: "after" }]);
+});
+
+it("does not bind an earlier publication hash to metadata changed by its final callback", async () => {
+  const original = await fs.readFile(sourcePath);
+  const verification: MigrationArtifactVerification = new Map();
+  await publishVerifiedSqliteFile({
+    sourcePath,
+    sourceIdentity: await fs.stat(sourcePath, { bigint: true }),
+    targetPath,
+    expectedContent: snapshotContent(original),
+    afterPublish: (guard) => {
+      const verified = guard.assertTargetUnchanged(() => {
+        fsSync.utimesSync(targetPath, 1_700_000_000, 1_700_000_000);
+      });
+      verification.set(`${verified.stat.dev}:${verified.stat.ino}`, verified);
+    },
+  });
+  let readBytes = 0;
+  const read = fsSync.readSync;
+  using _ = vi.spyOn(fsSync, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
+    const count = read(...args);
+    readBytes += count;
+    return count;
+  });
+  const identity = readMigrationArtifactIdentity(targetPath, 1n, undefined, verification);
+  expect(identity).toMatchObject({
+    sha256: snapshotContent(original).sha256,
+    size: original.length,
+  });
+  expect(readBytes).toBe(original.length);
 });
 
 it("rejects same-size byte changes during a ctime-fallback transfer", async () => {

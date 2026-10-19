@@ -23,6 +23,7 @@ export {
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabasePendingWriteToken,
   readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseWriteRevision,
   readSqliteDatabaseWriteTokenForPath,
   withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,

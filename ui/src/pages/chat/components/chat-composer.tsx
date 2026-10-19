@@ -26,7 +26,9 @@ import { renderChatComposerView } from "./chat-composer-view.tsx";
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
 export function ChatComposer(props: ChatComposerProps) {
-  const state = getChatComposerState(untrack(() => props.paneId));
+  // A pane owns this component's lifetime; a different pane mounts a different composer.
+  const initialPaneId = untrack(() => props.paneId);
+  const state = getChatComposerState(initialPaneId);
   // Unrelated prop updates must preserve the native input's uncommitted IME preview.
   const compositionDraftKey = createMemo(() => composerDraftKey(props));
   const [composition, setComposition] = createSignal<{ key: string; value: string } | null>(() => {
@@ -55,11 +57,13 @@ export function ChatComposer(props: ChatComposerProps) {
   );
   const goalComposer = createGoalComposer(() => currentProps, state);
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
-  state.dictation ??= new ComposerDictationOwner(
-    untrack(() =>
+  if (!state.dictation) {
+    // Seed this retained owner once; later configuration is admitted by update(), not recreation.
+    const initialDictationOptions = untrack(() =>
       createComposerDictationOptions(currentProps, state, microphonePicker, interaction.setError),
-    ),
-  );
+    );
+    state.dictation = new ComposerDictationOwner(initialDictationOptions);
+  }
   const voice = { dictation: state.dictation, picker: microphonePicker };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
   onCleanup(
@@ -118,35 +122,24 @@ export function ChatComposer(props: ChatComposerProps) {
     );
   });
   createEffect(
-    () =>
-      [
-        context().mentionDirectory,
-        context().emojiEnabled,
-        context().draftKey,
-        context().clearSlashMenu,
-        context().clearSkillMenu,
-      ] as const,
-    ([directory, emojiEnabled, draftKey, clearSlash, clearSkill], previous) => {
-      state.mentionMenu.syncDirectory(directory);
-      if (clearSlash) {
+    () => ({ context: context(), predictions: currentProps.composerPredictions }),
+    ({ context: current }, previous) => {
+      state.mentionMenu.syncDirectory(current.mentionDirectory);
+      if (current.clearSlashMenu) {
         state.slashMenu.reset();
       }
-      if (clearSkill) {
+      if (current.clearSkillMenu) {
         state.skillMenu.reset();
       }
-      if (!emojiEnabled || draftKey !== previous?.[2]) {
+      if (!current.emojiEnabled || current.draftKey !== previous?.context.draftKey) {
         state.emojiMenu.close();
       }
-    },
-  );
-  createEffect(
-    () => [context().dictationOptions, currentProps.composerPredictions] as const,
-    ([options]) => {
+      const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
-      untrack(() => prediction.sync());
+      prediction.sync();
     },
   );
   onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
-  return renderChatComposerView(context, currentProps);
+  return renderChatComposerView(context, currentProps, state);
 }

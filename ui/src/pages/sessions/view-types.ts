@@ -11,6 +11,7 @@ import type { TranscriptSearchProps } from "./transcript-search-view.tsx";
 export type SessionsProps = {
   loading: boolean;
   refreshing: boolean;
+  refreshDisabled: boolean;
   result: SessionsListResult | null;
   error: string | null;
   basePath: string;

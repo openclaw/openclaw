@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -24,6 +24,7 @@ import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
 type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
@@ -42,11 +43,14 @@ const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 type RecoveryProps = {
   host: RecoveryHost | undefined;
   identity: string;
-  messages: readonly unknown[];
+  onRestored?: () => void;
 };
 
 /** Recovery is owner-scoped and intentionally outside every automatic drain. */
-function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
+function createChatOutboxRecovery(
+  props: RecoveryProps,
+  element: SolidBridgeElement<RecoveryProps>,
+) {
   const [entries, setEntries] = createSignal<ChatOutboxRecoveryEntry[]>([]);
   const [drafts, setDrafts] = createSignal<DurableComposerRecoveryEntry[]>([]);
   const [error, setError] = createSignal("");
@@ -68,40 +72,40 @@ function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
         }
       : null;
   };
-  const unsubscribe = subscribeStoredChatOutboxChanges(() => {
-    if (refreshQueued) {
-      return;
-    }
-    refreshQueued = true;
-    // Storage notifications can fire inside the owner's transfer fence.
-    queueMicrotask(() => {
-      refreshQueued = false;
-      if (isConnected()) {
-        void refresh();
+  onSettled(() => {
+    const unsubscribe = subscribeStoredChatOutboxChanges(() => {
+      if (refreshQueued) {
+        return;
       }
+      refreshQueued = true;
+      // Storage notifications can fire inside the owner's transfer fence.
+      queueMicrotask(() => {
+        refreshQueued = false;
+        if (isConnected()) {
+          void refresh();
+        }
+      });
     });
+    const host = props.host;
+    let messages = host?.chatMessages;
+    const stopReceipts =
+      host &&
+      chatRunPresentation(host).subscribe(() => {
+        if (messages === host.chatMessages) {
+          return;
+        }
+        messages = host.chatMessages;
+        if (entries().some((entry) => entry.session.queue?.some((item) => item.sendRunId))) {
+          void refresh();
+        }
+      });
+    void refresh();
+    return () => {
+      active = false;
+      unsubscribe();
+      stopReceipts?.();
+    };
   });
-  onCleanup(() => {
-    active = false;
-    unsubscribe();
-  });
-  createEffect(
-    () => ({ host: props.host, identity: props.identity, messages: props.messages }),
-    // Reconcile durable outbox/draft storage when its owner or delivery receipts change.
-    (current, previous) => {
-      const awaitsProof =
-        previous?.messages !== current.messages &&
-        entries().some((entry) => entry.session.queue?.some((item) => item.sendRunId));
-      if (
-        !previous ||
-        previous.identity !== current.identity ||
-        previous.host !== current.host ||
-        awaitsProof
-      ) {
-        void refresh();
-      }
-    },
-  );
   async function refresh() {
     if (!active) {
       return;
@@ -255,7 +259,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
             ).status;
       if (result === "restored" || result === "persisted") {
         if (active && props.host === host && props.identity === identity) {
-          element.dispatchEvent(new CustomEvent("outbox-restored", { bubbles: true }));
+          element.onRestored?.();
         }
         await refresh();
       } else {
@@ -435,38 +439,50 @@ declare global {
 defineSolidBridge<RecoveryProps>(
   "openclaw-chat-outbox-recovery",
   (props, element) => {
-    const recovery = createChatOutboxRecovery(props, element);
+    const scope = createMemo(() => ({ host: props.host, identity: props.identity }), {
+      equals: (previous, next) =>
+        previous.host === next.host && previous.identity === next.identity,
+    });
     return (
-      <Show when={recovery.rows().length || recovery.error()}>
-        <div class="chat-outbox-recovery">
-          <Show when={recovery.error()}>
-            <div class="chat-outbox-recovery__error" role="alert" title={recovery.error()}>
-              {recovery.error()}
-            </div>
-          </Show>
-          <For
-            each={recovery.rows()}
-            keyed={(entry) => ("id" in entry ? `outbox:${entry.id}` : `draft:${entry.scopeKey}`)}
-          >
-            {(entry) => (
-              <RecoveryRow
-                entry={entry()}
-                host={props.host}
-                busy={recovery.busy()}
-                canRecover={recovery.canRecover()}
-                onChange={recovery.changeRecovery}
-              />
-            )}
-          </For>
-        </div>
-      </Show>
+      <For each={[scope()]}>
+        {(current) => {
+          const recovery = createChatOutboxRecovery(current, element);
+          return (
+            <Show when={recovery.rows().length || recovery.error()}>
+              <div class="chat-outbox-recovery">
+                <Show when={recovery.error()}>
+                  <div class="chat-outbox-recovery__error" role="alert" title={recovery.error()}>
+                    {recovery.error()}
+                  </div>
+                </Show>
+                <For
+                  each={recovery.rows()}
+                  keyed={(entry) =>
+                    "id" in entry ? `outbox:${entry.id}` : `draft:${entry.scopeKey}`
+                  }
+                >
+                  {(entry) => (
+                    <RecoveryRow
+                      entry={entry()}
+                      host={current.host}
+                      busy={recovery.busy()}
+                      canRecover={recovery.canRecover()}
+                      onChange={recovery.changeRecovery}
+                    />
+                  )}
+                </For>
+              </div>
+            </Show>
+          );
+        }}
+      </For>
     );
   },
   {
     properties: {
       host: { default: undefined, attribute: false },
       identity: { default: "" },
-      messages: { default: [], attribute: false },
+      onRestored: { default: undefined, attribute: false },
     },
   },
 );
@@ -479,9 +495,8 @@ export function PaneOutboxRecovery(props: {
   return (
     <openclaw-chat-outbox-recovery
       prop:host={props.state}
-      prop:messages={props.state.chatMessages}
       prop:identity={props.identity}
-      onOutbox-restored={() => props.onRestored()}
+      prop:onRestored={() => props.onRestored()}
     />
   );
 }
@@ -492,14 +507,7 @@ declare module "@solidjs/web" {
       "openclaw-chat-outbox-recovery": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]
       > &
-        ElementProperties<
-          Pick<
-            HTMLElementTagNameMap["openclaw-chat-outbox-recovery"],
-            "host" | "identity" | "messages"
-          >
-        > & {
-          "onOutbox-restored"?: () => void;
-        };
+        ElementProperties<RecoveryProps>;
     }
   }
 }

@@ -7,9 +7,9 @@ import { isPluginInPackageBundledRoots } from "../plugins/bundled-dir.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPathInside } from "./path-guards.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,

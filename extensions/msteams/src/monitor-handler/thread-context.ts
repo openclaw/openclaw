@@ -24,7 +24,6 @@ import {
   formatParentContextEvent,
   markParentContextInjected,
   shouldInjectParentContext,
-  summarizeParentMessage,
 } from "../thread-parent-context.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
@@ -194,7 +193,7 @@ export async function resolveMSTeamsThreadContext(params: {
               allowNameMatching: params.allowNameMatching,
             }).allowed,
         });
-      const parentSummary = summarizeParentMessage(parentMsg);
+      const parentContextEvent = formatParentContextEvent(parentMsg);
       const visibleParentMessages = parentMsg
         ? filterSupplementalContextItems({
             items: [parentMsg],
@@ -204,11 +203,11 @@ export async function resolveMSTeamsThreadContext(params: {
           }).items
         : [];
       if (
-        parentSummary &&
+        parentContextEvent &&
         visibleParentMessages.length > 0 &&
         shouldInjectParentContext(route.sessionKey, threadParentId)
       ) {
-        core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
+        core.system.enqueueSystemEvent(parentContextEvent, {
           sessionKey: route.sessionKey,
           contextKey: `msteams:thread-parent:${params.conversationId}:${threadParentId}`,
         });

@@ -57,6 +57,7 @@ type NativeFixtureThread = {
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
+  codexHome?: string;
   persistedThreads?: Array<string | ReturnType<typeof nativeThreadStartResult>>;
   unsubscribe?: (threadId: string) => unknown;
 }) {
@@ -90,7 +91,10 @@ export function createCodexLifecycleHarness(options: {
     const threadId = typeof params.threadId === "string" ? params.threadId : "";
     const current = threads.get(threadId);
     if (request.method === "initialize") {
-      return { userAgent: "codex-cli/0.151.0" };
+      return {
+        userAgent: "codex-cli/0.151.0",
+        ...(options.codexHome ? { codexHome: options.codexHome } : {}),
+      };
     }
     if (request.method === "thread/start") {
       const response = await options.respond(request.method, request.params);

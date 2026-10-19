@@ -1,4 +1,3 @@
-/** Runtime entrypoint for image generation with provider fallback and override normalization. */
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

@@ -1,17 +1,22 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { listSqliteSessionEntriesFromDatabase } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
-import { listTranscriptInstancesFromDatabase } from "../config/sessions/session-accessor.sqlite-history.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
-import { readWithCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  readWithCanonicalSessionAdmission,
+} from "../config/sessions/session-canonical-key.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { LruCache } from "./lru-cache.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import {
@@ -109,26 +114,24 @@ export function createUsageCostCollectionAccess(params: {
       return readStore(agentId, storePath, () => {
         const result = withOpenClawAgentDatabaseReadOnly(
           (opened) =>
-            readWithCanonicalSessionReaderContinuation(opened, undefined, () => {
-              const currentEntries = new Map(
-                listSqliteSessionEntriesFromDatabase(
-                  opened,
-                  {
-                    agentId,
-                    databaseAgentId: database.agentId,
-                    path: database.path,
-                    env,
-                    sessionKey: "",
-                  },
-                  { agentId, storePath, env, clone: false, projection: "list" },
-                ).map(({ sessionKey, entry }) => [sessionKey, entry]),
-              );
-              return listTranscriptInstancesFromDatabase({
-                currentEntries,
-                database: opened,
-                options: {},
-                entryProjection: "list",
-              });
+            readWithCanonicalSessionAdmission(opened, () => {
+              assertCanonicalSqliteSessionKeysCurrent(opened);
+              return executeSqliteQuerySync(
+                opened.db,
+                getSessionKysely(opened.db)
+                  .selectFrom("session_windows")
+                  .select(["session_id", "session_key", "transcript_updated_at"])
+                  .where("transcript_updated_at", "is not", null)
+                  .$narrowType<{ transcript_updated_at: number }>()
+                  .orderBy("transcript_updated_at", "desc")
+                  .orderBy("session_id", "asc"),
+              )
+                .rows.filter((row) => !isInternalSessionEffectsKey(row.session_key))
+                .map((row) => ({
+                  agentId: resolveAgentIdFromSessionKey(row.session_key, opened.agentId),
+                  sessionId: row.session_id,
+                  updatedAtMs: row.transcript_updated_at,
+                }));
             }),
           { ...database, env },
         );

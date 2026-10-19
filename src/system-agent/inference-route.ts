@@ -42,12 +42,11 @@ export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntimeAsync?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntimeAsync;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
 type SystemAgentRouteProjectionDeps = Pick<
   SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntimeAsync" | "pluginMetadataPlugins" | "modelTarget"
+  "pluginMetadataPlugins" | "modelTarget"
 >;
 
 /** The canonical source and default-materialized view from one authoritative read. */
@@ -173,9 +172,6 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
                 authProfileIdSource: "user",
               },
             }
-          : {}),
-        ...(deps.loadAuthProfileStoreForRuntimeAsync
-          ? { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync }
           : {}),
       })
     : undefined;

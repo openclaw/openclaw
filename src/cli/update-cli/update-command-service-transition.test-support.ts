@@ -69,6 +69,8 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
   ] as const)(
     "refreshes a verified installed root with $scenario",
     async ({ scenario, mode, allowed }) => {
+      // These cases test service transitions, not host I/O against the readiness deadline.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const { root, run, mocks } = getFixture();
       const replacementCli = scenario === "CLI already uses replacement install";
       const unresolved = scenario === "retained unresolved launcher";
@@ -247,6 +249,8 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
   it.each(["git", "npm"] as const)(
     "delegates %s activation and post-handoff Doctor after newer config is stamped",
     async (mode) => {
+      // These cases test version guards, not host I/O against the readiness deadline.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const { root, run, mocks, writeConfig } = getFixture();
       const entry = path.join(root, "dist", "index.js");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({

@@ -2,12 +2,8 @@ import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
-import {
-  type ParsedWikiMarkdown,
-  scanWikiPageSummary,
-  type WikiPageSummary,
-  WIKI_PAGE_GROUPS,
-} from "./markdown.js";
+import { type ParsedWikiMarkdown, scanWikiPageSummary, type WikiPageSummary } from "./markdown.js";
+import { WIKI_PAGE_GROUPS } from "./wiki-page-kinds.js";
 
 export const QUERY_PAGE_READ_CONCURRENCY = 16;
 

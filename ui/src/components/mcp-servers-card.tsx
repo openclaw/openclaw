@@ -1,4 +1,5 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
@@ -18,7 +19,7 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
 import { McpServersForm } from "./mcp-servers-form.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -38,7 +39,7 @@ type McpServersCardProps = { pluginsHref: string; docsUrl: string };
 type McpServerMessage = { kind: "error" | "success"; text: string };
 
 function quoteShellArg(value: string): string {
-  return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+  return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : shellEscapeBackslash(value);
 }
 
 function tlsLabel(tls: McpServerSummary["tls"]): string | null {
@@ -55,11 +56,7 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
 export function McpServersCard(props: McpServersCardProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const config = projectSource(context.runtimeConfig, {
-    read: (source) => source.state,
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
+  const config = projectOwner(context.runtimeConfig, (source) => source.state);
   const [view, setView] = createSignal<{
     busy: boolean;
     message: McpServerMessage | null;
@@ -78,15 +75,21 @@ export function McpServersCard(props: McpServersCardProps) {
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
     setView((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
   });
-  const hello = createMemo(() => gateway.read().snapshot.hello);
-  // A new transport retires the previous sign-in before another interaction can start one.
-  createEffect(hello, () => {
-    login.reset();
-  });
-  const stopSelection = context.agentSelection.subscribe(() => login.reset());
-  onCleanup(() => {
-    active = false;
-    stopSelection();
+  onSettled(() => {
+    let hello = context.gateway.snapshot.hello;
+    // Retire sign-in with its transport or agent selection before the next interaction can reuse it.
+    const stopGateway = context.gateway.subscribe((snapshot) => {
+      if (snapshot.hello !== hello) {
+        hello = snapshot.hello;
+        login.reset();
+      }
+    });
+    const stopSelection = context.agentSelection.subscribe(() => login.reset());
+    return () => {
+      active = false;
+      stopGateway();
+      stopSelection();
+    };
   });
 
   const mutationBlockedReason = (): string | null => {

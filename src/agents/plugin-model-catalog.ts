@@ -10,6 +10,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -573,7 +574,11 @@ export async function replacePersistedPluginModelCatalogs(params: {
     withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
       scope.execute({
         type: "catalog.replace",
-        input: { planned: [...planned], authSnapshot: params.authSnapshot, env: options.env },
+        input: {
+          planned: [...planned],
+          authSnapshot: params.authSnapshot,
+          env: { ...options.env, OPENCLAW_STATE_DIR: resolveStateDir(options.env) },
+        },
       }),
     ),
   );

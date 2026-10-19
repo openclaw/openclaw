@@ -1,5 +1,5 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
@@ -42,7 +42,7 @@ function findRenderKey(wantSurprise: boolean): string {
 }
 
 describe("ChatWorkingIndicator", () => {
-  it("promotes child activity above supporting totals and restores the standalone glyph", () => {
+  it("promotes child activity above supporting totals and restores the standalone glyph", async () => {
     const { container, draw } = mountIndicator(
       { kind: "reading-indicator", key: "task-first", startedAt: 1 },
       { outputTokens: 4_100 },
@@ -62,6 +62,8 @@ describe("ChatWorkingIndicator", () => {
         ],
       },
     });
+    await vi.dynamicImportSettled();
+    flush();
     const task = container.querySelector(".chat-subagent-activity");
     const status = container.querySelector(".chat-working-indicator");
     expect(task).not.toBeNull();

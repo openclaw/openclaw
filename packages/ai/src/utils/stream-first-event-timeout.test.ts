@@ -87,6 +87,7 @@ describe("withFirstStreamEventTimeout", () => {
       const error = await next;
 
       expect(error).toBeInstanceOf(Error);
+      expect(error).toHaveProperty("name", "FirstStreamEventTimeoutError");
       expect(onTimeout).toHaveBeenCalledWith(error);
       expect(abort).toHaveBeenCalledWith(error);
     } finally {

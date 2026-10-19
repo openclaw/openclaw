@@ -30,8 +30,12 @@ import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js"
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import * as preparationTiming from "./preparation-timing.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import {
+  ageManagedWorktreeTemplates,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
@@ -84,7 +88,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     vi.mocked(detectWorktreeFilesystemBackend).mockReset().mockResolvedValue(backend);
     service = new ManagedWorktreeService({
       env,
-      now: () => now,
       getConfig: () => ({ worktreeAcceleration: acceleration }),
     });
   });
@@ -746,7 +749,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   it("retains expired snapshots and templates until allocation cleanup can run", async () => {
     const created = await service.create({ repoRoot: repo, name: "expired", baseRef: "HEAD" });
     const removed = await service.remove({ id: created.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+    });
+    await ageManagedWorktreeTemplates(env, Date.now() - SNAPSHOT_RETENTION_MS - 1);
     const allocation = vi
       .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
@@ -769,7 +775,8 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     await service.create({ repoRoot: repo, name: "retained", baseRef: "HEAD" });
     const template = (await listTemplatesAsync(env))[0];
     assert(template);
-    now += IDLE_GC_MS + 1;
+    await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
+    let refreshedAt: number | undefined;
     const held = createDeferredCore<stateLease.OpenClawStateLeaseContext>();
     const release = createDeferredCore();
     const templateKey = `template:${template.cacheKey}`;
@@ -818,7 +825,8 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         guard,
       );
       try {
-        expect(await markTemplateReadyAsync(env, template.id, now, guard)).toBe(true);
+        refreshedAt = Date.now();
+        expect(await markTemplateReadyAsync(env, template.id, refreshedAt, guard)).toBe(true);
       } finally {
         await releaseTemplateReaderAsync(env, reader, guard);
       }
@@ -831,7 +839,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
     }
     expect((await pending).removed).toEqual([]);
-    expect(await listTemplatesAsync(env)).toEqual([{ ...template, lastUsedAt: now }]);
+    expect(await listTemplatesAsync(env)).toEqual([{ ...template, lastUsedAt: refreshedAt }]);
     expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
   });
 

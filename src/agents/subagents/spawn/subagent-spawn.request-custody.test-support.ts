@@ -4,10 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { handleChatAbortRequestWithLifecycle } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { requireLastRespondCall } from "../../../gateway/server-methods/chat.abort-authorization.test-helpers.js";
-import {
-  createChatAbortContext,
-  invokeChatAbortHandler,
-} from "../../../gateway/server-methods/chat.abort.test-helpers.js";
+import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import {
   captureExecRequestOwners,
   withExecRequestOwners,
@@ -116,7 +113,7 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
         bound.parent.cleanup();
         const commands = captureExecRequestCancellation(original);
         expect(commands.owners).toEqual(owners);
-        const context = createChatAbortContext({ getRuntimeConfig: () => bound.cfg });
+        const context = bound.context;
         const stop = (connId: string, exact = mode === "exact") =>
           invokeChatAbortHandler({
             handler: (requestOptions) =>

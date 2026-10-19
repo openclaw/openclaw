@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import { ENV_SECRET_REF_ID_RE } from "../../../../src/config/types.secrets.js";
 import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -295,14 +295,14 @@ export function SecretsPage() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   // This mount owns one secrets request state; Gateway replacement is bound below.
-  const model = untrack(
-    () => new SecretsPageState(context, () => setRevision((value) => value + 1)),
-  );
-  createEffect(
-    () => context.gateway,
-    (gateway) => model.bindGateway(gateway),
-  );
-  onCleanup(() => model.dispose());
+  const model = new SecretsPageState(context, () => setRevision((value) => value + 1));
+  onSettled(() => {
+    const release = model.bindGateway(context.gateway);
+    return () => {
+      release();
+      model.dispose();
+    };
+  });
   const state = createMemo(
     () => {
       revision();

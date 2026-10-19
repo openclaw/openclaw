@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -23,7 +23,7 @@ describe("agent admission session ownership", () => {
       const scope = `agent-admission-replay-${replay}.sqlite`;
       const replayEntered = createDeferred();
       const releaseReplay = createDeferred();
-      const replayAdmission = beginSessionWorkAdmission({
+      const replayAdmission = beginSessionEffect({
         scope,
         identities: [replayKey],
         storeWriterIdentities: [replayKey],

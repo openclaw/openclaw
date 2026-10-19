@@ -3,8 +3,9 @@ import { createMemo, For, Show } from "solid-js";
 import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { DreamingViewState } from "./dreaming.ts";
 import { DiaryEmpty, DreamingAction } from "./view-shared.tsx";
-import type { DreamingProps, DreamingViewState } from "./view-types.ts";
+import type { DreamingProps } from "./view-types.ts";
 import {
   ImportedInsightsContent,
   renderWikiPreviewOverlay,

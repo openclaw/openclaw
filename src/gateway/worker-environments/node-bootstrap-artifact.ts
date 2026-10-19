@@ -6,7 +6,7 @@ import type {
   NodeBootstrapArtifact,
   NodeBootstrapArtifactOptions,
 } from "./node-bootstrap-artifact-contract.js";
-import { prepareNodeBootstrapArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
+import { prepareNodeArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
 
 /** Owns one immutable deployment artifact for this Gateway process, never the live installation. */
 export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifactOptions) {
@@ -25,7 +25,7 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
           temporaryRoot = await fs.mkdtemp(
             path.join(resolvePreferredOpenClawTmpDir(), "openclaw-node-runtime-"),
           );
-          return await prepareNodeBootstrapArtifactInWorker(options, temporaryRoot);
+          return await prepareNodeArtifactInWorker("bootstrap", { options, temporaryRoot });
         } catch (error) {
           if (temporaryRoot) {
             await fs.rm(temporaryRoot, { recursive: true, force: true });

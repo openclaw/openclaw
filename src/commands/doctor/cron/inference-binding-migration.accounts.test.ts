@@ -299,10 +299,14 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
   );
 });
 
-it("never records a personal account that the unattended planner does not select", async () => {
+it.each([
+  { name: "unbound session", linked: false, originalPresent: true },
+  { name: "linked account", linked: true, originalPresent: true },
+  { name: "missing linked account", linked: true, originalPresent: false },
+])("respects $name when migrating personal-account jobs", async ({ linked, originalPresent }) => {
   await withOpenClawTestState(
     {
-      label: "cron-inference-personal-first",
+      label: "cron-inference-personal-selection",
       env: { OPENAI_API_KEY: undefined, OPENAI_OAUTH_TOKEN: undefined },
     },
     async (state) => {
@@ -311,7 +315,7 @@ it("never records a personal account that the unattended planner does not select
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-          defaults: { model: "openai/gpt-5.5" },
+          defaults: { model: "openai/gpt-5.4" },
         },
         auth: { order: { openai: [personalId, "openai:shared"] } },
         plugins: { allow: ["openai"], slots: { memory: "none" } },
@@ -324,26 +328,58 @@ it("never records a personal account that the unattended planner does not select
       await persistAuthProfileBatch({
         profiles: [
           {
-            profileId: personalId,
-            credential: { type: "api_key", provider: "openai", key: "synthetic-personal" },
-          },
-          {
             profileId: "openai:shared",
             credential: { type: "api_key", provider: "openai", key: "synthetic-shared" },
           },
+          ...(originalPresent
+            ? [
+                {
+                  profileId: personalId,
+                  credential: {
+                    type: "api_key" as const,
+                    provider: "openai",
+                    key: "synthetic-personal",
+                  },
+                },
+              ]
+            : []),
         ],
       });
+      const sessionScope = { agentId: "main", sessionKey: "agent:main:cron:personal-selection" };
+      if (linked) {
+        await replaceSessionEntry(sessionScope, {
+          sessionId: "original-linked-session",
+          updatedAt: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5",
+          modelOverrideSource: "user",
+          authProfileOverride: personalId,
+          authProfileOverrideSource: "user-link",
+        });
+      }
+      const originalSession = loadSessionEntry(sessionScope);
+      const original = job("personal-selection");
       const storePath = state.statePath("cron", "jobs.json");
-      await saveCronJobsStore(storePath, { version: 1, jobs: [job("personal-first")] });
+      await saveCronJobsStore(storePath, { version: 1, jobs: [original] });
       await withDoctorConfigMaintenance(async () => {
         const result = await maybeRepairCronInferenceBindings({ cfg, shouldRepair: true });
-        // Personal accounts are owner-scoped, so an unattended run never plans one even when
-        // auth.order lists it first; Doctor records the shared account the run would use.
-        expect(result.changes.join("\n")).toContain("retain openai:shared");
-        expect(result.changes.join("\n")).not.toContain(personalId);
-        expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toMatchObject({
-          profileId: "openai:shared",
-        });
+        if (linked) {
+          expect(result.changes).toEqual([]);
+          const warnings = result.warnings.join("\n");
+          expect(warnings).toContain("inference account was not migrated");
+          expect(warnings).toContain('Selected auth profile "personal:');
+          expect(warnings).toContain("is unavailable");
+          expect(warnings).toContain("openai/gpt-5.5@<profileId>");
+          expect((await loadCronJobsStore(storePath)).jobs).toEqual([original]);
+        } else {
+          // Without a prior selection, the unattended planner skips personal accounts.
+          expect(result.changes.join("\n")).toContain("retain openai:shared");
+          expect(result.changes.join("\n")).not.toContain(personalId);
+          expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toMatchObject({
+            profileId: "openai:shared",
+          });
+        }
+        expect(loadSessionEntry(sessionScope)).toEqual(originalSession);
       });
     },
   );

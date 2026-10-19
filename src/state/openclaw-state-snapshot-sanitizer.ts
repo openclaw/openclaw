@@ -54,7 +54,7 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
       let sanitized: ExecApprovalsFile = FAIL_CLOSED_EXEC_APPROVALS;
       const parsed = tryParsePersistedExecApprovals(row.raw_json);
       if (parsed) {
-        sanitized = structuredClone(parsed);
+        sanitized = parsed;
         if (sanitized.socket) {
           delete sanitized.socket.token;
         }

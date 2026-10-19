@@ -69,8 +69,8 @@ describe("attached conversation portal tool availability", () => {
     ["gateway", "scoped", true, true, false, false],
     ["gateway", "global", false, false, false, true],
     ["gateway", "absent", false, true, false, false],
-    ["agent", "absent", true, false, false, false],
-    ["agent", "absent", true, true, true, false],
+    ["agent", "refused", true, false, false, false],
+    ["agent", "refused", true, true, true, false],
     ["http", "absent", true, true, false, false],
   ] as const)(
     "%s has %s portal access (dedicated=%s, attached=%s, locked=%s, owner=%s)",
@@ -82,10 +82,18 @@ describe("attached conversation portal tool availability", () => {
           const portal = (await tools(builder, undefined, owner)).find(
             (tool) => tool.name === "portal",
           );
+          // Non-owner turns keep the owner's portal definition so the prompt prefix stays
+          // stable; the captured target or the owner gate applies when the call runs.
+          const ownerPortal = (await tools(builder, undefined, true)).find(
+            (tool) => tool.name === "portal",
+          );
           if (access === "scoped") {
             expect(portal).toBeDefined();
-            expect(portal?.parameters).not.toHaveProperty("properties.environmentId");
-            expect(portal?.description).toContain("attached dedicated worker");
+            expect(portal?.parameters).toEqual(ownerPortal?.parameters);
+            expect(portal?.description).toBe(ownerPortal?.description);
+            await expect(
+              portal!.execute("host", { action: "open", port: 3000, environmentId: "other" }),
+            ).rejects.toThrow("bound");
             expect(
               (await tools(builder, { tools: { profile: "coding", deny: ["portal"] } })).some(
                 (tool) => tool.name === "portal",
@@ -93,6 +101,11 @@ describe("attached conversation portal tool availability", () => {
             ).toBe(false);
           } else if (access === "global") {
             expect(portal?.parameters).toHaveProperty("properties.environmentId");
+          } else if (access === "refused") {
+            expect(portal?.parameters).toEqual(ownerPortal?.parameters);
+            const result = await portal!.execute("refused", { action: "list" });
+            expect(result.details).toMatchObject({ gated: true });
+            expect(JSON.stringify(result.content)).toContain("needs the owner's authority");
           } else {
             expect(portal).toBeUndefined();
           }

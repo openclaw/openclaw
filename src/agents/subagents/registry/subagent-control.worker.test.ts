@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, type Mock, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
@@ -20,14 +20,18 @@ import {
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import {
-  beginSessionWorkAdmission,
-  type SessionWorkAdmissionLease,
-} from "../../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  type SessionEffectRef,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+import {
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
+} from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createOpenClawToolsAsync } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
@@ -49,10 +53,54 @@ import { registerSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 const fixture = useSubagentControlFixture();
-
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
+
+// Native fixture handles must remain attached to their admitted controller turn until cleanup.
+async function admitNativeRun(
+  sessionId: string,
+  sessionKey: string,
+  handle: ReturnType<typeof createEmbeddedRunHandle>,
+) {
+  const admitted = createDeferred();
+  const release = createDeferred();
+  const abort = handle.abort;
+  handle.abort = (...args) => {
+    try {
+      abort(...args);
+    } finally {
+      release.resolve();
+    }
+  };
+  const settlement = withSessionTurn(
+    { sessionKey, sessionId, agentId: "main" },
+    async (operation) => {
+      if (!operation) {
+        throw new Error("Native fixture did not receive controller turn admission");
+      }
+      attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
+      admitted.resolve();
+      await release.promise;
+    },
+  );
+  await Promise.race([admitted.promise, settlement]);
+  return {
+    finish: async () => {
+      detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+      release.resolve();
+      await settlement;
+    },
+  };
+}
+
+type NativeRunFixture = {
+  id: string;
+  sessionId: string;
+  handle: ReturnType<typeof createEmbeddedRunHandle>;
+  abort: Mock<() => void>;
+  nativeRun: Awaited<ReturnType<typeof admitNativeRun>>;
+};
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",
@@ -79,7 +127,7 @@ it.each(["caller admission", "session generation"] as const)(
     const caller = new AbortController();
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    const nativeRun = await admitNativeRun(sessionId, sessionKey, handle);
     let retiredAfterAck = false;
     fixture.worker.mockImplementation((context, operation, options) =>
       runSubagentStateWorkerOperation(
@@ -139,7 +187,7 @@ it.each(["caller admission", "session generation"] as const)(
     } finally {
       counts = sql?.calls.map((probe) => probe.mock.calls.length);
       sql?.restore();
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      await nativeRun.finish();
     }
     expect(retiredAfterAck).toBe(true);
     expect(abort).not.toHaveBeenCalled();
@@ -213,11 +261,12 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           await prepareReadCache();
         },
       );
-      const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
+      const abort = vi.fn(() => detachActiveEmbeddedRun(sessionId, handle, sessionKey));
       const handle = createEmbeddedRunHandle({ runId, abort });
       const pending = tool
         .execute("prepared-stop", { action: "cancel", runId })
         .catch((error: unknown) => error);
+      let nativeRun: Awaited<ReturnType<typeof admitNativeRun>> | undefined;
       try {
         await Promise.race([
           entered.promise,
@@ -238,7 +287,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         } else {
           expect(successor.generation).toBe(original.generation);
         }
-        setActiveEmbeddedRun(sessionId, handle, sessionKey);
+        nativeRun = await admitNativeRun(sessionId, sessionKey, handle);
         release.resolve();
         const outcome = await pending;
         await fixture.settle();
@@ -254,7 +303,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       } finally {
         release.resolve();
         await pending;
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        await nativeRun?.finish();
       }
     });
   },
@@ -346,7 +395,7 @@ it.each([
     const terminalEntered = createDeferred();
     const terminalRelease = createDeferred();
     let heldTerminal = false;
-    let admission: SessionWorkAdmissionLease | undefined;
+    let admission: SessionEffectRef | undefined;
     let runnerSettlement: Promise<void> | undefined;
     if (completesDuringStop) {
       fixture.worker.mockImplementation((context, operation, options) =>
@@ -434,15 +483,14 @@ it.each([
     if (missingStore) {
       expect(existsSync(missingPath)).toBe(false);
     }
-    const handles = [runId, siblingId]
-      .filter((id) => !queued || id !== runId)
-      .map((id) => {
-        const sessionId = `${id}-session`;
-        const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, key(id)));
-        const handle = createEmbeddedRunHandle({ abort, runId: id });
-        setActiveEmbeddedRun(sessionId, handle, key(id));
-        return { id, sessionId, handle, abort };
-      });
+    const handles: NativeRunFixture[] = [];
+    for (const id of [runId, siblingId].filter((candidate) => !queued || candidate !== runId)) {
+      const sessionId = `${id}-session`;
+      const abort = vi.fn(() => detachActiveEmbeddedRun(sessionId, handle, key(id)));
+      const handle = createEmbeddedRunHandle({ abort, runId: id });
+      const nativeRun = await admitNativeRun(sessionId, key(id), handle);
+      handles.push({ id, sessionId, handle, abort, nativeRun });
+    }
     const tool = (
       await createOpenClawToolsAsync({
         config,
@@ -458,11 +506,12 @@ it.each([
     const completedAtBeforeStop = earlierSuccess ? fixtureStartedAt + 1 : Date.now();
     clock?.mockReturnValue(fixtureStartedAt + 2);
     if (completesDuringStop) {
-      admission = await beginSessionWorkAdmission({
+      admission = await beginSessionEffect({
         scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
           agentId: "main",
         }),
         identities: [key(runId), `${runId}-session`],
+        run: { runId, sessionKey: key(runId), sessionId: `${runId}-session`, agentId: "main" },
         assertAllowed: () => {},
         onInterrupt: () => {
           handles.find(({ id }) => id === runId)!.abort();
@@ -484,6 +533,7 @@ it.each([
               : { phase: "end", status: "error", aborted: true, endedAt: Date.now() },
           });
           runnerSettlement = fixture.settle().finally(() => admission?.release());
+          return { runId };
         },
       });
     }
@@ -532,9 +582,7 @@ it.each([
       if (earlierSuccess) {
         resetGlobalHookRunner();
       }
-      for (const { id, sessionId, handle } of handles) {
-        clearActiveEmbeddedRun(sessionId, handle, key(id));
-      }
+      await Promise.all(handles.map(({ nativeRun }) => nativeRun.finish()));
       releaseSwarmRun(capacityOwner);
       if (missingStore) {
         expect

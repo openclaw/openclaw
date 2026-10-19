@@ -11,6 +11,7 @@ import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import {
   resolvePluginLoadCacheContext,
   resolveRuntimeSubagentMode,
+  type PluginLoadCacheContext,
 } from "./loader-load-context.js";
 import { createLazyPluginRuntime, createPluginModuleLoader } from "./loader-module-runtime.js";
 import {
@@ -33,7 +34,10 @@ import {
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
@@ -155,6 +159,37 @@ function createCapabilityCatalogContextResolver(
   return () => context;
 }
 
+/** The loader records actual registration inputs with their selected inventory. */
+function bindRuntimeLoadContext(
+  registry: PluginRegistry,
+  options: PluginLoadOptions,
+  context: PluginLoadCacheContext,
+  manifestRegistry: PluginManifestRegistry,
+  logger: NonNullable<PluginLoadOptions["logger"]>,
+): void {
+  setPluginRuntimeLoadContext(
+    registry,
+    {
+      rawConfig: options.config ?? {},
+      config: context.cfg,
+      activationSourceConfig: context.activationSourceConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: options.workspaceDir,
+      env: context.env,
+      logger,
+      manifestRegistry,
+      metadataSnapshot:
+        context.metadataSnapshot?.manifestRegistry === manifestRegistry
+          ? context.metadataSnapshot
+          : undefined,
+      installRecords: context.installRecords,
+      preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
+      expectedSourceDigests: options.expectedSourceDigests,
+    },
+    context.registrationConfigKey,
+  );
+}
+
 export function loadOpenClawPluginsCore(
   ...args: Parameters<typeof loadOpenClawPluginsSteps>
 ): PluginRegistry {
@@ -182,6 +217,16 @@ export function* loadOpenClawPluginsSteps(
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
     const emptyRegistry = createEmptyPluginRegistry();
     inspectionResources?.attach(emptyRegistry);
+    if (options.metadataSnapshot) {
+      // Even an empty provider scope owns later discovery artifact selection.
+      bindRuntimeLoadContext(
+        emptyRegistry,
+        options,
+        resolvePluginLoadCacheContext(options),
+        options.manifestRegistry ?? options.metadataSnapshot.manifestRegistry,
+        options.logger ?? createSubsystemLogger("plugins"),
+      );
+    }
     if (options.mode !== "cli-metadata" && options.activate !== false) {
       const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
       activatePluginRegistry(
@@ -342,23 +387,7 @@ export function* loadOpenClawPluginsSteps(
       requestKey: context.cacheKey,
       resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
     });
-    // Raw and prepared loads share one owner; absent workspace means shared-root scope.
-    setPluginRuntimeLoadContext(
-      registry,
-      {
-        rawConfig: options.config ?? {},
-        config: context.cfg,
-        activationSourceConfig: context.activationSourceConfig,
-        autoEnabledReasons: context.autoEnabledReasons,
-        workspaceDir: options.workspaceDir,
-        env: context.env,
-        logger,
-        manifestRegistry,
-        installRecords: context.installRecords,
-        preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
-      },
-      context.registrationConfigKey,
-    );
+    bindRuntimeLoadContext(registry, options, context, manifestRegistry, logger);
     const replacedIds = new Set([
       ...(options.replacePluginIds ?? []),
       ...(options.moduleRecoveries?.keys() ?? []),

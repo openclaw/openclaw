@@ -7,10 +7,14 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   canAccess,
   canAccessSync,
+  executableFileExists,
+  executableFileExistsSync,
+  lstatIfExists,
   pathEntryExists,
   pathMayExistSync,
   readDirectoryEntriesSync,
   safeStat,
+  statIfExists,
 } from "./path-existence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -34,6 +38,19 @@ describe("filesystem discovery policies", () => {
 
       expect(await pathEntryExists(dangling)).toBe(true);
       expect(await pathEntryExists(missing)).toBe(false);
+      expect((await lstatIfExists(dangling))?.isSymbolicLink()).toBe(true);
+      expect(await lstatIfExists(missing)).toBeUndefined();
+      expect(await lstatIfExists(path.join(file, "child"))).toBeUndefined();
+      await expect(lstatIfExists(path.join(file, "child"), "ENOENT")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+      expect((await statIfExists(link))?.isFile()).toBe(true);
+      expect((await statIfExists(directory))?.isDirectory()).toBe(true);
+      expect(await statIfExists(dangling)).toBeUndefined();
+      expect(await statIfExists(missing)).toBeUndefined();
+      await expect(statIfExists(path.join(file, "child"))).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
       expect((await safeStat(link))?.isFile()).toBe(true);
       expect((await safeStat(directory))?.isDirectory()).toBe(true);
       expect(await safeStat(dangling)).toBeNull();
@@ -74,6 +91,42 @@ describe("filesystem discovery policies", () => {
     const failure = Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
     vi.spyOn(fsPromises, "lstat").mockRejectedValue(failure);
     await expect(pathEntryExists("blocked/child")).rejects.toBe(failure);
+  });
+
+  it.each(["EACCES", "EIO", "not-found"])("preserves optional lstat failure %s", async (code) => {
+    const failure = Object.assign(new Error("filesystem probe failed"), { code });
+    vi.spyOn(fsPromises, "lstat").mockRejectedValue(failure);
+    await expect(lstatIfExists("blocked")).rejects.toBe(failure);
+  });
+
+  it.each(["EACCES", "EIO"])("preserves strict stat failure %s", async (code) => {
+    const failure = Object.assign(new Error("filesystem probe failed"), { code });
+    vi.spyOn(fsPromises, "stat").mockRejectedValue(failure);
+    await expect(statIfExists("blocked")).rejects.toBe(failure);
+  });
+
+  it("requires executable regular targets while preserving Windows existence-only access", async () => {
+    await withTestDir({ prefix: "openclaw-executable-" }, async (root) => {
+      const file = path.join(root, "file");
+      const directory = path.join(root, "directory");
+      await fsPromises.writeFile(file, "fixture", { mode: 0o600 });
+      await fsPromises.mkdir(directory);
+      expect(await executableFileExists(file, "win32")).toBe(true);
+      expect(executableFileExistsSync(file, "win32")).toBe(true);
+      expect(await executableFileExists(directory, "win32")).toBe(false);
+      expect(executableFileExistsSync(directory, "win32")).toBe(false);
+      expect(await executableFileExists(path.join(root, "missing"), "win32")).toBe(false);
+      expect(executableFileExistsSync(path.join(root, "missing"), "win32")).toBe(false);
+      if (process.platform !== "win32") {
+        expect(await executableFileExists(file, process.platform)).toBe(false);
+        expect(executableFileExistsSync(file, process.platform)).toBe(false);
+        await fsPromises.chmod(file, 0o700);
+        const link = path.join(root, "link");
+        await fsPromises.symlink(file, link, "file");
+        expect(await executableFileExists(link, process.platform)).toBe(true);
+        expect(executableFileExistsSync(link, process.platform)).toBe(true);
+      }
+    });
   });
 });
 

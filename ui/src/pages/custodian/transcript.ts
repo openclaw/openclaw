@@ -44,7 +44,7 @@ export function createCustodianMessage(
 export function createCustodianReplyMessage(
   id: number,
   result: SystemAgentChatResult,
-): CustodianMessage | null {
+): CustodianMessage {
   const step = result.step ?? null;
   const question = step ? null : parseCustodianQuestion(result.question);
   return {

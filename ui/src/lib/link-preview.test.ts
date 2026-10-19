@@ -5,7 +5,7 @@ import { clearLinkPreviews, loadLinkPreview } from "./link-preview.ts";
 
 function fixture() {
   const request = vi.fn().mockResolvedValue({ title: "Field guide" });
-  const state = { request, connectionGeneration: 1, recoveryScope: "first" };
+  const state = { request, connected: true, connectionGeneration: 1, recoveryScope: "first" };
   return { request, state, client: state as unknown as GatewayBrowserClient };
 }
 afterEach(() => vi.useRealTimers());
@@ -70,6 +70,25 @@ describe("shared public link metadata", () => {
     expect(preview.description).toHaveLength(400);
     expect(preview.imageDataUrl).toBeUndefined();
     expect(preview.faviconDataUrl).toBeUndefined();
+  });
+
+  it("keeps settled metadata through disconnect and reconnect but retires a changed identity", async () => {
+    const { client, request, state } = fixture();
+    const preview = await loadLinkPreview(client, "https://example.com/page");
+    state.connected = false;
+    state.connectionGeneration++;
+    expect(await loadLinkPreview(client, "https://example.com/page")).toBe(preview);
+    expect(request).toHaveBeenCalledOnce();
+    state.connected = true;
+    state.connectionGeneration++;
+    expect(await loadLinkPreview(client, "https://example.com/page")).toMatchObject(preview);
+    expect(request).toHaveBeenCalledTimes(2);
+    state.recoveryScope = "another-account";
+    request.mockResolvedValueOnce({ title: "New account" });
+    expect(await loadLinkPreview(client, "https://example.com/page")).toMatchObject({
+      title: "New account",
+    });
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("backs off empty metadata but retries transport failures", async () => {

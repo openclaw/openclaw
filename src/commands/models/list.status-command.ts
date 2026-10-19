@@ -5,6 +5,7 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentNativeModelPrimary,
@@ -19,8 +20,8 @@ import {
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../agents/auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -225,7 +226,7 @@ export async function modelsStatusCommand(
     skipPluginValidation: opts.probe !== true,
   });
   for (const warning of await readModelCatalogWarnings(cfg, opts.agent?.trim())) {
-    runtime.error(`${warning.message} ${warning.fixHint}`);
+    runtime.error(sanitizeTerminalText(`${warning.message} ${warning.fixHint}`));
   }
   const explicitAgentId = opts.agent?.trim();
   const envAgentDir =
@@ -370,13 +371,13 @@ export async function modelsStatusCommand(
       // status select the same OpenAI subscription profile without scanning
       // unrelated external CLIs or prompting the keychain.
       const store = textUsesOpenAI
-        ? ensureAuthProfileStore(agentDir, {
+        ? await ensureAuthProfileStoreAsync(agentDir, {
             allowKeychainPrompt: false,
             config: cfg,
             externalCliProviderIds: [OPENAI_PROVIDER_ID],
             readOnly: true,
           })
-        : ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+        : await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       const providersFromStore = new Set(
         Object.values(store.profiles)
           .map((profile) => normalizeProviderId(profile.provider))
@@ -1134,7 +1135,7 @@ export async function modelsStatusCommand(
       }
 
       if (opts.plain) {
-        writeRuntimeStdout(runtime, resolvedLabel);
+        writeRuntimeStdout(runtime, sanitizeTerminalText(resolvedLabel));
         finishModelsStatusOutput(runtime, opts.check, checkStatus);
         return;
       }
@@ -1142,15 +1143,16 @@ export async function modelsStatusCommand(
       const rich = isRich(opts);
       type ModelConfigSource = "agent" | "defaults";
       const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
+      const logRow = (name: string, value: string, source?: ModelConfigSource) =>
+        runtime.log(
+          `${label(source ? `${name} (${source})` : name)}${colorize(rich, theme.muted, ":")} ${value}`,
+        );
       const logField = (
         name: string,
         value: string,
         style: (value: string) => string,
         source?: ModelConfigSource,
-      ) =>
-        runtime.log(
-          `${label(source ? `${name} (${source})` : name)}${colorize(rich, theme.muted, ":")} ${colorize(rich, style, value)}`,
-        );
+      ) => logRow(name, colorize(rich, style, sanitizeTerminalText(value)), source);
       const logList = (
         name: string,
         values: string[],
@@ -1209,15 +1211,18 @@ export async function modelsStatusCommand(
         theme.accentBright,
         agentId ? "defaults" : undefined,
       );
-      const aliasEntries = Object.entries(aliases);
-      logList(
-        "Aliases",
-        aliasEntries.map(([alias, target]) =>
-          rich
-            ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
-            : `${alias} -> ${target}`,
-        ),
-        theme.accent,
+      // Sanitize each part before styling; logField would strip the per-part colors.
+      const aliasEntries = Object.entries(aliases).map(([alias, target]) => {
+        const [safeAlias, safeTarget] = [alias, target].map(sanitizeTerminalText);
+        return rich
+          ? `${theme.accentDim(safeAlias)} ${theme.muted("->")} ${theme.info(safeTarget)}`
+          : `${safeAlias} -> ${safeTarget}`;
+      });
+      logRow(
+        `Aliases (${aliasEntries.length})`,
+        aliasEntries.length
+          ? colorize(rich, theme.accent, aliasEntries.join(", "))
+          : colorize(rich, theme.muted, "-"),
       );
       logList("Allowed models", allowed, theme.info, undefined, "all");
 
@@ -1300,7 +1305,9 @@ export async function modelsStatusCommand(
             issue.kind === "missing-auth"
               ? `requires ${issue.authRequirement} auth:`
               : `[${issue.kind === "incompatible" ? issue.code : "indeterminate"}]`;
-          runtime.log(`- ${theme.heading(modelRef)} ${requirement} ${issue.message}`);
+          runtime.log(
+            `- ${theme.heading(sanitizeTerminalText(modelRef))} ${requirement} ${sanitizeTerminalText(issue.message)}`,
+          );
         }
       }
 
@@ -1320,7 +1327,9 @@ export async function modelsStatusCommand(
             config: cfg,
             includeEnvVar: !requiresSubscription,
           });
-          runtime.log(`- ${theme.heading(provider)} ${hint}`);
+          runtime.log(
+            `- ${theme.heading(sanitizeTerminalText(provider))} ${sanitizeTerminalText(hint)}`,
+          );
         }
       }
 
@@ -1360,11 +1369,7 @@ export async function modelsStatusCommand(
               timeoutMs: 3500,
             });
             for (const snapshot of usageSummary.providers) {
-              const formatted = formatUsageWindowSummary(snapshot, {
-                now: Date.now(),
-                maxWindows: 2,
-                includeResets: true,
-              });
+              const formatted = formatUsageWindowSummary(snapshot);
               if (formatted) {
                 usageByProvider.set(snapshot.provider, formatted);
               }

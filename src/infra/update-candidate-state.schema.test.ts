@@ -81,19 +81,27 @@ it("reports a best-effort generation verification failure for its actual sources
   db.exec("PRAGMA user_version=3;");
   db.close();
   const preload = path.join(stateDir, "write-between-reads.cjs");
-  // The WAL probe follows the first database fingerprint, so this write lands
-  // between the two generation reads exactly as an active Gateway commit would.
+  // Wait for the private image to close, then commit between the final generation
+  // reads. A write during provisional capture can instead fail snapshot acquisition.
   fs.writeFileSync(
     preload,
     `
-    const fs = require('node:fs');
+    const fs = require('node:fs'), path = require('node:path');
+    const { DatabaseSync } = require('node:sqlite');
     const source = ${JSON.stringify(file)};
-    const open = fs.openSync;
-    let written = false;
+    const open = fs.openSync, close = DatabaseSync.prototype.close;
+    let snapshotClosed = false, written = false;
+    DatabaseSync.prototype.close = function(...args) {
+      const snapshot = path.basename(this.location() ?? '') === 'database.sqlite';
+      const result = close.apply(this, args);
+      snapshotClosed ||= snapshot;
+      return result;
+    };
     fs.openSync = function(file, ...args) {
-      if (String(file) === source + '-wal' && !written) {
+      if (snapshotClosed && String(file) === source + '-wal' && !written) {
         written = true;
-        fs.appendFileSync(source, 'concurrent write');
+        const writer = new DatabaseSync(source);
+        try { writer.exec('PRAGMA user_version=4'); } finally { writer.close(); }
       }
       return open.call(this, file, ...args);
     };
@@ -113,6 +121,12 @@ it("reports a best-effort generation verification failure for its actual sources
     `during database generation verification for source scope [${file}, ${missing}] (scope: 2 source paths)`,
   );
   expect(failure.message).not.toMatch(/shared database discovery|retry the update|free space/);
+  const changed = openNodeSqliteDatabase(file);
+  try {
+    expect(changed.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+  } finally {
+    changed.close();
+  }
 });
 
 it.skipIf(process.platform === "win32")(

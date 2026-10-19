@@ -149,10 +149,12 @@ async function createGatewaySurface(
   return { runtime, container, draw: settleRootContent };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dispose of mountedSurfaces.splice(0)) {
     dispose();
   }
+  // Standalone startup views load their panel registration while the splash is visible.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -180,6 +182,8 @@ describe("Control UI Gateway target lineage", () => {
           pathname,
           pendingGatewayUrl,
         );
+        await vi.dynamicImportSettled();
+        await draw();
         const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
         expect(confirmations).toHaveLength(1);
         const confirmation = confirmations[0] as HTMLElement & {

@@ -252,3 +252,63 @@ it("retains stale recap text but skips another session's recap without losing co
     }
   });
 });
+
+it.each(["active", "complete", "replaced", "cleared"] as const)(
+  "preserves %s Goal identity and status while accounting a continuation across actor restart",
+  async (state) => {
+    await withActor(async (f) => {
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        writeSessionEntry(f.database, f.target.sessionKey, {
+          ...f.nativeEntry()!,
+          goal:
+            state === "cleared"
+              ? undefined
+              : {
+                  schemaVersion: 1,
+                  id: state === "replaced" ? "other-goal" : "admitted-goal",
+                  objective: "Verify the synthetic fixture",
+                  status: state === "complete" ? "complete" : "active",
+                  createdAt: 1,
+                  updatedAt: 1,
+                  tokenStart: 0,
+                  tokenStartFresh: true,
+                  tokensUsed: 12,
+                  continuationTurns: 2,
+                },
+        });
+      });
+      const before = f.read();
+      const command: Mutation = {
+        type: "session.actor.completeTurn",
+        input: {
+          target: f.target,
+          commandId: "goal-turn-complete",
+          phaseId: "goal-turn",
+          expected: before.version,
+          bookkeeping: {
+            sessionId: f.scope.sessionId,
+            lifecycleRevision: before.entry!.lifecycleRevision ?? null,
+            writerRunId: before.entry!.activeWriterRunId,
+            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+          },
+          reducers: [{ kind: "goal-continuation", goalId: "admitted-goal" }],
+        },
+      };
+      await f.prepare(command);
+      expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+      f.restartActor();
+      await f.prepare(command);
+      const replay = f.mutate(command);
+      expect(replay).toMatchObject({ kind: "stale-version" });
+      const goal = f.read().entry?.goal;
+      if (state === "cleared") {
+        expect(goal).toBeUndefined();
+      } else {
+        expect(goal).toEqual({
+          ...before.entry!.goal,
+          continuationTurns: state === "replaced" ? 2 : 3,
+        });
+      }
+    });
+  },
+);

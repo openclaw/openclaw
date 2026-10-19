@@ -13,7 +13,7 @@ import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   admitStoredChatComposerQueueItem,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "../pages/chat/composer-persistence.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -30,7 +30,7 @@ import {
   startAuthenticatedStore,
   type CompactCronPage,
 } from "./sidebar-attention-store.test-support.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 
 describe("sidebar attention source publication", () => {
@@ -63,7 +63,7 @@ describe("sidebar attention source publication", () => {
 
   function activate(harness: ReturnType<typeof createGatewayHarness>) {
     store = createStore(harness.gateway);
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     return store;
   }
   function expectLabels(...labels: string[]) {
@@ -151,6 +151,35 @@ describe("sidebar attention source publication", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps health attention across a same-client blip but clears it for another identity", async () => {
+    vi.useFakeTimers();
+    const refreshed = deferred<CompactCronPage>();
+    let reads = 0;
+    const harness = startAuthenticatedStore(
+      inventoryRequest(() => (++reads === 1 ? cronPage("retained") : refreshed.promise)),
+    );
+    store = harness.attention;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    const hello = harness.gateway.snapshot.hello;
+    const selfUser = harness.gateway.snapshot.selfUser;
+    harness.update({ phase: "reconnecting", hello: null, selfUser: undefined });
+    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    harness.update({ phase: "connected", hello });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    expect(reads).toBe(1);
+    harness.update({ selfUser });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    expect(reads).toBe(2);
+    refreshed.resolve(cronPage("refreshed"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.entries).toMatchObject([{ label: "refreshed" }]);
+    harness.update({ phase: "reconnecting", client: mockClient(async () => ({})) });
+    expect(store.entries).toEqual([]);
+  });
+
   it("retains cron inventory without reviving stale auth when returning to an agent", async () => {
     vi.useFakeTimers();
     const inventory = pending(cronPage("incident"));
@@ -179,7 +208,7 @@ describe("sidebar attention source publication", () => {
       },
     } as unknown as ApplicationContext["agentSelection"];
     store = createStore(harness.gateway, undefined, selection);
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     selection.state.selectedId = "writer";
     selectionListener();
     selectionListener();
@@ -321,6 +350,7 @@ describe("sidebar attention source publication", () => {
       if (boundary === "reconnect") {
         harness.update({ phase: "reconnecting", selfUser: null });
         store.dismiss({ kind: "cronFailed", signature: "visible-incident" });
+        expect(store.entries).toEqual([]);
       }
       connect("bob");
       await waitForFast(() => expect(store?.entries).toHaveLength(2));
@@ -340,7 +370,7 @@ describe("sidebar attention source publication", () => {
       }
       expectLabels("dismissed-incident");
       connect("alice");
-      await waitLabels("visible-incident");
+      await waitLabels(...(boundary === "reconnect" ? [] : ["visible-incident"]));
     },
   );
 
@@ -416,7 +446,7 @@ describe("sidebar attention source publication", () => {
       bootstrap.setForegroundRoute("agent:main:current");
       bootstrap.synchronize({ client, connected: true });
       store = createStore(harness.gateway, bootstrap);
-      store.activate(SidebarAttentionStoreController);
+      store.activate(SidebarAttentionStoreOwner);
       expect(request.mock.calls.filter(([method]) => method.startsWith("cron."))).toEqual([]);
       if (boundary === "hidden") {
         setVisibility("hidden", false);
@@ -606,7 +636,7 @@ describe("sidebar attention source publication", () => {
     store = createStore(harness.gateway);
     const publishedCounts: number[] = [];
     store.subscribe(() => publishedCounts.push(store?.entries.length ?? 0));
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     await waitForFast(() => expect(store?.entries).toHaveLength(1));
     expect(publishedCounts).toContain(1);
 
@@ -725,7 +755,7 @@ describe("sidebar attention source publication", () => {
       store = createStore(harness.gateway);
       const publish = vi.fn();
       store.subscribe(publish);
-      store.activate(SidebarAttentionStoreController);
+      store.activate(SidebarAttentionStoreOwner);
       harness.emitEvent("cron", {});
       document.dispatchEvent(new Event("visibilitychange"));
 
@@ -780,8 +810,8 @@ describe("sidebar attention source publication", () => {
     expect(request).not.toHaveBeenCalled();
     const publish = vi.fn();
     const stop = store.subscribe(publish);
-    const mentions = store.activate(SidebarAttentionStoreController);
-    expect(store.activate(SidebarAttentionStoreController)).toBe(mentions);
+    const mentions = store.activate(SidebarAttentionStoreOwner);
+    expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
     await waitForFast(() => expect(mentions.snapshot.items).toEqual([mention]));
     expect(request.mock.calls.filter(([method]) => method === "mentions.list")).toHaveLength(1);
 
@@ -795,7 +825,7 @@ describe("sidebar attention source publication", () => {
       ]),
     );
     expect(publish).not.toHaveBeenCalled();
-    expect(store.activate(SidebarAttentionStoreController)).toBe(mentions);
+    expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
 
     store.dispose();
     store = undefined;
@@ -852,23 +882,26 @@ describe("sidebar attention source publication", () => {
       system: 1,
       automations: 1,
     });
+    const hello = harness.gateway.snapshot.hello;
     const dismissal = store.entries[0]?.dismissal;
     expect(dismissal?.kind).toBe("outbox");
     expect(JSON.stringify(store.entries[0])).not.toContain("private submission");
     harness.update({ phase: "reconnecting", hello: null });
     const calls = request.mock.calls.length;
-    expect(store.entries.map((entry) => entry.type)).toEqual(["outbox"]);
+    expect(store.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]);
     expect(sidebarInboxTabCounts(store.entries)).toMatchObject({
-      all: 1,
+      all: 2,
       system: 1,
-      automations: 0,
+      automations: 1,
     });
     store.dismiss(dismissal!);
-    expect(store.entries).toEqual([]);
+    expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);
     expect(request.mock.calls).toHaveLength(calls);
-    harness.update({ phase: "connected" });
+    harness.update({ phase: "connected", hello });
     expect(store.entries.some((entry) => entry.type === "outbox")).toBe(false);
-    expect(removeStoredChatComposerQueueItem(host, host.sessionKey, row.id, row)).toBe(true);
-    expect(store.entries).toEqual([]);
+    expect(
+      updateStoredChatComposerQueueItems(host, host.sessionKey, [{ expected: row, next: null }]),
+    ).toBe(true);
+    expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);
   });
 });

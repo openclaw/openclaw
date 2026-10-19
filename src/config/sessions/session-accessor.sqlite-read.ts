@@ -10,7 +10,7 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-n
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -199,7 +199,7 @@ export function readTranscriptExportSnapshotReadOnlySync(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options),
         { operationLabel: "session transcript export snapshot" },
@@ -349,7 +349,7 @@ export function loadTranscriptReadSnapshotSync(
 ): SessionTranscriptReadSnapshot {
   const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const read = (database: Pick<OpenClawAgentDatabase, "db" | "path">) =>
-    runSqliteDeferredTransactionSync(
+    runSqliteReadSnapshotSync(
       database.db,
       () => {
         const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
@@ -382,7 +382,7 @@ export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): 
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => ({
           events: readTranscriptSnapshot(database, resolved.sessionId).events,
@@ -414,7 +414,7 @@ export function validatePreparedAssistantAppendSync(
     resolved.sessionId,
     admittedUserId,
   );
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () =>
       canRebasePreparedAssistantInTransaction(

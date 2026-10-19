@@ -159,7 +159,7 @@ does not reveal the full token.
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
     the `/usr/local/bin/openclaw` symlink. Dependabot refreshes the reviewed base
-    digests; do not replace them with floating `FROM node:24-bookworm` tags.
+    digests; do not replace them with floating `FROM node:24-trixie` tags.
 
   </Accordion>
 
@@ -179,7 +179,7 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The runtime image uses `node:24-bookworm-slim` and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest, and each build applies current Debian point-release updates. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
+    The runtime image uses `node:24-trixie-slim` (Debian 13) and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. Node 24 stays aligned with Docker release CI. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest, and each build applies current Debian point-release updates. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
 

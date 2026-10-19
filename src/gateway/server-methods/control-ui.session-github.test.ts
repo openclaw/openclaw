@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -7,7 +8,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createFixture, sessionKey } from "../control-ui-session-pr-access.test-support.js";
 import {
   redeemFactoryGitHubProof,
-  factoryGitHubRequestDigest,
   type FactoryGitHubProofVerdict,
 } from "../factory-github-proof.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -226,7 +226,7 @@ it.each([
               sessionKey,
               sessionId: f.sessionId,
               lifecycleRevision: "synthetic-lifecycle",
-              requestDigest: factoryGitHubRequestDigest(targetUrl),
+              requestDigest: sha256Hex(targetUrl),
             },
           });
           expect(requests.at(-1)).toBe(`${apiBaseUrl}/installation/token`);

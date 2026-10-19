@@ -60,7 +60,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
         "runtimeLabel" in value &&
         "reason" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_150, var_151) => External[0].test(var_150) || !1,
+          (var_70, var_71) => External[0].test(var_70) || !1,
         ) &&
         typeof value.code == "string" &&
         value.code === "AGENT_RUNTIME_RESTRICTED" &&
@@ -87,7 +87,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
             "expectedSandboxMode" in value.recovery &&
             "expectedNativeRuntimeConsent" in value.recovery &&
             Object.getOwnPropertyNames(value.recovery).every(
-              (var_152, var_153) => External[1].test(var_152) || !1,
+              (var_72, var_73) => External[1].test(var_72) || !1,
             ) &&
             typeof value.recovery.action == "string" &&
             value.recovery.action === "use-native-permissions" &&
@@ -142,7 +142,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
           "action" in value &&
           "objective" in value &&
           Object.getOwnPropertyNames(value).every(
-            (var_154, var_155) => External[0].test(var_154) || !1,
+            (var_74, var_75) => External[0].test(var_74) || !1,
           ) &&
           typeof value.sessionKey == "string" &&
           (value.sessionKey.length >= 2 ||
@@ -184,7 +184,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
           "issuedAtMs" in value &&
           "action" in value &&
           Object.getOwnPropertyNames(value).every(
-            (var_156, var_157) => External[1].test(var_156) || !1,
+            (var_76, var_77) => External[1].test(var_76) || !1,
           ) &&
           typeof value.sessionKey == "string" &&
           (value.sessionKey.length >= 2 ||
@@ -234,7 +234,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
         "operationId" in value &&
         "issuedAtMs" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_158, var_159) => External[0].test(var_158) || !1,
+          (var_78, var_79) => External[0].test(var_78) || !1,
         ) &&
         typeof value.sessionKey == "string" &&
         (value.sessionKey.length >= 2 ||
@@ -293,7 +293,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
         !Array.isArray(value) &&
         "url" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_160, var_161) => External[0].test(var_160) || !1,
+          (var_80, var_81) => External[0].test(var_80) || !1,
         ) &&
         typeof value.url == "string" &&
         (value.url.length >= 2 || (value.url.length >= 1 && CodePointCount2(value.url) >= 1)) &&
@@ -343,7 +343,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
         value !== null &&
         !Array.isArray(value) &&
         Object.getOwnPropertyNames(value).every(
-          (var_162, var_163) => External[0].test(var_162) || !1,
+          (var_82, var_83) => External[0].test(var_82) || !1,
         ) &&
         (value.mcpServers === void 0 ||
           !("mcpServers" in value) ||
@@ -351,7 +351,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
             value.mcpServers !== null &&
             !Array.isArray(value.mcpServers) &&
             Object.entries(value.mcpServers).every(
-              ([var_164, var_165], _) => !External[1].test(var_164) || typeof var_165 == "boolean",
+              ([var_84, var_85], _) => !External[1].test(var_84) || typeof var_85 == "boolean",
             ))) &&
         (value.mcpToolsDeny === void 0 ||
           !("mcpToolsDeny" in value) ||
@@ -359,10 +359,10 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
             value.mcpToolsDeny !== null &&
             !Array.isArray(value.mcpToolsDeny) &&
             Object.entries(value.mcpToolsDeny).every(
-              ([var_166, var_167], _) =>
-                !External[2].test(var_166) ||
-                (Array.isArray(var_167) &&
-                  var_167.every(
+              ([var_86, var_87], _) =>
+                !External[2].test(var_86) ||
+                (Array.isArray(var_87) &&
+                  var_87.every(
                     (element, index) =>
                       typeof element == "string" &&
                       (element.length >= 2 ||
@@ -375,7 +375,7 @@ var isAgentRuntimeRestrictionErrorDetails = /* @__PURE__ */ (() => {
             value.skills !== null &&
             !Array.isArray(value.skills) &&
             Object.entries(value.skills).every(
-              ([var_168, var_169], _) => !External[3].test(var_168) || typeof var_169 == "boolean",
+              ([var_88, var_89], _) => !External[3].test(var_88) || typeof var_89 == "boolean",
             ))) &&
         (value.webSearch === void 0 ||
           !("webSearch" in value) ||

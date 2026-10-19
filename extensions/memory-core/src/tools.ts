@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
@@ -35,7 +36,6 @@ import {
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   resolveMemorySearchAbortError,
-  runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
 import {
   buildMemorySearchPresentation,
@@ -130,19 +130,24 @@ async function closeMemoryManagers(
   if (pending.length === 0) {
     return;
   }
-  try {
-    await runMemorySearchWithDeadline({
-      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
-      parentSignal,
-      run: async () => {
-        await Promise.allSettled(pending);
+  if (parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(parentSignal);
+  }
+  // Manager close owns settlement; its best-effort wait must not hide search results.
+  await raceWithTimeout(
+    Promise.allSettled(pending),
+    DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+    () => undefined,
+    {
+      ref: false,
+      signal: parentSignal,
+      onAbort: (signal) => {
+        throw resolveMemorySearchAbortError(signal);
       },
-    });
-  } catch (error) {
-    if (parentSignal?.aborted) {
-      throw error;
-    }
-    // Search results should not be hidden by best-effort transient cleanup.
+    },
+  );
+  if (parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(parentSignal);
   }
 }
 

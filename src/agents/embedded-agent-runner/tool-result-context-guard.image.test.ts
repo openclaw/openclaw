@@ -9,7 +9,6 @@ import type { Agent, AgentMessage } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createImageTool } from "../tools/image-tool.js";
 import {
-  createMessageCharEstimateCache,
   estimateMessageCharsCached,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
 } from "./tool-result-char-estimator.js";
@@ -80,9 +79,9 @@ function expectWithinExistingCap(message: AgentMessage, contextWindowTokens: num
     1_024,
     Math.floor(contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * 0.5),
   );
-  expect(estimateMessageCharsCached(message, createMessageCharEstimateCache())).toBeLessThanOrEqual(
-    existingCap,
-  );
+  expect(
+    estimateMessageCharsCached(message, new WeakMap<AgentMessage, number>()),
+  ).toBeLessThanOrEqual(existingCap);
 }
 
 describe("native image tool result context projection", () => {

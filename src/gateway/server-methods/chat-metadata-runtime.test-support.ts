@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   resolveUsableAgentCredentialModes,
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import * as auth from "../../agents/auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
@@ -15,6 +16,8 @@ import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import * as pluginRuntime from "../../plugins/runtime.js";
+import * as skills from "../../skills/runtime/refresh-state.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -160,14 +163,20 @@ export function createChatMetadataHarness(
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
   const invalidProjections = new WeakSet<object>();
+  const getPreparedAuthStore = vi.spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot");
+  getPreparedAuthStore.mockImplementation(() => authStore);
+  onTestFinished(() => getPreparedAuthStore.mockRestore());
+  const getSkillsVersion = vi.spyOn(skills, "getSkillsSnapshotVersion");
+  getSkillsVersion.mockImplementation(() => skillsVersion);
+  onTestFinished(() => getSkillsVersion.mockRestore());
+  const getPluginRegistryVersion = vi.spyOn(pluginRuntime, "getActivePluginRegistryVersion");
+  getPluginRegistryVersion.mockClear();
+  onTestFinished(() => getPluginRegistryVersion.mockRestore());
   const deps = {
     getPreparedOwner: vi.fn(
       (_params?: GetPublishedPreparedModelCatalogOwnerParams): typeof owner | undefined => owner,
     ),
-    getPreparedAuthStore: vi.fn(() => authStore),
     getAuthStoreRevision: vi.fn(() => authStoreRevision),
-    getSkillsVersion: vi.fn(() => skillsVersion),
-    getPluginRegistryVersion: vi.fn(() => pluginRegistryVersion),
     buildCommands: vi.fn(
       async (_params: Parameters<ChatMetadataRuntimeDeps["buildCommands"]>[0]) => ({
         commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
@@ -223,6 +232,9 @@ export function createChatMetadataHarness(
   });
   return {
     ...deps,
+    getPreparedAuthStore,
+    getSkillsVersion,
+    getPluginRegistryVersion,
     buildProjection,
     readProjection,
     invalidProjections,

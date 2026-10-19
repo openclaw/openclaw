@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   createAccount,
+  createAllowlistedAccount,
+  createAttachment,
   createMessage,
   createRuntimeEnv,
   requireFirstMockArg,
@@ -103,24 +105,9 @@ describe("nextcloud-talk inbound media behavior", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "",
-        attachment: {
-          fileId: "9006",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9006"),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime: createRuntimeEnv(),
     });
@@ -151,14 +138,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         roomName: "Ops",
         isGroupChat: true,
         text: "",
-        attachment: {
-          fileId: "9007",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9007"),
       }),
       account: createAccount({
         config: {
@@ -195,14 +175,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         roomName: "Ops",
         isGroupChat: true,
         text: "",
-        attachment: {
-          fileId: "9013",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9013"),
       }),
       account: createAccount({
         config: {
@@ -266,24 +239,13 @@ describe("nextcloud-talk inbound media behavior", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text,
-        attachment: {
-          fileId,
+        attachment: createAttachment(fileId, {
           name: fileName,
           mimeType: contentType,
           declaredSizeBytes: size,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        }),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime: createRuntimeEnv(),
     });
@@ -317,24 +279,9 @@ describe("nextcloud-talk inbound media behavior", () => {
       await handleNextcloudTalkInbound({
         message: createMessage({
           text: "please inspect this receipt",
-          attachment: {
-            fileId: "9001",
-            name: "receipt.pdf",
-            mimeType: "application/pdf",
-            declaredSizeBytes: 24_576,
-            shareUrl: "https://cloud.example.com/s/redacted-share-token",
-            hideDownload: false,
-          },
+          attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }),
         }),
-        account: createAccount({
-          config: {
-            dmPolicy: "allowlist",
-            allowFrom: ["user-1"],
-            mediaAllowFrom,
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-          },
-        }),
+        account: createAllowlistedAccount({ mediaAllowFrom }),
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime,
       });
@@ -383,24 +330,9 @@ describe("nextcloud-talk inbound media behavior", () => {
       await handleNextcloudTalkInbound({
         message: createMessage({
           text: "",
-          attachment: {
-            fileId: "9001",
-            name: "receipt.pdf",
-            mimeType: "application/pdf",
-            declaredSizeBytes: 24_576,
-            shareUrl: "https://cloud.example.com/s/redacted-share-token",
-            hideDownload: false,
-          },
+          attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }),
         }),
-        account: createAccount({
-          config: {
-            dmPolicy: "allowlist",
-            allowFrom: ["user-1"],
-            mediaAllowFrom,
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-          },
-        }),
+        account: createAllowlistedAccount({ mediaAllowFrom }),
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime,
       });
@@ -423,24 +355,12 @@ describe("nextcloud-talk inbound media behavior", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "private receipt",
-        attachment: {
-          fileId: "9002",
+        attachment: createAttachment("9002", {
           name: "private.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
           hideDownload: true,
-        },
+        }),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -477,15 +397,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         text: "caption survives",
         attachmentIssue: "media_missing_metadata",
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -527,15 +439,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         text: structuredCommand,
         attachmentIssue: "media_missing_metadata",
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime: createRuntimeEnv(),
     });
@@ -561,25 +465,12 @@ describe("nextcloud-talk inbound media behavior", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "large receipt",
-        attachment: {
-          fileId: "9003",
+        attachment: createAttachment("9003", {
           name: "large.pdf",
-          mimeType: "application/pdf",
           declaredSizeBytes: 2 * 1024 * 1024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        }),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          mediaMaxMb: 1,
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount({ mediaMaxMb: 1 }),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -617,24 +508,9 @@ describe("nextcloud-talk inbound media behavior", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "inspect this",
-        attachment: {
-          fileId: "9004",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9004"),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -691,24 +567,9 @@ describe("nextcloud-talk inbound media behavior", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "inspect this sensitive receipt",
-        attachment: {
-          fileId: "9009",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9009"),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });

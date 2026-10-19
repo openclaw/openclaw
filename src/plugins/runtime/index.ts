@@ -239,6 +239,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
         }),
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        config: params.config,
         fields: [
           "sandbox",
           "sandboxMode",

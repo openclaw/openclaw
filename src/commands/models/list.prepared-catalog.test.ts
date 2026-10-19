@@ -20,7 +20,6 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { modelsListCommand } from "./list.list-command.js";
-import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import * as configLoader from "./load-config.js";
 
@@ -432,16 +431,17 @@ describe("models list published transport", () => {
 });
 
 describe("model list terminal table", () => {
-  const makeRow = (key: string): ModelRow => ({
-    key,
-    name: key,
-    input: "text",
+  const makeModel = (provider: string, id: string): ModelChoice => ({
+    provider,
+    id,
+    name: `${provider}/${id}`,
+    input: ["text"],
     contextWindow: 128_000,
     local: false,
     available: true,
     tags: [],
   });
-  it("prints context caps with sanitized tags in their original order", () => {
+  it("prints context caps with sanitized tags in their original order", async () => {
     const tags = [
       "\u001b[31mdefault\u001b[0m",
       "fallback#2",
@@ -451,17 +451,18 @@ describe("model list terminal table", () => {
       "default",
     ];
     const originalTags = [...tags];
-    const rows = [
+    const rows: ModelChoice[] = [
       {
-        ...makeRow("openai/gpt-5.5"),
-        input: "text+image",
+        ...makeModel("openai", "gpt-5.5"),
+        input: ["text", "image"],
         contextWindow: 400_000,
         contextTokens: 272_000,
         tags,
       },
     ];
 
-    printModelTable(rows, runtime);
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: rows });
+    await list({});
 
     expect(runtime.log.mock.calls).toEqual([
       ["Model                                      Input      Ctx         Local Auth  Tags"],
@@ -472,11 +473,12 @@ describe("model list terminal table", () => {
     expect(rows[0]?.tags).toEqual(originalTags);
   });
 
-  it("keeps fixed-width rows aligned when model keys contain wide graphemes", () => {
-    const wideKey = `${"a".repeat(41)}表`;
-    const rows = [makeRow(wideKey)];
+  it("keeps fixed-width rows aligned when model keys contain wide graphemes", async () => {
+    const wideKey = `${"a".repeat(39)}表`;
+    const rows = [makeModel("a", wideKey)];
 
-    printModelTable(rows, runtime);
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: rows });
+    await list({});
 
     const [header, row] = runtime.log.mock.calls.map(([line]) => line);
     expect(typeof header).toBe("string");

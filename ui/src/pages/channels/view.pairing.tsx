@@ -96,7 +96,11 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
               <button
                 type="button"
                 class={["btn btn--sm", { primary: action === "approve" }]}
-                disabled={Boolean(props.channels.pairingBusyRequestId) || !props.canManagePairing}
+                disabled={
+                  !props.channels.connected ||
+                  Boolean(props.channels.pairingBusyRequestId) ||
+                  !props.canManagePairing
+                }
                 aria-label={t(`channels.pairing.${action}Aria`, {
                   sender: request().senderId,
                   channel: request().channelLabel,
@@ -158,7 +162,9 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
         actions={
           <ChannelRefresh
             updatedAt={props.canManagePairing ? props.channels.pairingLastSuccess : null}
-            disabled={props.channels.pairingLoading || !props.canManagePairing}
+            disabled={
+              !props.channels.connected || props.channels.pairingLoading || !props.canManagePairing
+            }
             onRefresh={props.onPairingRefresh}
           />
         }
@@ -287,13 +293,12 @@ function PairingPromptContent(params: {
   prompt: NonNullable<ChannelsProps["pairingPrompt"]>;
   props: ChannelsProps;
 }) {
-  const request = createMemo(() => params.prompt.request);
-  const busy = createMemo(() => params.props.channels.pairingBusyRequestId === request().requestId);
-  const approving = createMemo(() => params.prompt.kind === "approve");
-  const ownerMissing = createMemo(
-    () => params.props.channels.pairingSnapshot?.commandOwnerConfigured === false,
-  );
-  const dialogTitle = createMemo(() => t(`channels.pairing.${params.prompt.kind}DialogTitle`));
+  const request = () => params.prompt.request;
+  const busy = () => params.props.channels.pairingBusyRequestId === request().requestId;
+  const approving = () => params.prompt.kind === "approve";
+  const ownerMissing = () =>
+    params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;
+  const dialogTitle = () => t(`channels.pairing.${params.prompt.kind}DialogTitle`);
   const option = (field: "notify" | "bootstrapCommandOwner", label: string) => (
     <label class="channels-pairing-dialog__option">
       <input
@@ -341,7 +346,7 @@ function PairingPromptContent(params: {
           <button
             type="button"
             class={["btn", approving() ? "primary" : "danger"]}
-            disabled={busy()}
+            disabled={!params.props.channels.connected || busy()}
             onClick={() => params.props.onPairingPromptConfirm()}
           >
             {t(`channels.pairing.${params.prompt.kind}`)}

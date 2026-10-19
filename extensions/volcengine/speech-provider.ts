@@ -35,7 +35,7 @@ function normalizeSpeedRatio(value: unknown): number | undefined {
 
 function normalizeVolcengineProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.volcengine) ?? asOptionalRecord(rawConfig.volcengine);
+  const raw = asOptionalRecord(providers?.volcengine);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -85,7 +85,7 @@ function resolveLegacyVolcengineCredentials(config: { appId?: string; token?: st
 
 function readProviderConfig(config: SpeechProviderConfig) {
   return normalizeVolcengineProviderConfig({
-    volcengine: { ...config, token: trimToUndefined(config.token) },
+    providers: { volcengine: { ...config, token: trimToUndefined(config.token) } },
   });
 }
 

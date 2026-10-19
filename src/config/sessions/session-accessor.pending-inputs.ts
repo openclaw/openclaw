@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import { decodeRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import {
   normalizeMessageClientSources,
   readMessageClientSources,
@@ -70,6 +71,18 @@ export type { SessionPendingInputReceipt } from "./session-pending-input-receipt
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
 
+/** The private accepted bytes survive mutable receipt projections and replay preparation. */
+export function readSessionPendingInputRequesterOrigin(
+  receipt: SessionPendingInputReceipt,
+): RequesterOrigin | undefined {
+  const owner = receiptOwners.get(receipt);
+  if (!owner) {
+    return undefined;
+  }
+  assertSessionPendingInputLifetimeCurrent(owner);
+  return owner.requesterOrigin;
+}
+
 export function readWithdrawnSessionPendingInputId(
   receipt: SessionPendingInputReceipt | undefined,
 ): string | undefined {
@@ -78,6 +91,8 @@ export function readWithdrawnSessionPendingInputId(
 }
 
 function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
+  const message = parseSessionPendingInputMessage(owner.messageJson);
+  owner.requesterOrigin ??= decodeRequesterOrigin(message["__openclaw"]?.requesterOrigin);
   const receipt: SessionPendingInputReceipt = {
     get state() {
       return owner.consumed || owner.sources?.every((source) => source.consumed)
@@ -85,7 +100,7 @@ function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputRecei
         : "queued";
     },
     inputId: owner.inputId,
-    message: parseSessionPendingInputMessage(owner.messageJson),
+    message,
     run: (operation) => runWithSessionPendingInput(owner, operation),
     runAsync: (operation) =>
       runWithSessionPendingInputPersistence(owner, () =>
@@ -165,6 +180,7 @@ export function bindSessionPendingInputSources(
   const aggregateInputId = randomUUID();
   const aggregate = ownerReceipt({
     ...first,
+    requesterOrigin: undefined,
     inputId: aggregateInputId,
     transcriptInputId: aggregateInputId,
     idempotencyKey,
@@ -204,6 +220,8 @@ type PendingInputStageOptions = PendingInputRequest & {
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
+  /** An idempotent pre-commit operation may reclaim interrupted custody in this process. */
+  retryInterrupted?: boolean;
   assertCurrent: () => void;
   assertAdmittedCurrent?: () => void;
   assertCompletionCurrent?: () => void;
@@ -360,7 +378,9 @@ async function stagePreparedPendingInput(
       if (
         (!options.requestFingerprint && !options.trackCompletion) ||
         (existing.state !== "queued" && existing.state !== "interrupted") ||
-        (existing.lifecycle_generation === lifecycleGeneration && !options.trackCompletion)
+        (existing.lifecycle_generation === lifecycleGeneration &&
+          !options.trackCompletion &&
+          !(options.retryInterrupted && existing.state === "interrupted"))
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }

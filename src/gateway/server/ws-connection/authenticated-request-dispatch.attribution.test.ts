@@ -7,6 +7,8 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
+import { captureSessionRowGeneration } from "../../session-row-identity.js";
+import { shareSidebarSessionRows } from "../../session-row-presentation.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -72,6 +74,41 @@ async function dispatch(
   return events;
 }
 
+it.each(["wire", "shared", "internal"] as const)(
+  "attributes base misses out-of-band through %s responses",
+  async (delivery) => {
+    const row = { key: "one", kind: "direct", updatedAt: 1 } as const;
+    const previous = [row];
+    const base = shareSidebarSessionRows(previous);
+    const changed = [{ ...row, updatedAt: 2 }];
+    for (const [token, reason] of [
+      [`delta:${base.rowsRevision}`, "all-rows-changed"],
+      ["delta:unknown", "unknown-base"],
+    ] as const) {
+      const payload = shareSidebarSessionRows(changed, token, [
+        captureSessionRowGeneration(previous),
+      ]);
+      expect(Object.keys(payload).toSorted()).toEqual(["rowsRevision", "sessions", "sharedFacts"]);
+      const events = await dispatch(
+        "sessions.list",
+        { rowMode: "sidebar", ifRowsRevision: token },
+        payload,
+        delivery,
+      );
+      expect(events).toHaveLength(delivery === "shared" ? 2 : 1);
+      for (const event of events) {
+        expect(event.sessionsList).toMatchObject({
+          rowsOutcome: "full-with-base",
+          baseMissReason: reason,
+        });
+      }
+    }
+    const noBase = shareSidebarSessionRows(changed);
+    const events = await dispatch("sessions.list", { rowMode: "sidebar" }, noBase, delivery);
+    expect(events[0]?.sessionsList).not.toHaveProperty("baseMissReason");
+  },
+);
+
 it.each([
   {
     params: { rowMode: "sidebar", ifRowsRevision: "private-revision" },
@@ -95,6 +132,21 @@ it.each([
     rowsOutcome: "full-with-base",
   },
   { params: { rowMode: "compact" }, payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "" },
+    payload: { sessions: [] },
+    rowsOutcome: "full-no-base",
+  },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "private-revision" },
+    payload: { rowsUnchanged: true },
+    rowsOutcome: "unchanged",
+  },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "delta:private-revision" },
+    payload: { rowsDelta: { baseRevision: "private-revision" } },
+    rowsOutcome: "delta",
+  },
 ])(
   "attributes session response bytes as $rowsOutcome",
   async ({ params, payload, rowsOutcome }) => {

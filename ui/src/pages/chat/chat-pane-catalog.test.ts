@@ -30,7 +30,8 @@ import {
 function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = {} as SessionCapability;
-  const { pane, requestUpdate, state } = createTestChatPane({ client, sessions });
+  const { pane, state } = createTestChatPane({ client, sessions });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   const key = {
     catalogId: "codex",
     hostId: "gateway:local",
@@ -44,7 +45,7 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
     state.chatMessage = draft;
   });
   state.handleSendChat = vi.fn(async () => undefined);
-  pane.catalogSession = {
+  pane.history.catalogSession = {
     threadId: key.threadId,
     status: "idle",
     archived: false,
@@ -52,7 +53,8 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
     canArchive: true,
   };
   pane.onPaneSessionChange = vi.fn();
-  return { client, key, pane, requestUpdate, sessions, sourceSessionKey, state };
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+  return { client, key, pane, sessions, sourceSessionKey, state };
 }
 
 describe("catalog transcript cache", () => {
@@ -65,7 +67,9 @@ describe("catalog transcript cache", () => {
       { catalogId: "fixture", hostId: "gateway:local", threadId: "history" },
       "main",
     );
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = state.sessionKey = sessionKey;
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     const now = Date.now();
     pane.receiveQuestionEvent({
       event: "question.requested",
@@ -105,7 +109,7 @@ describe("catalog transcript cache", () => {
       { role: "user", content: "Saved catalog question", timestamp: 2, messageId: "user" },
       { role: "assistant", content: "Saved catalog answer", timestamp: 3, messageId: "answer" },
     ];
-    Object.assign(pane, { catalogMessages: messages, catalogLoading: false });
+    Object.assign(pane.history, { catalogMessages: messages, catalogLoading: false });
     state.settings = { ...state.settings, chatShowToolCalls: true };
     state.chatVerboseLevel = "full";
     state.chatToolMessages = [
@@ -129,7 +133,7 @@ describe("catalog transcript cache", () => {
     draw();
     expect(build).toHaveBeenCalledOnce();
 
-    Object.assign(pane, {
+    Object.assign(pane.history, {
       catalogMessages: [
         { role: "assistant", content: "Older catalog answer", timestamp: 1, messageId: "older" },
         ...messages,
@@ -197,7 +201,9 @@ describe("chat pane catalog session lifecycle", () => {
       .mockResolvedValueOnce(transcript);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = buildCatalogSessionKey(key, "main");
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
     await pane.loadCatalogSession(key, false);
 
@@ -216,7 +222,7 @@ describe("chat pane catalog session lifecycle", () => {
       sourceHomeId: "source-home-a",
       limit: 50,
     });
-    expect(pane.catalogSession).toEqual(selectedSession);
+    expect(pane.history.catalogSession).toEqual(selectedSession);
   });
 
   it("discards a catalog read when the pane owner changes", async () => {
@@ -257,9 +263,11 @@ describe("chat pane catalog session lifecycle", () => {
       .mockImplementationOnce(() => read.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = buildCatalogSessionKey(key, "main");
     state.sessionKey = pane.sessionKey;
     state.assistantAgentId = "main";
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
     const pending = pane.loadCatalogSession(key, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -272,7 +280,7 @@ describe("chat pane catalog session lifecycle", () => {
     });
 
     await expect(pending).resolves.toBe(false);
-    expect(pane.catalogMessages).toEqual([]);
+    expect(pane.history.catalogMessages).toEqual([]);
   });
 
   it.each([
@@ -339,16 +347,18 @@ describe("chat pane catalog session lifecycle", () => {
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const key = { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" };
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     state.sessionKey = buildCatalogSessionKey(key, "main");
     pane.sessionKey = state.sessionKey;
-    pane.catalogCursor = scenario.initialCursor;
+    pane.history.catalogCursor = scenario.initialCursor;
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     if (scenario.seenCursor) {
       pane.olderCursorsSeen.add(scenario.seenCursor);
     }
 
     expect(await pane.loadCatalogSession(key, true)).toBe(scenario.progressed);
-    expect(pane.catalogCursor).toBe(scenario.expectedCursor);
-    expect(pane.catalogMessages).toHaveLength(scenario.visibleMessages);
+    expect(pane.history.catalogCursor).toBe(scenario.expectedCursor);
+    expect(pane.history.catalogMessages).toHaveLength(scenario.visibleMessages);
   });
 });
 
@@ -356,7 +366,10 @@ describe("chat pane catalog continuation lifecycle", () => {
   it("hands a continued catalog draft to the retained destination pane", async () => {
     const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued" });
     const { key, pane, state } = createCatalogContinuationPane(request);
-    pane.catalogSession = { ...pane.catalogSession!, sourceHomeId: "source-home-a" };
+    pane.history.catalogSession = {
+      ...pane.history.catalogSession!,
+      sourceHomeId: "source-home-a",
+    };
 
     await pane.continueCatalogSession(key);
 
@@ -573,7 +586,7 @@ describe("chat pane catalog continuation lifecycle", () => {
   it("does not display a rejected catalog continuation in a different conversation", async () => {
     const continued = createDeferred<{ sessionKey: string }>();
     const request = vi.fn(() => continued.promise);
-    const { key, pane, requestUpdate, state } = createCatalogContinuationPane(request);
+    const { key, pane, state } = createCatalogContinuationPane(request);
 
     const pending = pane.continueCatalogSession(key);
     state.sessionKey = "agent:main:different-conversation";
@@ -581,14 +594,12 @@ describe("chat pane catalog continuation lifecycle", () => {
     pane.catalogLoadGeneration += 1;
     state.lastError = "Current conversation error";
     state.chatMessage = "Draft belonging to the selected conversation";
-    const updatesBeforeReject = requestUpdate.mock.calls.length;
     continued.reject(new Error("Stale catalog continuation failed"));
     await pending;
 
     expect(state.lastError).toBe("Current conversation error");
     expect(state.chatSending).toBe(false);
     expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(requestUpdate).toHaveBeenCalledTimes(updatesBeforeReject + 1);
   });
 
   it("reports a catalog continuation failure in the original conversation", async () => {

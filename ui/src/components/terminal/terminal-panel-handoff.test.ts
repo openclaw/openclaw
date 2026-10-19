@@ -27,7 +27,7 @@ function gatewayFixture() {
       const { sessionId } = params as { sessionId: string };
       return { ...terminalOpenResult(sessionId), buffer: "live owner", seq: 10 };
     }
-    return method === "terminal.list" ? { sessions: [] } : {};
+    return method === "terminal.list" ? { sessions: [] } : { ok: true };
   });
   const client: TerminalGatewayClient = {
     request: request as TerminalGatewayClient["request"],

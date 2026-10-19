@@ -87,6 +87,15 @@ the original manager and service identity. This does not start the service or
 rewrite its definition. A later refusal still uses the recorded stop to restore
 the previous Gateway; a service that was already stopped remains stopped.
 
+If service inspection times out, repair names the stalled probe or inspection
+phase. An unavailable manager does not mean the Gateway was started manually.
+Repair reports any verified Gateway owner and known service definition, leaves
+that definition unchanged, and keeps Doctor and plugin maintenance pending when
+the Gateway still owns the state. Stop the managed Gateway with
+`openclaw gateway stop` (or `systemctl --user stop openclaw-gateway` for the default
+systemd user service), then run `openclaw update repair` again. Keep the same
+profile and state-directory overrides for both commands.
+
 On macOS, a failed LaunchAgent state probe is recorded as a failed recovery
 attempt with its reason. OpenClaw leaves the service definition unchanged and
 prints `LaunchAgent state could not be inspected`. Run
@@ -337,6 +346,15 @@ the Gateway for the same profile/state directory before retrying.
 Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
 successful repair or continue post-update maintenance while that record remains.
+
+For private retained package trees, recovery ignores widened group/other permission
+bits while verifying the package, then restores owner-only access and reports one
+warning. This includes POSIX ACL access masks introduced by recursive `setfacl`.
+File contents, ownership, identity, owner permissions, and symlink targets must
+still match. If the filesystem prevents tightening permissions, recovery warns
+and continues with the verified package. Older fingerprints that included public
+package permissions still match those original permissions; recovery preserves
+them so the same receipt remains valid on the next run.
 
 For a record written by the published 2026.9.8 package recovery helper, repair
 can settle an aborted operation after rollback or finish publication into a

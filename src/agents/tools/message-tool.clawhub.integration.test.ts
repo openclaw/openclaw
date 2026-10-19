@@ -40,13 +40,6 @@ function messageTool(config = {}, options: Partial<Parameters<typeof createMessa
     currentChannelProvider: "webchat",
     agentSessionKey: "agent:main:webchat:dm:clawhub-proof",
     runId: "clawhub-proof-run",
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async () => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...options,
   });
 }

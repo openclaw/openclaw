@@ -21,19 +21,20 @@ import {
   clearSidebarEntriesMetadata,
   type ServerUiPrefs,
 } from "./server-prefs-state.ts";
-import type { ServerUiPrefsSync, ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
+import type { ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
 import {
   selectProfileUiPrefs,
   removePendingUiPrefsBatch,
   serverUiPrefsCommittedSnapshot,
 } from "./server-prefs-write-batch.ts";
+import type { serverUiPrefsOutbox } from "./server-prefs.ts";
 import type { UiSettings } from "./settings-contract.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 // Operation-only code: the synchronous preference owner retains its outbox and
 // all generation/authority facts, exposed live across every awaited boundary.
 export async function drainPendingPrefs(
-  sync: ServerUiPrefsSync,
+  sync: typeof serverUiPrefsOutbox,
   writer: ServerUiPrefsWriter,
   epoch: number,
 ): Promise<void> {
@@ -150,7 +151,7 @@ export async function drainPendingPrefs(
     let acknowledgedBase = batch.sidebarEntries;
     let composed = false;
     let reordered = false;
-    const compose: ServerUiPrefsSync["composeSidebar"] = (pending, next) => {
+    const compose: (typeof serverUiPrefsOutbox)["composeSidebar"] = (pending, next) => {
       if (!next.sidebarEntries) {
         return;
       }

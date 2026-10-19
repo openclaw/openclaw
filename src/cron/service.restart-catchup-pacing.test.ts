@@ -19,8 +19,6 @@ type RestartCase = {
   paced: boolean;
   restartAfterMs: number;
   expectedNextAfterMs: number;
-  forceStatus?: "ok" | "error";
-  firstStatus?: "error";
 };
 
 describe("CronService restart catch-up with dynamic cadence", () => {
@@ -28,14 +26,12 @@ describe("CronService restart catch-up with dynamic cadence", () => {
     {
       label: "a paced cron deadline during a failed force run's backoff",
       paced: true,
-      forceStatus: "error",
       restartAfterMs: 10 * MINUTE + 1_000,
       expectedNextAfterMs: PACED_DELAY,
     },
     {
       label: "backoff after a failed scheduled cron run",
       paced: false,
-      firstStatus: "error",
       restartAfterMs: 10_000,
       expectedNextAfterMs: 30_000,
     },
@@ -44,12 +40,9 @@ describe("CronService restart catch-up with dynamic cadence", () => {
     const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
     runIsolatedAgentJob.mockResolvedValue({ status: "ok" });
     runIsolatedAgentJob.mockResolvedValueOnce(
-      scenario.firstStatus === "error"
-        ? { status: "error", error: "temporary timeout" }
-        : {
-            status: "ok",
-            ...(scenario.paced ? { nextCheck: { delayMs: PACED_DELAY } } : {}),
-          },
+      scenario.paced
+        ? { status: "ok", nextCheck: { delayMs: PACED_DELAY } }
+        : { status: "error", error: "temporary timeout" },
     );
     const createService = () =>
       new CronService({
@@ -80,27 +73,23 @@ describe("CronService restart catch-up with dynamic cadence", () => {
       expect(job.state.nextRunAtMs).toBe(FIRST_RUN_AT);
       vi.setSystemTime(FIRST_RUN_AT);
       await expect(original.run(job.id, "due")).resolves.toMatchObject({ ok: true, ran: true });
-      if (scenario.forceStatus) {
+      if (scenario.paced) {
         vi.setSystemTime(FIRST_RUN_AT + 10 * MINUTE - 1_000);
         runIsolatedAgentJob.mockResolvedValueOnce({
-          status: scenario.forceStatus,
-          ...(scenario.forceStatus === "error" ? { error: "temporary timeout" } : {}),
+          status: "error",
+          error: "temporary timeout",
         });
         await expect(original.run(job.id, "force")).resolves.toMatchObject({ ok: true, ran: true });
       }
       original.stop();
 
       const before = (await loadCronStore(store.storePath)).jobs[0];
-      const initialNextAfterMs = scenario.firstStatus
-        ? 30_000
-        : scenario.paced
-          ? PACED_DELAY
-          : MINUTE;
+      const initialNextAfterMs = scenario.paced ? PACED_DELAY : 30_000;
       expect(before?.state.nextRunAtMs).toBe(FIRST_RUN_AT + initialNextAfterMs);
       expect(before?.state.pacedNextRunAtMs).toBe(
         scenario.paced ? FIRST_RUN_AT + PACED_DELAY : undefined,
       );
-      const completedRuns = scenario.forceStatus ? 2 : 1;
+      const completedRuns = scenario.paced ? 2 : 1;
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(completedRuns);
 
       vi.setSystemTime(FIRST_RUN_AT + scenario.restartAfterMs);

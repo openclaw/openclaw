@@ -40,6 +40,10 @@ const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   // Native update_plan is disabled on every thread; its replacement must be
   // available in the initial context, including catalogs prepared at creation.
   "progress_card",
+  // Native Goals are disabled; core controls must not depend on model tool-search support.
+  "get_goal",
+  "create_goal",
+  "update_goal",
   "sessions_spawn",
   "sessions_yield",
 ]);

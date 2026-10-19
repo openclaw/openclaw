@@ -19,7 +19,6 @@ import { createAttachmentDownload } from "./chat-attachment-download.ts";
 import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createFileHtmlPreview } from "./chat-html-preview.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type {
   ChatDetailPanelProps,
   FileSidebarNavigation,
@@ -102,7 +101,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     runtime: AttachmentSidebarRuntime,
   ) {
     if (previousRuntime && previousRuntime.connectionEpoch !== runtime.connectionEpoch) {
-      releaseChatMediaResourceSubscriber(invalidate);
       attachmentDownload.cancel();
     }
     if (!contentChanged) {
@@ -115,7 +113,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       }
       return;
     }
-    releaseChatMediaResourceSubscriber(invalidate);
     attachmentDownload.cancel();
     visibleContent = content;
     error = null;
@@ -665,7 +662,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       onViewRawText: showRawText,
       onClick: handlePanelClick,
       onKeydown: handlePanelKeyDown,
-      onAttachmentUpdate: invalidate,
       attachmentRuntime: props.attachmentRuntime,
       attachmentDownload,
     };
@@ -696,7 +692,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       fileDraftContent = currentFileText();
     }
     destroyFileEditor();
-    releaseChatMediaResourceSubscriber(invalidate);
   });
   return <SidebarPanel {...lifecycle.snapshot()} />;
 }

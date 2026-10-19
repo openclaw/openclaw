@@ -4,7 +4,7 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
-import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner, type AttachmentItem } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -29,7 +29,7 @@ function admissionHarness(item: AttachmentItem, fetchMock: typeof fetch, withSid
   after.textContent = "After attachment";
   const props = () => ({
     attachments: [item],
-    options: { onRequestUpdate: update },
+    options: { mediaOwner: update },
     onOpenSidebar: withSidebar ? onOpenSidebar : undefined,
     inlinePlayback: false,
   });
@@ -44,7 +44,7 @@ function admissionHarness(item: AttachmentItem, fetchMock: typeof fetch, withSid
     dispose() {
       view.dispose();
       scroller.remove();
-      releaseChatMediaResourceSubscriber(update);
+      releaseChatMediaResourceOwner(update);
       vi.unstubAllGlobals();
     },
   };

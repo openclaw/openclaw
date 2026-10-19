@@ -35,7 +35,7 @@ async function createSessionFromTool(
 ) {
   const caller = getGatewayToolCallerIdentity();
   const assertCallerCurrent = captureGatewayToolCallerAssertion("sessions.create");
-  const selection = resolveGatewayToolOperatorSelection();
+  const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
   const authority = selection.operatorAuthority;
   if (
     !caller?.operationalRunInstance ||
@@ -114,6 +114,8 @@ async function createSessionFromTool(
     agentToolCaller: {
       agentId: caller.agentId,
       sessionKey: caller.sessionKey,
+      executionIdentityToken: caller.executionIdentityToken,
+      requesterOrigin: selection.requesterOrigin,
       assertCurrent: composeSessionSourceAssertion(
         [selection.assertCurrent, assertCallerCurrent],
         (assertSource) => {

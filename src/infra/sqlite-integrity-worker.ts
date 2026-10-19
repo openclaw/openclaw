@@ -5,6 +5,7 @@ import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { assertChildRuntimeAvailable, observeChildRuntime } from "./child-runtime-viability.js";
 import { restoreNativeErrorResponse } from "./native-error-response.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
@@ -57,6 +58,7 @@ type IntegrityProcess = {
   retired: boolean;
   closeBudgetMs: number;
   failure?: Error;
+  runtimeFailure?: Error;
 };
 type IntegrityQueue = { process?: IntegrityProcess; tail: Promise<void> };
 type IntegrityScope = {
@@ -213,14 +215,16 @@ function assertSqliteIntegrityWithProcess(
   let active = scope?.queue.process;
   if (!active || active.retired) {
     const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
+    assertChildRuntimeAvailable();
     const child = fork(entry, [], {
       execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
       serialization: "advanced",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
       timeout: scope || isSqliteInspectionDeadlineOwnedByCaller() ? undefined : timeoutMs,
       killSignal: "SIGKILL",
       ...(scope ? {} : { signal }),
     });
+    const runtimeFailure = observeChildRuntime(child);
     const { promise: closed, resolve: onClosed } = createDeferredCore();
     active = {
       child,
@@ -235,6 +239,7 @@ function assertSqliteIntegrityWithProcess(
       child.kill("SIGKILL");
     });
     child.once("close", () => {
+      launched.runtimeFailure = runtimeFailure();
       launched.retired = true;
       onClosed();
     });
@@ -290,7 +295,7 @@ function assertSqliteIntegrityWithProcess(
       try {
         signal.throwIfAborted();
         scope?.assertCurrent();
-        const workerFailure = failure ?? reader.failure;
+        const workerFailure = reader.runtimeFailure ?? failure ?? reader.failure;
         if (workerFailure) {
           throw workerFailure;
         }

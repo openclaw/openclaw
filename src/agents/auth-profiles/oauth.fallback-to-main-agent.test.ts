@@ -53,9 +53,11 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
+// mock-isolation: OAuth fallback fixtures control stored agents and refresh results without unrelated external credentials.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 

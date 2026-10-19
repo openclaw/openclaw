@@ -314,6 +314,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
+    // Layered workspaces can inject one basename from two directories; show the source then.
+    const shared = report.injectedWorkspaceFiles.some((o) => o !== f && o.name === f.name);
+    const label = shared ? `${f.name} (${f.path})` : f.name;
     const nativeUnverified = f.injectionStatus === "native_unverified";
     const status = nativeUnverified
       ? "NATIVE/UNVERIFIED"
@@ -328,7 +331,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       : f.missing
         ? "0"
         : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
+    return `- ${label}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;

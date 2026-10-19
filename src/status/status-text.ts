@@ -19,8 +19,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../agents/model-thinking-default.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
-import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -283,26 +282,16 @@ export async function buildStatusReplyParts(
     provider: selectedLookupProvider,
     effectiveHarness,
   });
-  const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: selectedLookupProvider,
-    harnessRuntime: effectiveHarness,
-    config: cfg,
-  });
   const activeProvider = modelRefs.active.provider || provider;
   const activeStatusProvider = resolveStatusRuntimeProvider({
     provider: activeProvider,
     effectiveHarness,
   });
-  const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: activeProvider,
-    harnessRuntime: effectiveHarness,
-    config: cfg,
-  });
   const selectedResolution = await resolveModel({
     provider: selectedStatusProvider,
     model: selectedLookupModel,
     runtimeId: effectiveHarness,
-    acceptedProviderIds: selectedAuthProviders,
+    acceptedProviderIds: [selectedLookupProvider],
     ...(Object.hasOwn(params, "modelAuthOverride")
       ? { authLabelOverride: params.modelAuthOverride }
       : {}),
@@ -316,7 +305,7 @@ export async function buildStatusReplyParts(
             provider: activeStatusProvider,
             model: modelRefs.active.model || model,
             runtimeId: effectiveHarness,
-            acceptedProviderIds: activeAuthProviders,
+            acceptedProviderIds: [activeProvider],
           })
         ).authLabel
       : selectedModelAuth;
@@ -409,11 +398,7 @@ export async function buildStatusReplyParts(
           Boolean(usageEntry.billing?.length) ||
           Boolean(usageEntry.summary?.trim()))
       ) {
-        const summaryLine = formatUsageWindowSummary(usageEntry, {
-          now: Date.now(),
-          maxWindows: 2,
-          includeResets: true,
-        });
+        const summaryLine = formatUsageWindowSummary(usageEntry);
         if (summaryLine) {
           usageLine = `📊 Usage: ${summaryLine}`;
         }

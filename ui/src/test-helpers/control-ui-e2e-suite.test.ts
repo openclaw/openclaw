@@ -30,7 +30,10 @@ type FixtureMode =
   | "scenario-noncooperative"
   | "scenario-late-close"
   | "scenario-close-failure"
+  | "scenario-root-drain"
+  | "scenario-root-leak"
   | "resources-success"
+  | "resources-root-drain"
   | "resources-close-failure"
   | "resources-late-setup"
   | "resources-browser-failure";
@@ -59,6 +62,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, expect, it, vi } from "vitest";
+import { tryBeginGatewayRootWorkAdmission } from ${JSON.stringify(path.join(repoRoot, "src/process/gateway-work-admission.ts"))};
 const state = vi.hoisted(() => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -258,6 +262,7 @@ function createFixtureState() {
   };
 }
 let sharedFixture;
+let gatewayAdmission;
 const suite = createControlUiE2eSuite({ name: "owned context fixture",
   trackBrowserContexts: ${mode.startsWith("tracked-") || mode === "diagnostic-tracked-timeout"},
   ...(${JSON.stringify(mode)}.startsWith("resources-") ? {
@@ -265,6 +270,10 @@ const suite = createControlUiE2eSuite({ name: "owned context fixture",
       retainedState: () => sharedFixture?.root,
       run: async (signal) => {
         sharedFixture = createFixtureState();
+        if (${JSON.stringify(mode)} === "resources-root-drain") {
+          gatewayAdmission = tryBeginGatewayRootWorkAdmission("synthetic shared Gateway request");
+          expect(gatewayAdmission).not.toBeNull();
+        }
         fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, sharedFixture.root);
         state.events.push("resource acquired"); record();
         if (${JSON.stringify(mode)} === "resources-late-setup") {
@@ -276,6 +285,7 @@ const suite = createControlUiE2eSuite({ name: "owned context fixture",
         }
       },
       close: async () => {
+        gatewayAdmission?.release();
         state.events.push("resource closed"); record();
         if (${JSON.stringify(mode)} === "resources-close-failure") throw new Error("synthetic shared resource close failure");
       },
@@ -368,11 +378,37 @@ suite.define(() => {
       state.events.push("successor"); record();
       fs.writeFileSync(${JSON.stringify(path.join(root, "successor.txt"))}, "started");
     });
+  } else if (${JSON.stringify(mode)}.startsWith("scenario-root-")) {
+    it("closes its Gateway before requiring requests to drain", async (context) => {
+      let fixture;
+      await suite.runScenario(context, {
+        retainedState: () => fixture?.root,
+        run: async () => {
+          fixture = createFixtureState();
+          fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, fixture.root);
+          gatewayAdmission = tryBeginGatewayRootWorkAdmission("synthetic scenario Gateway request");
+          expect(gatewayAdmission).not.toBeNull();
+          state.events.push("acquired"); record();
+          await suite.withPage({}, async () => {});
+        },
+        close: async () => {
+          state.events.push("gateway closed"); record();
+          if (${JSON.stringify(mode)} === "scenario-root-drain") gatewayAdmission.release();
+        },
+        release: async () => {
+          await fixture.cleanup();
+          state.events.push("released"); record();
+        },
+      });
+    });
   } else if (${JSON.stringify(mode)}.startsWith("resources-")) {
     it.for(["first", "second"])("uses shared resources: %s", async (name, context) => {
       await suite.runScenario(context, { run: async () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(sharedFixture.stateDir);
         state.events.push(name); record();
+        if (${JSON.stringify(mode)} === "resources-root-drain") {
+          await suite.withPage({}, async () => {});
+        }
       } });
     });
   } else if (${JSON.stringify(mode)}.startsWith("tracked-")) {
@@ -890,6 +926,21 @@ it("joins late suite setup before closing its acquired server", (context) =>
       published: false,
     });
   }));
+
+it.for(["scenario-root-drain", "resources-root-drain", "scenario-root-leak"] as const)(
+  "drains Gateway requests at the owner close boundary: %s",
+  (mode, context) =>
+    runJoinedShutdownTest(context, async () => {
+      const result = await runFixture(mode, context.signal);
+      const leaked = mode === "scenario-root-leak";
+      expect(result.code, result.output).toBe(leaked ? 1 : 0);
+      expect(result.retainedExists).toBe(leaked);
+      expect(result.journal.events).toContain(
+        mode.startsWith("resources-") ? "resource closed" : "gateway closed",
+      );
+      expect(result.journal.events.includes("released")).toBe(!leaked);
+    }),
+);
 
 it.for([
   ["scenario-timeout", undefined],

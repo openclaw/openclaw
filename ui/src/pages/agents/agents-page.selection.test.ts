@@ -55,12 +55,51 @@ describe("AgentsPage routing", () => {
 
       expect(page.read().activePanel).toBe("tools");
       expect(page.read().selectedAgentId).toBe(expectedAgentId);
+      expect(page.read().memoryTarget.read()).toBe(expectedAgentId);
       expect(selection.state.selectedId).toBe(expectedAgentId);
       expect(agentFileValues(page.read().agentFiles, "draft")).toEqual(
         selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
       );
     },
   );
+
+  it("publishes admitted memory targets from the retained page owner", () => {
+    const currentGateway = gateway(snapshot(null, false));
+    const selection = settingsSelection(roster, "main");
+    const agents = agentsCapability(async () => files("main", "main"));
+    agents.state.agentsList = roster;
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      settingsAgentSelection: selection,
+    };
+    const page = createAgentsPage(
+      context,
+      agentsRouteData(currentGateway, roster, "main", selection),
+    );
+    const target = page.read().memoryTarget;
+    const notify = vi.fn((agentId: string | null) => agentId);
+    const stop = target.subscribe(() => notify(target.read()));
+    try {
+      expect(target.read()).toBe("main");
+      const staleRoute = agentsRouteData(currentGateway, roster, "research", selection);
+      selection.set("research");
+      expect(notify).toHaveBeenLastCalledWith("research");
+      selection.set("main");
+      expect(notify).toHaveBeenLastCalledWith("main");
+      page.setRouteData(staleRoute);
+      expect(target.read()).toBe("main");
+      expect(page.read().memoryTarget).toBe(target);
+
+      stop();
+      notify.mockClear();
+      selection.set("research");
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      page.dispose();
+      selection.dispose();
+    }
+  });
 
   it("keeps Back at Settings when the roster defaults after Agents route data", async () => {
     const previousUrl = window.location.href;

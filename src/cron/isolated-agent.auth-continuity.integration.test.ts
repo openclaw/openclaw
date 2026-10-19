@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
-import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
+import {
+  removeAuthProfilesAcrossOwnerStores,
+  setAuthProfileOrder,
+} from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -12,6 +15,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-mo
 import { withDoctorConfigMaintenance } from "../commands/doctor-config-flow.test-support.js";
 import { maybeRepairCronInferenceBindings } from "../commands/doctor/cron/inference-binding-migration.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
 import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
@@ -366,6 +370,8 @@ describe("legacy cron jobs without a recorded account through the real embedded 
     personalFirst?: boolean;
     cooledFirst?: boolean;
     migrate?: boolean;
+    linked?: "shared" | "personal" | "missing";
+    retireLinked?: "replacement" | "revocation";
   }) {
     return await withOpenClawTestState(
       {
@@ -439,7 +445,8 @@ describe("legacy cron jobs without a recorded account through the real embedded 
             ],
           });
         }
-        if (params.personalFirst) {
+        let linkedProfileId: string | undefined;
+        if (params.personalFirst || params.linked === "personal") {
           const owner = ensureProfileForEmail("cron-legacy-owner@example.test");
           const { authProfileId } = await connectUserModelAccountAsync({
             ownerProfileId: owner.id,
@@ -447,6 +454,23 @@ describe("legacy cron jobs without a recorded account through the real embedded 
             assertCurrent() {},
           });
           cfg.auth = { ...cfg.auth, order: { openai: [authProfileId, platformId] } };
+          if (params.linked === "personal") {
+            linkedProfileId = authProfileId;
+          }
+        }
+        if (params.linked === "shared" || params.linked === "missing") {
+          linkedProfileId = otherPlatformId;
+          cfg.auth = { ...cfg.auth, order: { openai: [platformId, otherPlatformId] } };
+          if (params.linked === "shared") {
+            await persistAuthProfileBatch({
+              profiles: [
+                {
+                  profileId: otherPlatformId,
+                  credential: { type: "api_key", provider: "openai", key: "synthetic-other-key" },
+                },
+              ],
+            });
+          }
         }
         if (params.cooledFirst) {
           await persistAuthProfileBatch({
@@ -482,12 +506,46 @@ describe("legacy cron jobs without a recorded account through the real embedded 
           state: {},
         };
         const storePath = state.statePath("cron", "jobs.json");
+        const sessionScope = { agentId: "main", sessionKey: "agent:main:cron:legacy-account" };
+        if (linkedProfileId) {
+          await replaceSessionEntry(sessionScope, {
+            sessionId: "original-linked-session",
+            updatedAt: 1,
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1",
+            modelOverrideSource: "user",
+            authProfileOverride: linkedProfileId,
+            authProfileOverrideSource: "user-link",
+          });
+        }
+        const originalSession = loadSessionEntry(sessionScope);
         await saveCronJobsStore(storePath, { version: 1, jobs: [stored] });
         const migration = params.migrate
           ? await withDoctorConfigMaintenance(() =>
               maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
             )
           : undefined;
+        if (linkedProfileId) {
+          expect(loadSessionEntry(sessionScope)).toEqual(originalSession);
+        }
+        if (params.retireLinked === "replacement") {
+          await persistAuthProfileBatch({
+            profiles: [
+              {
+                profileId: otherPlatformId,
+                credential: {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "synthetic-replacement-key",
+                },
+              },
+            ],
+          });
+        } else if (params.retireLinked === "revocation") {
+          expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [otherPlatformId] })).toBe(
+            true,
+          );
+        }
         if (params.cooledFirst) {
           // The rate limit ends before the next scheduled run.
           await updateAuthProfileStoreWithLock({
@@ -551,6 +609,56 @@ describe("legacy cron jobs without a recorded account through the real embedded 
       { url: `${openaiUrl}/responses`, authorization: `Bearer ${platformKey}` },
     ]);
   });
+
+  it("migrates a linked shared account instead of the first default, then runs on that account", async () => {
+    const { result, requests, migration, job } = await runLegacyJob({
+      storedProfile: true,
+      linked: "shared",
+      migrate: true,
+    });
+    expect(migration?.warnings).toEqual([]);
+    expect(job.inferenceBinding).toMatchObject({ profileId: otherPlatformId, source: "user" });
+    expect(result.status, result.error).toBe("ok");
+    expect(requests).toEqual([
+      { url: openaiUrl + "/responses", authorization: "Bearer synthetic-other-key" },
+    ]);
+  });
+
+  it.each(["personal", "missing"] as const)(
+    "never adopts a different account or falls back when the linked account is %s",
+    async (linked) => {
+      const { result, requests, migration, job } = await runLegacyJob({
+        storedProfile: true,
+        linked,
+        migrate: true,
+      });
+      expect(migration?.changes).toEqual([]);
+      expect(migration?.warnings.join("\n")).toContain("inference account was not migrated");
+      expect(job.inferenceBinding).toBeUndefined();
+      expect(result.status).toBe("error");
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it.each(["replacement", "revocation"] as const)(
+    "sends no request after the migrated linked account's %s",
+    async (retireLinked) => {
+      const { result, requests, job } = await runLegacyJob({
+        storedProfile: true,
+        linked: "shared",
+        migrate: true,
+        retireLinked,
+      });
+      expect(job.inferenceBinding).toMatchObject({ profileId: otherPlatformId, source: "user" });
+      expect(result.status).toBe("error");
+      expect(result.error).toContain(
+        retireLinked === "replacement"
+          ? "inference account was replaced"
+          : "was removed or signed out",
+      );
+      expect(requests).toEqual([]);
+    },
+  );
 
   it("records the usual account even while it is rate-limited during Doctor", async () => {
     const { result, requests, migration, job } = await runLegacyJob({

@@ -6,9 +6,10 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { runDatabasePortTask as runWorkboardPortTask } from "./port-command.worker.js";
+import { runDatabasePortTask } from "./port-command.worker.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
 import { inspectDatabasePort, type PortDescriptor } from "./port.worker.js";
+import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,12 +38,47 @@ async function hash(file: string) {
     .digest("hex");
 }
 
+it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", async (version) => {
+  const directory = tempDirs.make("state-port-legacy-");
+  const sourcePath = path.join(directory, "openclaw.sqlite");
+  const legacy = await loadStatePortDescriptor(version);
+  {
+    using db = openNodeSqliteDatabase(sourcePath);
+    db.exec(legacy.sqlite);
+    for (const fragment of legacy.fragments ?? []) {
+      db.exec(fragment.sqlite);
+    }
+    db.exec(`PRAGMA user_version = ${version}`);
+    for (const table of [
+      "github_publication_requests",
+      "github_personal_publication_requests",
+      "github_repository_publication_requests",
+    ]) {
+      expect(
+        db
+          .prepare(`PRAGMA table_info(${table})`)
+          .all()
+          .some((column) => column.name === "draft"),
+      ).toBe(false);
+      const definition = [legacy, ...(legacy.fragments ?? [])]
+        .flatMap((part) => part.tables)
+        .find((entry) => entry.name === table);
+      expect(definition?.columns.some((column) => column.name === "draft")).toBe(false);
+    }
+  }
+  const original = await hash(sourcePath);
+  await expect(
+    runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope),
+  ).rejects.toThrow("run openclaw doctor --fix with the matching version first");
+  expect(await hash(sourcePath)).toBe(original);
+});
+
 describe("workboard port worker", () => {
   it("inspects without writing and refuses changed canonical SQLite data", async () => {
     const { directory, sourcePath } = fixture();
     const original = await hash(sourcePath);
     const before = await fs.readdir(directory);
-    const inspected = await runWorkboardPortTask(
+    const inspected = await runDatabasePortTask(
       { operation: "inspect", sourcePath, config: {}, to: "postgres" },
       scope,
     );
@@ -56,7 +92,7 @@ describe("workboard port worker", () => {
     using changed = openNodeSqliteDatabase(targetPath);
     changed.exec("UPDATE workboard_boards SET name = 'changed'");
     await expect(
-      runWorkboardPortTask(
+      runDatabasePortTask(
         {
           operation: "verify",
           sourcePath: targetPath,
@@ -116,7 +152,7 @@ describe("workboard port worker", () => {
       "PRAGMA foreign_keys = OFF; INSERT INTO workboard_card_labels VALUES ('absent', 1, 'private-payload')",
     );
     const original = await hash(sourcePath);
-    const failure = await runWorkboardPortTask(
+    const failure = await runDatabasePortTask(
       { operation: "inspect", sourcePath, config: {}, to: "postgres" },
       scope,
     ).catch((error: unknown) => error);

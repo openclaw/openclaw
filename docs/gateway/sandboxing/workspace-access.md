@@ -63,10 +63,44 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
+`.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
+that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
+`.artifacts/vitest-worker-cache/` retained compiler outputs,
+`.artifacts/vitest-shard-timings.json` scheduling samples, and
+`.artifacts/dist-artifacts.lock/` ownership files.
+Synchronization and recovery of older pending results exclude these exact paths,
+so dependency and test-tool downloads do not count as authored workspace results.
+Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
+reconcile, including nested paths and explicit staged inputs; an ignore
+rule alone does not make a file disposable. Source changes cannot remove a
+runtime-owned lock subtree by replacing its parent directory.
+
+Local managed guest workspaces also exclude disposable `.artifacts/build-all-cache/`
+build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Original
+inputs admitted from the host source or its Git index remain protected even within
+those roots. Guest Git metadata cannot admit generated files as original inputs.
+The same input custody applies during capture, synchronization and recovery without
+changing saved manifest bytes. This build-cache policy does not change native-node
+or SSH workspace synchronization. Older archives can lack the original index
+membership of saved files. Exact cache-root paths in the owned archive remain
+restored inputs; new generated paths under the same directories are still excluded.
+An ambiguous older cache file may therefore remain preserved.
+
+If you are a guest, you can ask the agent:
+
+> Bring this workspace up to date with the latest project changes, keeping my
+> edits. Resolve any conflicts, rerun the relevant checks and Auto Review, and
+> update the same PR. Do not merge it.
+
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
-workspace. The Gateway fetches with its host identity and preserves saved guest
-files, ignored guest data, and empty directories. The operation returns the exact
+workspace. The Gateway fetches with its host identity and prepares any missing
+file contents from the selected repository before offline merge and snapshot
+operations, including the ancestor versions needed to merge diverged branches.
+This also works when a partial clone already knows the base commit. A
+content-fetch failure leaves saved work available for retry. Refresh preserves
+saved guest files, ignored guest data, and empty directories. The operation returns the exact
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
@@ -81,7 +115,8 @@ available objects from host-selected snapshots when possible, then stages its
 current source. Guest HEAD, branches, and commit history remain unchanged.
 The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
 normal Auto Review with that exact target after refresh or conflict resolution,
-then publish to update the same draft. Reviewing against the old guest HEAD would
+then publish to update the same PR, preserving its current draft or open state.
+Reviewing against the old guest HEAD would
 also include upstream-only changes. The operation requires the prepared sandbox
 of the current agent; a direct RPC cannot supply another runtime. Publication
 refuses a pending integration and never silently merges new base changes into
@@ -113,8 +148,12 @@ filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
 during preparation prevents those effects rather than rejecting only afterward.
 Stopping a run blocks new commands and file operations while allowing its accepted
-workspace changes to finish checkpointing. Accepted command cleanup retains the
-workspace owner until finalization finishes, even after the parent exits.
+workspace changes to finish checkpointing. Accepted command cleanup waits for an active checkpoint to resume the runtime
+before reaping its processes. Its reap budget starts after admission; the command's
+original exit and timeout results remain unchanged. Termination checkpoints any
+final writes from signal handlers before returning, including when an earlier
+finalization already checkpointed the command. Cleanup retains the workspace owner
+until termination and finalization finish, even after the parent exits.
 Settlement still requires the original
 session and worktree binding and live Gateway ownership; a replacement session or
 unresolved checkpoint failure cannot be reported as a clean stop.

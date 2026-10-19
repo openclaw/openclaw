@@ -20,6 +20,7 @@ import {
   assertAllowedCompletionModel,
   resolvePluginLlmPolicy,
 } from "../plugins/runtime/runtime-model-policy.js";
+import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage.js";
 import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost, PreparedDecisionBilling } from "./provider-host.js";
@@ -55,7 +56,47 @@ export function evaluateDecisionV2(
   );
 }
 
-export function evaluateDecisionInRegistry(
+type Outcome = DecisionOutcome | DecisionOutcomeV2;
+export type DecisionEvaluation<T extends Outcome = Outcome> = {
+  outcome: T;
+  usageFacts?: Pick<
+    Parameters<typeof finalizePluginModelUsage>[0],
+    "cfg" | "hostPluginId" | "target" | "preparedBilling"
+  >;
+};
+
+/** Complete only at the caller's successful return, after its late guards and projection. */
+export function completeDecisionEvaluation<T extends Outcome>(
+  evaluation: DecisionEvaluation<T>,
+): T {
+  if (evaluation.outcome.status === "ok" && evaluation.usageFacts) {
+    finalizePluginModelUsage({
+      ...evaluation.usageFacts,
+      rawUsage: evaluation.outcome.result.usage,
+      estimate: "none",
+    });
+  }
+  return evaluation.outcome;
+}
+
+export async function evaluateDecisionInRegistry(
+  ...args: Parameters<typeof evaluateDecisionOperation>
+): Promise<DecisionOutcome> {
+  const evaluation = await evaluateDecisionOperation(...args);
+  args[1].signal.throwIfAborted();
+  return completeDecisionEvaluation(evaluation);
+}
+
+export async function evaluateDecisionV2InRegistry(
+  ...args: Parameters<typeof evaluateDecisionV2Operation>
+): Promise<DecisionOutcomeV2> {
+  const evaluation = await evaluateDecisionV2Operation(...args);
+  args[1].signal.throwIfAborted();
+  return completeDecisionEvaluation(evaluation);
+}
+
+/** Internal callers with outer lifecycle checks retain completion until those checks pass. */
+export function evaluateDecisionOperation(
   batch: DecisionBatch,
   options: Options,
   registry: PluginRegistry | null | undefined,
@@ -63,7 +104,7 @@ export function evaluateDecisionInRegistry(
   consumerId?: string,
   isAdmissible?: () => boolean,
   canDispatch?: () => boolean,
-): Promise<DecisionOutcome> {
+): Promise<DecisionEvaluation<DecisionOutcome>> {
   return evaluateVersion(
     batch,
     options,
@@ -73,10 +114,10 @@ export function evaluateDecisionInRegistry(
     consumerId,
     isAdmissible,
     canDispatch,
-  ) as Promise<DecisionOutcome>; // SAFETY: Version 1 dispatch validates a V1 batch and returns the paired V1 outcome.
+  ) as Promise<DecisionEvaluation<DecisionOutcome>>; // SAFETY: V1 dispatch validates and returns the paired V1 outcome.
 }
 
-export function evaluateDecisionV2InRegistry(
+export function evaluateDecisionV2Operation(
   batch: DecisionBatchV2,
   options: DecisionEvaluateOptionsV2,
   registry: PluginRegistry | null | undefined,
@@ -84,8 +125,7 @@ export function evaluateDecisionV2InRegistry(
   consumerId?: string,
   isAdmissible?: () => boolean,
   canDispatch?: () => boolean,
-  onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
-): Promise<DecisionOutcomeV2> {
+): Promise<DecisionEvaluation<DecisionOutcomeV2>> {
   return evaluateVersion(
     batch,
     options,
@@ -95,8 +135,7 @@ export function evaluateDecisionV2InRegistry(
     consumerId,
     isAdmissible,
     canDispatch,
-    onPreparedBilling,
-  ) as Promise<DecisionOutcomeV2>; // SAFETY: Version 2 dispatch validates a V2 batch and returns the paired V2 outcome.
+  ) as Promise<DecisionEvaluation<DecisionOutcomeV2>>; // SAFETY: V2 dispatch validates and returns the paired V2 outcome.
 }
 
 async function evaluateVersion(
@@ -108,8 +147,7 @@ async function evaluateVersion(
   consumerId?: string,
   isAdmissible?: () => boolean,
   canDispatch?: () => boolean,
-  onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
-): Promise<DecisionOutcome | DecisionOutcomeV2> {
+): Promise<DecisionEvaluation> {
   const options = { ...inputOptions };
   if (
     !inputOptions ||
@@ -133,11 +171,9 @@ async function evaluateVersion(
   }
   options.signal.throwIfAborted();
   const started = performance.now();
-  const skipped = (
-    outcome: DecisionOutcome | DecisionOutcomeV2,
-  ): DecisionOutcome | DecisionOutcomeV2 => {
+  const skipped = (outcome: DecisionOutcome | DecisionOutcomeV2): DecisionEvaluation => {
     logDecisionEvaluation({ options, facts: { dispatched: false }, started, outcome });
-    return outcome;
+    return { outcome };
   };
   if (!(version === 1 ? validateDecisionBatch(batch) : validateDecisionBatchV2(batch))) {
     return skipped({ status: "unavailable", reason: "unsupported-input" });
@@ -237,6 +273,10 @@ async function evaluateVersion(
     if (timeoutMs <= 0) {
       return skipped(entry.host.unavailable("deadline"));
     }
+    let preparedBilling: PreparedDecisionBilling | undefined;
+    const onPreparedBilling = (facts: PreparedDecisionBilling) => {
+      preparedBilling = facts;
+    };
     const result =
       version === 1
         ? await entry.host.evaluate(
@@ -247,6 +287,7 @@ async function evaluateVersion(
             registry,
             consumerId,
             isAdmissible,
+            onPreparedBilling,
           )
         : await entry.host.evaluateV2(
             submitted as DecisionBatchV2, // SAFETY: V2 validation and structuredClone preserve the admitted V2 shape.
@@ -265,7 +306,19 @@ async function evaluateVersion(
     if (!rootCaller && !authority?.()) {
       throw new Error("Decision consumer authority closed.");
     }
-    return result;
+    return {
+      outcome: result,
+      usageFacts: {
+        cfg: config,
+        hostPluginId: consumerId,
+        target: {
+          provider: selected.provider,
+          model: splitTrailingAuthProfile(selected.model).model,
+          agentId: options.agentId,
+        },
+        preparedBilling,
+      },
+    };
   } finally {
     modelExecution?.release();
     capturedOperator?.release?.();

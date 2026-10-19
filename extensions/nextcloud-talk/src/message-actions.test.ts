@@ -43,7 +43,7 @@ const disabledAccount = {
 describe("nextcloudTalkMessageActions", () => {
   beforeEach(() => {
     hoisted.sendReactionNextcloudTalk.mockReset();
-    hoisted.sendReactionNextcloudTalk.mockResolvedValue({ ok: true });
+    hoisted.sendReactionNextcloudTalk.mockResolvedValue(undefined);
     hoisted.listNextcloudTalkAccountIds.mockReset();
     hoisted.resolveNextcloudTalkAccount.mockReset();
   });

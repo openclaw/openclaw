@@ -2,6 +2,7 @@ import type {
   WorkboardBoardMetadata,
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardCardCursor,
   WorkboardChange,
   WorkboardListResult,
   WorkboardSessionPlacement,
@@ -21,6 +22,7 @@ import type {
   WorkboardWriteAuthority,
 } from "./persistence-types.js";
 import { normalizeBoardMetadata } from "./store-board-normalizers.js";
+import { compareCards } from "./store-card-helpers.js";
 import type { WorkboardBoardInput, WorkboardListOptions } from "./store-inputs.js";
 import { normalizeBoardId, normalizeBoardIdRequired } from "./store-normalizers.js";
 import { readCards } from "./store-read.js";
@@ -73,6 +75,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   listCards(
     board: unknown,
     sessionKey?: string,
+    after?: WorkboardCardCursor,
   ): Promise<
     WorkboardListResult & {
       boards: WorkboardBoardSummary[];
@@ -83,19 +86,23 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       const boardId = normalizeBoardId(board);
       const writeToken = this.refreshWriteReceipt();
       const revision = this.cardsRevision;
-      const cached = sessionKey === undefined ? this.cardLists.get(boardId) : undefined;
+      const cacheable = sessionKey === undefined && after === undefined;
+      const cached = cacheable ? this.cardLists.get(boardId) : undefined;
       if (cached) {
         return cached;
       }
       const pending: ReturnType<WorkboardBoardStore["listCards"]> = Promise.all([
-        sessionKey === undefined
-          ? this.list({ boardId })
-          : readCards(this.store, { kind: "session-links", sessionKey, boardId }),
+        this.store.entries({ kind: "page", boardId, sessionKey, after, limit: 101 }),
         this.listBoards(),
       ])
-        .then(([cards, { boards }]) => {
+        .then(([entries, { boards }]) => {
+          const cards = entries.slice(0, 100).map(({ value }) => value.card);
+          const last = cards.at(-1);
           const result = {
-            cards: cards.map(redactClaimToken),
+            cards: cards.toSorted(compareCards).map(redactClaimToken),
+            ...(entries.length > 100 && last
+              ? { nextCursor: { position: last.position, createdAt: last.createdAt, id: last.id } }
+              : {}),
             boards,
             statuses: WORKBOARD_STATUSES,
             revision: {
@@ -109,12 +116,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
           return result;
         })
         .catch((error: unknown) => {
-          if (sessionKey === undefined) {
+          if (cacheable) {
             this.cardLists.delete(boardId);
           }
           throw error;
         });
-      if (writeToken !== undefined && sessionKey === undefined) {
+      if (writeToken !== undefined && cacheable) {
         this.cardLists.set(boardId, pending);
       }
       return pending;

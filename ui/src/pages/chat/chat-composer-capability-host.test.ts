@@ -1,10 +1,11 @@
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -14,6 +15,7 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerCapabilityHost,
   ChatComposerCapabilityDialogs,
@@ -51,7 +53,7 @@ function capabilityHarness(
   request: ReturnType<typeof vi.fn>,
   snapshot: ConfigSnapshot = { appliedConfigHash: "config-a", runtimeConfig: {} },
 ) {
-  const host = new ChatComposerCapabilityHost(vi.fn());
+  const host = new ChatComposerCapabilityHost();
   const context = createContext(snapshot);
   const state = createState();
   state.client = { request } as unknown as GatewayBrowserClient;
@@ -173,33 +175,16 @@ function createAddServerHarness(
     container.remove();
     sessions.dispose();
   });
-  const settled = deferred();
-  let submitted = false;
-  const [revision, setRevision] = createSignal(0);
-  let paint = () => {};
-  const host = new ChatComposerCapabilityHost(() => {
-    paint();
-    if (
-      submitted &&
-      !container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled
-    ) {
-      settled.resolve();
-    }
-  });
+  const host = new ChatComposerCapabilityHost();
   mountSolid(
-    () =>
-      createComponent(ChatComposerCapabilityDialogs, {
-        read: () => host.dialogView(context, state, session),
-        get revision() {
-          return { value: revision() };
-        },
-      }),
+    () => {
+      const capabilities = projectOwner(host, (owner) => owner);
+      return createComponent(ChatComposerCapabilityDialogs, {
+        read: () => capabilities.read().dialogView(context, state, session),
+      });
+    },
     { container },
   );
-  paint = () => {
-    setRevision((value) => value + 1);
-    flush();
-  };
   host.props(context, state, session, "main").onAddServer?.();
   return {
     container,
@@ -216,6 +201,7 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
+      await waitForSolid(() => expect(query("form")).not.toBeNull());
       const form = query("form");
       container
         .querySelector<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!
@@ -225,9 +211,8 @@ function createAddServerHarness(
       container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
         server.transport;
       container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = server.target;
-      submitted = true;
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      await settled.promise;
+      await waitForSolid(() => expect(host.dialogView(context, state, session).busy).toBe(false));
     },
   };
 }
@@ -337,7 +322,7 @@ describe("ChatComposerCapabilityHost", () => {
   });
 
   it("keeps Everywhere selectable while a missing session row blocks session submit", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
+    const host = new ChatComposerCapabilityHost();
     const context = createContext({ runtimeConfig: {} });
     const state = createState();
     host.props(context, state, undefined, "main").onAddServer?.();
@@ -346,7 +331,6 @@ describe("ChatComposerCapabilityHost", () => {
       () =>
         createComponent(ChatComposerCapabilityDialogs, {
           read: () => host.dialogView(context, state, undefined),
-          revision: {},
         }),
       { container },
     );

@@ -4202,7 +4202,7 @@ ${step.run}`,
     );
     const install = requiredWorkflowStep(steps, "Install actionlint");
 
-    expect(setupGo.with).toEqual({ "go-version": "1.27.1", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.2", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expectIncludes(install.run, [
       `ACTIONLINT_REVISION="${revision}"`,
@@ -5183,14 +5183,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       label: "current",
       frozenTarget: false,
       compatibilityTarget: false,
-      policy: "bun-compatible",
+      policy: "bun-all",
       shards: [1, 2, 3],
     },
     {
       label: "frozen current",
       frozenTarget: true,
       compatibilityTarget: false,
-      policy: "dual",
+      policy: "dual-all",
       shards: [1, 2, 3],
     },
   ])("executes the $label standalone UI envelope", (scenario) => {
@@ -5258,8 +5258,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     // Hosted rows (full-release dispatches, github backend, hybrid retries,
     // fork PRs) run the Control UI suites slower than Blacksmith; a frozen
     // full-release dispatch measured 15-20 min per shard against a 20 min cap.
+    const runtimePasses = scenario.policy === "dual-all" ? 2 : 1;
     expect(evaluateWorkflowExpression(ui["timeout-minutes"], context)).toBe(
-      scenario.frozenTarget ? 35 : 20,
+      (scenario.frozenTarget ? 35 : 20) * runtimePasses,
     );
     for (const override of [
       { runnerBackend: "github" },
@@ -5267,7 +5268,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       { eventName: "pull_request", headRepository: "contributor/openclaw" },
     ] as const) {
       expect(evaluateWorkflowExpression(ui["timeout-minutes"], { ...context, ...override })).toBe(
-        35,
+        35 * runtimePasses,
       );
     }
     expect(
@@ -5276,7 +5277,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         eventName: "workflow_dispatch",
         preflightOutputs: { ...context.preflightOutputs, ci_shape: "main" },
       }),
-    ).toBe(20);
+    ).toBe(20 * runtimePasses);
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui");
 
     const root = tempDirs.make("openclaw-ui-workflow-");
@@ -5921,9 +5922,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
-    );
-    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
-      "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
     );
     const checkLint = workflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",

@@ -32,6 +32,7 @@ export function buildRestartRecoveryExpectedState(
     restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
     restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
     restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
+    restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
     restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
@@ -91,6 +92,10 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
         isDeepStrictEqual(
           selected.entry.restartRecoveryOperatorSource,
           expectedState.restartRecoveryOperatorSource,
+        ) &&
+        isDeepStrictEqual(
+          selected.entry.restartRecoveryRequesterSource,
+          expectedState.restartRecoveryRequesterSource,
         ) &&
         selected.entry.restartRecoverySourceIngress ===
           expectedState.restartRecoverySourceIngress &&

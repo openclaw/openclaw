@@ -20,7 +20,7 @@ describe("heartbeat wake owner resolution", () => {
         source: "interval",
         intent: "scheduled",
         reason: "interval",
-        deps: { getQueueSize: () => 0, nowMs: () => 0 },
+        deps: { nowMs: () => 0 },
       });
 
       expect(result).not.toEqual({ status: "skipped", reason: "disabled" });
