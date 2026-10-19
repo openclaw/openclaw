@@ -1,5 +1,6 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { filterStringEntries } from "@openclaw/normalization-core";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { applyClawAddPlanStateless } from "../claws/add-stateless.js";
 import { CLAW_ADD_RESULT_SCHEMA_VERSION, ClawAddMutationError } from "../claws/add.js";
@@ -138,7 +139,9 @@ export async function runClawsInspectCommand(
     return;
   }
   runtime.log(`Claw: ${result.source.name}@${result.source.version}`);
-  runtime.log(`Agent: ${result.manifest.agent.name ?? result.manifest.agent.id}`);
+  runtime.log(
+    `Agent: ${sanitizeTerminalText(result.manifest.agent.name ?? result.manifest.agent.id)}`,
+  );
   runtime.log(`Packages: ${result.manifest.packages.length}`);
   runtime.log(`Extension requirements: ${extensionPlan.extensions.length}`);
   for (const extension of extensionPlan.extensions) {

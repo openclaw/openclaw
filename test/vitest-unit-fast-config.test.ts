@@ -148,11 +148,11 @@ describe("unit-fast vitest lane", () => {
       console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads, fullInventoryReads: gitLsFilesCalls }));
       const { resolveCiTestRuntimeSelections } = await import("./scripts/lib/ci-test-runtime.mts");
       const runtimeSelections = ["unit-fast", "unit-fast-isolated"].map((name, index) => ({
-        target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-compatible"),
+        target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-all"),
         group: resolveCiTestRuntimeSelections({
           configs: ["test/vitest/vitest." + name + ".config.ts"],
           includePatterns: selectedTests,
-        }, "bun-compatible"),
+        }, "bun-all"),
       }));
       console.log("UNIT_FAST_RUNTIME_PROBE", JSON.stringify({ runtimeSelections, unselectedFileReads }));
       hookFileReads = 0;
@@ -263,12 +263,7 @@ describe("unit-fast vitest lane", () => {
       runtimeSelections: [
         {
           target: [{ runtime: "bun" }],
-          group: [
-            {
-              runtime: "bun",
-              includePatterns: ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
-            },
-          ],
+          group: [{ runtime: "bun" }],
         },
         {
           target: [{ runtime: "bun" }],
@@ -560,13 +555,16 @@ describe("unit-fast vitest lane", () => {
     expect(contractsInclude).toEqual(pluginContractPatterns);
   });
 
-  it("routes unit-fast source files to their unit-fast sibling tests", () => {
+  it("routes light sibling tests without pulling stateful owner suites into unit-fast", () => {
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/text-chunking.ts")).toBe(
       "src/plugin-sdk/text-chunking.test.ts",
     );
     expect(resolveUnitFastTestIncludePattern("src/commands/text-format.ts")).toBe(
       "src/commands/text-format.test.ts",
     );
+    expect(
+      resolveUnitFastTestIncludePattern("src/infra/heartbeat-runner.exact-session-busy.test.ts"),
+    ).toBeNull();
   });
 
   it("routes audited stateful-looking tests through the isolated fast lane", () => {

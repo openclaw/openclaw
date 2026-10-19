@@ -1,39 +1,115 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
+import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
+import {
+  findAssistantTranscriptEventInDatabase,
+  readTranscriptEventId,
+  readTranscriptEventMessage,
+  readTranscriptIdentityByEventId,
+} from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { TRANSCRIPT_INSERT_BATCH_SIZE, transcriptEventJsonSql } from "./transcript-payload.js";
+
+export type TranscriptIdentityInsertRow = NonNullable<
+  ReturnType<typeof readTranscriptEventIdentity>
+> & { seq: number; createdAt: number };
 
 export function createTranscriptIdentityInserter(
   database: OpenClawAgentDatabase,
   sessionId: string,
   ignoreConflicts: boolean,
 ) {
-  return prepareSqliteQuerySync<
-    NonNullable<ReturnType<typeof readTranscriptEventIdentity>> & { seq: number; createdAt: number }
-  >(database.db, (parameter) =>
+  // Each executor is used only with the chunk length that defines its bound indexes.
+  const prepare = (count: number) =>
+    prepareSqliteQuerySync<readonly TranscriptIdentityInsertRow[]>(database.db, (parameter) =>
+      getSessionKysely(database.db)
+        .insertInto("transcript_event_identities")
+        .values(
+          Array.from({ length: count }, (_, index) => ({
+            session_id: sessionId,
+            event_id: parameter((rows) => rows[index]!.eventId),
+            seq: parameter((rows) => rows[index]!.seq),
+            event_type: parameter((rows) => rows[index]!.eventType),
+            parent_id: parameter((rows) => rows[index]!.parentId),
+            // An unowned key is SQL NULL, also the schema default when previously omitted.
+            message_idempotency_key: parameter((rows) => rows[index]!.messageIdempotencyKey),
+            created_at: parameter((rows) => rows[index]!.createdAt),
+          })),
+        )
+        .$if(ignoreConflicts, (query) =>
+          query.onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
+        ),
+    );
+  const inserts = new Map<number, ReturnType<typeof prepare>>();
+  const batch = (rows: readonly TranscriptIdentityInsertRow[]) => {
+    for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+      const chunk = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+      let insert = inserts.get(chunk.length);
+      if (!insert) {
+        insert = prepare(chunk.length);
+        inserts.set(chunk.length, insert);
+      }
+      insert(chunk);
+    }
+  };
+  return Object.assign((row: TranscriptIdentityInsertRow) => batch([row]), { batch });
+}
+
+/** Prepared arrays can resolve all conflicts before their synchronous append loop. */
+export function readTranscriptAppendIdentities(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  eventIds: readonly string[],
+  keys: readonly string[],
+) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor?.transcript.complete) {
+    const selected = new Map(
+      eventIds.flatMap((eventId) => {
+        const row = actor.transcript.identities.get(eventId);
+        return row ? [[eventId, row] as const] : [];
+      }),
+    );
+    const remainingKeys = new Set(keys);
+    if (remainingKeys.size > 0) {
+      for (const row of actor.transcript.identities.values()) {
+        if (
+          row.message_idempotency_key !== null &&
+          remainingKeys.delete(row.message_idempotency_key)
+        ) {
+          selected.set(row.event_id, row);
+          if (remainingKeys.size === 0) {
+            break;
+          }
+        }
+      }
+    }
+    return [...selected.values()];
+  }
+  return executeSqliteQuerySync(
+    database.db,
     getSessionKysely(database.db)
-      .insertInto("transcript_event_identities")
-      .values({
-        session_id: sessionId,
-        event_id: parameter((row) => row.eventId),
-        seq: parameter((row) => row.seq),
-        event_type: parameter((row) => row.eventType),
-        parent_id: parameter((row) => row.parentId),
-        // An unowned key is SQL NULL, also the schema default when previously omitted.
-        message_idempotency_key: parameter((row) => row.messageIdempotencyKey),
-        created_at: parameter((row) => row.createdAt),
-      })
-      .$if(ignoreConflicts, (query) =>
-        query.onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
-      ),
-  );
+      .selectFrom("transcript_event_identities")
+      .select(["event_id", "seq", "message_idempotency_key"])
+      .where("session_id", "=", sessionId)
+      .where((eb) => {
+        const keyMatch =
+          keys.length === 0
+            ? eb.lit(false)
+            : eb("message_idempotency_key", "in", keys.length <= 64 ? keys : sqliteStringSet(keys));
+        return eventIds.length > 0
+          ? eb.or([eb("event_id", "in", sqliteStringSet(eventIds)), keyMatch])
+          : keyMatch;
+      }),
+  ).rows;
 }
 
 export function readIdempotencyKeyOwner(
@@ -50,21 +126,11 @@ export function readIdempotencyKeyOwner(
       return row ? { eventId: row.event_id, seq: row.seq } : undefined;
     }
   }
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_event_identities")
-      .select(["event_id", "seq"])
-      .where("session_id", "=", sessionId)
-      .where("message_idempotency_key", "=", idempotencyKey)
-      .orderBy("seq", "desc")
-      .limit(1),
-  );
+  const row = readTranscriptAppendIdentities(database, sessionId, [], [idempotencyKey])[0];
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
 }
 
-export function readTranscriptMessageByIdentity(
+function readTranscriptMessageByIdentity(
   database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   identity: { eventId: string; seq: number },
@@ -112,5 +178,25 @@ export function readTranscriptEventIdentity(event: unknown) {
         parentId: typeof event.parentId === "string" ? event.parentId : null,
         messageIdempotencyKey: readMessageIdempotencyKey(event.message),
       }
+    : undefined;
+}
+
+export function readTranscriptMessageByScopedIdempotencyKey(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  scope: ResolvedTranscriptScope,
+  idempotencyKey: string,
+  lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
+): { messageId: string; message: unknown } | undefined {
+  if (lookup !== "scan-assistant") {
+    const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
+    return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
+  }
+  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
+  if (!found) {
+    return undefined;
+  }
+  const message = readTranscriptEventMessage(found.event);
+  return message
+    ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
     : undefined;
 }

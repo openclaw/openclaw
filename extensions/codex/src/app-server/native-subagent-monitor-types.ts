@@ -270,6 +270,8 @@ export type ThreadRecovery = {
 
 export type NativeDescendantCancellation = Parameters<DescendantCancellation>[0] & {
   parentThreadId: string;
+  /** Optional native binding guard; persistence compares the row inside its own mutation. */
+  assertBindingCurrent?: () => void;
 };
 
 export type MonitorOptions = {

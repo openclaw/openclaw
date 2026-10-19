@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -13,11 +14,14 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
  */
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import {
   assertOperatorModelAllowed,
@@ -161,6 +165,7 @@ async function runCliIsolatedCompletion(
   provider: string,
   modelProvider: string,
   diagnostics: IsolatedCompletionDiagnostics,
+  remainingTimeoutMs: () => number,
 ): Promise<IsolatedCompletionResult> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
@@ -209,7 +214,7 @@ async function runCliIsolatedCompletion(
             config,
             prompt: request.prompt,
             extraSystemPrompt: request.systemPrompt,
-            timeoutMs: request.timeoutMs,
+            timeoutMs: remainingTimeoutMs(),
             runId: sessionId,
             provider,
             modelProvider,
@@ -256,7 +261,7 @@ async function runCliIsolatedCompletion(
           );
         }
         const text = payloads
-          .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
+          .filter((payload) => !payload.isReasoning && payload.text !== undefined)
           .map((payload) => payload.text ?? "")
           .join("\n")
           .trim();
@@ -346,8 +351,26 @@ function emitIsolatedCompletionUsage(params: {
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
+  const deadline = performance.now() + params.timeoutMs;
   const diagnostics = createIsolatedCompletionDiagnostics(params);
   const abortSignal = params.abortSignal;
+  const timeout = new AbortController();
+  const signal = abortSignal ? AbortSignal.any([abortSignal, timeout.signal]) : timeout.signal;
+  const expire = () =>
+    timeout.abort(
+      new IsolatedCompletionError("runtime-unavailable", "Isolated completion timed out."),
+    );
+  const remainingTimeoutMs = () => {
+    const remaining = deadline - performance.now();
+    // Check the clock at ownership boundaries even when the timer is starved.
+    if (remaining <= 0 && !signal.aborted) {
+      expire();
+    }
+    signal.throwIfAborted();
+    // Runtime timeout APIs require integers; the shared signal keeps the exact cutoff.
+    return Math.ceil(remaining);
+  };
+  const cancelDeadline = scheduleAbsoluteDeadline(deadline, expire, () => performance.now());
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     let release: (() => Promise<void>) | undefined;
     // Register before acquisition: failed preparation can still own an async cleanup tail.
@@ -363,21 +386,31 @@ export async function runIsolatedCompletion(
       },
     });
     try {
-      const result = await runIsolatedCompletionOwned(
-        params,
-        (resources) => {
-          release = resources.release;
-        },
-        captureWorkContext,
-        diagnostics,
+      const result = await racePromiseWithAbortSignal(
+        // Timeout ends observation, not ownership of preparation or runtime cleanup.
+        () =>
+          trackAsyncWork(() =>
+            runIsolatedCompletionOwned(
+              { ...params, abortSignal: signal },
+              (resources) => {
+                release = resources.release;
+              },
+              captureWorkContext,
+              diagnostics,
+              remainingTimeoutMs,
+            ),
+          ),
+        signal,
+        (aborted) => aborted.reason,
       );
+      remainingTimeoutMs();
       diagnostics?.complete("completed");
       return result;
     } catch (error) {
       diagnostics?.complete(abortSignal?.aborted ? "aborted" : "error");
       throw error;
     }
-  });
+  }).finally(cancelDeadline);
 }
 
 async function runIsolatedCompletionOwned(
@@ -385,6 +418,7 @@ async function runIsolatedCompletionOwned(
   onAcquired: (resources: { release: () => Promise<void> }) => void,
   captureWorkContext: () => void,
   diagnostics: IsolatedCompletionDiagnostics,
+  remainingTimeoutMs: () => number,
 ): Promise<IsolatedCompletionResult> {
   // Snapshot caller choices and validators before admission yields; callbacks expire on close.
   const input = {
@@ -413,7 +447,7 @@ async function runIsolatedCompletionOwned(
     } catch (error) {
       throw input.mapOperatorAuthorizationError?.(error) ?? error;
     }
-    input.abortSignal?.throwIfAborted();
+    remainingTimeoutMs();
   };
   const resolveAuthorizedModel: typeof resolveModelAsync = async (...args) => {
     const resolved = await resolveModelAsync(...args);
@@ -494,7 +528,13 @@ async function runIsolatedCompletionOwned(
         ...context,
       });
       if (cliOwner) {
-        return await runCliIsolatedCompletion(request, cliOwner, provider, diagnostics);
+        return await runCliIsolatedCompletion(
+          request,
+          cliOwner,
+          provider,
+          diagnostics,
+          remainingTimeoutMs,
+        );
       }
 
       // Retain the validated plugin instance; load the built-in runner only when selected.
@@ -514,7 +554,6 @@ async function runIsolatedCompletionOwned(
         ...context,
         systemPrompt: request.systemPrompt,
         prompt: request.prompt,
-        timeoutMs: request.timeoutMs,
         abortSignal: request.abortSignal,
         assertCurrent,
         thinkLevel: request.thinkLevel,
@@ -627,23 +666,10 @@ async function runIsolatedCompletionOwned(
             store: harnessAuth.store,
             modelId: harnessAuth.model.id,
           });
-        // Profile rotation shares one inference budget instead of restarting it per account.
-        let deadline: number | undefined;
-        const remainingTimeoutMs = () => {
-          const remaining = deadline === undefined ? request.timeoutMs : deadline - Date.now();
-          if (remaining <= 0) {
-            throw new IsolatedCompletionError(
-              "runtime-unavailable",
-              "Isolated completion timed out.",
-            );
-          }
-          return remaining;
-        };
         let firstError: unknown;
         let priorProfileAttempted = false;
         for (const preparedAttempt of harnessAuth?.attempts ?? [undefined]) {
           assertCurrent();
-          remainingTimeoutMs();
           const attempt = preparedAttempt && selectIsolatedHarnessAuthAttempt(preparedAttempt);
           if (
             attempt &&
@@ -713,7 +739,6 @@ async function runIsolatedCompletionOwned(
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
             assertCurrent();
-            deadline ??= Date.now() + request.timeoutMs;
             const execution = modelAuthority.bind(modelForAuthorization);
             const dispatch = () =>
               harness.runIsolatedCompletionV2!({
@@ -751,7 +776,7 @@ async function runIsolatedCompletionOwned(
         }
       } else {
         const authorization = await prepareHostAuthorization(request.authProfileId);
-        const harnessParams: AgentHarnessIsolatedCompletionParams = {
+        const harnessParams: Omit<AgentHarnessIsolatedCompletionParams, "timeoutMs"> = {
           ...commonParams,
           streamParams: resolveIsolatedStreamParams(request, authorization.model),
           model: authorization.model,
@@ -762,7 +787,11 @@ async function runIsolatedCompletionOwned(
         const execution = modelAuthority.bind(modelForAuthorization);
         const dispatch = () =>
           harness.runIsolatedCompletion!(
-            prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
+            prepareIsolatedHostAuthorization(harness, {
+              ...harnessParams,
+              ...execution,
+              timeoutMs: remainingTimeoutMs(),
+            }),
           );
         result = await (diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch());
         execution.assertCurrent?.();
@@ -775,22 +804,25 @@ async function runIsolatedCompletionOwned(
         usage: result.assistant.usage,
       };
     };
-    const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
-    assertCurrent();
-    if (!result.text && input.outputTextPolicy !== "strict-visible") {
-      throw new IsolatedCompletionError(
-        "output-rejected",
-        "Isolated completion returned empty output.",
-      );
-    }
-    emitIsolatedCompletionUsage({
-      config: lease.snapshot.config,
-      agentId,
-      agentDir: lease.snapshot.agentDir,
-      purpose: input.purpose,
-      result,
+    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+      const result = await run();
+      assertCurrent();
+      if (!result.text && input.outputTextPolicy !== "strict-visible") {
+        throw new IsolatedCompletionError(
+          "output-rejected",
+          "Isolated completion returned empty output.",
+        );
+      }
+      // Usage pricing must share the completion's prepared metadata instead of rediscovering it.
+      emitIsolatedCompletionUsage({
+        config: lease.snapshot.config,
+        agentId,
+        agentDir: lease.snapshot.agentDir,
+        purpose: input.purpose,
+        result,
+      });
+      return result;
     });
-    return result;
   } finally {
     closed = true;
   }

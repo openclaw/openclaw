@@ -39,7 +39,6 @@ it("keeps the focused work summary toggle through expansion updates", async () =
     thread.render(props);
     transcript.update();
   };
-  props.onRequestUpdate = rerender;
   onTestFinished(() => {
     thread.unmount();
     transcript.dispose();

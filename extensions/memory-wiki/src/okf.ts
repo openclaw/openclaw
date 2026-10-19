@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -146,7 +147,15 @@ async function readOkfTextFile(params: {
   relativePath: string;
   warnings: ImportMemoryWikiOkfWarning[];
 }): Promise<string | null> {
-  return await params.bundleRoot.readText(params.relativePath).catch((err: unknown) => {
+  try {
+    const bytes = await params.bundleRoot.readBytes(params.relativePath);
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        "OKF document must be valid UTF-8. Convert the source to UTF-8 and retry the import.",
+      );
+    }
+    return bytes.toString("utf8");
+  } catch (err) {
     params.warnings.push({
       code: "unreadable-entry",
       path: params.relativePath,
@@ -158,7 +167,7 @@ async function readOkfTextFile(params: {
             : "Unable to read OKF concept.",
     });
     return null;
-  });
+  }
 }
 
 function splitMarkdownLinkDestination(target: string): {
@@ -361,8 +370,11 @@ export async function importMemoryWikiOkfBundle(params: {
 
   for (const relativePath of markdownFiles) {
     if (relativePath === "index.md") {
-      rootIndexContent =
-        (await readOkfTextFile({ bundleRoot, relativePath, warnings })) ?? undefined;
+      const content = await readOkfTextFile({ bundleRoot, relativePath, warnings });
+      if (content === null) {
+        throw new Error(`Cannot read OKF bundle index.md: ${warnings.at(-1)?.message}`);
+      }
+      rootIndexContent = content;
     }
     if (OKF_RESERVED_FILENAMES.has(path.posix.basename(relativePath))) {
       continue;

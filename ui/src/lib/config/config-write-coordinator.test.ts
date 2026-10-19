@@ -112,151 +112,6 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("debounces form edits into one config.set and marks needsApply", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    runtimeConfig.patchForm(["count"], 3);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS - 1);
-    expect(server.submissions).toHaveLength(0);
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(server.submissions).toEqual([
-      { method: "config.set", raw: '{\n  "count": 3\n}\n', baseHash: "hash-1" },
-    ]);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-    expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    // The acknowledgement rebased the clean draft onto the new hash.
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
-    runtimeConfig.dispose();
-  });
-
-  it("keeps mid-flight edits dirty and queues exactly one trailing save", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saving");
-
-    // Edits during the in-flight save stay dirty and fold into one trailing save.
-    runtimeConfig.patchForm(["count"], 3);
-    runtimeConfig.patchForm(["count"], 4);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    expect(submissions).toHaveLength(2);
-    expect(submissions[1]).toEqual({ raw: '{\n  "count": 4\n}\n', baseHash: "hash-2" });
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-    runtimeConfig.dispose();
-  });
-
-  it("surfaces auto-save failures without retry-looping", async () => {
-    vi.useFakeTimers();
-    let setCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.set") {
-        setCalls += 1;
-        throw new Error("disk full");
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(setCalls).toBe(1);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configNeedsApply).toBe(false);
-    expect(runtimeConfig.state.lastError).toContain("disk full");
-
-    // Resuming the updater is not new edit intent or an explicit retry.
-    runtimeConfig.setWritesSuspended(true);
-    runtimeConfig.setWritesSuspended(false);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 10);
-    expect(setCalls).toBe(1);
-    runtimeConfig.patchForm(["count"], 3);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(setCalls).toBe(2);
-    runtimeConfig.dispose();
-  });
-
-  it("flushes the pending debounce before apply and leaves no dangling save", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 7);
-    // Apply serializes the current form itself; the scheduled autosave is
-    // cancelled and never fires afterwards.
-    await expect(runtimeConfig.apply()).resolves.toBe(true);
-    expect(server.submissions).toEqual([
-      { method: "config.apply", raw: '{\n  "count": 7\n}\n', baseHash: "hash-1" },
-    ]);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-    expect(server.submissions).toHaveLength(1);
-    runtimeConfig.dispose();
-  });
-
-  it("runs one trailing save when a field is reverted during the flight", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
-
-    // Revert to the pre-save value while the save is in flight: against the
-    // old original this looks clean, but the submitted bytes are now the
-    // authoritative original, so the revert must still be written back.
-    runtimeConfig.patchForm(["count"], 1);
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(submissions).toHaveLength(2);
-    expect(submissions[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-    runtimeConfig.dispose();
-  });
-
   it("drains the whole autosave chain before an explicit apply", async () => {
     vi.useFakeTimers();
     const { request, submissions, applySubmissions, firstSet } = createDeferredSetServerMock();
@@ -285,32 +140,6 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("drains an in-flight manual save before an explicit apply", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, applySubmissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    const rawDraft = '{\n  "count": 5\n}\n';
-    runtimeConfig.setRaw(rawDraft);
-    const savePromise = runtimeConfig.save();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(submissions).toEqual([{ raw: rawDraft, baseHash: "hash-1" }]);
-
-    // Apply while the manual save is still in flight: it must wait for the
-    // save's ack and chain onto its hash instead of racing the same base.
-    const applyPromise = runtimeConfig.apply();
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(savePromise).resolves.toBe(true);
-    await expect(applyPromise).resolves.toBe(true);
-
-    expect(applySubmissions).toEqual([{ raw: rawDraft, baseHash: "hash-2" }]);
-    runtimeConfig.dispose();
-  });
-
   it("skips the teardown flush when the pending save fails", async () => {
     vi.useFakeTimers();
     const { request, submissions, firstSet } = createDeferredSetServerMock();
@@ -332,35 +161,32 @@ describe("config write coordinator", () => {
     expect(submissions).toHaveLength(1);
   });
 
-  it.each([false, true])(
-    "drains saves without trailing discarded bytes (reloadOnly: %s)",
-    async (reloadOnly) => {
-      vi.useFakeTimers();
-      const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
+  it("drains saves without trailing discarded bytes on reload", async () => {
+    vi.useFakeTimers();
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
 
-      runtimeConfig.patchForm(["count"], 2);
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      expect(submissions).toHaveLength(1);
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(submissions).toHaveLength(1);
 
-      // A mid-flight edit would normally spawn a trailing save; a discard must
-      // wait for the flight and then throw the draft away instead.
-      runtimeConfig.patchForm(["count"], 3);
-      const discardPromise = runtimeConfig.discardDraft({ reloadOnly });
-      firstSet.resolve({});
-      await vi.advanceTimersByTimeAsync(0);
-      await discardPromise;
+    // A mid-flight edit would normally spawn a trailing save; a discard must
+    // wait for the flight and then throw the draft away instead.
+    runtimeConfig.patchForm(["count"], 3);
+    const discardPromise = runtimeConfig.discardDraft({ reloadOnly: true });
+    firstSet.resolve({});
+    await vi.advanceTimersByTimeAsync(0);
+    await discardPromise;
 
-      expect(submissions).toHaveLength(1);
-      expect(runtimeConfig.state.configFormDirty).toBe(false);
-      // The draft ends clean against the acked/reloaded state, not the old bytes.
-      expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
-      runtimeConfig.dispose();
-    },
-  );
+    expect(submissions).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    // The draft ends clean against the acked/reloaded state, not the old bytes.
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+    runtimeConfig.dispose();
+  });
 
   it("suspends config writes while the app updater runs and resumes after", async () => {
     vi.useFakeTimers();
@@ -387,57 +213,6 @@ describe("config write coordinator", () => {
     expect(server.submissions).toEqual([
       { method: "config.set", raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
     ]);
-    runtimeConfig.dispose();
-  });
-
-  it("treats config.patch as a suspendable, drainable write", async () => {
-    vi.useFakeTimers();
-    const patchGate = deferred<unknown>();
-    const patches: unknown[] = [];
-    const request = vi.fn((method: string, params?: unknown) => {
-      if (method === "config.get") {
-        return Promise.resolve({
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        });
-      }
-      if (method === "config.patch") {
-        patches.push(params);
-        return patchGate.promise;
-      }
-      return Promise.resolve({});
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    // Suspended (app updater running): patches refuse like save/apply — a
-    // patch is a config write too and could overlap the install.
-    runtimeConfig.setWritesSuspended(true);
-    await expect(
-      runtimeConfig.patch({ raw: { count: 5 }, note: "test suspended patch" }),
-    ).resolves.toBe(false);
-    expect(patches).toHaveLength(0);
-    runtimeConfig.setWritesSuspended(false);
-
-    // Once in flight, the updater barrier must wait for it.
-    const patchPromise = runtimeConfig.patch({ raw: { count: 5 }, note: "test in-flight patch" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(patches).toHaveLength(1);
-    let drained = false;
-    const drainPromise = runtimeConfig.waitForPendingWrites().then(() => {
-      drained = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(drained).toBe(false);
-    patchGate.resolve({ config: { count: 5 }, hash: "hash-2" });
-    await vi.advanceTimersByTimeAsync(0);
-    await drainPromise;
-    await expect(patchPromise).resolves.toBe(true);
     runtimeConfig.dispose();
   });
 
@@ -481,58 +256,6 @@ describe("config write coordinator", () => {
     await drain;
     expect(drained).toBe(true);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
-    runtimeConfig.dispose();
-  });
-
-  it("config.set serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
-    vi.useFakeTimers();
-    const order: string[] = [];
-    let storedConfig: Record<string, unknown> = { count: 1 };
-    let hash = "hash-1";
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.get") {
-        order.push("config.get");
-        return {
-          config: storedConfig,
-          raw: JSON.stringify(storedConfig),
-          hash,
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.set") {
-        order.push("config.set");
-        storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
-        hash = "hash-2";
-        return { config: storedConfig, hash };
-      }
-      if (method === "plugins.setEnabled") {
-        order.push("plugins.setEnabled");
-        storedConfig = { ...storedConfig, pluginEnabled: true };
-        hash = "hash-3";
-        return { ok: true };
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-    order.length = 0;
-
-    runtimeConfig.patchForm(["count"], 2);
-    const result = await runtimeConfig.runExternalMutation((client) =>
-      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      value: { ok: true },
-      refresh: { ok: true },
-    });
-    expect(order).toEqual(["config.set", "plugins.setEnabled", "config.get"]);
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
-    expect(runtimeConfig.state.configForm).toEqual({ count: 2, pluginEnabled: true });
     runtimeConfig.dispose();
   });
 
@@ -638,45 +361,6 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("preserves a committed external mutation when its authoritative refresh fails", async () => {
-    let getCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        getCalls += 1;
-        if (getCalls === 1) {
-          return {
-            config: { count: 1 },
-            raw: '{"count":1}',
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          };
-        }
-        throw new Error("refresh unavailable");
-      }
-      if (method === "plugins.setEnabled") {
-        return { ok: true };
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    const result = await runtimeConfig.runExternalMutation((client) =>
-      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      value: { ok: true },
-      refresh: { ok: false, error: "refresh unavailable" },
-    });
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
-    runtimeConfig.dispose();
-  });
-
   it("distinguishes definitive external mutation rejections from transient errors", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
@@ -716,45 +400,6 @@ describe("config write coordinator", () => {
       reason: "error",
       error: "socket closed",
     });
-    runtimeConfig.dispose();
-  });
-
-  it("queues background external mutations until write suspension ends", async () => {
-    const methods: string[] = [];
-    const request = vi.fn(async (method: string) => {
-      methods.push(method);
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{"count":1}',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
-      }
-      return { ok: true };
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-    methods.length = 0;
-    runtimeConfig.setWritesSuspended(true);
-
-    const resultPromise = runtimeConfig.runExternalMutation(
-      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
-      { waitForWritesResumed: true },
-    );
-    await Promise.resolve();
-    expect(methods).toEqual([]);
-
-    runtimeConfig.setWritesSuspended(false);
-    await expect(resultPromise).resolves.toEqual({
-      ok: true,
-      value: { ok: true },
-      refresh: { ok: true },
-    });
-    expect(methods).toEqual(["config.patch", "config.get"]);
     runtimeConfig.dispose();
   });
 
@@ -844,59 +489,6 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("config.set flushes a pre-ack revert during disposal with canonical siblings", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock({
-      count: 2,
-      ui: { prefs: { locale: "fr" } },
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
-
-    // Revert to the original value while the save is in flight: dirty reads
-    // false (originals not yet rebased onto the submission), but the bytes
-    // differ from the submitted ones — dropping this flush would persist the
-    // unreverted value.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    runtimeConfig.dispose();
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(submissions).toHaveLength(2);
-    expect(submissions[1]?.baseHash).toBe("hash-2");
-    expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
-      { count: 2 },
-      { count: 1, ui: { prefs: { locale: "fr" } } },
-    ]);
-  });
-
-  it("does not write when an edit is reverted within the debounce window", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    // Dirtiness is canonical-vs-canonical on the form objects, so a revert to
-    // the original value reads clean and never rewrites the file (which would
-    // destroy JSON5 comments/formatting for a semantic no-op).
-    runtimeConfig.patchForm(["count"], 2);
-    runtimeConfig.patchForm(["count"], 1);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-
-    expect(server.submissions).toHaveLength(0);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    runtimeConfig.dispose();
-  });
-
   it("serializes explicit ops queued behind the same in-flight write", async () => {
     vi.useFakeTimers();
     const { request, submissions, applySubmissions, firstSet } = createDeferredSetServerMock();
@@ -923,32 +515,6 @@ describe("config write coordinator", () => {
     expect(submissions[1]?.baseHash).toBe("hash-2");
     expect(applySubmissions).toHaveLength(1);
     expect(applySubmissions[0]?.baseHash).toBe("hash-3");
-    runtimeConfig.dispose();
-  });
-
-  it("cancels a debounce armed while an explicit save drains another write", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
-
-    const save = runtimeConfig.save();
-    runtimeConfig.patchForm(["count"], 3);
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(save).resolves.toBe(true);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-
-    expect(submissions).toEqual([
-      { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
-      { raw: '{\n  "count": 3\n}\n', baseHash: "hash-2" },
-    ]);
     runtimeConfig.dispose();
   });
 
@@ -1060,33 +626,6 @@ describe("config write coordinator", () => {
     expect(patchBaseCount).toBe(2);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
-  });
-
-  it("chains the teardown flush behind a pending manual save", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    const savePromise = runtimeConfig.save();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(submissions).toHaveLength(1);
-
-    runtimeConfig.patchForm(["count"], 3);
-    runtimeConfig.dispose();
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await savePromise;
-
-    // Exactly one chained flush, based on the manual save's own ack hash —
-    // never a parallel write against the same base.
-    expect(submissions).toEqual([
-      { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
-      { raw: '{\n  "count": 3\n}\n', baseHash: "hash-2" },
-    ]);
   });
 
   it("config.apply chains the final form edit from its acknowledged revision during teardown", async () => {

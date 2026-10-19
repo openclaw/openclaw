@@ -16,13 +16,15 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
-import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -301,9 +303,10 @@ export async function runIndependentCreationInputCase(
       return;
     }
     const recorder = await withinTest(dispatchEntered.promise, signal);
-    releaseWork = getSessionWorkAdmissionRelease({
+    releaseWork = captureSessionControllerSettlement({
       scope: target.storePath,
       identities: [receipt.sessionKey, receipt.sessionId],
+      agentId: "main",
     });
     expect(releaseWork).toBeDefined();
     expect((await listSessionPendingInputs(scope)).total).toBe(1);
@@ -318,10 +321,13 @@ export async function runIndependentCreationInputCase(
     expect(recorder.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.senderIdentity");
     expect(recorder.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.senderName");
     if (boundary === "target abort") {
-      expectDefined(
-        context.chatAbortControllers.get(expectDefined(receipt.runId, "started run")),
-        "target abort owner",
-      ).controller.abort(new Error("target stopped"));
+      requestRpcSourceCancellation(
+        expectDefined(
+          rpcSourceTesting.get(expectDefined(receipt.runId, "started run")),
+          "target abort owner",
+        ),
+        new Error("target stopped"),
+      );
     } else if (boundary === "target replacement") {
       await sessionAccessor.replaceSessionEntry(
         { agentId: "main", sessionKey: receipt.sessionKey },

@@ -1,8 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi, type Mock } from "vitest";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 type UpdatePreflightFixture = {
   mockPackageInstallAtCaseDir: () => Promise<string>;
@@ -145,6 +147,59 @@ export function registerUpdatePreflightTests({
         ?.steps.filter((step) => step.step === "diagnostic:updater-runtime-retention")
         .map((step) => JSON.parse(step.detail!)),
     ).toEqual([retention]);
+  });
+
+  it("ends unfinished retention at --timeout with the installed package untouched", async () => {
+    const packageRoot = await mockPackageInstallAtCaseDir();
+    const manifest = await fs.readFile(`${packageRoot}/package.json`, "utf8");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let retentionSettled = false;
+    retainUpdateRuntime.mockImplementationOnce(async ({ signal }) => {
+      entered.resolve();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(toErrorObject(signal.reason, "Runtime retention cancelled")),
+            {
+              once: true,
+            },
+          );
+          void release.promise.then(resolve);
+          signal?.throwIfAborted();
+        });
+      } finally {
+        retentionSettled = true;
+      }
+    });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const work = updateCommand({ yes: true, json: true, timeout: "60" }).catch((error: unknown) => {
+      entered.reject(error);
+      return error;
+    });
+    try {
+      await entered.promise;
+      expect(retainUpdateRuntime).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() => expect(lastWriteJsonCall()).toMatchObject({ status: "error" }));
+      expect(await work).toMatchObject({ code: 1 });
+      expect(retainUpdateRuntime).toHaveBeenCalledOnce();
+      expect(retentionSettled).toBe(true);
+      expect(lastWriteJsonCall()).toMatchObject({ reason: "update-activation-timeout" });
+      expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "updater-runtime-retention", status: "failed" }),
+        ]),
+      });
+      expect(await fs.readFile(`${packageRoot}/package.json`, "utf8")).toBe(manifest);
+    } finally {
+      release.resolve();
+      await work;
+      vi.useRealTimers();
+    }
   });
 
   it("refuses insufficient initial snapshot capacity before staging", async () => {

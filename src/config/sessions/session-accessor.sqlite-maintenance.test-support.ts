@@ -39,12 +39,9 @@ type SessionMaintenancePlanningWorkerResponse = {
 export function observeSessionMaintenancePlanningWorker(hooks: {
   beforeExecute?: () => void;
   beforeAdmission?: (request: admission.SqliteWorkerAdmissionRequest) => void;
-  afterPrepare?: (
-    id: string,
-    native: { store: Pick<SqliteWorkerStore<SqliteWorkerOperations>, "close"> },
-  ) => void | Promise<void>;
-  beforeRelease?: (id: string) => void | Promise<void>;
-  afterRelease?: (id: string) => void | Promise<void>;
+  afterPrepare?: (native: {
+    store: Pick<SqliteWorkerStore<SqliteWorkerOperations>, "close">;
+  }) => void | Promise<void>;
   afterExecute?: (
     result: SessionMaintenancePlanningWorkerResponse,
     native: {
@@ -79,38 +76,9 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
                 if (planning) {
                   hooks.beforeExecute?.();
                 }
-                const preparationCommand =
-                  command.type === "session.maintenance.prepare" ||
-                  command.type === "session.maintenance.release";
-                const preparationId =
-                  preparationCommand &&
-                  isRecord(command.input) &&
-                  typeof command.input.id === "string"
-                    ? command.input.id
-                    : undefined;
-                if (preparationCommand && preparationId === undefined) {
-                  throw new Error("Real maintenance preparation omitted its private identity");
-                }
-                if (
-                  command.type === "session.maintenance.release" &&
-                  preparationId !== undefined &&
-                  hooks.beforeRelease
-                ) {
-                  await hooks.beforeRelease(preparationId);
-                }
                 const result = await worker.execute(command, options);
-                if (
-                  command.type === "session.maintenance.prepare" &&
-                  preparationId !== undefined &&
-                  hooks.afterPrepare
-                ) {
-                  await hooks.afterPrepare(preparationId, { store: target });
-                } else if (
-                  command.type === "session.maintenance.release" &&
-                  preparationId !== undefined &&
-                  hooks.afterRelease
-                ) {
-                  await hooks.afterRelease(preparationId);
+                if (command.type === "session.maintenance.prepare") {
+                  await hooks.afterPrepare?.({ store: target });
                 }
                 if (planning) {
                   if (!isRecord(result) || typeof result.workerThreadId !== "number") {

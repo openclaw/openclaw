@@ -143,9 +143,13 @@ export function createChatComposerContext(
         : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")
           : t("chat.composer.working", { name: assistantName });
-  // Keep run phases accessible alongside the transcript and working indicator.
+  const cancellationCaveat =
+    composerRunStatus?.phase === "interrupted" && composerRunStatus.localModelMayStillBeFinishing
+      ? t("chat.composer.localCancellationCaveat")
+      : null;
+  // The visible caveat owns its announcement; keep other run phases accessible.
   const runStatusAnnouncement =
-    composerRunStatus == null
+    composerRunStatus == null || cancellationCaveat
       ? ""
       : composerRunStatus.phase === "in-progress"
         ? inProgressLabel
@@ -594,6 +598,7 @@ export function createChatComposerContext(
     acceptPrediction,
     dismissPrediction: () => prediction?.dismiss(),
     runStatusAnnouncement,
+    cancellationCaveat,
     sendShortcut,
     questionPanelProps,
     showComposer,

@@ -20,17 +20,6 @@ export type BoardSessionSurfaceProps = {
   widgetFrameUrl: BoardWidgetFrameUrl;
 };
 
-let boardViewLoad: Promise<unknown> | null = null;
-
-export async function ensureBoardViewElement(): Promise<boolean> {
-  if (customElements.get("openclaw-board-view")) {
-    return false;
-  }
-  boardViewLoad ??= import("../../components/board/board-view.ts");
-  await boardViewLoad;
-  return true;
-}
-
 export function BoardSessionSurface(props: BoardSessionSurfaceProps & { elementReady?: boolean }) {
   const active = usePanePresentation(() => props.active);
   return (

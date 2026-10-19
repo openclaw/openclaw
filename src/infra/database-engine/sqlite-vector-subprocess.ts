@@ -2,6 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { serialize } from "node:v8";
 import { createPermitPool } from "../../shared/permit-pool.js";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
+import {
+  assertChildRuntimeAvailable,
+  classifyChildRuntimeFailure,
+} from "../child-runtime-viability.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../sqlite-handle-lifecycle.js";
@@ -51,6 +55,7 @@ const children = new Map<
   {
     child: ChildProcessWithoutNullStreams;
     idleTimer?: ReturnType<typeof setTimeout>;
+    started?: boolean;
     retire: () => void;
   }
 >();
@@ -183,6 +188,7 @@ async function runAdmittedVectorKnn<Row>(
     }
     let child;
     try {
+      assertChildRuntimeAvailable();
       const childUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteVector);
       child = spawn(process.execPath, resolveRuntimeWorkerArgv(childUrl), {
         env: buildChildEnv(),
@@ -192,9 +198,12 @@ async function runAdmittedVectorKnn<Row>(
       });
     } catch (error) {
       releaseAdmission();
-      throw new VectorKnnSubprocessError(
-        error instanceof Error ? error.message : String(error),
-        "unavailable",
+      throw (
+        classifyChildRuntimeFailure({ error }) ??
+        new VectorKnnSubprocessError(
+          error instanceof Error ? error.message : String(error),
+          "unavailable",
+        )
       );
     }
     worker = {
@@ -234,6 +243,7 @@ async function runAdmittedVectorKnn<Row>(
     let closed = false;
     let callerSettled = false;
     let terminationReason: Error | undefined;
+    let nativeError: Error | undefined;
     let killExitTimer: ReturnType<typeof setTimeout> | undefined;
 
     const settleCaller = (action: () => void) => {
@@ -319,6 +329,7 @@ async function runAdmittedVectorKnn<Row>(
               "protocol",
             );
           }
+          ownedWorker.started = true;
           const result = parseChildResult(
             Buffer.concat(chunks),
             params.request.limit,
@@ -348,6 +359,7 @@ async function runAdmittedVectorKnn<Row>(
     };
     child.stdin.on("error", onStdinError);
     const onError = (error: Error) => {
+      nativeError = error;
       requestTermination(new VectorKnnSubprocessError(error.message, "unavailable"));
     };
     child.once("error", onError);
@@ -361,6 +373,16 @@ async function runAdmittedVectorKnn<Row>(
       }
       params.signal?.removeEventListener("abort", abort);
       settleCaller(() => {
+        const runtimeFailure = classifyChildRuntimeFailure({
+          error: nativeError ?? terminationReason,
+          stderr: Buffer.concat(stderrChunks).toString("utf8"),
+          signal,
+          started: ownedWorker.started,
+        });
+        if (runtimeFailure) {
+          reject(runtimeFailure);
+          return;
+        }
         if (terminationReason) {
           reject(terminationReason);
           return;

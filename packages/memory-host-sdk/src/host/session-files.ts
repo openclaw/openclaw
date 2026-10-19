@@ -480,7 +480,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. Removal in the first January 2027 stable release. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},

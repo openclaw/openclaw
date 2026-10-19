@@ -51,16 +51,6 @@ export function UsageQuerySection(props: {
               {t("usage.filters.clear")}
             </button>
           ) : undefined}
-          <span class="usage-query-hint">
-            {!props.hasOverviewData
-              ? undefined
-              : props.hasQuery
-                ? t("usage.query.matching", {
-                    shown: String(props.matchingSessions),
-                    total: String(props.totalSessions),
-                  })
-                : t("usage.query.inRange", { total: String(props.totalSessions) })}
-          </span>
         </div>
       </div>
       <div class="usage-filter-row">
@@ -71,11 +61,23 @@ export function UsageQuerySection(props: {
               label={t(`usage.filters.${filterKey}`)}
               options={props.filterOptions[filterKey]}
               queryDraft={props.filters.queryDraft}
+              queryTerms={props.queryTerms}
               onQueryDraftChange={props.actions.onQueryDraftChange}
             />
           )}
         </For>
         <span class="usage-query-hint">{t("usage.query.tip")}</span>
+        {/* Last in the row, so the count arriving with data moves nothing. */}
+        <span class="usage-query-hint usage-query-count">
+          {!props.hasOverviewData
+            ? undefined
+            : props.hasQuery
+              ? t("usage.query.matching", {
+                  shown: String(props.matchingSessions),
+                  total: String(props.totalSessions),
+                })
+              : t("usage.query.inRange", { total: String(props.totalSessions) })}
+        </span>
       </div>
       {props.queryTerms.length > 0 ? (
         <div class="usage-query-chips">

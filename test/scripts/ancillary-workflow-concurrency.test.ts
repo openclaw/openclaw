@@ -10,99 +10,63 @@ type ManualPolicy =
   | { mode: "absent" }
   | { mode: "isolated per-run" | "same-SHA cancels" | "same-ref queues"; group: string };
 
-const WORKFLOWS: {
+type WorkflowPolicy = {
   file: string;
   prGroup: string;
   manual: ManualPolicy;
   manualAdmission?: string;
   push?: { group: string; cancel: boolean };
   convertToDraft?: true;
-}[] = [
-  {
-    file: ".github/workflows/ci-check-testbox.yml",
-    prGroup: "Blacksmith Testbox-pr-v1-123",
-    manual: { mode: "isolated per-run", group: "Blacksmith Testbox-manual-v1-201" },
+};
+const fixtureSha = "a".repeat(40);
+const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
+const WORKFLOWS: WorkflowPolicy[] = [
+  ...[
+    ["ci-check-testbox", "Blacksmith Testbox"],
+    ["ci-check-arm-testbox", "Blacksmith ARM Testbox"],
+    ["ci-build-artifacts-testbox", "Blacksmith Build Artifacts Testbox"],
+  ].map(([name, label]) => ({
+    file: workflowPath(name!),
+    prGroup: `${label}-pr-v1-123`,
+    manual: { mode: "isolated per-run" as const, group: `${label}-manual-v1-201` },
     manualAdmission: "admission",
-  },
+  })),
+  ...[
+    ["ios-periphery", "ios-periphery-iOS Periphery Dead Code"],
+    ["macos-periphery", "macos-periphery-macOS Periphery Dead Code"],
+    ["shared-openclawkit-periphery", "shared-openclawkit-periphery"],
+    ["linux-app", "linux-app-Linux App"],
+    ["node-runtime-conformance", "node-runtime-conformance", "-pull_request", "-workflow_dispatch"],
+  ].map(([name, prefix, prSuffix = "", manualSuffix = ""]) => ({
+    file: workflowPath(name!),
+    prGroup: `${prefix}${prSuffix}-123`,
+    convertToDraft: true as const,
+    manual: { mode: "same-SHA cancels" as const, group: `${prefix}${manualSuffix}-${fixtureSha}` },
+  })),
   {
-    file: ".github/workflows/ci-check-arm-testbox.yml",
-    prGroup: "Blacksmith ARM Testbox-pr-v1-123",
-    manual: { mode: "isolated per-run", group: "Blacksmith ARM Testbox-manual-v1-201" },
-    manualAdmission: "admission",
-  },
-  {
-    file: ".github/workflows/ci-build-artifacts-testbox.yml",
-    prGroup: "Blacksmith Build Artifacts Testbox-pr-v1-123",
-    manual: { mode: "isolated per-run", group: "Blacksmith Build Artifacts Testbox-manual-v1-201" },
-    manualAdmission: "admission",
-  },
-  {
-    file: ".github/workflows/ios-periphery.yml",
-    prGroup: "ios-periphery-iOS Periphery Dead Code-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-SHA cancels",
-      group: `ios-periphery-iOS Periphery Dead Code-${"a".repeat(40)}`,
-    },
-  },
-  {
-    file: ".github/workflows/macos-periphery.yml",
-    prGroup: "macos-periphery-macOS Periphery Dead Code-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-SHA cancels",
-      group: `macos-periphery-macOS Periphery Dead Code-${"a".repeat(40)}`,
-    },
-  },
-  {
-    file: ".github/workflows/shared-openclawkit-periphery.yml",
-    prGroup: "shared-openclawkit-periphery-123",
-    convertToDraft: true,
-    manual: { mode: "same-SHA cancels", group: `shared-openclawkit-periphery-${"a".repeat(40)}` },
-  },
-  {
-    file: ".github/workflows/node-runtime-conformance.yml",
-    prGroup: "node-runtime-conformance-pull_request-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-SHA cancels",
-      group: `node-runtime-conformance-workflow_dispatch-${"a".repeat(40)}`,
-    },
-  },
-  {
-    file: ".github/workflows/linux-app.yml",
-    prGroup: "linux-app-Linux App-123",
-    convertToDraft: true,
-    manual: { mode: "same-SHA cancels", group: `linux-app-Linux App-${"a".repeat(40)}` },
-  },
-  {
-    file: ".github/workflows/website-installer-sync.yml",
+    file: workflowPath("website-installer-sync"),
     prGroup: "website-installer-sync-refs/pull/123/merge",
     convertToDraft: true,
     manual: { mode: "isolated per-run", group: "website-installer-sync-201" },
     manualAdmission: "sync-website",
   },
   {
-    file: ".github/workflows/opengrep-precise.yml",
+    file: workflowPath("opengrep-precise"),
     prGroup: "opengrep-pr-diff-OpenGrep — PR Diff-123",
     manual: { mode: "absent" },
   },
-  {
-    file: ".github/workflows/sandbox-common-smoke.yml",
-    prGroup: "Sandbox Common Smoke-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-ref queues",
-      group: "Sandbox Common Smoke-workflow_dispatch-refs/heads/main",
-    },
-    push: { group: "Sandbox Common Smoke-push-refs/heads/main", cancel: true },
-  },
-  {
-    file: ".github/workflows/plugin-init-scaffold-validation.yml",
-    prGroup: "Plugin Init Scaffold Validation-123",
-    manual: { mode: "same-ref queues", group: "Plugin Init Scaffold Validation-refs/heads/main" },
-    push: { group: "Plugin Init Scaffold Validation-push-refs/heads/main", cancel: false },
-  },
+  ...(
+    [
+      ["sandbox-common-smoke", "Sandbox Common Smoke", "-workflow_dispatch", true],
+      ["plugin-init-scaffold-validation", "Plugin Init Scaffold Validation", "", false],
+    ] as const
+  ).map(([name, label, suffix, cancel]) => ({
+    file: workflowPath(name),
+    prGroup: `${label}-123`,
+    manual: { mode: "same-ref queues" as const, group: `${label}${suffix}-refs/heads/main` },
+    push: { group: `${label}-push-refs/heads/main`, cancel },
+    convertToDraft: cancel ? (true as const) : undefined,
+  })),
 ];
 
 type Job = {
@@ -110,8 +74,6 @@ type Job = {
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
   steps: {
-    id?: string;
-    name?: string;
     if?: string;
     uses?: string;
     env?: Record<string, string>;
@@ -121,10 +83,7 @@ type Job = {
 type Concurrency = { group: string; "cancel-in-progress": string | boolean };
 type Workflow = {
   name: string;
-  on: {
-    pull_request?: { types: string[] };
-    pull_request_target?: { types: string[] };
-    issues?: { types: string[] };
+  on: Partial<Record<"pull_request" | "pull_request_target" | "issues", { types: string[] }>> & {
     workflow_dispatch?: unknown;
     schedule?: unknown;
     push?: { branches: string[] };
@@ -132,33 +91,27 @@ type Workflow = {
   concurrency?: Concurrency;
   jobs: Record<string, Job>;
 };
+type GithubEvent = {
+  action?: string;
+  pull_request?: {
+    number: number;
+    draft: boolean;
+    head: { sha: string };
+    user?: { login?: string; type?: string };
+    author_association?: string;
+  };
+  issue?: { number: number; author_association?: string };
+  changes?: Record<string, unknown>;
+};
 type Github = {
   workflow: string;
   repository: string;
-  event_name:
-    | "pull_request"
-    | "pull_request_target"
-    | "issues"
-    | "workflow_dispatch"
-    | "push"
-    | "schedule";
+  event_name: keyof Workflow["on"];
   run_id: number;
   sha: string;
   ref: string;
+  event: GithubEvent;
   actor?: string;
-  event: {
-    action?: string;
-    pull_request?: {
-      number: number;
-      draft: boolean;
-      head: { sha: string };
-      user?: { login?: string; type?: string };
-      author_association?: string;
-    };
-    issue?: { number: number; author_association?: string };
-    comment?: { user?: { type?: string } };
-    changes?: Record<string, unknown>;
-  };
 };
 
 function pr(
@@ -170,23 +123,38 @@ function pr(
   number = 123,
 ): Github {
   return {
-    workflow: workflow.name,
-    repository: "openclaw/openclaw",
+    ...refEvent(workflow, "workflow_dispatch", runId, "e", `refs/pull/${number}/merge`),
     event_name: "pull_request",
-    run_id: runId,
-    sha: "e".repeat(40),
-    ref: `refs/pull/${number}/merge`,
     event: { action, pull_request: { number, draft, head: { sha: head.repeat(40) } } },
   };
 }
 
+function targetEvent(
+  workflow: Workflow,
+  runId: number,
+  action: string,
+  changes?: Github["event"]["changes"],
+  draft = false,
+): Github {
+  const github = pr(workflow, runId, action, draft);
+  github.event_name = "pull_request_target";
+  github.actor = "contributor";
+  github.event.changes = changes;
+  Object.assign(github.event.pull_request!, {
+    user: { login: "contributor", type: "User" },
+    author_association: "NONE",
+  });
+  return github;
+}
+
 function refEvent(
   workflow: Workflow,
-  eventName: "workflow_dispatch" | "push" | "schedule",
+  eventName: keyof Workflow["on"],
   runId: number,
   sha = "a",
   ref = "refs/heads/main",
 ): Github {
+  const event: GithubEvent = {};
   return {
     workflow: workflow.name,
     repository: "openclaw/openclaw",
@@ -194,7 +162,8 @@ function refEvent(
     run_id: runId,
     sha: sha.repeat(40),
     ref,
-    event: {},
+    event,
+    actor: undefined,
   };
 }
 
@@ -219,12 +188,29 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
   return workflow.concurrency;
 }
 
-// Like ci-workflow-guards, this uses VM evaluation, not a general Actions parser.
-// Supported here: typed primitive ==/!=/!/&&/||, parentheses, property lookup,
-// format, JSON/string helpers, always()/cancelled(), and embedded interpolation. Missing
-// properties are empty strings; hyphenated property names are single lookups.
-// Expression fixtures avoid coercion/case-folding and escaped strings, where JS
-// differs. Admission separately normalizes concurrency group names to lowercase.
+const readWorkflow = (file: string) => parse(readFileSync(file, "utf8")) as Workflow;
+type Admission = Awaited<ReturnType<typeof admission>>;
+const groupsOf = (runs: Admission[]) => runs.map(({ group }) => group);
+const cancellations = (runs: Admission[]) => runs.map(({ cancel }) => cancel);
+const uniqueGroups = (values: string[]) => new Set(values.map((group) => group.toLowerCase())).size;
+const nonScopeJobs = (result: Admission) =>
+  Object.entries(result.eligibility.jobs).filter(([id]) => id !== "scope");
+const evaluateRecord = (values: Record<string, string>, context: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, evaluate(value, context)]));
+
+function expectPolicies(runs: Admission[], group: string, cancel: boolean) {
+  for (const run of runs) {
+    expect(run).toMatchObject({ group, cancel });
+  }
+}
+
+function expectRejected(run: Admission) {
+  expect(run.group).toBe("");
+  expect(Object.values(run.eligibility.jobs).every((eligible) => !eligible)).toBe(true);
+}
+
+// Evaluate the fixtures' Actions subset; missing properties are empty strings.
+// Fixtures avoid JS/Actions coercion differences; admission folds group case.
 function expression(source: string, context: Record<string, unknown>): unknown {
   return runInNewContext(
     source.replace(
@@ -306,11 +292,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         await runInNewContext(`(async () => {\n${step.with.script}\n})()`, {
           require: createRequire(import.meta.url),
           context: { eventName: github.event_name, payload: github.event },
-          process: {
-            env: Object.fromEntries(
-              Object.entries(step.env ?? {}).map(([key, value]) => [key, evaluate(value, context)]),
-            ),
-          },
+          process: { env: evaluateRecord(step.env ?? {}, context) },
           core: {
             info() {},
             warning() {},
@@ -321,13 +303,9 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
           exec: {
             getExecOutput: async (command: string, args: string[]) => {
               expect(command).toBe("git");
-              expect(args.filter((arg) => arg !== "--no-renames").slice(0, 5)).toEqual([
-                "diff",
-                "--quiet",
-                "HEAD^1",
-                "HEAD",
-                "--",
-              ]);
+              expect(args.filter((arg) => arg !== "--no-renames").slice(0, 5)).toEqual(
+                "diff --quiet HEAD^1 HEAD --".split(" "),
+              );
               diffCalls++;
               return { exitCode: 1 }; // A scoped change; path selection has its own suite.
             },
@@ -336,12 +314,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
       }
     }
     needs.scope = {
-      outputs: Object.fromEntries(
-        Object.entries(scope.outputs ?? {}).map(([key, value]) => [
-          key,
-          evaluate(value, { steps: { scope: { outputs } } }),
-        ]),
-      ),
+      outputs: evaluateRecord(scope.outputs ?? {}, { steps: { scope: { outputs } } }),
       result: jobs.scope ? "success" : "skipped",
     };
   }
@@ -378,40 +351,33 @@ async function admission(workflow: Workflow, github: Github, vars: Record<string
   };
 }
 
-function expectDraftSkipped(result: Awaited<ReturnType<typeof admission>>) {
-  for (const [id, eligible] of Object.entries(result.eligibility.jobs)) {
-    if (id !== "scope") {
-      expect(eligible, id).toBe(false);
-    }
+function expectDraftSkipped(result: Admission) {
+  for (const [id, eligible] of nonScopeJobs(result)) {
+    expect(eligible, id).toBe(false);
   }
-  expect(result.eligibility.diffCalls).toBe(0);
-  expect(result.eligibility.checkouts).toBe(0);
+  expect(result.eligibility).toMatchObject({ diffCalls: 0, checkouts: 0 });
 }
 
-function expectUseful(...results: Awaited<ReturnType<typeof admission>>[]) {
+function expectUseful(...results: Admission[]) {
   for (const result of results) {
-    expect(
-      Object.entries(result.eligibility.jobs).some(([id, eligible]) => id !== "scope" && eligible),
-    ).toBe(true);
+    expect(nonScopeJobs(result).some(([, eligible]) => eligible)).toBe(true);
   }
 }
 
 describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
   const { file, prGroup, manual, push, convertToDraft } = policy;
-  const workflow = parse(readFileSync(file, "utf8")) as Workflow;
+  const workflow = readWorkflow(file);
 
   it("admits useful and intentional draft changes together while isolating passive drafts and other PRs", async () => {
     const ready = await admission(workflow, pr(workflow, 100, "ready_for_review"));
     const newer = await admission(workflow, pr(workflow, 101, "synchronize", false, "b"));
     const other = await admission(workflow, pr(workflow, 102, "opened", false, "a", 124));
-    expect([ready.group, newer.group]).toEqual([prGroup, prGroup]);
-    expect([ready.cancel, newer.cancel, other.cancel]).toEqual([true, true, true]);
+    expectPolicies([ready, newer], prGroup, true);
+    expect(other.cancel).toBe(true);
     expect(other.group).not.toBe(prGroup);
     expectUseful(ready, newer, other);
-    for (const [id, eligible] of Object.entries(ready.eligibility.jobs)) {
-      if (id !== "scope") {
-        expect(eligible, id).toBe(id !== policy.manualAdmission);
-      }
+    for (const [id, eligible] of nonScopeJobs(ready)) {
+      expect(eligible, id).toBe(id !== policy.manualAdmission);
     }
     const passiveGroups: string[] = [];
     for (const [index, action] of [
@@ -424,15 +390,12 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       const draft = await admission(workflow, pr(workflow, 103 + index, action, true));
       expectDraftSkipped(draft);
       if (action === "converted_to_draft") {
-        expect(draft.group).toBe(prGroup);
-        expect(draft.cancel).toBe(true);
+        expectPolicies([draft], prGroup, true);
       } else {
         passiveGroups.push(draft.group);
       }
     }
-    expect(
-      new Set([prGroup, other.group, ...passiveGroups].map((group) => group.toLowerCase())).size,
-    ).toBe(6);
+    expect(uniqueGroups([prGroup, other.group, ...passiveGroups])).toBe(6);
   });
 
   it(`retains the manual contract: ${manual.mode}`, async () => {
@@ -449,16 +412,14 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     expect(runs[0]!.group).toBe(manual.group);
     expectUseful(...runs);
     expect(runs.every(({ group }) => group !== prGroup)).toBe(true);
-    expect(runs.map(({ cancel }) => cancel)).toEqual(
-      Array(4).fill(manual.mode === "same-SHA cancels"),
-    );
+    expect(cancellations(runs)).toEqual(Array(4).fill(manual.mode === "same-SHA cancels"));
     if (manual.mode === "same-ref queues") {
-      expect(runs.slice(0, 3).map(({ group }) => group)).toEqual(Array(3).fill(manual.group));
+      expect(groupsOf(runs.slice(0, 3))).toEqual(Array(3).fill(manual.group));
       expect(runs[3]!.group).toBe(manual.group.replace("refs/heads/main", "refs/heads/release"));
     } else {
       expect(runs[1]!.group === runs[0]!.group).toBe(manual.mode === "same-SHA cancels");
       expect(runs[2]!.group).not.toBe(runs[0]!.group);
-      expect(new Set(runs.slice(0, 3).map(({ group }) => group.toLowerCase())).size).toBe(
+      expect(uniqueGroups(groupsOf(runs.slice(0, 3)))).toBe(
         manual.mode === "same-SHA cancels" ? 2 : 3,
       );
     }
@@ -466,42 +427,26 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
 
   if (push) {
     it("isolates push admission from PR, hourly and manual work", async () => {
-      const enabled = await admission(workflow, refEvent(workflow, "push", 201), {
-        OPENCLAW_CI_ON_PUSH: "true",
-      });
-      const newer = await admission(workflow, refEvent(workflow, "push", 202, "b"), {
-        OPENCLAW_CI_ON_PUSH: "true",
-      });
-      expect([enabled.group, newer.group]).toEqual([push.group, push.group]);
-      expect([enabled.cancel, newer.cancel]).toEqual([push.cancel, push.cancel]);
+      const vars = { OPENCLAW_CI_ON_PUSH: "true" };
+      const enabled = await admission(workflow, refEvent(workflow, "push", 201), vars);
+      const newer = await admission(workflow, refEvent(workflow, "push", 202, "b"), vars);
+      expectPolicies([enabled, newer], push.group, push.cancel);
       const hourly = await admission(workflow, refEvent(workflow, "schedule", 203));
       const laterHourly = await admission(workflow, refEvent(workflow, "schedule", 206, "b"));
       const manualRun = await admission(workflow, refEvent(workflow, "workflow_dispatch", 204));
       const skipped = await admission(workflow, refEvent(workflow, "push", 205, "c"));
-      expect(
-        new Set(
-          [prGroup, enabled.group, hourly.group, manualRun.group].map((group) =>
-            group.toLowerCase(),
-          ),
-        ).size,
-      ).toBe(4);
+      expect(uniqueGroups([prGroup, ...groupsOf([enabled, hourly, manualRun])])).toBe(4);
       expect(skipped.group).toBe(enabled.group);
       expectUseful(enabled, newer, hourly, laterHourly, manualRun);
       expect(laterHourly.group).toBe(hourly.group);
       expect([hourly.cancel, laterHourly.cancel, manualRun.cancel]).toEqual([false, false, false]);
-      expect(
-        Object.entries(skipped.eligibility.jobs)
-          .filter(([id]) => id !== "scope")
-          .every(([, eligible]) => !eligible),
-      ).toBe(true);
+      expect(nonScopeJobs(skipped).every(([, eligible]) => !eligible)).toBe(true);
     });
   }
 });
 
 it("honors cancellation after a schedule-only scope job is skipped", () => {
-  const workflow = parse(
-    readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
-  ) as Workflow;
+  const workflow = readWorkflow(workflowPath("plugin-init-scaffold-validation"));
   const guard = workflow.jobs["validate-provider-scaffold"]!.if!;
   const context = {
     github: pr(workflow, 100, "ready_for_review"),
@@ -513,7 +458,7 @@ it("honors cancellation after a schedule-only scope job is skipped", () => {
 });
 
 describe("Labeler admission", () => {
-  const workflow = parse(readFileSync(".github/workflows/labeler.yml", "utf8")) as Workflow;
+  const workflow = readWorkflow(workflowPath("labeler"));
   const bodyChange = { body: { from: "Previous description" } };
   function event(
     runId: number,
@@ -521,33 +466,25 @@ describe("Labeler admission", () => {
     changes?: Github["event"]["changes"],
     draft = false,
   ): Github {
-    const github = pr(workflow, runId, action, draft);
-    return {
-      ...github,
-      event_name: "pull_request_target",
-      ref: "refs/heads/main",
-      event: { ...github.event, changes },
-    };
+    return { ...targetEvent(workflow, runId, action, changes, draft), ref: "refs/heads/main" };
   }
 
   it.each([
     { action: "opened", changes: undefined },
-    { action: "edited", changes: { title: { from: "Old title" } } },
-    { action: "edited", changes: { base: { ref: { from: "old-base" } } } },
-  ])(
-    "admits useful $action replacement for $changes without admitting ignored edits",
-    async ({ action, changes }) => {
-      const useful = await admission(workflow, event(100, action, changes, true));
-      expect(useful.group).toBe("Labeler-123");
-      expect(useful.cancel).toBe(true);
-      expect(useful.eligibility.jobs.label).toBe(true);
-      for (const ignored of [bodyChange, undefined]) {
-        const rejected = await admission(workflow, event(101, "edited", ignored));
-        expect(rejected.group).toBe("");
-        expect(Object.values(rejected.eligibility.jobs).every((eligible) => !eligible)).toBe(true);
-      }
-    },
-  );
+    { action: "edited", changes: { title: { from: "old" } } },
+    { action: "edited", changes: { base: { ref: { from: "old" } } } },
+  ])("admits $action/$changes but rejects irrelevant edits", async ({ action, changes }) => {
+    const useful = await admission(workflow, event(100, action, changes, true));
+    expect(useful).toMatchObject({
+      group: "Labeler-123",
+      cancel: true,
+      eligibility: { jobs: { label: true } },
+    });
+    for (const ignored of [bodyChange, undefined]) {
+      const rejected = await admission(workflow, event(101, "edited", ignored));
+      expectRejected(rejected);
+    }
+  });
 
   it("retains a non-cancelling manual ref group", async () => {
     const active = await admission(workflow, {
@@ -555,8 +492,7 @@ describe("Labeler admission", () => {
       event: { action: "edited" },
     });
     const repeated = await admission(workflow, refEvent(workflow, "workflow_dispatch", 201));
-    expect([active.group, repeated.group]).toEqual(Array(2).fill("Labeler-refs/heads/main"));
-    expect([active.cancel, repeated.cancel]).toEqual([false, false]);
+    expectPolicies([active, repeated], "Labeler-refs/heads/main", false);
     expectUseful(active, repeated);
   });
 
@@ -587,22 +523,9 @@ describe("Labeler admission", () => {
 });
 
 describe("PR context admission", () => {
-  const workflow = parse(
-    readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"),
-  ) as Workflow;
-  const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
-    ...pr(workflow, runId, action),
-    event_name: "pull_request_target",
-    event: {
-      action,
-      changes,
-      pull_request: {
-        ...pr(workflow, runId, action).event.pull_request!,
-        user: { login: "contributor", type: "User" },
-        author_association: "NONE",
-      },
-    },
-  });
+  const workflow = readWorkflow(workflowPath("real-behavior-proof"));
+  const event = (runId: number, action: string, changes?: Github["event"]["changes"]) =>
+    targetEvent(workflow, runId, action, changes);
 
   it.each([
     ["contributor", "User", "NONE"],
@@ -639,20 +562,9 @@ describe("PR context admission", () => {
 });
 
 describe("Auto response admission", () => {
-  const workflow = parse(readFileSync(".github/workflows/auto-response.yml", "utf8")) as Workflow;
-  const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
-    ...pr(workflow, runId, action),
-    event_name: "pull_request_target",
-    actor: "contributor",
-    event: {
-      action,
-      changes,
-      pull_request: {
-        ...pr(workflow, runId, action).event.pull_request!,
-        author_association: "NONE",
-      },
-    },
-  });
+  const workflow = readWorkflow(workflowPath("auto-response"));
+  const event = (runId: number, action: string, changes?: Github["event"]["changes"]) =>
+    targetEvent(workflow, runId, action, changes);
 
   it.each(["OWNER", "MEMBER", "COLLABORATOR"])(
     "rejects the owner's known %s exemption before allocation",
@@ -703,7 +615,7 @@ describe("Auto response admission", () => {
 it("isolates supported useful, passive, manual and push events across the tracked workflows", () => {
   for (const event of ["ready_for_review", "opened", "workflow_dispatch", "push"] as const) {
     const groups = WORKFLOWS.flatMap(({ file }) => {
-      const workflow = parse(readFileSync(file, "utf8")) as Workflow;
+      const workflow = readWorkflow(file);
       const github =
         event === "workflow_dispatch" || event === "push"
           ? refEvent(workflow, event, 201)

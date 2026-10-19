@@ -26,9 +26,11 @@ afterEach(() => resetGlobalHookRunner());
 it.each([
   { sourceTool: "sessions_send", hidden: true },
   { sourceTool: "subagent_announce", hidden: false },
+  { sourceTool: "subagent_announce", privateCompletion: true as const, hidden: true },
+  { sourceTool: "subagent_settle", privateCompletion: true as const, hidden: true },
 ])(
-  "preserves CLI $sourceTool output with its display policy after hooks",
-  async ({ sourceTool, hidden }) => {
+  "preserves CLI $sourceTool output with its display policy after hooks (private=$privateCompletion)",
+  async ({ sourceTool, hidden, privateCompletion }) => {
     const root = sessionDirs.make();
     const target = {
       agentId: "main",
@@ -64,6 +66,7 @@ it.each([
           runId: "cli-coordination-run",
           timeoutMs: 1_000,
           persistAssistantTranscript: true,
+          privateCompletion,
           inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
         },
         text: "The worker result passed validation",

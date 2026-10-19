@@ -217,11 +217,11 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   const plan = await resolveGatewayRunShellEnvFallbackPlan(
     startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
-  if (!plan.enabled) {
-    return { ...startupConfig, lowerPrecedenceEnv: {} };
-  }
   // Startup uses one shell-env plan; edits during this read take effect on the next start.
-  const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
+  const lowerPrecedenceEnv = plan.enabled ? await loadGatewayRunShellEnvFallback(plan) : {};
+  if (Object.keys(lowerPrecedenceEnv).length === 0) {
+    return { ...startupConfig, lowerPrecedenceEnv };
+  }
   return {
     ...(await readGatewayStartupConfig(params.startupTrace, { lowerPrecedenceEnv })),
     lowerPrecedenceEnv,
@@ -607,10 +607,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
               },
             }),
       });
-      if (killed.length === 0) {
-        // Nothing was freed; keep the no-op out of normal startup output.
-        gatewayLog.debug(`force: no listeners on port ${port}`);
-      } else {
+      if (killed.length > 0) {
         for (const proc of killed) {
           gatewayLog.info(
             `force: killed pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""} on port ${port}`,

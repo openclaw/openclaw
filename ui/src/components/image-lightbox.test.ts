@@ -231,6 +231,36 @@ describe("openclaw-image-lightbox", () => {
     expect(disconnect).toHaveBeenCalledOnce();
   });
 
+  it("uses only mounted media when switching between image and video", async () => {
+    const { modal } = await renderLightbox();
+    const image = modal.querySelector<HTMLImageElement>("img")!;
+    image.dispatchEvent(new Event("load"));
+    const disconnect = vi.fn();
+    const connectVideo = vi.fn(() => disconnect);
+    Object.assign(modal, { mediaKind: "video", connectVideo });
+    await modal.updateComplete;
+    const video = modal.querySelector("video")!;
+    await waitForSolid(() =>
+      expect(connectVideo).toHaveBeenCalledExactlyOnceWith(video, expect.any(Function), false),
+    );
+    expect(image.isConnected).toBe(false);
+
+    vi.mocked(Panzoom).mockClear();
+    image.dispatchEvent(new Event("load"));
+    image.dispatchEvent(new Event("error"));
+    expect(Panzoom).not.toHaveBeenCalled();
+
+    modal.mediaKind = "image";
+    await modal.updateComplete;
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(video.isConnected).toBe(false);
+    modal.querySelector("img")!.dispatchEvent(new Event("load"));
+    await modal.updateComplete;
+    expect(modal.querySelector('[aria-label="Zoom in"]')?.getAttribute("aria-disabled")).toBe(
+      "false",
+    );
+  });
+
   it("retires queued image work on detachment without downloading originals, then reconnects", async () => {
     const { modal } = await renderLightbox();
     const image = modal.querySelector<HTMLImageElement>("img")!;

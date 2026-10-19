@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { afterEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -53,12 +54,14 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   await requireGit(source, ["config", "user.name", "Project Test"]);
   await requireGit(source, ["config", "user.email", "project@example.invalid"]);
   await requireGit(source, ["config", "commit.gpgsign", "false"]);
-  await fs.writeFile(path.join(source, "input.txt"), "old private content\n");
-  await requireGit(source, ["add", "."]);
-  await requireGit(source, ["commit", "--quiet", "-m", "ancestor"]);
-  const ancestor = await requireGit(source, ["rev-parse", "HEAD"]);
+  const commit = async (name: string, content: string) => {
+    await fs.writeFile(path.join(source, "input.txt"), `${content} private content\n`);
+    await requireGit(source, ["add", "."]);
+    await requireGit(source, ["commit", "--quiet", "-m", name]);
+    return requireGit(source, ["rev-parse", "HEAD"]);
+  };
+  const ancestor = await commit("ancestor", "old");
   const oldBlob = await requireGit(source, ["rev-parse", "HEAD:input.txt"]);
-  await fs.writeFile(path.join(source, "input.txt"), "pinned private content\n");
   if (fixtureOptions.setupRecipe !== false) {
     await fs.mkdir(path.join(source, ".openclaw"));
     await fs.writeFile(
@@ -67,24 +70,23 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       { mode: 0o755 },
     );
   }
-  await requireGit(source, ["add", "."]);
-  await requireGit(source, ["commit", "--quiet", "-m", "pinned"]);
-  const baseCommit = await requireGit(source, ["rev-parse", "HEAD"]);
+  const baseCommit = await commit("pinned", "pinned");
   const setupRecipe =
     fixtureOptions.setupRecipe === false
       ? undefined
       : await requireGit(source, ["rev-parse", "HEAD:.openclaw/worktree-setup.sh"]);
   const tree = await requireGit(source, ["rev-parse", "HEAD^{tree}"]);
-  await fs.writeFile(path.join(source, "input.txt"), "later private content\n");
-  await requireGit(source, ["commit", "--quiet", "-am", "later"]);
-  const later = await requireGit(source, ["rev-parse", "HEAD"]);
+  const later = await commit("later", "later");
   await requireGit(root, ["clone", "--quiet", "--bare", "--no-local", source, remote]);
 
   const received = createDeferred();
   const disconnected = createDeferred();
   const mode = { reject: false, stall: false };
   const requests: string[] = [];
-  const server = http.createServer((request, response) => {
+  const serve: http.RequestListener = (request, response) => {
+    void handleRequest(request, response);
+  };
+  async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     requests.push(request.headers.authorization ?? "");
     received.resolve();
     response.once("close", disconnected.resolve);
@@ -96,49 +98,47 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       response.end(`Rejected ${TOKEN} ${AUTHORIZATION}`);
       return;
     }
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => {
-      const [pathname, query = ""] = (request.url ?? "").split("?");
-      try {
-        const output = execFileSync("git", ["http-backend"], {
-          input: Buffer.concat(chunks),
-          timeout: 10_000,
-          env: {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_GLOBAL: gitExec.gitNullConfigPath(),
-            GIT_PROJECT_ROOT: root,
-            GIT_HTTP_EXPORT_ALL: "1",
-            PATH_INFO: pathname,
-            REQUEST_METHOD: request.method,
-            QUERY_STRING: query,
-            CONTENT_TYPE: request.headers["content-type"],
-            HTTP_GIT_PROTOCOL: request.headers["git-protocol"]?.toString(),
-          },
-        });
-        const split = output.indexOf("\r\n\r\n");
-        if (split < 0) {
-          throw new Error("Synthetic Git backend omitted CGI headers");
-        }
-        for (const header of output.subarray(0, split).toString().split("\r\n")) {
-          const colon = header.indexOf(":");
-          const name = header.slice(0, colon);
-          const value = header.slice(colon + 1).trim();
-          if (name.toLowerCase() === "status") {
-            response.statusCode = Number(value.split(" ")[0]);
-          } else {
-            response.setHeader(name, value);
-          }
-        }
-        response.end(output.subarray(split + 4));
-      } catch {
-        response.writeHead(500);
-        response.end("Synthetic Git backend failed");
+    const [pathname, query = ""] = (request.url ?? "").split("?");
+    try {
+      const input = await buffer(request);
+      const output = execFileSync("git", ["http-backend"], {
+        input,
+        timeout: 10_000,
+        env: {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: gitExec.gitNullConfigPath(),
+          GIT_PROJECT_ROOT: root,
+          GIT_HTTP_EXPORT_ALL: "1",
+          PATH_INFO: pathname,
+          REQUEST_METHOD: request.method,
+          QUERY_STRING: query,
+          CONTENT_TYPE: request.headers["content-type"],
+          HTTP_GIT_PROTOCOL: request.headers["git-protocol"]?.toString(),
+        },
+      });
+      const split = output.indexOf("\r\n\r\n");
+      if (split < 0) {
+        throw new Error("Synthetic Git backend omitted CGI headers");
       }
-    });
-  });
+      for (const header of output.subarray(0, split).toString().split("\r\n")) {
+        const colon = header.indexOf(":");
+        const name = header.slice(0, colon);
+        const value = header.slice(colon + 1).trim();
+        if (name.toLowerCase() === "status") {
+          response.statusCode = Number(value.split(" ")[0]);
+        } else {
+          response.setHeader(name, value);
+        }
+      }
+      response.end(output.subarray(split + 4));
+    } catch {
+      response.writeHead(500);
+      response.end("Synthetic Git backend failed");
+    }
+  }
+  const server = http.createServer(serve);
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
@@ -154,7 +154,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     throw new Error("Synthetic Git endpoint has no TCP address");
   }
   const endpoint = `http://127.0.0.1:${address.port}/remote.git`;
-  const beforeFetch = { run: async () => {} };
   const fetches: { argv: string[]; settled: boolean }[] = [];
   const failedDiagnostics: string[] = [];
   // Only translate the admitted network boundary. Git transport, authentication,
@@ -166,7 +165,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     const fetch = { argv: [...args], settled: false };
     fetches.push(fetch);
     try {
-      await beforeFetch.run();
       const result = await executeGitCommand(
         cwd,
         args.map((arg) => (arg === URL ? endpoint : arg)),
@@ -244,7 +242,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   };
   return {
     root,
-    source,
     endpoint,
     scratch,
     home,
@@ -259,7 +256,6 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     received: received.promise,
     disconnected: disconnected.promise,
     fetches,
-    beforeFetch,
     failedDiagnostics,
     scripts,
     preparePack,

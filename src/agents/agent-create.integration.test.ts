@@ -39,10 +39,8 @@ import {
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { AGENT_DELETION_RECOVERY_SOURCE_KEY } from "../state/agent-deletion-journal-recovery.kernel.js";
-import {
-  completeAgentDeletionJournalInDatabase,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -59,7 +57,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -213,6 +214,12 @@ it("restores only the configured held store after explicit creation, never throu
   ).rejects.toThrow("restore authority closed");
   expect(recovery.readHolds()).toEqual(recovery.held);
 
+  await expectCreation(
+    { ...params, restorePaths: [] },
+    { status: "error", reason: "already-exists" },
+  );
+  expect(recovery.readHolds()).toEqual(recovery.held);
+
   await expectCreation(params, { status: "existing", agentDir: state.agentDir() });
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
   const isHeld = createRetainedAgentDatabaseMatcher(state.env, () =>
@@ -225,6 +232,7 @@ it("restores only the configured held store after explicit creation, never throu
     recovery.bytes,
   );
   expect(readAgentDeletionJournal("main", { env: state.env })).toBeUndefined();
+  expect(await readAgentDeletionJournalStatusInWorker("main", { env: state.env })).toBe("absent");
   expect(isAgentDeletionBlocked("main", { env: state.env })).toBe(false);
   for (const target of recovery.held.slice(0, 2)) {
     expect(openOpenClawAgentDatabase({ ...target, env: state.env }).path).toBe(target.path);

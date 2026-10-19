@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
 import { createTestReplyOperation } from "../../../auto-reply/reply/reply-run-registry.test-helpers.js";
-import { testing } from "../../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
@@ -13,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
+import { testing } from "../../../sessions/session-controller.test-support.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
@@ -27,7 +27,7 @@ import {
 import { createNativeSessionBindingAuthority } from "./binding-authority.js";
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
 });
 

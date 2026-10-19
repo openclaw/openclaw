@@ -34,6 +34,7 @@ import {
   createBackupClassificationInventory,
   listArchiveEntries,
   listArchiveEntryDetails,
+  useIsolatedBackupTempRoot,
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
@@ -68,6 +69,7 @@ function expectRow(database: import("node:sqlite").DatabaseSync, sql: string, ro
 }
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
+useIsolatedBackupTempRoot();
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -954,12 +956,21 @@ describe("createBackupArchive", () => {
         }
         await createDatabase(dbPath);
         const sourceBytes = await fs.readFile(dbPath);
+        const sidecarNames = new Set([
+          `${path.basename(dbPath)}-wal`,
+          `${path.basename(dbPath)}-shm`,
+        ]);
+        const readSidecars = async () =>
+          (await fs.readdir(path.dirname(dbPath))).filter((name) => sidecarNames.has(name));
+        expect(await readSidecars()).toEqual([]);
         const recordOutcome = backupRunRecords.recordBackupRunOutcome;
         let bytesBeforeOutcome: Buffer | undefined;
+        let sidecarsBeforeOutcome: string[] | undefined;
         const outcomeSpy = vi
           .spyOn(backupRunRecords, "recordBackupRunOutcome")
           .mockImplementation(async (params, options) => {
             bytesBeforeOutcome = await fs.readFile(dbPath);
+            sidecarsBeforeOutcome = await readSidecars();
             await recordOutcome(params, options);
           });
         try {
@@ -977,7 +988,9 @@ describe("createBackupArchive", () => {
             }),
           );
           expect(bytesBeforeOutcome).toEqual(sourceBytes);
+          expect(sidecarsBeforeOutcome).toEqual([]);
           expect(await fs.readFile(dbPath)).toEqual(sourceBytes);
+          expect(await readSidecars()).toEqual([]);
           expect(await fs.readdir(outputDir)).toEqual([]);
         } finally {
           outcomeSpy.mockRestore();
@@ -988,11 +1001,6 @@ describe("createBackupArchive", () => {
 
   it("creates, verifies, and restores foreign SQLite files as opaque bytes", async () => {
     await withBackupState("openclaw-backup-foreign-sqlite-", async (state) => {
-      // Keep concurrent backups out of this fixture's warning inventory.
-      const scratchRoot = state.path("scratch");
-      await fs.mkdir(scratchRoot);
-      Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
-      state.applyEnv();
       const databasePaths = [
         state.statePath("browser", "foreign-browser.sqlite"),
         state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),

@@ -1254,6 +1254,14 @@ openclaw-toast-host[data-toast-placement="shell"]
   transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
 }
 
+.app-toast__avatar {
+  display: grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+}
+
 .app-toast__icon {
   display: grid;
   flex: 0 0 auto;

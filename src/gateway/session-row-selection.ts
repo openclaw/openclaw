@@ -33,8 +33,6 @@ export function createSessionRowSelection(
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
-  const pending = new Map<string, Exclude<SelectionChange, { kind: "reset" }>>();
-  let flushScheduled = false;
   const orders = new Map<
     string,
     {
@@ -269,37 +267,14 @@ export function createSessionRowSelection(
       }
     }
   };
-  const flush = () => {
-    if (pending.size === 0) {
-      return;
-    }
-    for (const change of pending.values()) {
-      update(change.id, keyFor(change), change.row);
-    }
-    pending.clear();
-  };
   return {
     add(row: SelectionTarget) {
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      // Lists consume current metadata on demand; intermediate streaming updates
-      // need neither selection work nor an order that no reader will use.
-      pending.set(change.id, change);
-      if (!change.row) {
-        // Preserve resident insertion order across removal and recreation.
-        flush();
-      } else if (!flushScheduled) {
-        // Release superseded entries even when no viewer reads the list again.
-        flushScheduled = true;
-        setImmediate(() => {
-          flushScheduled = false;
-          flush();
-        }).unref();
-      }
+      update(change.id, keyFor(change), change.row);
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
-      flush();
       assertCanonical();
       const profileOrders = Array.from(profileIds, (profileId) => {
         let entries = creatorOrders.get(profileId);
@@ -332,7 +307,6 @@ export function createSessionRowSelection(
       sortBy?: SessionsListParams["sortBy"],
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
     ) {
-      flush();
       assertCanonical();
       if (!candidates && !partitions) {
         partitions = Array.from({ length: 64 }, () => ({
@@ -345,12 +319,8 @@ export function createSessionRowSelection(
       }
       return {
         configuredAgentIds,
-        get partitions() {
-          flush();
-          return candidates ? undefined : partitions;
-        },
+        partitions: candidates ? undefined : partitions,
         entries(this: void, archived: SessionsListParams["archived"]) {
-          flush();
           const orderKey = `${sortBy}:${archived ?? false}`;
           let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
           if (!entries) {
@@ -374,12 +344,8 @@ export function createSessionRowSelection(
           }
           return entries;
         },
-        get: (key: string) => {
-          flush();
-          return winners.get(key)?.row;
-        },
+        get: (key: string) => winners.get(key)?.row,
         involvementKeys(this: void, profileId: string, personal: boolean): ReadonlySet<string> {
-          flush();
           prepareInvolvements();
           return (
             (personal ? personalInvolvements : relatedInvolvements).get(profileId) ?? EMPTY_KEYS

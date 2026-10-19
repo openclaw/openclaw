@@ -1,5 +1,5 @@
 import { createSignal, For, Show, onSettled } from "solid-js";
-import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
+import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/reaction-emoji.js";
 import { EmojiSearchPanel } from "../../../components/emoji-search-panel.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";

@@ -1,6 +1,14 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  createEffect,
+  createMemo,
+  createReaction,
+  createRoot,
+  createSignal,
+  flush,
+  onCleanup,
+} from "solid-js";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutBoundary } from "../app/shell-layout-traits-solid.tsx";
@@ -163,7 +171,17 @@ it("batches property bursts without invalidating unrelated Solid computations", 
     "openclaw-solid-granular-test",
     (props) => {
       mount();
-      readLabel = () => props.label;
+      // Sample the live prop in a tracked scope without flushing the pending render.
+      readLabel = () =>
+        createRoot((dispose) => {
+          let value = "";
+          const track = createReaction(() => undefined);
+          track(() => {
+            value = props.label;
+          });
+          dispose();
+          return value;
+        });
       const label = createMemo(() => labels(props.label));
       const count = createMemo(() => counts(props.count));
       return (
@@ -387,6 +405,8 @@ it.each(["attribute"])("honors the public setter when updating %s", async (input
 });
 
 it("provides the Solid application context, rebinds replacements, and unsubscribes", async () => {
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  onTestFinished(() => warning.mockRestore());
   const seen = vi.fn();
   const connection = vi.fn();
   const ContextBridge = defineSolidBridge(
@@ -403,9 +423,16 @@ it("provides the Solid application context, rebinds replacements, and unsubscrib
   const container = createApplicationContextProvider(first);
   document.body.append(container);
   const host = document.createElement("openclaw-solid-context-test") as SolidBridgeElement<object>;
-  container.append(host);
+  render(() => {
+    createEffect(
+      () => host,
+      (element) => container.append(element),
+    );
+    return null;
+  });
   await host.updateComplete;
   expect(seen).toHaveBeenLastCalledWith(first);
+  expect(warning).not.toHaveBeenCalled();
   container.setContext(second);
   await host.updateComplete;
   expect(host.textContent).toBe("/second");

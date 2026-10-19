@@ -5,7 +5,7 @@ import type {
   ModelProviderConfig,
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {

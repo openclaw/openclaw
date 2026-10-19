@@ -143,8 +143,10 @@ container network when that access needs tighter controls. See
 [Sandboxing](/gateway/sandboxing#workspace-access) for workspace and network policy.
 
 Guests publish through **Publish PR** from sessions they created. Publication
-uses the shared GitHub account and opens a draft pull request; OpenClaw never
-merges. Protect the base branch with GitHub rules so the shared account cannot
+uses the shared GitHub account and opens a pull request by default. To create a
+draft, ask the agent to publish with `draft: true` on `github_publish`. Updating an
+existing PR preserves its draft or open state. Publication does not merge the PR. Protect the
+base branch with GitHub rules so the shared account cannot
 merge or bypass review. If the checkout's `origin` is the upstream repository,
 guest branches live in that repository and its pull request workflows receive
 repository secrets. Point `origin` at a fork owned by the shared account so

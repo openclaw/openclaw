@@ -1,3 +1,5 @@
+import type { SessionLogEntry, UsageProps } from "./types.ts";
+
 export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
   const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
   const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
@@ -9,6 +11,31 @@ export function createDefaultUsageDateRange(date = new Date()) {
   const start = new Date(date);
   start.setDate(start.getDate() - 29);
   return { startDate: formatIsoDate(start), endDate: formatIsoDate(date) };
+}
+
+function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7)) - 1;
+  const day = Number(date.slice(8, 10)) + dayOffset;
+  // Build the target date directly; advancing a normalized skipped midnight can retain 01:00.
+  return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
+}
+
+export function prepareUsageDateRange(
+  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
+) {
+  const { startDate, endDate, selectedDays, timeZone } = range;
+  const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
+  const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
+  const selectedDaySet = selectedDays.length ? new Set(selectedDays) : undefined;
+  const matches =
+    startDate || endDate || selectedDaySet
+      ? (timestamp: number) =>
+          timestamp >= startTs &&
+          timestamp < endTs &&
+          (!selectedDaySet || selectedDaySet.has(formatIsoDate(new Date(timestamp), timeZone)))
+      : undefined;
+  return { timeZone, matches };
 }
 
 export function toggleUsageRangeSelection<T>(
@@ -38,7 +65,7 @@ export function toggleUsageRangeSelection<T>(
   return mode === "append" ? [...selected, value] : [value];
 }
 
-export function parseToolSummary(content: string) {
+function parseToolSummary(content: string) {
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
   for (const line of content.split("\n")) {
@@ -67,3 +94,10 @@ export function parseToolSummary(content: string) {
     cleanContent: nonToolLines.join("\n").trim(),
   };
 }
+
+export function parseSessionLog(log: SessionLogEntry) {
+  const toolInfo = parseToolSummary(log.content);
+  return { log, toolInfo, cleanContent: toolInfo.cleanContent || log.content };
+}
+
+export type ParsedSessionLog = ReturnType<typeof parseSessionLog>;

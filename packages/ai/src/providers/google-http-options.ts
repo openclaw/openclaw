@@ -1,5 +1,5 @@
 import { type HttpOptions, ResourceScope } from "@google/genai";
-import { resolveAiTransportHeaderSentinels } from "../host.js";
+import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
@@ -32,12 +32,21 @@ export function buildGoogleHttpOptions(
     httpOptions.baseUrl = model.baseUrl;
     httpOptions.apiVersion = ""; // baseUrl already includes the version path.
   }
-  if (model.headers || optionsHeaders) {
-    httpOptions.headers = resolveAiTransportHeaderSentinels(
-      profile === "vertex"
+  const headers =
+    profile === "vertex"
+      ? model.headers || optionsHeaders
         ? { ...model.headers, ...optionsHeaders }
-        : mergeTransportHeaders(model.headers, optionsHeaders),
-    );
+        : undefined
+      : getAiTransportHost().resolveProviderRequestHeaders({
+          provider: model.provider,
+          api: model.api,
+          baseUrl: model.baseUrl,
+          callerHeaders: mergeTransportHeaders(model.headers, optionsHeaders),
+          precedence: "caller-wins",
+          model,
+        });
+  if (headers) {
+    httpOptions.headers = resolveAiTransportHeaderSentinels(headers);
   }
   return Object.keys(httpOptions).length > 0 ? httpOptions : undefined;
 }

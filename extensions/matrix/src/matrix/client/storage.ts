@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   isMatrixActiveTokenRootDirectory,
@@ -143,15 +144,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
     mtimeMs: bestCurrentMtimeMs,
   };
 
-  let siblingEntries: fs.Dirent[];
-  try {
-    siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
-  } catch {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
+  const siblingEntries = readDirectoryEntriesSync(parentDir);
 
   const populatedSiblingTokenHashes: string[] = [];
   const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];

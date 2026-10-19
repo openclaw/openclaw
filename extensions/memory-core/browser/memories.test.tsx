@@ -41,6 +41,7 @@ function createElement(
   document.body.append(container);
   let lifetime: AbortController;
   let view: ReturnType<ControlUiSettingsView["mount"]>;
+  let snapshot: ControlUiSettingsSnapshot;
   const formatError = vi.fn((error: unknown) =>
     error instanceof Error ? error.message : String(error),
   );
@@ -48,7 +49,7 @@ function createElement(
     lifetime?.abort();
     view?.dispose();
     lifetime = new AbortController();
-    const snapshot: ControlUiSettingsSnapshot = {
+    snapshot = {
       agentId,
       agentsLoading: false,
       agentsError: null,
@@ -89,6 +90,12 @@ function createElement(
   });
   return Object.assign(container, {
     retire: () => lifetime.abort(),
+    // The host keeps this view mounted through a same-identity reconnect.
+    update(patch: Partial<ControlUiSettingsSnapshot>) {
+      snapshot = { ...snapshot, ...patch };
+      view.update(snapshot);
+      flush();
+    },
     formatError,
   });
 }
@@ -346,6 +353,51 @@ describe("Memory Core indexed-search presentation", () => {
       );
     },
   );
+
+  it("keeps results and the query through a same-identity reconnect and retries interrupted reads", async () => {
+    const request = vi
+      .fn<Request>()
+      .mockResolvedValueOnce(searchResponse([result]))
+      .mockRejectedValueOnce(new Error("gateway closed"))
+      .mockResolvedValueOnce(memoryFileResponse("first\nmatched two\nmatched three"));
+    const element = createElement(request);
+    search(element);
+    await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
+    const row = () => element.querySelector<HTMLButtonElement>("article > button");
+    row()?.click();
+    await waitForSolid(() => expect(element.textContent).toContain("gateway closed"));
+
+    element.update({ connected: false, connectionEpoch: 2 });
+    expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    element.update({ connected: true, connectionEpoch: 3 });
+    expect(element.querySelector<HTMLInputElement>("#memory-search-input")?.value).toBe("Ada");
+    expect(element.textContent).toContain(result.snippet);
+    expect(request.mock.calls.filter(([method]) => method === "memory.search")).toHaveLength(1);
+
+    row()?.click();
+    flush();
+    row()?.click();
+    await waitForSolid(() =>
+      expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
+        "matched two\nmatched three",
+      ),
+    );
+    expect(fileReads(request)).toHaveLength(2);
+  });
+
+  it("disables search retry while the Gateway is offline", async () => {
+    const request = vi.fn<Request>().mockRejectedValueOnce(new Error("gateway closed"));
+    const element = createElement(request);
+    search(element);
+    await waitForSolid(() => expect(element.textContent).toContain("gateway closed"));
+    element.update({ connected: false, connectionEpoch: 2 });
+    const retry = [...element.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(retry?.disabled).toBe(true);
+    retry?.click();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 
   it("shows stale guidance alongside empty results and clears it after a fresh search", async () => {
     const warning =

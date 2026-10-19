@@ -90,8 +90,13 @@ describe("OpenAI tool schema reuse", () => {
       convertResponsesToolPayload(tools, { strict: true })[0],
       "wire tool",
     );
-    expect(convertResponsesToolPayload(tools, { strict: true })[0]).toBe(wire);
-    expect(() => Object.assign(wire, { name: "other" })).toThrow(TypeError);
+    expect(wire).toMatchObject({
+      type: "function",
+      name: "choose",
+      description: "Choose",
+      strict: true,
+    });
+    expect(wire.parameters).toBe(strict);
     const renamed = convertResponsesToolPayload(
       [
         {

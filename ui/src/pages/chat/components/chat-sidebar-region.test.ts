@@ -99,6 +99,35 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("builds unopened panel options only when the operator opens the type menu", async () => {
+    const readIcon = vi.fn(() => "terminal" as const);
+    const definitions = sidebarPanelDefinitions().map((definition) =>
+      Object.defineProperty(
+        Object.assign({}, definition, { available: definition.slot === "terminal" }),
+        "icon",
+        { get: () => (definition.slot === "terminal" ? readIcon() : definition.icon) },
+      ),
+    );
+    const region = await createRegion(openSlot({ columns: [] }, "detail"), definitions);
+    expect(readIcon).not.toHaveBeenCalled();
+    region.panelDefinitions = definitions.map((definition) =>
+      Object.defineProperty(Object.assign({}, definition, { label: "Updated terminal" }), "icon", {
+        get: () => (definition.slot === "terminal" ? readIcon() : definition.icon),
+      }),
+    );
+    readIcon.mockClear();
+    await region.updateComplete;
+    expect(readIcon).not.toHaveBeenCalled();
+    root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+    await waitForSolid(() =>
+      expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+    );
+    expect(readIcon).toHaveBeenCalled();
+    expect(root(region).querySelector(".side-panel-type-menu__item")?.textContent).toContain(
+      "Updated terminal",
+    );
+  });
+
   it("preserves header focus when an already locked side panel refreshes", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     onTestFinished(() => {
@@ -406,7 +435,7 @@ describe("chat sidebar region", () => {
     const context = createInitializationContext();
     const state = createPageState(
       context,
-      { afterCommit: () => () => {}, invalidate: vi.fn() },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.sessionKey = "agent:main:main";
@@ -472,7 +501,7 @@ describe("chat sidebar region", () => {
       onDesktopFocusTargetChange: vi.fn(),
       dashboard: null,
       workspace: undefined,
-      detail: { chat: createChatProps(), host: state, requestUpdate: vi.fn() },
+      detail: { chat: createChatProps(), host: state },
       digest: null,
       activeRunId: null,
       pullRequests: [],
@@ -552,13 +581,12 @@ describe("chat sidebar region", () => {
     async ({ slot, eventType, detail }) => {
       const handleToggleRequest = vi.fn();
       const region = await createRegion(openSlot({ columns: [] }, slot));
+      const panel = Object.assign(element("<div>Panel content</div>"), { handleToggleRequest });
       region.panelDefinitions = region.panelDefinitions.map((definition) =>
         Object.assign({}, definition, {
           available: definition.slot === slot,
-          content:
-            definition.slot === slot
-              ? Object.assign(element("<div>Panel content</div>"), { handleToggleRequest })
-              : null,
+          content: definition.slot === slot ? panel : null,
+          panelHost: definition.slot === slot ? panel : undefined,
         }),
       );
       await region.updateComplete;

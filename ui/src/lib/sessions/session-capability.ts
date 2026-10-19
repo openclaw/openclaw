@@ -219,7 +219,6 @@ export type SessionCapability = {
     // The lazy presentation supplies code; this session owner keeps operation custody.
     attach: (
       row: GatewaySessionRow,
-      changed: () => void,
       Owner: typeof GitHubPublicationOwner,
     ) => GitHubPublicationBinding | null;
   };

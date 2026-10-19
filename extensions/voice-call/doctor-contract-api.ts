@@ -65,6 +65,8 @@ const schemaMigrationDescriptions = {
   "portable-identity-columns-v22": "ACP resume keys and receipt cursors -> portable columns",
   "task-run-indexes-v24": "retained task indexes -> ordered cron history and runtime/run lookup",
   "session-state-head-layout-v26": "session state heads -> primary-key table layout",
+  "state-write-indexes-v27": "replay, skill usage, and lease writes -> smaller index maintenance",
+  "github-publication-draft-v28": "GitHub publication requests -> durable draft choice",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

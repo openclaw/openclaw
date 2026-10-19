@@ -1,7 +1,7 @@
 // Proves isolated cron/hook runs carry the published Gateway plugin generation
 // into embedded execution instead of rebuilding metadata per run (#125596 family).
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   getPreparedModelRuntimeBorrowedSnapshot,
@@ -41,6 +41,7 @@ function runTurn(overrides?: Record<string, unknown>) {
 
 async function setupPublishedGeneration(withAuth = false) {
   const config = {
+    session: { store: "/tmp/store.json" },
     ...(withAuth
       ? { auth: { profiles: { test: { provider: "openai", mode: "api_key" as const } } } }
       : {}),
@@ -102,6 +103,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       verboseDefault: "on" as const,
     };
     const config = {
+      session: { store: "/tmp/store.json" },
       agents: { defaults: { model: "anthropic/claude-opus-4-6" }, entries: { main: agent } },
     };
     const admittedConfig = structuredClone(config);
@@ -187,14 +189,12 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     const result = await runTurn({ cfg: config, agentId: "default" });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("ok");
-    const dispatchAdmission = loadPublishedReplyDispatchRuntimeMock.mock.calls[0]?.[0] as {
-      abortSignal: AbortSignal;
-    };
+    const dispatchAdmission = loadPublishedReplyDispatchRuntimeMock.mock.calls[0]?.[0];
     expect(dispatchAdmission).toMatchObject({ agentId: "default", abortSignal: expect.anything() });
     expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1]).toEqual({
       catalogMode: "static",
       pluginGeneration,
-      abortSignal: dispatchAdmission.abortSignal,
+      abortSignal: expect.any(AbortSignal),
     });
     expect(embeddedRunGeneration).toBe(selectedGeneration);
     expect(readFullModelCatalog).toHaveBeenCalledOnce();
@@ -203,6 +203,61 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     afterRun.resolve();
     await expect(borrowedAfterClose).resolves.toBeUndefined();
     expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+  });
+
+  it("cancels prepared runtime acquisition and releases its published dispatch lease", async () => {
+    const fixture = await setupPublishedGeneration();
+    const releaseDispatch = vi.fn(async () => {});
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+      onRuntimeLease?.({
+        snapshot: fixture.owner,
+        pluginGeneration: fixture.pluginGeneration,
+        [Symbol.asyncDispose]: releaseDispatch,
+      });
+      return fixture.dispatchRuntime;
+    });
+    const acquisitionStarted = createDeferred<AbortSignal>();
+    const releaseAcquisition = createDeferred();
+    acquirePreparedModelRuntimeMock.mockImplementation(
+      async (_input, options: { abortSignal?: AbortSignal }) => {
+        const signal = options.abortSignal;
+        if (!signal) {
+          throw new Error("Prepared runtime acquisition requires cancellation");
+        }
+        acquisitionStarted.resolve(signal);
+        await releaseAcquisition.promise;
+        signal.throwIfAborted();
+        throw new Error("Prepared runtime acquisition did not receive cancellation");
+      },
+    );
+    const controller = new AbortController();
+    const reason = new Error("Scheduled run cancelled during runtime acquisition");
+    const pending = runTurn({
+      cfg: fixture.config,
+      agentId: "default",
+      abortSignal: controller.signal,
+    });
+    const settled = pending.catch((error: unknown) => error);
+    try {
+      const signal = await awaitGateBeforeSettlement(
+        acquisitionStarted.promise,
+        pending,
+        "Scheduled run settled before runtime acquisition",
+      );
+      expect(signal.aborted).toBe(false);
+      expect(releaseDispatch).not.toHaveBeenCalled();
+      controller.abort(reason);
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason).toBe(reason);
+      releaseAcquisition.resolve();
+      await expect(settled).resolves.toBe(reason);
+      expect(releaseDispatch).toHaveBeenCalledOnce();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    } finally {
+      controller.abort(reason);
+      releaseAcquisition.resolve();
+      await settled;
+    }
   });
 
   it("retains the admitted runtime when a generation publishes during auth preparation", async () => {
@@ -246,6 +301,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
 
   it("keeps the execution owner's model pricing through finalization", async () => {
     const config = {
+      session: { store: "/tmp/store.json" },
       models: {
         providers: {
           fixture: {

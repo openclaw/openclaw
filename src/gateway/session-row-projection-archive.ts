@@ -119,7 +119,7 @@ export function createSessionRowProjectionArchive(params: {
           );
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
-          if (!params.dirty.has(records.identity(row))) {
+          if (row.materialized && !params.dirty.has(records.identity(row))) {
             row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
               row.retainedDatabaseFacts,
             )

@@ -46,21 +46,28 @@ export function SessionBarRow(props: {
       </button>
       <div class="session-bar-actions">
         <Show when={copyIdentity()} keyed>
-          {(_identity) => (
-            <>
-              {" "}
-              <button
-                type="button"
-                class="btn btn--sm btn--ghost"
-                onClick={(event: MouseEvent) => {
-                  event.stopPropagation();
-                  void handleCopyButton(event, props.displayLabel, t("usage.sessions.copy"));
-                }}
-              >
-                <span data-copy-label>{t("usage.sessions.copy")}</span>
-              </button>{" "}
-            </>
-          )}
+          {(_identity) => {
+            let label!: HTMLSpanElement;
+            return (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  class="btn btn--sm btn--ghost"
+                  onClick={(event: MouseEvent) => {
+                    event.stopPropagation();
+                    void handleCopyButton(event, props.displayLabel, t("usage.sessions.copy"), {
+                      label,
+                    });
+                  }}
+                >
+                  <span ref={(element) => (label = element)} data-copy-label>
+                    {t("usage.sessions.copy")}
+                  </span>
+                </button>{" "}
+              </>
+            );
+          }}
         </Show>
         <div class="session-bar-value">{props.valueLabel}</div>
       </div>

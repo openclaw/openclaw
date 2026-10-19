@@ -124,6 +124,7 @@ describe("normalizeAssistantReplayContent", () => {
     const converted = convertMessages(
       model,
       {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
         messages: normalizeAssistantReplayContent(messages).filter(
           (message) =>
             message.role === "user" ||
@@ -590,11 +591,14 @@ describe("normalizeAssistantReplayContent", () => {
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
-  it("drops standalone silent assistant replay text", () => {
-    const messages = [userMessage("first"), bedrockAssistant("NO_REPLY"), userMessage("second")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toEqual([messages[0], messages[2]]);
-  });
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "drops standalone %s assistant replay text",
+    (text) => {
+      const messages = [userMessage("first"), bedrockAssistant(text), userMessage("second")];
+      const out = normalizeAssistantReplayContent(messages);
+      expect(out).toEqual([messages[0], messages[2]]);
+    },
+  );
 
   it.each([
     [
@@ -663,7 +667,7 @@ describe("normalizeAssistantReplayContent", () => {
     ]);
   });
 
-  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "no_reply", "Done\nNO_REPLY"])(
+  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "Done\nNO_REPLY"])(
     "preserves ordinary assistant replay text %s",
     (text) => {
       const messages = [userMessage("first"), bedrockAssistant(text), userMessage("NO_REPLY")];

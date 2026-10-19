@@ -1,13 +1,17 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { isAgentDeletionBlocked, withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
-  beginSessionWorkAdmission,
+  beginSessionEffect,
   closeAgentWorkAdmissions,
-} from "../sessions/session-lifecycle-admission.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+} from "../sessions/session-controller.lifecycle.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   getPreparedAgentDeletionDiscovery,
   invalidateAgentDeletionJournalStatus,
@@ -27,13 +31,52 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+function agentFixture(state: OpenClawTestState, agentId = "doomed") {
+  const options = { env: state.env };
+  const database = openOpenClawStateDatabase(options);
+  const paths = {
+    agentId,
+    agentDir: state.agentDir(agentId),
+    workspaceDir: state.path(agentId),
+    sessionsDir: state.sessionsDir(agentId),
+  };
+  return {
+    options,
+    database,
+    paths,
+    read: () => readAgentDeletionJournalStatusInWorker(agentId, options),
+    blocked(expected: boolean) {
+      const sql = observeHostDataSql();
+      try {
+        expect(isAgentDeletionBlocked(agentId, options)).toBe(expected);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    },
+    async deleting(run: () => Promise<void>) {
+      await withAgentDeletion(
+        agentId,
+        async (begin) => {
+          const deletion = await begin({ ...paths, phase: "draining" });
+          try {
+            await run();
+          } finally {
+            await deletion.rollback();
+          }
+        },
+        options,
+      );
+    },
+  };
+}
+
 it("revokes queued work and refuses the next turn after a worker deletion without rereading the journal", async () => {
   await withOpenClawTestState({ label: "deletion-status-admission" }, async (state) => {
-    const options = { env: state.env };
-    openOpenClawStateDatabase(options);
+    const fixture = agentFixture(state);
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const target = {
-      ...options,
+      ...fixture.options,
       agentId: "doomed",
       scope: state.sessionsDir("doomed"),
       identities: ["same-session"],
@@ -41,44 +84,32 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
       serializeOwner: true,
       assertAllowed: () => {},
     };
-    const first = await beginSessionWorkAdmission(target);
+    const first = await beginSessionEffect(target);
     first.release();
     const directReads = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseCurrentReadOnly");
-    expect(isAgentDeletionBlocked("doomed", options)).toBe(false);
+    expect(isAgentDeletionBlocked("doomed", fixture.options)).toBe(false);
     expect(directReads).not.toHaveBeenCalled();
     reads.mockClear();
-    const active = await beginSessionWorkAdmission(target);
-    const queued = beginSessionWorkAdmission(target);
+    const active = await beginSessionEffect(target);
+    const queued = beginSessionEffect(target);
     const refused = expect(queued).rejects.toThrow("deletion");
     const reopen = closeAgentWorkAdmissions({
       ...target,
       reason: new Error("agent deletion began"),
     });
     try {
-      await withAgentDeletion(
-        "doomed",
-        async (begin) => {
-          const deletion = await begin({
-            agentId: "doomed",
-            agentDir: state.agentDir("doomed"),
-            workspaceDir: state.path("doomed"),
-            sessionsDir: state.sessionsDir("doomed"),
-            phase: "draining",
-          });
-          await refused;
-          expect(active.isActive()).toBe(true);
-          await expect(beginSessionWorkAdmission(target)).rejects.toThrow("deletion");
-          expect(await readAgentDeletionJournalStatusInWorker("doomed", options)).toBe("pending");
-          directReads.mockClear();
-          expect(isAgentDeletionBlocked("doomed", options)).toBe(true);
-          expect(directReads).not.toHaveBeenCalled();
-          active.release();
-          await deletion.rollback();
-        },
-        options,
-      );
+      await fixture.deleting(async () => {
+        await refused;
+        expect(active.isActive()).toBe(true);
+        await expect(beginSessionEffect(target)).rejects.toThrow("deletion");
+        expect(await fixture.read()).toBe("pending");
+        directReads.mockClear();
+        expect(isAgentDeletionBlocked("doomed", fixture.options)).toBe(true);
+        expect(directReads).not.toHaveBeenCalled();
+        active.release();
+      });
       reopen();
-      const resumed = await beginSessionWorkAdmission(target);
+      const resumed = await beginSessionEffect(target);
       resumed.release();
       expect(
         reads.mock.calls.filter(([, command]) => command.type === "agentDeletionJournal.status"),
@@ -94,55 +125,53 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
   });
 });
 
-it("publishes completion and recreation only on commit and reloads a discarded tombstone fact", async () => {
+it("denies cold authority and publishes completion and recreation only on commit", async () => {
   await withOpenClawTestState({ label: "deletion-status-commit" }, async (state) => {
-    const options = { env: state.env };
-    openOpenClawStateDatabase(options);
+    const fixture = agentFixture(state);
     const input = {
-      agentId: "doomed",
+      ...fixture.paths,
       operationId: "delete",
-      agentDir: state.agentDir("doomed"),
-      workspaceDir: state.path("doomed"),
-      sessionsDir: state.sessionsDir("doomed"),
       deleteFiles: false,
     };
-    const read = () => readAgentDeletionJournalStatusInWorker(input.agentId, options);
-    expect(await read()).toBe("absent");
-    expect(isAgentDeletionBlocked(input.agentId, options)).toBe(false);
+    fixture.blocked(true);
+    expect(await fixture.read()).toBe("absent");
+    fixture.blocked(false);
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
         beginAgentDeletionJournalInDatabase(database, input);
-        expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
+        fixture.blocked(true);
         throw new Error("rollback");
-      }, options),
+      }, fixture.options),
     ).toThrow("rollback");
-    expect(await read()).toBe("absent");
+    expect(await fixture.read()).toBe("absent");
     runOpenClawStateWriteTransaction((database) => {
       beginAgentDeletionJournalInDatabase(database, input);
       completeAgentDeletionJournalInDatabase(database, input.agentId, input.operationId);
-    }, options);
-    expect(await read()).toBe("complete");
-    expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
-    const stateDatabase = openOpenClawStateDatabase(options);
+    }, fixture.options);
+    expect(await fixture.read()).toBe("complete");
+    expect(isAgentDeletionBlocked(input.agentId, fixture.options)).toBe(true);
+    const stateDatabase = fixture.database;
     invalidateAgentDeletionJournalStatus(stateDatabase.db, input.agentId);
+    fixture.blocked(true);
     seedAgentDeletionDiscovery(stateDatabase.path, {
       status: "unavailable",
       cause: "unreadable",
       reason: "synthetic unavailable read",
     });
     expect(getPreparedAgentDeletionDiscovery(stateDatabase.path)).toBeUndefined();
-    expect(await read()).toBe("complete");
+    expect(await fixture.read()).toBe("complete");
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
         deleteAgentDeletionJournalInDatabase(database, input.agentId, input.operationId, true);
+        expect(isAgentDeletionBlocked(input.agentId, fixture.options)).toBe(false);
         throw new Error("rollback");
-      }, options),
+      }, fixture.options),
     ).toThrow("rollback");
-    expect(await read()).toBe("complete");
+    expect(await fixture.read()).toBe("complete");
     runOpenClawStateWriteTransaction((database) => {
       deleteAgentDeletionJournalInDatabase(database, input.agentId, input.operationId, true);
-    }, options);
-    expect(await read()).toBe("absent");
+    }, fixture.options);
+    expect(await fixture.read()).toBe("absent");
   });
 });
 
@@ -150,8 +179,8 @@ it.each(["before-read", "during-read", "revoked-read"] as const)(
   "prepares an overlapping roster without retiring credentials (%s)",
   async (timing) => {
     await withOpenClawTestState({ label: "secrets-retiring-roster" }, async (state) => {
-      openOpenClawStateDatabase({ env: state.env });
       const agentId = "retiring";
+      const fixture = agentFixture(state, agentId);
       const agentDir = state.agentDir(agentId);
       const healthyDir = state.agentDir("main");
       const config = { agents: { entries: { main: {}, [agentId]: {} } } };
@@ -186,35 +215,18 @@ it.each(["before-read", "during-read", "revoked-read"] as const)(
         if (inFlight) {
           await entered.promise;
         }
-        await withAgentDeletion(
-          agentId,
-          async (begin) => {
-            const deletion = await begin({
-              agentId,
-              agentDir,
-              workspaceDir: state.path(agentId),
-              sessionsDir: state.sessionsDir(agentId),
-              phase: "draining",
-            });
-            try {
-              release.resolve();
-              const snapshot = await (inFlight ?? prepare());
-              expect(snapshot.authStores.map((entry) => entry.agentDir)).toEqual([healthyDir]);
-              expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
-                key: "fixture-key",
-              });
-              expect(listConfiguredOwnerInputs(config).map((input) => input.agentId)).toEqual([
-                "main",
-              ]);
-              if (timing === "before-read") {
-                expect(loadAuthStore).not.toHaveBeenCalledWith(agentDir);
-              }
-            } finally {
-              await deletion.rollback();
-            }
-          },
-          { env: state.env },
-        );
+        await fixture.deleting(async () => {
+          release.resolve();
+          const snapshot = await (inFlight ?? prepare());
+          expect(snapshot.authStores.map((entry) => entry.agentDir)).toEqual([healthyDir]);
+          expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
+            key: "fixture-key",
+          });
+          expect(listConfiguredOwnerInputs(config).map((input) => input.agentId)).toEqual(["main"]);
+          if (timing === "before-read") {
+            expect(loadAuthStore).not.toHaveBeenCalledWith(agentDir);
+          }
+        });
         expect(listConfiguredOwnerInputs(config).map((input) => input.agentId)).toEqual([
           "main",
           agentId,

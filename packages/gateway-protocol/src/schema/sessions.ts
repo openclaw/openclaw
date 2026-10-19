@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
+import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -25,6 +26,7 @@ export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
 export {
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionOwnerSessionCountSchema,
   type SessionsListParams,
   type SessionOwnerSessionCount,
@@ -268,7 +270,7 @@ export const SessionsFilesDownloadResultSchema = closedObject({
   expiresAt: NonEmptyString,
 });
 
-export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
+export { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
 export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
@@ -357,6 +359,8 @@ export const SessionsDiffParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   scope: Type.Optional(SessionDiffScopeSchema),
   commit: Type.Optional(NonEmptyString),
+  /** File metadata and line counts only; skip patches and branch history. */
+  summaryOnly: Type.Optional(Type.Boolean()),
 });
 
 /** Branch + working-tree diff for one session checkout. */

@@ -108,9 +108,6 @@ type ManifestProviderAuthOptions = Omit<
   promptMessage?: string;
 };
 
-/**
- * Catalog configuration accepted by the single-provider entry helper.
- */
 type SingleProviderPluginCatalogOptions =
   | {
       /**

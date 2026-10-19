@@ -97,8 +97,8 @@ describe("catalog pane disconnect ownership", () => {
         const active = pendingLoads(loads);
         expect(active.length).toBeGreaterThan(0);
         expect(pane.isConnected).toBe(true);
-        const messagesBeforeClose = pane.catalogMessages;
-        const sessionBeforeClose = pane.catalogSession;
+        const messagesBeforeClose = pane.history.catalogMessages;
+        const sessionBeforeClose = pane.history.catalogSession;
         if (disconnectTiming === "before") {
           pane.remove();
           lookup.resolve(listed);
@@ -116,8 +116,8 @@ describe("catalog pane disconnect ownership", () => {
         expect
           .soft(request.mock.calls.filter(([method]) => method === "sessions.catalog.read"))
           .toHaveLength(0);
-        expect.soft(pane.catalogMessages).toEqual(messagesBeforeClose);
-        expect.soft(pane.catalogSession).toEqual(sessionBeforeClose);
+        expect.soft(pane.history.catalogMessages).toEqual(messagesBeforeClose);
+        expect.soft(pane.history.catalogSession).toEqual(sessionBeforeClose);
       } finally {
         pane.remove();
         lookup.resolve(listed);
@@ -156,7 +156,7 @@ describe("catalog pane disconnect ownership", () => {
         expect(pane.state).toBeUndefined();
         expect(context.gateway.snapshot.client).toBe(client);
         expect(context.gateway.snapshot.phase).toBe("connected");
-        const messagesAfterClose = pane.catalogMessages;
+        const messagesAfterClose = pane.history.catalogMessages;
         const errorAfterClose = state.lastError;
 
         if (settlement === "resolve") {
@@ -169,7 +169,7 @@ describe("catalog pane disconnect ownership", () => {
         expect
           .soft(request.mock.calls.filter(([method]) => method === "sessions.catalog.read"))
           .toHaveLength(readCount);
-        expect.soft(pane.catalogMessages).toEqual(messagesAfterClose);
+        expect.soft(pane.history.catalogMessages).toEqual(messagesAfterClose);
         expect.soft(state.lastError).toBe(errorAfterClose);
       } finally {
         pane.remove();

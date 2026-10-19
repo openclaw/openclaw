@@ -67,6 +67,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { buildHarnessHostRequester } from "./host-requester.js";
+import { bindBoundedSeed } from "./host-seed.js";
 import { bindHostSkillCatalog, prepareHostSkillLibraryResources } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
@@ -491,6 +492,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
+    ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
     ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
       assertActive();
@@ -501,7 +503,7 @@ export function createAgentHarnessHostCapabilities(params: {
       return buildActiveNodeContextText(requesterProfileId);
     },
     bindToolSurface,
-    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. */
+    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
     createToolSurface: (options, bindingOptions) => {
       warnPluginSdkDeprecation({
         family: "agent-harness-host",

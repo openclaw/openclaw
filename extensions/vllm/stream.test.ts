@@ -3,6 +3,8 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createVllmQwenThinkingWrapper, wrapVllmProviderStream } from "./stream.js";
 
+// Bypass cases must prove that the base stream ran with an unchanged payload.
+// When no wrapper applies, call the base stream as the runtime does.
 function capturePayload(params: {
   format: "chat-template" | "top-level";
   thinkingLevel?: "off" | "low" | "medium" | "high" | "xhigh" | "max";

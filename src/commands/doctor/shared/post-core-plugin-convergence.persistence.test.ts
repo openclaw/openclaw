@@ -55,10 +55,9 @@ function createPeerPlugin(
     path.join(packageDir, "package.json"),
     JSON.stringify({ name: "peer-plugin", version: "1.0.0", peerDependencies: { openclaw: "*" } }),
   );
-  const baselineInstallRecords: Record<string, PluginInstallRecord> =
-    layout === "managed"
-      ? {}
-      : { "peer-plugin": { source: "npm", spec: "peer-plugin@1.0.0", installPath: packageDir } };
+  const baselineInstallRecords: Record<string, PluginInstallRecord> = {
+    "peer-plugin": { source: "npm", spec: "peer-plugin@1.0.0", installPath: packageDir },
+  };
   if (contents !== "missing-modules") {
     fs.mkdirSync(nodeModules);
     if (contents === "stale-link") {

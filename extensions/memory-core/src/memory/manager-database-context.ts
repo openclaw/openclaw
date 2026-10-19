@@ -547,7 +547,7 @@ export class MemoryIndexDatabase {
     command: Command,
     assertCurrent: () => void,
   ): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
-    if (this.isShadow || this.admission?.engine === "postgres") {
+    if (this.isShadow || (!this.readOnly && this.admission?.engine === "postgres")) {
       return this.executePublication(command, assertCurrent);
     }
     const target = this.writeOptions;

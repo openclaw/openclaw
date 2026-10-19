@@ -1,12 +1,12 @@
 import type { SkillsFileGetResult } from "@openclaw/gateway-protocol";
-import { render } from "@solidjs/web";
+import { render, spread } from "@solidjs/web";
 import { createEffect, createMemo, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { highlightCodeHtml } from "./markdown-code-blocks.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
@@ -178,7 +178,7 @@ export function createSkillFileHovercard(props: SkillFileHovercardProps) {
   let anchor: HTMLAnchorElement | null = null;
   let request: AbortController | null = null;
   let pointerOpened = false;
-  const hovercard = new PortaledHovercardController(close);
+  const hovercard = createPortaledHovercardOwner(close);
   const scope = createMemo(() => [props.client, props.agentId, props.sessionKey] as const, {
     equals: (previous, next) => previous.every((value, index) => value === next[index]),
   });
@@ -261,10 +261,7 @@ export function createSkillFileHovercard(props: SkillFileHovercardProps) {
         return;
       }
       dispose = render(() => {
-        createEffect(
-          () => t("filePreview.skill.title"),
-          (title) => card.setAttribute("aria-label", title),
-        );
+        spread(card, () => ({ "aria-label": t("filePreview.skill.title") }), true);
         return (
           <Errored
             fallback={(_error, retry) => (

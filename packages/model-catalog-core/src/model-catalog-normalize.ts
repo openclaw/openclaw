@@ -10,15 +10,18 @@ import {
   normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { normalizeModelCatalogContextWindowSelection } from "./model-catalog-context-windows.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 import {
   MODEL_CATALOG_APIS,
+  MODEL_CATALOG_INPUTS as MODEL_CATALOG_INPUT_VALUES,
+  MODEL_CATALOG_STATUSES as MODEL_CATALOG_STATUS_VALUES,
+  MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
   MODEL_CATALOG_THINKING_LEVELS,
   isModelCatalogThinkingFormat,
   type ModelCatalog,
   type ModelCatalogApi,
   type ModelCatalogCompatConfig,
+  type ModelCatalogContextWindowOption,
   type ModelCatalogCost,
   type ModelCatalogDiscovery,
   type ModelCatalogImageInputConfig,
@@ -39,9 +42,9 @@ import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities
 import { normalizeProviderId } from "./provider-id.js";
 export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
-const MODEL_CATALOG_INPUTS = new Set(["text", "image", "video", "document"]);
+const MODEL_CATALOG_INPUTS = new Set<string>(MODEL_CATALOG_INPUT_VALUES);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
-const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
+const MODEL_CATALOG_STATUSES = new Set<string>(MODEL_CATALOG_STATUS_VALUES);
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
@@ -99,6 +102,52 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
     MODEL_CATALOG_INPUTS.has(input),
   );
   return inputs.length > 0 ? inputs : undefined;
+}
+
+function normalizeModelCatalogContextWindows(
+  value: unknown,
+): ModelCatalogContextWindowOption[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const contextWindows = value.slice(0, MODEL_CATALOG_MAX_CONTEXT_WINDOWS).flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const label = normalizeOptionalString(entry.label) ?? "";
+    const contextWindow = normalizePositiveInteger(entry.contextWindow);
+    if (!id || !label || contextWindow === undefined || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [{ id, label, contextWindow }];
+  });
+  return contextWindows.length > 0
+    ? contextWindows.toSorted(
+        (left, right) =>
+          left.contextWindow - right.contextWindow || left.id.localeCompare(right.id),
+      )
+    : undefined;
+}
+
+function normalizeModelCatalogContextWindowSelection(value: {
+  contextWindows?: unknown;
+  contextWindowDefault?: unknown;
+}): {
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+} {
+  const contextWindows = normalizeModelCatalogContextWindows(value.contextWindows);
+  const contextWindowDefault = normalizeOptionalString(value.contextWindowDefault);
+  // Options and default are one atomic tuple: options without a valid default
+  // would advertise a capability the picker cannot render a selection for, so
+  // a missing or invalid default drops the option list with it.
+  return contextWindowDefault &&
+    contextWindows?.some((option) => option.id === contextWindowDefault)
+    ? { contextWindows, contextWindowDefault }
+    : {};
 }
 
 function normalizeModelCatalogTieredCost(value: unknown): ModelCatalogTieredCost[] | undefined {

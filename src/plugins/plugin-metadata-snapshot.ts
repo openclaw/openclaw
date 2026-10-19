@@ -13,7 +13,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import {
@@ -313,12 +313,8 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   const rebased = {
     ...snapshot,
     ...buildPluginMetadataManifestFacts(manifestRegistry, snapshot.index),
-    normalizePluginId: snapshot.index
-      ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
-      : snapshot.normalizePluginId,
-    ...(snapshot.metrics
-      ? { metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length } }
-      : {}),
+    normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry }),
+    metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length },
   };
   // Rebuilt views retain the original generation even when consumed in another scope.
   bindPluginMetadataSnapshotCache(rebased, getPluginMetadataSnapshotCache(snapshot));
@@ -399,17 +395,13 @@ export function loadPluginMetadataSnapshot(
       env: params.env,
       workspaceDir: params.workspaceDir,
       allowWorkspaceScopedSnapshot: true,
+      ...(params.config === undefined ? { requireDefaultDiscoveryContext: true } : {}),
     });
     if (
       current &&
       (isCurrentPluginMetadataSnapshotRuntimeGeneration(current) ||
-        isPluginMetadataSnapshotCompatible({
-          snapshot: current,
-          config: params.config,
-          env: params.env,
-          workspaceDir: params.workspaceDir,
-          index: params.index,
-        }))
+        ((current.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
+          indexesMatch(current.index, params.index)))
     ) {
       return projectPluginMetadataSnapshot(
         current,
@@ -597,19 +589,7 @@ function selectPluginMetadataSnapshot(
     if (!params.index) {
       return { kind: "current", snapshot: current };
     }
-    if (
-      allowSynchronousPolicyRead &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: current,
-        config: params.config,
-        env: params.env,
-        allowScopedSnapshot: params.pluginIds !== undefined || params.pluginIdScope !== undefined,
-        workspaceDir:
-          params.workspaceDir ??
-          (params.allowWorkspaceScopedCurrent === true ? current.workspaceDir : undefined),
-        index: params.index,
-      })
-    ) {
+    if (allowSynchronousPolicyRead && indexesMatch(current.index, params.index)) {
       return { kind: "current", snapshot: current };
     }
   }
@@ -655,23 +635,11 @@ export async function resolvePluginMetadataSnapshotAsync(
       if (current.kind === "current") {
         return current.snapshot;
       }
-      const activateDiscovery = await prepareBundledDiscoveryMode(captured.env);
-      activateDiscovery();
-      const prepared = selectPluginMetadataSnapshot(captured);
-      if (prepared.kind === "current") {
-        return prepared.snapshot;
-      }
-      if (
-        captured.index === undefined &&
-        captured.installRecords === undefined &&
-        captured.preferPersisted !== false
-      ) {
-        const installed = await preparePersistedInstalledPluginIndexCacheEntry({
-          env: captured.env,
-          stateDir: captured.stateDir,
-        });
-        installed.assertCurrent();
-      }
+      const activateDiscovery = await (captured.index === undefined &&
+      captured.installRecords === undefined &&
+      captured.preferPersisted !== false
+        ? preparePluginMetadataMachineStateAsync({ env: captured.env, stateDir: captured.stateDir })
+        : prepareBundledDiscoveryMode(captured.env));
       activateDiscovery();
       return resolvePluginMetadataSnapshot(captured);
     });

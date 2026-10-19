@@ -124,17 +124,6 @@ export function createSkillMenu() {
     state.skillMenuTarget = null;
   }
 
-  function closeSkillMenuIfNeeded(state: SkillMenuState): void {
-    if (
-      state.skillMenuOpen ||
-      state.skillMenuItems.length > 0 ||
-      state.skillMenuTarget !== null ||
-      state.skillCommandRefreshPending
-    ) {
-      resetSkillMenuState(state);
-    }
-  }
-
   function requestSkillCommandRefresh(state: SkillMenuState, host: SkillMenuHost): void {
     if (!host.refreshCommands || state.skillCommandRefreshPending) {
       return;
@@ -169,7 +158,9 @@ export function createSkillMenu() {
   ): void {
     const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
     if (!target) {
-      closeSkillMenuIfNeeded(state);
+      if (state.skillMenuTarget !== null) {
+        resetSkillMenuState(state);
+      }
       return;
     }
     if (!opts.skipRefresh && refreshTargetStart !== target.start) {

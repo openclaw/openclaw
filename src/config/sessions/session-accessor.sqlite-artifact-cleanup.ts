@@ -258,11 +258,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
             assertCommitAllowed,
             plan,
           });
-          if (reclaimed.kind !== plan.kind) {
-            throw new Error(
-              `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
-            );
-          }
           return reclaimed.value;
         }),
       { additionalIdentities: cleanupPlan.deletePlans.map((plan) => plan.sessionId) },

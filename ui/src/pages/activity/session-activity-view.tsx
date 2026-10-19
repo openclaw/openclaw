@@ -6,7 +6,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.ts";
+import "../../components/ip-location.tsx";
 import "../../components/viewer-facepile.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -123,10 +123,10 @@ function SessionLinkView(props: {
   );
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
   // The mounted route owns this application context; only its stores publish updates.
-  const context = untrack(() => props.context);
-  const agents = projectAgents(context.agents);
+  const initialContext = untrack(() => props.context);
+  const agents = projectAgents(initialContext.agents);
   const agentIdentity = projectAgentIdentity({
-    identities: context.agentIdentity,
+    identities: initialContext.agentIdentity,
     get agentId() {
       return props.row.agentId;
     },

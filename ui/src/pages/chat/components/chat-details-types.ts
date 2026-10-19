@@ -36,6 +36,7 @@ export type ChatDetailsProps = Pick<
     | "subagentSessionsHydrated"
     | "subagentSessionsRead"
     | "onOpenSubagent"
+    | "onOpenSubagents"
   > & {
     onSessionSelect?: (sessionKey: string) => void;
     detailsWorkspace?: ChatDetailsWorkspace;
@@ -50,6 +51,8 @@ export type ChatDetailsProps = Pick<
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
     onOpenWorkspace?: () => void;
+    /** Opens this pane's Processes panel; absent where the pane has none. */
+    onOpenProcesses?: () => void;
     onCompact?: () => void | Promise<unknown>;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;

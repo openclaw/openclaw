@@ -35,6 +35,7 @@ import {
   type SessionMessageEntry,
 } from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
+import type { CliReusableSession } from "./types.js";
 
 const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
@@ -67,22 +68,12 @@ type CliSessionReseedMessage =
       isError?: boolean;
     };
 type RawTranscriptReseedReason =
+  | Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"]
   | "auth-unknown"
-  | "auth-profile"
-  | "auth-epoch"
-  | "message-policy"
-  | "system-prompt"
-  | "cwd"
-  | "mcp"
-  | "missing-transcript"
-  | "orphaned-tool-use"
   | "session-expired"
   | "stateless";
 
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
-  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
-    return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  }
   const contextShareChars = Math.floor(
     contextWindowTokens * CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE,
   );
@@ -395,7 +386,7 @@ export async function loadCliSessionHistoryMessages({
 /** Loads canonical replay messages for context-engine updates. */
 export async function loadCliSessionContextEngineMessages(
   params: CliSessionHistoryParams,
-): Promise<unknown[]> {
+): Promise<ReturnType<typeof buildSessionContext>["messages"]> {
   const entries = await loadCliSessionEntries(params);
   const messages = buildSessionContext(entries).messages;
   const boundary = entries.findLast(

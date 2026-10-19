@@ -11,6 +11,7 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeTrimmedStringList,
@@ -953,7 +954,7 @@ function readPolicyCommand(record: JsonObject | undefined): string | undefined {
   if (typeof command === "string") {
     return command;
   }
-  if (Array.isArray(command) && command.every((part): part is string => typeof part === "string")) {
+  if (isStringArray(command)) {
     return command.join(" ");
   }
   return readCommandActions(record).join(" && ") || undefined;

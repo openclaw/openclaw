@@ -133,6 +133,22 @@ describe("openclaw-file-preview-modal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["files", "document"] as const)(
+    "updates the active %s preview and focus without untracked reads",
+    async (layout) => {
+      const warning = vi.spyOn(console, "warn");
+      const modal = await renderPreview({ layout });
+      modal.activePath = files[1]!.path;
+      await modal.updateComplete;
+
+      expect(modal.querySelector(".detail-body")?.textContent).toContain("noreply@example.com");
+      expect(document.activeElement).toBe(
+        modal.querySelector(layout === "files" ? ".search" : ".item.is-active"),
+      );
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    },
+  );
+
   it("restores modal focus when the same element reconnects", async () => {
     const modal = await renderPreview();
     const outside = document.createElement("button");

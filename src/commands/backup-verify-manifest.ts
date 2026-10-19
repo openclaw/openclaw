@@ -13,6 +13,7 @@ import {
   resolvePortableArchivePathKey,
   type BackupSymbolicLink,
 } from "../infra/backup-archive-path-policy.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
@@ -212,7 +213,7 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
   return manifest;
 }
 
-export function backupManifestSizeError(bytes: number): Error | undefined {
+function backupManifestSizeError(bytes: number): Error | undefined {
   const maxBytes = 1024 * 1024;
   return bytes > maxBytes
     ? new Error(`Backup manifest exceeds ${maxBytes} byte limit.`)
@@ -581,35 +582,67 @@ export type NormalizedArchiveEntry = {
   type?: string;
 };
 
-export async function extractManifest(params: {
-  archivePath: string;
-  manifestEntryPath: string;
-}): Promise<string> {
-  let manifestContentPromise: Promise<Buffer | Error> | undefined;
+type ArchiveEntry = NormalizedArchiveEntry & {
+  linkpath?: string;
+};
+
+export async function listBackupArchiveEntries(archivePath: string) {
+  const entries: ArchiveEntry[] = [];
+  let invalidReason: string | undefined;
+  let pathError: Error | undefined;
+  let manifestContent: Promise<string | Error> | undefined;
   await tar.t({
-    file: params.archivePath,
+    file: archivePath,
     gzip: true,
     maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-    filter: (entryPath) => entryPath === params.manifestEntryPath,
+    onwarn: (code, message) => {
+      // tar skips invalid headers; a readable remainder is not a complete backup.
+      if (code === "TAR_BAD_ARCHIVE" || code === "TAR_ENTRY_INVALID") {
+        invalidReason ??= formatErrorMessage(message);
+      }
+    },
     onReadEntry: (entry) => {
-      manifestContentPromise = Promise.resolve(
-        backupManifestSizeError(entry.size) ??
-          entry.concat().catch((error: unknown) => toStringifiedError(error)),
-      );
+      if (pathError) {
+        return;
+      }
+      let normalized: string;
+      try {
+        normalized = normalizeArchivePath(entry.path, "Archive entry");
+      } catch (error) {
+        pathError ??= toStringifiedError(error);
+        return;
+      }
+      entries.push({
+        raw: entry.path,
+        normalized,
+        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
+        ...(Number.isSafeInteger(entry.size) && entry.size >= 0 ? { size: entry.size } : {}),
+        ...(entry.type ? { type: entry.type } : {}),
+      });
+      // tar resumes the entry after this callback. Capture only one bounded body;
+      // duplicate manifests are rejected after the entire archive has drained.
+      if (!manifestContent && isRootBackupManifestEntry(normalized)) {
+        manifestContent = readBackupManifestEntry(entry);
+      }
     },
   });
+  return { entries, invalidReason, pathError, manifestContent };
+}
 
-  if (!manifestContentPromise) {
-    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
+/** Collect during listing; defer content errors until the complete entry inventory is checked. */
+async function readBackupManifestEntry(entry: tar.ReadEntry): Promise<string | Error> {
+  const sizeError = backupManifestSizeError(entry.size);
+  if (sizeError) {
+    return sizeError;
   }
-  const content = await manifestContentPromise;
-  if (content instanceof Error) {
-    throw content;
+  try {
+    const content = await entry.concat();
+    return isUtf8(content)
+      ? content.toString("utf8")
+      : new Error("Backup manifest must be valid UTF-8.");
+  } catch (error) {
+    return toStringifiedError(error);
   }
-  if (!isUtf8(content)) {
-    throw new Error("Backup manifest must be valid UTF-8.");
-  }
-  return content.toString("utf8");
 }
 
 export function isRegularArchiveFile(entryType: string | undefined): boolean {

@@ -24,15 +24,13 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  collectServiceInspectionFailureFacts,
-  createUpdateCommandFailureResult,
-} from "./update-command-result.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
 import {
+  collectServiceInspectionFailureFacts,
   assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -146,7 +144,7 @@ it.each(maintenanceOperations)(
         if (operation === "changed-during-refresh") {
           command.environment.OPENCLAW_SERVICE_VERSION = "2026.9.6";
         }
-        return true;
+        return { kind: "refreshed" };
       });
       const runId =
         operation === "warning" || operation.startsWith("no-restart")
@@ -281,20 +279,33 @@ it.each([{ state: "failed", tasksCurrent: 2, residual: true }])(
     }),
 );
 
-it.each(["systemd-user-bus-unavailable", undefined] as const)(
+it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const)(
   "explains lost inspection after admission without claiming identity drift: %s",
   (reason) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("linux");
       let available = true;
       const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
+        readCommand: async () => {
+          if (!available && reason === "native-exception") {
+            throw new ServiceInspectionError("systemd-user-bus-unavailable");
+          }
+          return {
+            programArguments: [
+              process.execPath,
+              path.join(process.cwd(), "openclaw.mjs"),
+              "gateway",
+            ],
+            environment: { HOME: home },
+          };
+        },
         readRuntime: async () => {
           if (!available) {
-            throw reason ? new ServiceInspectionError(reason) : new Error("private-runtime-detail");
+            throw reason
+              ? new ServiceInspectionError(
+                  reason === "native-exception" ? "systemd-user-bus-unavailable" : reason,
+                )
+              : new Error("private-runtime-detail");
           }
           return { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 2001 } };
         },
@@ -322,8 +333,15 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
       if (!(failure instanceof GatewayServiceUpdateOwnershipError)) {
         throw new Error("Expected service inspection refusal");
       }
+      if (reason === "native-exception") {
+        expect(failure.message).toContain("systemd");
+        expect(service.stop).not.toHaveBeenCalled();
+        expect(service.start).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
+      }
       const detail = reason
-        ? formatServiceInspectionReason(reason)
+        ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")
         : "Gateway service inspection is unavailable";
       expect(failure.message).toContain(detail);
       expect(failure.message).not.toContain("identity changed");
@@ -359,6 +377,9 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         failure: { cause: failure },
       });
       expect(result.reason).toBe("managed-service-preflight");
+      expect(result.failedStep.stderrTail).toContain(
+        "installation and Gateway were left unchanged",
+      );
       expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
 
       const verdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -366,9 +387,7 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         state: await readGatewayServiceState(service),
       });
       expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
-        reason
-          ? detail
-          : "Gateway service ownership could not be verified because inspection is unavailable.",
+        reason ? detail : "Gateway service inspection is unavailable",
       );
       if (reason) {
         expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({

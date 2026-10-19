@@ -145,7 +145,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const makeState = (owner = sessions) => {
     const state = createPageState(
       { ...context, sessions: owner },
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.client = client;

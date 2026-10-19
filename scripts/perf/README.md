@@ -268,6 +268,18 @@ before the listener is installed. Diagnostic drops, inconsistent depth accountin
 row overflow, or clock skew of 100 ms or more mark the capture incomplete and
 fail the run after preserving its report. There are no request IDs or causal
 links, so this cannot prove individual request ordering across worker owners.
+Add `--writer-reads --worktree-churn --clients 40 --seconds 180` to compare
+worktree traffic after reconnect. The driver saves writer queue count/wait
+snapshots at 120 seconds, then creates 12 sessions with real worktrees in a
+seeded project concurrently, archives them, and deletes them through the normal
+RPCs. After archiving, it waits for the background cleanup receipt (including a
+coalesced follow-up pass) before sampling counters and deleting sessions. Each
+stage completes before the next and saves another metrics snapshot.
+`worktreeChurn` in `result.json` retains the snapshots and elapsed times; subtract
+adjacent counts/wait sums for each stage. Reconnect polling continues during the
+burst. Worktree creation or preserved cleanup failures reject the run. These
+histograms start when the exporter subscribes, so they exclude earlier boot
+work and describe all concurrent traffic, not just the 12 operations.
 
 Add `--cheap-handlers --clients 30 --seconds 120` to measure the first two minutes
 of reconnect traffic for `push.web.vapidPublicKey`, `push.web.subscribe`,

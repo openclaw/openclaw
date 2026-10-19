@@ -115,7 +115,9 @@ readiness does not release the lock. A non-Gateway holder, such as a CLI
 command or embedded agent run, gets time to finish first (up to 20 minutes by
 default, less on a host whose Doctor runs slowly); Doctor prints its PID and
 progress while it waits. The same applies to a process that only has an agent
-database open ("An agent database is in use").
+database open ("An agent database is in use"). An idle CLI process
+closes an unused agent database about 30 seconds after its last use; one started
+from an older release can keep it open for up to 30 minutes, so stop it first.
 
 Maintenance admission refusals finish the update with a recorded warning when
 no data is at risk, including contention from an unknown or non-serving holder.

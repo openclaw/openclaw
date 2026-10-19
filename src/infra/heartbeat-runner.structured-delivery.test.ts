@@ -87,7 +87,6 @@ function createCase({
         ...options,
         deps: {
           telegram: sendTelegram,
-          getQueueSize: () => 0,
           nowMs: () => 0,
           getReplyFromConfig: replySpy,
           ...deps,
@@ -240,11 +239,19 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
   );
 
   it(
-    "persists the first silent heartbeat after boot for the next user run",
+    "replaces an absent cached outcome when a silent heartbeat runs",
     heartbeatCase(async ({ cfg, storePath, seed, replySpy, sendTelegram, run }) => {
       cfg.agents!.defaults!.heartbeat!.target = "none";
       const sessionKey = await seed();
       await closeOpenClawAgentDatabasesAsync();
+      const claim = (runId: string) =>
+        heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId,
+        });
+      expect(await claim("before-heartbeat")).toBeUndefined();
       replySpy.mockResolvedValue(
         createHeartbeatToolResponsePayload({
           outcome: "progress",
@@ -254,15 +261,11 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
       );
       expect(await run()).toMatchObject({ status: "ran" });
       expect(sendTelegram).not.toHaveBeenCalled();
-      await closeOpenClawAgentDatabasesAsync();
-      expect(
-        await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
-          agentId: "main",
-          sessionKey,
-          storePath,
-          runId: "next-user",
-        }),
-      ).toMatchObject({ summary: "First heartbeat after boot", outcome: "progress" });
+      expect(await claim("next-user")).toMatchObject({
+        summary: "First heartbeat after boot",
+        outcome: "progress",
+      });
+      expect(await claim("later-user")).toBeUndefined();
     }),
   );
 

@@ -10,7 +10,7 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { captureAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
+import { isAgentDatabaseClosing } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -338,9 +338,7 @@ it("delivers a committed finalization before close permits a physical successor"
       await waitForSessionTranscriptIndexReconcile(options);
       return successor;
     });
-    expect(
-      captureAgentDatabaseCloseFence({ agentId: options.agentId, path: database.path }),
-    ).toBeDefined();
+    expect(isAgentDatabaseClosing({ agentId: options.agentId, path: database.path })).toBe(true);
     expect(database.db.isOpen).toBe(true);
     expect(events).toEqual(["committed"]);
     deliver.resolve();

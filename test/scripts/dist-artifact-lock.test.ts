@@ -32,6 +32,19 @@ const createRoot = () => {
   return root;
 };
 
+it("reuses checkout ownership for nested preparation without releasing its parent", async () => {
+  const root = createRoot();
+  const ownerPath = path.join(resolveDistArtifactLockPath(root), "owner.json");
+  await withDistArtifactOwnership(root, async () => {
+    const owner = fs.readFileSync(ownerPath, "utf8");
+    await withDistArtifactOwnership(root, async () => {
+      expect(fs.readFileSync(ownerPath, "utf8")).toBe(owner);
+    });
+    expect(fs.readFileSync(ownerPath, "utf8")).toBe(owner);
+  });
+  expect(fs.existsSync(ownerPath)).toBe(false);
+});
+
 it("cancels an already contended same-process waiter without disturbing the owner", async () => {
   const root = createRoot();
   const enteredOwner = createDeferred();

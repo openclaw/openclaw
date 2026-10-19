@@ -19,8 +19,9 @@ import {
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { AppSidebarElement } from "./app-sidebar.tsx";
+import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
@@ -36,8 +37,13 @@ const CLOSE_DELAY_MS = 100;
 const EXIT_DURATION_MS = 100;
 let nextHovercardId = 0;
 
-function sessionHovercardMenuOpen(owner: ParentNode): boolean {
-  return owner.querySelector("openclaw-session-menu, openclaw-catalog-session-menu") !== null;
+function sessionHovercardMenuOpen(owner: HTMLElement): boolean {
+  return [...registryFor(owner.ownerDocument).members.keys()].some(
+    (overlay) =>
+      overlay.open &&
+      owner.contains(overlay.surface) &&
+      overlay.surface.closest("openclaw-session-menu, openclaw-catalog-session-menu") !== null,
+  );
 }
 
 type SessionProgressHovercardProps = {
@@ -79,7 +85,7 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
   let skipDelayTimer: number | null = null;
   let lastProgressCard: ProgressCard | null = null;
   let renderedRevision: string | null = null;
-  const hovercard = new PortaledHovercardController(
+  const hovercard = createPortaledHovercardOwner(
     () => close(true),
     CLOSE_DELAY_MS,
     () => close(),

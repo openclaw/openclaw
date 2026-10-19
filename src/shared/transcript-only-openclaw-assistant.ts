@@ -1,11 +1,13 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "./model-fallback-notice.js";
+
+export { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 
 // Identifies OpenClaw-authored assistant rows that are transcript bookkeeping,
 // not provider model output. Some history surfaces keep gateway-injected rows
 // visible, so use the narrower delivery-mirror predicate when visibility matters.
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
-export const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
 export const SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND = "subagent-completion-direct" as const;
 export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;

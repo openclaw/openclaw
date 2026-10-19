@@ -13,7 +13,7 @@ import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update
 
 let originalWebkit: PropertyDescriptor | undefined;
 const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Actions are unavailable while the Gateway reconnects.";
+const reconnectFailure = "Could not refresh. Check your connection and try again.";
 async function settle() {
   await Promise.resolve();
   flush();

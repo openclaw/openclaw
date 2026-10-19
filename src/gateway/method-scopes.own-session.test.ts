@@ -70,11 +70,15 @@ afterEach(() => {
 });
 
 describe("method scope resolution and authorization", () => {
-  it("admits workspace refresh and metadata edits while retaining full-write admission for lifecycle actions", () => {
-    for (const action of ["refresh_base", "edit"]) {
+  it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
+    for (const action of ["refresh_base", "edit", "request_review", "ready", "upload_evidence"]) {
       allow("sessions.github.action", ["operator.sessions.write"], { action });
     }
-    for (const action of ["inspect", "ready", "merge", "close", "unknown"]) {
+    deny("operator.write", "sessions.github.action", ["operator.sessions.write"], {
+      action: "ready",
+      publishingSessionKey: "agent:main:child",
+    });
+    for (const action of ["inspect", "merge", "close", "unknown"]) {
       deny("operator.write", "sessions.github.action", ["operator.sessions.write"], {
         action,
       });
@@ -389,6 +393,7 @@ describe("session-scoped method admission", () => {
   );
 
   it.each([
+    ["sessions.diff", { sessionKey: "agent:main:own" }, true],
     [
       "sessions.files.assets",
       { sessionKey: "agent:main:own", path: "index.html", refs: ["a.png"] },

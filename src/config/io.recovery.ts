@@ -8,9 +8,11 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
+import { createConfigFileWriteGuard } from "./io.write-safety.js";
 import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
+import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
 function findJsonRootSuffix(
   raw: string,
@@ -74,9 +76,23 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
     return false;
   }
+  const raw = snapshot.raw;
+  return withConfigWriteLock(
+    context.configPath,
+    () => recoverConfigJsonRootSuffixUnderLock(context, snapshot, raw, assertRecoveryCandidate),
+    context.deps.env,
+  );
+}
+
+async function recoverConfigJsonRootSuffixUnderLock(
+  context: ConfigIoContext,
+  snapshot: ConfigFileSnapshot,
+  raw: string,
+  assertRecoveryCandidate?: (config: unknown) => void,
+): Promise<boolean> {
   const suffixRecovery = inspectConfigJsonRootSuffixWithContext(
     context,
-    snapshot.raw,
+    raw,
     assertRecoveryCandidate,
   );
   if (!suffixRecovery) {
@@ -84,15 +100,23 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   }
   const validated = validateConfigObjectWithPlugins(suffixRecovery.resolvedConfigRaw, {
     ...context.pathResolution,
+    pluginValidation: context.options.pluginValidation,
     sourceRaw: suffixRecovery.parsed,
   });
   if (!validated.ok) {
     return false;
   }
+  const writeGuard = createConfigFileWriteGuard(
+    context.configPath,
+    context.deps.fs,
+    captureConfigWriteLockGuard(context.configPath),
+    { snapshot, includeGraph: { hashes: {}, targets: {} } },
+  );
+  writeGuard.assertBeforeMutation();
   const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps: context.deps,
     configPath: context.configPath,
-    raw: snapshot.raw,
+    raw,
     observedAt: new Date().toISOString(),
   });
   if (clobberedPath === null) {
@@ -113,7 +137,9 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(context.configPath),
-    fileSystem: context.deps.fs,
+    fileSystem: writeGuard.fileSystem,
+    assertBeforeMutation: writeGuard.assertBeforeMutation,
+    onDestinationState: writeGuard.onDestinationState,
   });
   context.deps.logger.warn(
     `Config auto-stripped non-JSON prefix: ${context.configPath} (original saved as ${clobberedPath})`,

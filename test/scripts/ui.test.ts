@@ -30,6 +30,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -90,6 +91,12 @@ function copyUiFixture(root: string, extra: string[] = []): void {
   // Resolve native optional dependencies from their installed package owner.
   fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+  fs.mkdirSync(path.join(root, ".git"));
+  installDistArtifactScripts(root, [], { compiler: false });
+  fs.writeFileSync(
+    path.join(root, "scripts/generate-control-ui-validators.mts"),
+    'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
+  );
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -108,6 +115,7 @@ function writeUiPackageBin(modules: string, name: string, source: string): strin
 
 const buildEnvironment = {
   OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+  OPENCLAW_BUILD_CACHE: "0",
   OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
   GIT_COMMIT: "a".repeat(40),
 };
@@ -410,7 +418,7 @@ process.exitCode = 0;\n`,
     `control-ui.build-${process.pid}-live`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
-  it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
+  it.each(["default", "explicit"])("checks source prerequisites with %s cache", (cacheRoot) => {
     // Preload module URLs must preserve spaces and URL fragment characters.
     const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
     const build = prepareBuildFixture(root, [
@@ -421,15 +429,9 @@ process.exitCode = 0;\n`,
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
-    fs.symlinkSync(
-      path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
-      path.join(root, "node_modules/@openclaw/fs-safe"),
-      "junction",
-    );
     fs.mkdirSync(path.join(root, "extensions"));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
-    fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
     fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
     build.vite(`
 import fs from "node:fs";
@@ -448,14 +450,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const file of validatorNames) {
       fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
     }
-    const run = () => {
+    const run = (expectedExit = 0) => {
       const result = build.run({
-        BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
+        BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
         OPENCLAW_BUILD_CACHE: "1",
         OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
         OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
       });
-      expectExit(result);
+      expectExit(result, expectedExit);
       return result.stdout;
     };
     expect(run()).toContain("fixture-bundler-ran");
@@ -470,6 +472,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "openclaw.plugin.json": JSON.stringify({ id: "new-board" }),
     });
     expect(run()).toContain("fixture-bundler-ran");
+    const output = path.join(root, "dist/control-ui/index.html");
+    const published = fs.readFileSync(output, "utf8");
+    fs.writeFileSync(
+      path.join(root, "scripts/generate-control-ui-validators.mts"),
+      "process.exitCode = 23;\n",
+    );
+    const refused = run(23);
+    expect(refused).not.toContain("fixture-bundler-ran");
+    expect(refused).not.toContain("reused content cache");
+    expect(fs.readFileSync(output, "utf8")).toBe(published);
   });
 
   it.each([
@@ -736,10 +748,14 @@ const validators = ${JSON.stringify(validators)};
 assert.equal(process.env.TSX_DISABLE_CACHE, undefined);
 assert.equal(process.env.npm_execpath, ${JSON.stringify(pnpm)});
 childProcess.spawnSync = function(command, args, options) {
-  if (args[0] === ${JSON.stringify(vite)}) {
-    assert.deepEqual(args.slice(1, 3), ["build", "--outDir"]);
-    assert.equal(path.dirname(args[3]), ${JSON.stringify(path.join(root, "dist"))});
-    assert.equal(require("node:fs").existsSync(args[3]), true);
+  if (args.includes(path.join(${JSON.stringify(root)}, "scripts/generate-control-ui-validators.mts"))) {
+    return spawnSync(command, args, options);
+  }
+  const viteIndex = args.indexOf(require("node:url").pathToFileURL(${JSON.stringify(vite)}).href);
+  if (viteIndex !== -1) {
+    assert.deepEqual(args.slice(viteIndex + 1, viteIndex + 3), ["build", "--outDir"]);
+    assert.equal(path.dirname(args[viteIndex + 3]), ${JSON.stringify(path.join(root, "dist"))});
+    assert.equal(require("node:fs").existsSync(args[viteIndex + 3]), true);
     return { status: 0 };
   }
   const validatorIndex = args.findIndex(arg => validators.includes(path.basename(arg)));

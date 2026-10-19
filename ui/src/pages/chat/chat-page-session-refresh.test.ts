@@ -26,7 +26,7 @@ import {
   setNavigationContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.ts";
 
 describe("chat page session refresh", () => {
   beforeEach(() => {
@@ -42,7 +42,7 @@ describe("chat page session refresh", () => {
   });
 
   it("leaves roster presentation updates with mounted panes", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const source = createSessionTitleSource();
     const navigation = setNavigationContext(page);
     Object.assign(navigation.context, { sessions: source.sessions });
@@ -73,7 +73,7 @@ describe("chat page session refresh", () => {
   });
 
   it("refreshes route defaults on hello changes while leaving profile updates with children", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     const listeners = new Set<(snapshot: typeof navigation.context.gateway.snapshot) => void>();
     const gateway = {

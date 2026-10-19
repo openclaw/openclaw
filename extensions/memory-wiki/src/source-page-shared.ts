@@ -2,6 +2,7 @@ import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   decodeWikiPageUtf8,
@@ -66,10 +67,7 @@ export async function writeImportedSourcePage(params: {
     previous.sourceUpdatedAtMs === params.sourceUpdatedAtMs &&
     previous.sourceSize === params.sourceSize &&
     previous.renderFingerprint === params.renderFingerprint &&
-    (await fs.access(path.join(params.vaultRoot, params.pagePath)).then(
-      () => true,
-      () => false,
-    ))
+    (await canAccess(path.join(params.vaultRoot, params.pagePath)))
   ) {
     return { pagePath: params.pagePath, changed: false, created: false };
   }

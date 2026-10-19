@@ -76,9 +76,8 @@ ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
-restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
-the same runner is skipped while its outer dispatch is active; other hook
-families and independent turns remain available.
+restrictions intersect. Recursive `before_prompt_build` contributions on the
+same runner are unsupported; handlers must avoid dispatching themselves.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
 

@@ -9,6 +9,7 @@ import type {
 } from "../../lib/nodes/page-operations.ts";
 
 export type DevicesProps = {
+  connected: boolean;
   loading: boolean;
   nodes: NodeListNode[];
   presence: PresenceEntry[];

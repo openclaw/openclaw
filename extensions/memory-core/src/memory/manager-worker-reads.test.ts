@@ -3,6 +3,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import * as memoryStorage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
@@ -38,7 +39,7 @@ describe("memory manager retained worker reads", () => {
     }
   });
 
-  it("admits, reindexes, and reopens status without host SQLite", async () => {
+  it("keeps async status off host SQLite and warns once for legacy status", async () => {
     await fs.writeFile(path.join(fixture.paths.memory, "vectors.md"), "Alpha vector source.");
     const config = fixture.createConfig({
       provider: "openai",
@@ -46,6 +47,16 @@ describe("memory manager retained worker reads", () => {
       vectorEnabled: true,
     });
     const observed = observeHostDataSql();
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const warn = memoryStorage.warnPluginSdkDeprecation;
+    // Isolate the warning budget from fixture writers that also use legacy status.
+    const scopedWarning = vi
+      .spyOn(memoryStorage, "warnPluginSdkDeprecation")
+      .mockImplementation((params) => warn({ ...params, pluginId: "memory-status-compat" }));
+    const statusWarnings = () =>
+      emitWarning.mock.calls.filter(([message]) =>
+        String(message).includes("MemorySearchManager.status"),
+      );
     try {
       const manager = await fixture.getFreshManager(config, "cli");
       expect(await manager.statusAsync()).toMatchObject({ files: 0, chunks: 0 });
@@ -62,10 +73,26 @@ describe("memory manager retained worker reads", () => {
         chunks: indexed.chunks,
         sourceCounts: indexed.sourceCounts,
       });
-      await reopened.close();
       expect(observed.queries).toEqual([]);
+      expect(statusWarnings()).toEqual([]);
+      expect(reopened.status()).toMatchObject({ files: 2, chunks: indexed.chunks });
+      reopened.status();
+      await reopened.close();
+      expect(() => reopened.status()).toThrow("Memory index manager is closed");
+      expect(statusWarnings()).toEqual([
+        [
+          expect.stringContaining(
+            "MemorySearchManager.status is deprecated; use MemorySearchManager.statusAsync instead.",
+          ),
+          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+        ],
+      ]);
+      expect(String(statusWarnings()[0]?.[0])).toContain("Final compatibility day: 2026-12-31");
+      expect(String(statusWarnings()[0]?.[0])).toContain("first January 2027 stable release");
     } finally {
       observed.restore();
+      scopedWarning.mockRestore();
+      emitWarning.mockRestore();
     }
   });
 

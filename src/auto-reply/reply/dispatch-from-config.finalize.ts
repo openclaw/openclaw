@@ -154,6 +154,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             }
           : {}),
       });
+      if (finalReply.dispatcherOutcome) {
+        const operation = state.getDispatchReplyOperation();
+        void finalReply.dispatcherOutcome.then(
+          (outcome) => {
+            if (outcome === "delivered") {
+              operation?.watchdog.progress("finalization", "reply:final_delivered");
+            }
+          },
+          () => {},
+        );
+      }
       if (heartbeatReply?.settle) {
         const settle = heartbeatReply.settle;
         const outcome =

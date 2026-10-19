@@ -16,7 +16,7 @@ import {
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
 import { resolveSessionRenameValue } from "../lib/session-rename.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -205,10 +205,10 @@ export function buildSidebarSessionNavigationState(input: {
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: row.archived !== true && isSessionRunActive(row),
+      hasActiveRun: row.archived !== true && isSessionRunStateActive(row),
       isRunVisuallyActive:
         row.archived !== true &&
-        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunActive(row)),
+        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunStateActive(row)),
       gatewayHasActiveRun: row.hasActiveRun,
       hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,

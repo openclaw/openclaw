@@ -12,7 +12,6 @@ import {
 } from "../../scripts/lib/gateway-bench-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { startGatewayDiscovery } from "../../src/gateway/server-discovery-runtime.js";
-import { createGatewayPluginRuntimeGeneration } from "../../src/gateway/server-plugin-runtime-generation.js";
 import {
   resolveWideAreaDiscoveryDomain,
   writeWideAreaGatewayZone,
@@ -144,10 +143,6 @@ describe("gateway benchmark discovery isolation", () => {
     const discovery = await startGatewayDiscovery({
       machineDisplayName: "Benchmark fixture",
       discovery: cfgAtStart.discovery,
-      pluginRuntimeClaim: createGatewayPluginRuntimeGeneration({
-        getServices: () => null,
-        setServices: () => {},
-      }).currentClaim(),
       port: 18789,
       gatewayTls: { enabled: false },
       gatewayDirectReachable: false,

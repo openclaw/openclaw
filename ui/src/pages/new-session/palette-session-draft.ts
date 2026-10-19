@@ -47,10 +47,7 @@ export class PaletteSessionDraft {
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly element: Pick<
-      HTMLElement,
-      "isConnected" | "ownerDocument" | "querySelectorAll"
-    >,
+    private readonly element: Pick<HTMLElement, "isConnected" | "ownerDocument" | "contains">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
       changed: () => void;

@@ -92,12 +92,18 @@ export async function runAcpHarnessAttempt(params: {
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
   };
   let activeRegistered = false;
+  let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   assertActive();
   try {
-    setActiveEmbeddedRun(input.sessionId, activeRun, sessionKey, input.sessionFile, agentId);
+    activeAttachment = setActiveEmbeddedRun(
+      input.sessionId,
+      activeRun,
+      sessionKey,
+      input.sessionFile,
+      agentId,
+    );
     activeRegistered = true;
-    input.replyOperation?.attachBackend(activeRun);
     signal.addEventListener("abort", stopDelivery, { once: true });
     timer = setTimeout(() => {
       timedOut = true;
@@ -391,7 +397,14 @@ export async function runAcpHarnessAttempt(params: {
     clearTimeout(timer);
     signal.removeEventListener("abort", stopDelivery);
     if (activeRegistered) {
-      clearActiveEmbeddedRun(input.sessionId, activeRun, sessionKey, input.sessionFile);
+      clearActiveEmbeddedRun(
+        input.sessionId,
+        activeRun,
+        sessionKey,
+        input.sessionFile,
+        undefined,
+        activeAttachment,
+      );
     }
   }
   return {

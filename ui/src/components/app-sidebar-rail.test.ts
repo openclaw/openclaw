@@ -111,7 +111,7 @@ async function update(sidebar: Sidebar, properties: Partial<Sidebar>) {
 }
 async function seed(sidebar: Sidebar, rows: Parameters<Sidebar["pinnedSessions"]["seed"]>[0]) {
   sidebar.pinnedSessions.seed(rows);
-  sidebar.requestUpdate();
+  sidebar.invalidate();
   await sidebar.updateComplete;
 }
 function cachedPin(key: string, label = "Saved title") {
@@ -167,6 +167,18 @@ describe("personal navigation rail", () => {
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
+    const identity = bottom.querySelector(".sidebar-identity-card")!;
+    expect(
+      identity.querySelector(".sidebar-identity-card__avatar .sidebar-identity-card__status"),
+    ).not.toBeNull();
+    expect(identity.getAttribute("data-connection-status")).toBe("connected");
+    expect(identity.getAttribute("aria-label")).toContain("Identity and app menu for Self");
+    for (const status of ["connecting", "reconnecting", "offline", "reload-required"] as const) {
+      sidebar.connectionStatus = status;
+      await sidebar.updateComplete;
+      expect(identity.getAttribute("data-connection-status")).toBe(status);
+      expect(identity.querySelector(".gateway-status")).toBeNull();
+    }
   });
 
   it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
@@ -533,7 +545,7 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["person:other"]);
     sidebar.sessionData.presencePayload = { presence: [] };
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const person = link(sidebar, "person:other");
     expect(person).not.toBeNull();
@@ -550,7 +562,7 @@ describe("personal navigation rail", () => {
     const { sidebar, result } = await fixture();
     result.sessions.find((row) => row.key === "agent:main:mine")!.boardFace = "dashboard";
     sidebar.sidebarEntries = ["session:agent:main:mine"];
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;

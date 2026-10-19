@@ -19,10 +19,7 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
-import {
-  isSessionTranscriptIndexStatusClean,
-  maintainSessionTranscriptIndexStatus,
-} from "./session-transcript-index-status.worker.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import {
   bindSqliteWorkerBackend,
@@ -75,9 +72,6 @@ function seedCleanSession(db: DatabaseSync, sessionId: string) {
 }
 
 function maintain(db: DatabaseSync) {
-  if (isSessionTranscriptIndexStatusClean(db)) {
-    return { sessionIds: [], hasMore: false, traversalComplete: true };
-  }
   return withoutTraversal(transaction(db, () => maintainSessionTranscriptIndexStatus(db)));
 }
 

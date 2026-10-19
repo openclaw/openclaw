@@ -41,7 +41,7 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
           socket,
           frame.id,
           buildMinimalGatewayHelloOkPayload({
-            auth: { role: "operator", scopes },
+            auth: { role: "operator", scopes, recoveryScope: "account-a" },
             methods: ["doctor.memory.status", "memory.search", "health"],
           }),
         );
@@ -86,8 +86,9 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
     const listeners = new Set<() => void>();
     const runtime = new AbortController();
     const context = createDeferred<ControlUiSettingsContext>();
+    const gateway = { snapshot: { phase: "connected" as string, hello: connected, client } };
     const application = {
-      gateway: { snapshot: { phase: "connected", hello: connected, client } },
+      gateway,
       plugins: {
         reportError: (error: unknown) => {
           throw error;
@@ -126,17 +127,32 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
       held,
       close,
       context: await withinTest(context.promise, signal),
+      reconnect(phase: "reconnecting" | "connected", connectionEpoch: number) {
+        gateway.snapshot.phase = phase;
+        snapshot = { ...snapshot, connected: phase === "connected", connectionEpoch };
+        for (const notify of listeners) {
+          notify();
+        }
+      },
       retire(cause: string) {
         if (cause === "runtime") {
           runtime.abort();
+        } else if (cause === "account reassignment" || cause === "access revocation") {
+          const auth = connected.auth!;
+          gateway.snapshot.hello = {
+            ...connected,
+            auth:
+              cause === "account reassignment"
+                ? { ...auth, recoveryScope: "account-b" }
+                : { ...auth, scopes: [] },
+          };
+          for (const notify of listeners) {
+            notify();
+          }
         } else {
           snapshot = {
             ...snapshot,
-            ...(cause === "agent"
-              ? { agentId: "writer" }
-              : cause === "method catalog"
-                ? { advertisedMethods: ["health"] }
-                : { connectionEpoch: 2 }),
+            ...(cause === "agent" ? { agentId: "writer" } : { advertisedMethods: ["health"] }),
           };
           for (const notify of listeners) {
             notify();
@@ -150,7 +166,7 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
   }
 }
 
-it.for(["agent", "connection", "runtime", "method catalog"])(
+it.for(["agent", "runtime", "method catalog", "account reassignment", "access revocation"])(
   "fences real transport dispatch and replies after %s retirement",
   async (cause, { signal }) => {
     const method = cause === "method catalog" ? "memory.search" : "doctor.memory.status";
@@ -179,6 +195,27 @@ it.for(["agent", "connection", "runtime", "method catalog"])(
     }
   },
 );
+
+it("keeps the view through a same-client reconnect but rejects the earlier reply", async ({
+  signal,
+}) => {
+  const f = await transportFixture(["operator.read"], signal);
+  try {
+    const pending = f.context.request("memory.search", { agentId: "main", hold: true });
+    const reply = await withinTest(f.held.promise, signal);
+    f.reconnect("reconnecting", 2);
+    f.reconnect("connected", 3);
+    const rejected = expect(pending).rejects.toThrow("connection changed");
+    sendMinimalGatewayResponse(reply.socket, reply.id, { marker: "previous transport" });
+    await rejected;
+    expect(f.context.signal.aborted).toBe(false);
+    await expect(f.context.request("memory.search", { agentId: "main" })).resolves.toEqual({
+      marker: "memory.search",
+    });
+  } finally {
+    await f.close();
+  }
+});
 
 it("rejects an unauthorized caller before any real transport request", async ({ signal }) => {
   const f = await transportFixture([], signal);

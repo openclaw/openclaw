@@ -107,6 +107,8 @@ describe("copy payload lifetime", () => {
     setText("second");
     flush();
     const current = container.querySelector<HTMLButtonElement>(surface.selector)!;
+    const label = current.querySelector("[data-copy-label]")!;
+    const idleLabel = label.textContent;
     expect(current.disabled).toBe(false);
     pending.reject(new Error("Synthetic clipboard rejection"));
     await vi.advanceTimersByTimeAsync(0);
@@ -117,5 +119,8 @@ describe("copy payload lifetime", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(writeText.mock.lastCall?.[0]).toContain("second");
     expect(current.dataset.copyState).toBe("copied");
+    expect(label.textContent).toBe("Copied!");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(label.textContent).toBe(idleLabel);
   });
 });

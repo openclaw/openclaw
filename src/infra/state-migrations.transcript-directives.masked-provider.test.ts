@@ -19,6 +19,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { prepareTrajectoryPayload } from "../trajectory/runtime-payload.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { encodeArchiveContent } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
@@ -57,18 +58,47 @@ describe("historical transcript masked provider repair", () => {
     database: import("node:sqlite").DatabaseSync,
     sessionId: string,
     facts: Array<{ modelId: string; provider: string }>,
+    mixedStorage = false,
   ): void {
     const insert = database.prepare(
-      `INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at)
-       VALUES(?,?,?,?,?)`,
+      `INSERT INTO trajectory_runtime_events(
+         session_id,seq,run_id,event_json,created_at,event_payload,event_codec,event_utf8_bytes
+       ) VALUES(?,?,?,?,?,?,?,?)`,
     );
     for (const [seq, fact] of facts.entries()) {
+      const eventJson = JSON.stringify({
+        type: "model.completed",
+        sessionId,
+        ...fact,
+        ...(mixedStorage
+          ? {
+              data: {
+                messagesSnapshot: [{ role: "user", content: "retained payload ".repeat(256) }],
+              },
+            }
+          : {}),
+      });
+      const payload =
+        mixedStorage && seq % 2 === 0
+          ? prepareTrajectoryPayload(database, eventJson)
+          : {
+              event_json: eventJson,
+              event_payload: null,
+              event_codec: null,
+              event_utf8_bytes: null,
+            };
+      if (mixedStorage && seq % 2 === 0) {
+        expect(payload.event_codec).not.toBeNull();
+      }
       insert.run(
         sessionId,
         seq,
         "run",
-        JSON.stringify({ type: "model.completed", sessionId, ...fact }),
+        payload.event_json,
         seq,
+        payload.event_payload,
+        payload.event_codec,
+        payload.event_utf8_bytes,
       );
     }
   }
@@ -149,19 +179,32 @@ describe("historical transcript masked provider repair", () => {
       if (storage === "zstd") {
         compressTranscriptRows(database);
       }
-      insertTrajectory(database, "multi-session", [
-        { modelId: "claude-opus-5.5", provider: "github-copilot" },
-        { modelId: "claude-opus-5.5", provider: "github-copilot" },
-        { modelId: "gpt-6.1-sol", provider: "openai" },
-        { modelId: "gpt-6.1-sol", provider: "***" },
-      ]);
-      insertTrajectory(database, "ambiguous-session", [
-        { modelId: "claude-opus-5.5", provider: "github-copilot" },
-        { modelId: "claude-opus-5.5", provider: "openrouter" },
-      ]);
-      insertTrajectory(database, "archived-session", [
-        { modelId: "claude-opus-5.5", provider: "github-copilot" },
-      ]);
+      insertTrajectory(
+        database,
+        "multi-session",
+        [
+          { modelId: "claude-opus-5.5", provider: "github-copilot" },
+          { modelId: "claude-opus-5.5", provider: "github-copilot" },
+          { modelId: "gpt-6.1-sol", provider: "openai" },
+          { modelId: "gpt-6.1-sol", provider: "***" },
+        ],
+        storage === "zstd",
+      );
+      insertTrajectory(
+        database,
+        "ambiguous-session",
+        [
+          { modelId: "claude-opus-5.5", provider: "github-copilot" },
+          { modelId: "claude-opus-5.5", provider: "openrouter" },
+        ],
+        storage === "zstd",
+      );
+      insertTrajectory(
+        database,
+        "archived-session",
+        [{ modelId: "claude-opus-5.5", provider: "github-copilot" }],
+        storage === "zstd",
+      );
 
       const archived = maskedAssistant("archived", "claude-opus-5.5", 7);
       const archivedUser = messageEvent({

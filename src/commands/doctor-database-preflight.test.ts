@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -40,16 +40,17 @@ it.each([false, true])(
       for (const suffix of ["", "-wal", "-shm"]) {
         fs.copyFileSync(path.join(family, suffix || "db"), `${agentPath}${suffix}`);
       }
-      const captured = readUpdateDatabaseGenerations([agentPath]);
+      const captured = await readUpdatePhysicalDatabaseGenerations([agentPath]);
 
       const result = await prepareDoctorDatabasePreflight(
         preserveSourceArtifacts ? { preserveSourceArtifacts } : {},
       );
 
       expect(result).toMatchObject({ incompatible: [], indeterminate: [] });
-      expect(readUpdateDatabaseGenerations([agentPath])[agentPath] === captured[agentPath]).toBe(
-        preserveSourceArtifacts,
-      );
+      expect(
+        (await readUpdatePhysicalDatabaseGenerations([agentPath]))[agentPath] ===
+          captured[agentPath],
+      ).toBe(preserveSourceArtifacts);
     });
   },
 );

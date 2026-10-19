@@ -2,26 +2,16 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionDiscussionState,
   SessionSharingRole,
+  MessageReactionSummary,
   SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type {
-  ControlUiSessionBranch,
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
-} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  createQuestionPromptState,
-  listQuestionPrompts,
-  type QuestionPrompt,
-} from "../../app/question-prompt.ts";
-import type { PresencePayload } from "../../app/user-profile.ts";
-import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
+import { createQuestionPromptState, listQuestionPrompts } from "../../app/question-prompt.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
   BoardCommandEvent,
@@ -44,6 +34,7 @@ import {
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
@@ -54,14 +45,19 @@ import {
   getChatHistoryLoadState,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
-import { sameChatPanePresence } from "./chat-pane-presence.ts";
+import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
+import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
-import type { ChatTypingActorState } from "./chat-typing-presence.ts";
+import { publishChatRunState } from "./chat-state-render.ts";
+import type {
+  ChatTypingActorState,
+  ChatTypingActorView,
+  ChatTypingOverflow,
+} from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
@@ -83,8 +79,14 @@ export type ChatPaneInputChanges = {
 
 /** Synchronous pane facts and domain resources; Solid owns publication and commits. */
 export abstract class ChatPaneStateOwner {
-  invalidate: () => void = () => {};
+  readonly presentation = {
+    active: false,
+    presented: true,
+    visuallyPresented: true,
+    documentVisible: document.visibilityState !== "hidden",
+  };
   updateComplete: Promise<boolean> = Promise.resolve(true);
+  awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
 
   abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
@@ -92,13 +94,17 @@ export abstract class ChatPaneStateOwner {
   private paneLifecycleRoot: Element | null = null;
   // The first Solid render initializes hidden panes; later hidden work parks.
   private readonly handleVisibilityChange = () => {
-    this.invalidate();
+    this.presentation.documentVisible = document.visibilityState !== "hidden";
     if (document.visibilityState !== "hidden") {
       return;
     }
     const state = this.state;
     if (!state) {
       return;
+    }
+    if (state.chatStreamRenderFrame != null) {
+      // Publish before the browser suspends animation frames; the hidden view stays parked.
+      publishChatRunState(state);
     }
     const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
@@ -107,7 +113,7 @@ export abstract class ChatPaneStateOwner {
       // live textarea while visibility change can still reach browser storage.
       state.handleChatDraftChange(liveDraft);
     }
-    requestChatPageUpdate(state);
+    state.composerDraftChanged?.();
   };
   start() {
     if (this.chatState.disposed) {
@@ -130,14 +136,12 @@ export abstract class ChatPaneStateOwner {
         if (this.state) {
           this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
         }
-        this.invalidate();
       }) ?? (() => {}),
     );
     // Configuration publications reconcile the scoped swarm hydrator outside rendering.
     this.chatState.addCleanup(
       this.context.runtimeConfig?.subscribe(() => {
         this.refreshSwarmRoster();
-        this.invalidate();
       }) ?? (() => {}),
     );
     this.element.addEventListener(
@@ -159,7 +163,7 @@ export abstract class ChatPaneStateOwner {
     this.transcript.dispose();
     this.stopBoardSubscriptions?.();
     this.stopBoardSubscriptions = undefined;
-    this.subscribedBoardProvider = undefined;
+    this.boardPresentation.provider = undefined;
     // A removed Home pane cannot bubble its final loading edge. Notify its
     // former shell so background history does not stay blocked on that pane.
     const paneRoot = this.paneLifecycleRoot;
@@ -168,38 +172,37 @@ export abstract class ChatPaneStateOwner {
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  // Optional inputs need own fields after TypeScript erasure so their first value publishes.
+  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail = undefined;
   paneId = "single";
-  paneLabel?: string;
+  paneLabel?: string = undefined;
   presentationId = "single";
-  chatMessagesBySession?: ChatMessageCache;
-  sessionSnapshotStore?: SessionSnapshotStore;
+  chatMessagesBySession?: ChatMessageCache = undefined;
+  sessionSnapshotStore?: SessionSnapshotStore = undefined;
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
-  agentId?: string;
+  agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";
   compact = false;
-  onBackToSubagents?: () => void;
-  workContext?: ChatWorkContext;
+  onBackToSubagents?: () => void = undefined;
+  workContext?: ChatWorkContext = undefined;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
-  private visuallyPresentedValue = true;
   private conversationVisible = false;
   get visuallyPresented(): boolean {
-    return this.visuallyPresentedValue;
+    return this.presentation.visuallyPresented;
   }
   set visuallyPresented(value: boolean) {
-    const previous = this.visuallyPresentedValue;
+    const previous = this.presentation.visuallyPresented;
     if (value === previous) {
       return;
     }
     const wasConversationPresented = this.conversationPresented;
-    this.visuallyPresentedValue = value;
+    this.presentation.visuallyPresented = value;
     this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.invalidate();
     this.notifyConversationPresentation(wasConversationPresented);
   }
   /** The pane's committed layout and both visual and route ownership permit idle warming. */
@@ -218,22 +221,19 @@ export abstract class ChatPaneStateOwner {
       );
     }
   }
-  private activeValue = false;
   private headerPresentationGeneration = 0;
-  private presentedValue = true;
   get presented(): boolean {
-    return this.presentedValue;
+    return this.presentation.presented;
   }
   set presented(value: boolean) {
-    const previous = this.presentedValue;
+    const previous = this.presentation.presented;
     if (value === previous) {
       return;
     }
     const wasConversationPresented = this.conversationPresented;
     this.headerPresentationGeneration += 1;
-    this.presentedValue = value;
+    this.presentation.presented = value;
     this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.invalidate();
     this.presentedChanged(value);
     this.notifyConversationPresentation(wasConversationPresented);
     this.synchronizeForegroundTranscript();
@@ -284,22 +284,21 @@ export abstract class ChatPaneStateOwner {
     return this.presented && owner === this.headerOutcomeOwner;
   }
   protected get selected(): boolean {
-    return this.activeValue;
+    return this.presentation.active;
   }
   get active(): boolean {
     // The selected split pane stays selected while another region owns input.
     return (
-      this.activeValue &&
+      this.presentation.active &&
       (!this.context || chatInputOwnerForContext(this.context).current === this.inputRegion)
     );
   }
   set active(value: boolean) {
-    const previous = this.activeValue;
+    const previous = this.presentation.active;
     if (value === previous) {
       return;
     }
-    this.activeValue = value;
-    this.invalidate();
+    this.presentation.active = value;
     this.activeChanged(this.active);
     this.synchronizeForegroundTranscript();
   }
@@ -311,32 +310,33 @@ export abstract class ChatPaneStateOwner {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
   }
-  draft?: string;
+  draft?: string = undefined;
   focusComposer = false;
   dashboardExpanded = false;
-  routeFace?: BoardFace;
-  onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void;
-  onFocusPane?: (paneId: string, intent?: "review-edit") => void;
+  routeFace?: BoardFace = undefined;
+  onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void = undefined;
+  onFocusPane?: (paneId: string, intent?: "review-edit") => void = undefined;
   onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
-  ) => boolean | void;
+  ) => boolean | void = undefined;
   onSessionDeleted?: (
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
     preserveDraft?: boolean,
-  ) => void;
+  ) => void = undefined;
   narrow = false;
   mergedChrome = false;
   navDrawerOpen = false;
+  gatewayStatus: GatewayStatusProps | null = null;
   onboarding = false;
-  onOpenSplitView?: () => void;
-  onSplitDown?: (paneId: string) => void;
-  onSplitRight?: (paneId: string) => void;
-  onClosePane?: (paneId: string) => void;
-  boardProvider?: BoardProvider;
+  onOpenSplitView?: () => void = undefined;
+  onSplitDown?: (paneId: string) => void = undefined;
+  onSplitRight?: (paneId: string) => void = undefined;
+  onClosePane?: (paneId: string) => void = undefined;
+  boardProvider?: BoardProvider = undefined;
 
   private publishedRunActivity: ChatPaneStateOwner["runActivity"] = null;
   chatState: ReturnType<typeof createChatState<ChatPageHost>> = this.mountChatState();
@@ -368,17 +368,13 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() => this.invalidate());
-  protected readonly transcript = createChatTranscript(
-    () => this.invalidate(),
-    () => this.paneId,
-    {
-      geometryEventTarget: this.element,
-      onViewportResize: () => this.chatState.handleTranscriptResize(),
-      canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
-      onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
-    },
-  );
+  readonly composerCapabilities = new ChatComposerCapabilityHost();
+  readonly transcript = createChatTranscript(() => this.paneId, {
+    geometryEventTarget: this.element,
+    onViewportResize: () => this.chatState.handleTranscriptResize(),
+    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+    onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+  });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
   }
@@ -387,11 +383,10 @@ export abstract class ChatPaneStateOwner {
     return readSessionProgressCard(this.progressCards, this.initialProgressCardTarget());
   }
 
-  protected readonly questionPromptState = createQuestionPromptState(() => {
-    this.questionPrompts = listQuestionPrompts(this.questionPromptState);
-    this.invalidate();
-  });
-  protected questionPrompts: QuestionPrompt[] = [];
+  readonly questionPromptState = createQuestionPromptState();
+  protected get questionPrompts() {
+    return listQuestionPrompts(this.questionPromptState);
+  }
   protected state: ChatPageHost | undefined;
 
   protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
@@ -435,13 +430,13 @@ export abstract class ChatPaneStateOwner {
   protected projectChildRoster(
     target: ReturnType<typeof resolveUiConversationIdentity> | undefined,
   ) {
-    const sessions = target ? this.swarmHydrator?.rows : undefined;
+    const sessions = target ? this.swarm.hydrator?.rows : undefined;
     return {
-      swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
+      swarm: target && this.swarm.enabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
-      subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
-      subagentSessionsPending: Boolean(target && this.swarmHydrator?.pendingChildRead),
-      subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
+      subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
+      subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
+      subagentSessionsRead: Boolean(target && this.swarm.hydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
         ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
@@ -459,7 +454,7 @@ export abstract class ChatPaneStateOwner {
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
-  protected paneWidth = Number.POSITIVE_INFINITY;
+  paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
   protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
@@ -471,54 +466,76 @@ export abstract class ChatPaneStateOwner {
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
 
-  protected headerRenameValue = "";
-  protected headerPlatform: string | null = null;
-  protected headerCopiedAction: ChatPaneHeaderAction | null = null;
-  protected continueInTerminalDialog: {
-    qualifiedSessionKey: string;
-    selectedGatewayUrl: string;
-    clientGatewayUrl: string;
-    scope: ChatPaneConnectionScope;
-  } | null = null;
-  protected headerPlacementMovingKey: string | null = null;
-  protected headerPlacementReclaimingKey: string | null = null;
-  protected headerPlacementRestartingKey: string | null = null;
-  private presencePayloadValue: PresencePayload | undefined;
-  protected get presencePayload(): PresencePayload | undefined {
-    return this.presencePayloadValue;
-  }
-  protected set presencePayload(value: PresencePayload | undefined) {
-    const previous = this.presencePayloadValue;
-    // Control side effects and later renders must still read the newest raw facts.
-    this.presencePayloadValue = value;
+  readonly headerPresentation: {
+    renameValue: string;
+    renameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
+    platform: string | null;
+    copiedAction: ChatPaneHeaderAction | null;
+    continueInTerminalDialog: {
+      qualifiedSessionKey: string;
+      selectedGatewayUrl: string;
+      clientGatewayUrl: string;
+      scope: ChatPaneConnectionScope;
+    } | null;
+    placementMovingKey: string | null;
+    placementReclaimingKey: string | null;
+    placementRestartingKey: string | null;
+    // A checkout path belongs to a worktree ID, never a reused session key.
+    worktreePaths: Map<string, { loading?: boolean; path?: string | null }>;
+    // Branches belong to checkout roots and refresh when their menu opens.
+    branches: Map<string, { loading?: boolean; value?: string | null }>;
+  } = {
+    renameValue: "",
+    renameSession: null,
+    platform: null,
+    copiedAction: null,
+    continueInTerminalDialog: null,
+    placementMovingKey: null,
+    placementReclaimingKey: null,
+    placementRestartingKey: null,
+    worktreePaths: new Map(),
+    branches: new Map(),
+  };
+  readonly presence = createChatPanePresence(() => {
     const snapshot = this.context?.gateway.snapshot;
-    if (
-      !sameChatPanePresence(previous, value, {
-        sessionKey: this.state?.sessionKey ?? this.sessionKey,
-        selfUser: snapshot?.selfUser,
-        selfInstanceId: snapshot?.client?.instanceId,
-      })
-    ) {
-      this.chatState.requestBackgroundUpdate();
-    }
-  }
-  private sessionSharingStatesValue = new Map<string, ChatSessionSharingState>();
-  protected get sessionSharingStates(): Map<string, ChatSessionSharingState> {
-    return this.sessionSharingStatesValue;
-  }
-  protected set sessionSharingStates(value: Map<string, ChatSessionSharingState>) {
-    this.sessionSharingStatesValue = value;
-    this.chatState.requestBackgroundUpdate();
-  }
+    return {
+      sessionKey: this.state?.sessionKey ?? this.sessionKey,
+      selfUser: snapshot?.selfUser,
+      selfInstanceId: snapshot?.client?.instanceId,
+    };
+  });
+  readonly collaboration: {
+    sharingStates: Map<string, ChatSessionSharingState>;
+    suggestions: SessionSuggestion[];
+    role: SessionSharingRole | undefined;
+    busyIds: Set<string>;
+    addOperation: symbol | undefined;
+    editOperation: symbol | undefined;
+    typingViews: ChatTypingActorView[];
+    typingOverflow: ChatTypingOverflow | undefined;
+    reactions: Map<string, MessageReactionSummary[]>;
+  } = {
+    sharingStates: new Map(),
+    suggestions: [],
+    role: undefined,
+    busyIds: new Set(),
+    addOperation: undefined,
+    editOperation: undefined,
+    typingViews: [],
+    typingOverflow: undefined,
+    reactions: new Map(),
+  };
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  protected resetConfirmation:
-    | {
-        scopeKey: string;
-        promise: Promise<boolean>;
-        resolve: (confirmed: boolean) => void;
-      }
-    | undefined;
+  readonly resetConfirmation: {
+    pending:
+      | {
+          scopeKey: string;
+          promise: Promise<boolean>;
+          resolve: (confirmed: boolean) => void;
+        }
+      | undefined;
+  } = { pending: undefined };
   protected readonly observedBoardPresence = new Map<string, boolean>();
   protected dashboardPresentationActivation?: {
     client: ChatPageHost["client"];
@@ -526,14 +543,14 @@ export abstract class ChatPaneStateOwner {
     expanded: boolean;
     pendingRoute?: boolean;
   };
-  protected swarmHydrator: SwarmRosterHydrator | null = null;
-  protected swarmEnabled = true;
-  protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
-  protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
-  protected readonly pendingPanelToggleRequests = new Map<
-    SessionPanelToggleSlot,
-    PendingSessionPanelToggle
-  >();
+  readonly swarm: { hydrator: SwarmRosterHydrator | null; enabled: boolean } = {
+    hydrator: null,
+    enabled: true,
+  };
+  readonly sessionDiscussion = createChatPaneDiscussionState();
+  readonly pendingPanelToggles = {
+    requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>(),
+  };
   protected readonly sessionDiscussionProbes = new Set<string>();
   protected readonly sessionDiscussionPanels = new Map<
     string,
@@ -551,51 +568,36 @@ export abstract class ChatPaneStateOwner {
     }
   };
   protected headerRenameInitialValue = "";
-  protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
-    null;
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;
   protected composerPrefillAttentionTarget: HTMLElement | null = null;
 
-  /** Checkout paths keyed by worktree id — stable for a worktree's lifetime,
-   * so reused session keys can never inherit another checkout's path. */
-  protected readonly headerWorktreePaths = new Map<
-    string,
-    { loading?: boolean; path?: string | null }
-  >();
-  /** HEAD keyed by the resolved root directory it was read from — a branch is
-   * a fact about a checkout, so root transitions miss instead of going stale. */
-  protected readonly headerBranches = new Map<
-    string,
-    { loading?: boolean; value?: string | null }
-  >();
   protected nativeDraftCleanup: (() => void) | null = null;
   protected readonly unreadPatchGuard = new SessionUnreadPatchGuard();
-  protected sessionSuggestions: SessionSuggestion[] = [];
-  protected sessionSuggestionRole: SessionSharingRole | undefined;
-  protected readonly sessionSuggestionBusyIds = new Set<string>();
   protected sessionSuggestionsRequestVersion = 0;
   protected sessionSuggestionsRefreshPromise: Promise<void> | undefined;
   protected sessionSuggestionsRefreshVersion: number | undefined;
   protected sessionSuggestionsRefreshQueued = false;
   protected sessionSuggestionTargetSignature = "";
-  protected sessionSuggestionAddOperation: symbol | undefined;
-  protected sessionSuggestionEditOperation: symbol | undefined;
   protected readonly typingActors = new Map<string, ChatTypingActorState>();
   protected readonly typingTimers = new Map<string, number>();
-  protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
-  protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
-  protected githubRepo: MarkdownRenderOptions["githubRepo"] = null;
-  protected sessionPullRequestsStatus: ControlUiSessionPullRequestSnapshot["status"] = "ready";
-  protected githubPublication: GitHubPublicationBinding | null = null;
-  protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
-  protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
-  protected catalogMessages: unknown[] = [];
-  protected catalogLoading = false;
-  protected loadingOlder = false;
-  protected catalogCursor: string | undefined;
-  protected catalogSession: SessionCatalogSession | null = null;
-  protected catalogHost: SessionCatalogHost | null = null;
+  readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
+  readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
+  readonly history = projectChatFields<{
+    catalogMessages: unknown[];
+    catalogLoading: boolean;
+    loadingOlder: boolean;
+    catalogCursor: string | undefined;
+    catalogSession: SessionCatalogSession | null;
+    catalogHost: SessionCatalogHost | null;
+  }>({
+    catalogMessages: [],
+    catalogLoading: false,
+    loadingOlder: false,
+    catalogCursor: undefined,
+    catalogSession: null,
+    catalogHost: null,
+  });
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
@@ -615,7 +617,9 @@ export abstract class ChatPaneStateOwner {
     public context: ApplicationContext,
   ) {}
 
-  subscribedBoardProvider: BoardProvider | undefined;
+  readonly boardPresentation: { provider: BoardProvider | undefined } = {
+    provider: undefined,
+  };
   private stopBoardSubscriptions: (() => void) | undefined;
 
   refreshBoardSubscriptions(): void {
@@ -623,11 +627,11 @@ export abstract class ChatPaneStateOwner {
       return;
     }
     const provider = this.resolveBoardProvider();
-    if (provider === this.subscribedBoardProvider) {
+    if (provider === this.boardPresentation.provider) {
       return;
     }
     this.stopBoardSubscriptions?.();
-    this.subscribedBoardProvider = provider;
+    this.boardPresentation.provider = provider;
     // Commands must reach the synchronous pane owner in order, including while parked.
     this.stopBoardSubscriptions = provider.events.subscribe((event) =>
       this.handleBoardCommand(event),

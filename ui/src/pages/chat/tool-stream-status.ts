@@ -192,7 +192,6 @@ function setCompactionStatus(
       }
       host.compactionStatus = null;
       host.compactionClearTimer = null;
-      host.requestUpdate?.();
     }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
@@ -339,7 +338,6 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
-    host.requestUpdate?.();
   }, FALLBACK_TOAST_DURATION_MS);
 }
 

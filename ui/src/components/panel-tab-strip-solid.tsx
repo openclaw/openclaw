@@ -7,13 +7,14 @@ import {
   createMemo,
   createSignal,
   flush,
+  onCleanup,
   onSettled,
   untrack,
 } from "solid-js";
+import { createShadowStyles } from "../lib/reactive/shadow-styles.ts";
 import { createTabList } from "../lib/tabs.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
-import { bindShadowStyles } from "./solid/shadow-styles.ts";
 import "./tooltip.ts";
 import "../styles/tabs.css";
 import tabsStyles from "../styles/tabs.css?inline";
@@ -33,6 +34,7 @@ export type PanelTabStripProps<T extends SolidPanelTabStripTab> = {
   activeId: string | null;
   ariaControls: string | ((tab: T) => string);
   onSelect: (id: string) => void;
+  onFocusActiveReady?: (focus: ((options?: FocusOptions) => void) | null) => void;
   onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
   newLabel: string;
@@ -113,6 +115,7 @@ function NewControl<T extends SolidPanelTabStripTab>(props: {
 
 function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps<T>) {
   let group!: HTMLDivElement;
+  const labels = new Map<string, HTMLElement>();
   const [dropPreview, setDropPreview] = createSignal<[id: string, placement: "before" | "after"]>();
   const finishDrag = () => {
     setDropPreview(undefined);
@@ -134,6 +137,15 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     () => props.tabs.map((tab) => ({ value: tab.id })),
     () => group,
   );
+  let onFocusActiveReady: PanelTabStripProps<T>["onFocusActiveReady"];
+  onCleanup(() => onFocusActiveReady?.(null));
+  const groupRef = (notify: PanelTabStripProps<T>["onFocusActiveReady"]) => {
+    onFocusActiveReady = notify;
+    return (element: HTMLDivElement) => {
+      group = element;
+      notify?.((options) => tabs.element(props.activeId)?.focus(options));
+    };
+  };
   let scheduleMeasurement = () => {};
   const controlsFor = (tab: T) =>
     typeof props.ariaControls === "string" ? props.ariaControls : props.ariaControls(tab);
@@ -144,8 +156,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     JSON.stringify([layoutKey(), props.tabs.map((tab) => tab.className)]),
   );
 
+  createShadowStyles(
+    () => group,
+    () => [tabsStyles],
+  );
+
   onSettled(() => {
-    const styles = bindShadowStyles(group, [tabsStyles]);
     let disposed = false;
     let resizeObserver: ResizeObserver | undefined;
     let observed = new Set<Element>();
@@ -160,8 +176,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
           return;
         }
         const children = [...group.children];
-        const labels = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")];
-        const nextObserved = new Set<Element>([group, ...children, ...labels]);
+        const nextObserved = new Set<Element>([group, ...children, ...labels.values()]);
         for (const target of observed) {
           if (!nextObserved.has(target)) {
             resizeObserver?.unobserve(target);
@@ -174,7 +189,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         }
         observed = nextObserved;
         // Read the row together before overflow classes can dirty layout.
-        const overflow = labels.map((label) => ({
+        const overflow = [...labels.values()].map((label) => ({
           label,
           overflowing: label.scrollWidth > label.clientWidth + 1,
         }));
@@ -198,13 +213,10 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     mutationObserver.observe(group, { childList: true, characterData: true, subtree: true });
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(schedule);
-      resizeObserver.observe(group);
-      observed.add(group);
     }
     schedule();
     return () => {
       disposed = true;
-      styles.dispose();
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
       if (frame !== undefined) {
@@ -224,10 +236,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         if (!group.isConnected) {
           return;
         }
-        const activeId = untrack(() => props.activeId);
-        const selected = [...group.querySelectorAll<HTMLElement>('[role="tab"]')].find(
-          (tab) => tab.dataset.tabValue === activeId,
-        );
+        const selected = tabs.element(props.activeId);
         if (!selected) {
           return;
         }
@@ -241,6 +250,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   );
 
   async function closeTab(event: MouseEvent, tab: T) {
+    if (tab.closeDisabled) {
+      return;
+    }
     const button = event.currentTarget;
     const root = button instanceof Node ? button.getRootNode() : null;
     const renderRoot = root instanceof Document || root instanceof ShadowRoot ? root : null;
@@ -273,9 +285,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   return (
     <>
       <div
-        ref={(element) => {
-          group = element;
-        }}
+        ref={[groupRef(props.onFocusActiveReady)]}
         class="oc-tabs tabstrip"
         role="tablist"
         aria-orientation="horizontal"
@@ -284,7 +294,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         <For each={props.tabs} keyed={(tab) => tab.id}>
           {(tab, index) => {
             // The keyed id is this node's lifetime identity.
-            const ref = tabs.ref(untrack(() => tab().id));
+            const initialTabId = untrack(() => tab().id);
+            const ref = tabs.ref(initialTabId);
+            onCleanup(() => labels.delete(initialTabId));
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;
             const draggable = () => Boolean(props.onReorder) && tab().draggable !== false;
@@ -318,7 +330,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                     {props.renderIcon ? props.renderIcon(tab) : tab().icon}
                   </span>
                 </Show>
-                <span class="tabstrip-tab__label">{tab().label}</span>
+                <span
+                  class="tabstrip-tab__label"
+                  ref={(element) => labels.set(initialTabId, element)}
+                >
+                  {tab().label}
+                </span>
                 <Show when={tab().badge}>
                   <span class="tabstrip-tab__badge">{tab().badge}</span>
                 </Show>
@@ -352,7 +369,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   onClick={tabs.onClick}
                   onKeyDown={tabs.onKeyDown}
                   onAuxClick={(event: MouseEvent) => {
-                    if (event.button === 1) {
+                    if (event.button === 1 && !tab().closeDisabled) {
                       event.preventDefault();
                       void props.onClose(tab().id);
                     }
@@ -397,6 +414,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   type="button"
                   tabindex={selected() ? 0 : -1}
                   aria-label={tab().closeLabel}
+                  disabled={tab().closeDisabled}
                   onKeyDown={(event: KeyboardEvent) => {
                     if (
                       (event.key === "Enter" || event.key === " ") &&

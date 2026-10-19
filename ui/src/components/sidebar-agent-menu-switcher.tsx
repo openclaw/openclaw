@@ -11,7 +11,6 @@ export const AGENT_VALUE_PREFIX = "agent:";
 export type SidebarAgentMenuSwitcherParams = {
   activeId: string;
   allAgentsScope: boolean;
-  query: string;
   openMode: "hover" | "click";
   agents: readonly GatewayAgentRow[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
@@ -89,6 +88,7 @@ function renderAgentRow(
   params: SidebarAgentMenuSwitcherParams,
   readAutofocus: () => boolean,
   readDuplicateName: () => boolean,
+  pinButtons: Map<string, HTMLButtonElement>,
 ) {
   const agentId = createMemo(() => normalizeAgentId(readAgent().id));
   const identity = createMemo(() => params.identities.get(agentId()) ?? null);
@@ -139,6 +139,7 @@ function renderAgentRow(
         <span class="sidebar-agent-menu__agent-status">
           {params.agents.length > 3 ? (
             <button
+              ref={(button) => pinButtons.set(agentId(), button)}
               type="button"
               class="sidebar-agent-menu__pin"
               aria-label={`${pinLabel()}: ${label()}`}
@@ -153,15 +154,13 @@ function renderAgentRow(
                 const button = event.currentTarget;
                 // Moving a keyed row into pinned-first order can drop native focus.
                 const focused = button === document.activeElement;
-                const menu = button.closest('[role="menu"]');
-                const value = `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`;
-                void params.onTogglePinnedAgent(agentId()).then(() => {
+                const id = agentId();
+                void params.onTogglePinnedAgent(id).then(() => {
                   if (focused) {
-                    menu
-                      ?.querySelector<HTMLElement>(
-                        `[data-value="${CSS.escape(value)}"] .sidebar-agent-menu__pin`,
-                      )
-                      ?.focus({ preventScroll: true });
+                    const currentButton = pinButtons.get(id);
+                    if (currentButton?.isConnected) {
+                      currentButton.focus({ preventScroll: true });
+                    }
                   }
                 });
               }}
@@ -177,7 +176,10 @@ function renderAgentRow(
     ),
   } satisfies MenuItem;
 }
-export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherParams) {
+export function renderSidebarAgentMenuSwitcher(
+  params: SidebarAgentMenuSwitcherParams,
+  pinButtons = new Map<string, HTMLButtonElement>(),
+) {
   const agents = createMemo(() => {
     const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
     return params.agents.toSorted(
@@ -186,7 +188,6 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
         Number(pinnedIds.has(normalizeAgentId(a.id))),
     );
   });
-  const query = createMemo(() => params.query.trim().toLocaleLowerCase());
   const nameCounts = createMemo(() => {
     const counts = new Map<string, number>();
     for (const agent of agents()) {
@@ -195,16 +196,6 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
     }
     return counts;
   });
-  const visibleAgents = createMemo(() =>
-    agents().filter((agent) => {
-      const label = normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id)));
-      return (
-        !query() ||
-        label.toLocaleLowerCase().includes(query()) ||
-        agent.id.toLocaleLowerCase().includes(query())
-      );
-    }),
-  );
   const autofocusAll = createMemo(
     () => params.openMode === "click" && params.allAgentsScope && agents().length > 1,
   );
@@ -217,7 +208,7 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
   if (params.agents.length === 0) {
     return entries;
   }
-  if (params.agents.length > 1 && !query()) {
+  if (params.agents.length > 1) {
     entries.push({
       id: "scope:all",
       label: t("agentChip.showAll"),
@@ -239,7 +230,7 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
       ),
     });
   }
-  for (const agent of visibleAgents()) {
+  for (const agent of agents()) {
     entries.push(
       renderAgentRow(
         () => agent,
@@ -249,19 +240,9 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
           (nameCounts().get(
             normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id))),
           ) ?? 0) > 1,
+        pinButtons,
       ),
     );
-  }
-  if (visibleAgents().length === 0) {
-    entries.push({
-      kind: "content",
-      id: "empty",
-      content: (
-        <div class="sidebar-agent-menu__empty" role="status">
-          {t("agentChip.noMatches")}
-        </div>
-      ),
-    });
   }
   return entries;
 }

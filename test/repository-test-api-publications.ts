@@ -39,6 +39,7 @@ const publications: Record<string, string | symbol> = {
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
+  "src/auto-reply/reply/queue/enqueue.ts": Symbol.for("openclaw.queueEnqueueTestApi"),
   "src/auto-reply/usage-bar/template.ts": Symbol.for("openclaw.usageBarTemplateTestApi"),
   "src/cli/gateway-cli/run.ts": Symbol.for("openclaw.gatewayRunTestApi"),
   "src/commands/doctor-auth-migration-receipts.ts": Symbol.for(
@@ -59,18 +60,14 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
-  "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
-  "src/sessions/session-lifecycle-admission.ts": Symbol.for(
-    "openclaw.sessionLifecycleAdmissionTestApi",
-  ),
+  "src/sessions/session-controller.stop.ts": Symbol.for("openclaw.sessionControllerTestApi"),
+  "src/sessions/session-controller.storage.ts": Symbol.for("openclaw.sessionControllerTestApi"),
   "src/sessions/session-upstream-monitor.ts": Symbol.for("openclaw.sessionUpstreamMonitorTestApi"),
-  "src/skills/lifecycle/upload-store.ts": Symbol.for("openclaw.skillUploadStoreTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
-  "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
 };
 

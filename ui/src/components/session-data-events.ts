@@ -2,6 +2,7 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-l
 import type { ApplicationContext } from "../app/context.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type {
   SessionCapability,
@@ -19,11 +20,11 @@ export function subscribeSessionCatalogBrowserEvents(
   onContinued: EventListener,
   onPageActivation: EventListener,
 ): () => void {
-  document.addEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
-  document.addEventListener("visibilitychange", onPageActivation);
+  const stopContinued = listen(document, CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+  const stopActivation = listen(document, "visibilitychange", onPageActivation);
   return () => {
-    document.removeEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
-    document.removeEventListener("visibilitychange", onPageActivation);
+    stopContinued();
+    stopActivation();
   };
 }
 
@@ -128,6 +129,7 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
+  owner.sessionsLoading = snapshot.loading;
   owner.sessionsStartupPending = snapshot.startupPending === true;
   if (snapshot.result && snapshot.agentId) {
     const agentId = normalizeAgentId(snapshot.agentId);
@@ -152,7 +154,6 @@ export function subscribeFilteredSidebarSessions(
       return;
     }
     publishSidebarSessionList(owner, snapshot);
-    owner.sessionsLoading = snapshot.loading;
     publishSidebarSessionError(owner, snapshot.error, "list");
     owner.requestSessionDataUpdate();
   };

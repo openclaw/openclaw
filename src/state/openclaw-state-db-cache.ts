@@ -12,11 +12,6 @@ import {
   isSqliteLockError,
   sqlitePrimaryResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
-import { readSqliteFileGeneration } from "../infra/sqlite-file-generation-worker.js";
-import {
-  sameSqliteFileGeneration,
-  type SqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -42,10 +37,7 @@ import {
 } from "./openclaw-state-db-borrow.js";
 import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.admission.js";
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
-import type {
-  CachedOpenClawStateDatabase,
-  StateDatabaseLifecycle,
-} from "./openclaw-state-db-cache.types.js";
+import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
 import type {
   OpenClawStateDatabase,
@@ -67,7 +59,7 @@ const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   STATE_DATABASE_LIFECYCLE_KEY,
   () => ({
-    cachedDatabases: new Map<string, CachedOpenClawStateDatabase>(),
+    cachedDatabases: new Map<string, OpenClawStateDatabase>(),
     retainedDatabaseHandles: new Map<EngineConnection, StateDatabaseHandle>(),
     idleTimers: new WeakMap(),
     idleReferences: new WeakMap(),
@@ -148,10 +140,6 @@ const cacheAdmission = createStateDatabaseCacheAdmission({
       error,
       identity: asyncResources.knownIdentity(pathname),
     }),
-  recordSchemaFailure: (pathname, error) => {
-    terminalOpenLatch.record(pathname, error);
-    notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: pathname, error });
-  },
 });
 
 export function registerOpenClawStateDatabaseLifecycleListener(
@@ -305,16 +293,10 @@ function publishOpenClawStateDatabase(
   env: NodeJS.ProcessEnv,
 ): OpenClawStateDatabase {
   const { db, path: pathname } = database;
-  const schemaFacts = cacheAdmission.initialize(database);
   const { identity, admission } = asyncResources.publish(pathname);
   // Lifecycle settlement retains this projection after native disposal clears its identity.
   databaseIdentities.set(db, readTrackedStateDatabaseIdentity(db) ?? identity);
-  cachedDatabases.set(
-    pathname,
-    Object.assign(database, {
-      schemaFacts,
-    }),
-  );
+  cachedDatabases.set(pathname, database);
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
@@ -384,12 +366,8 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
 }
 
 /** Latch integrity refusals so later opens fail without rescanning. */
-export function recordOpenClawStateDatabaseOpenFailure(
-  pathname: string,
-  error: Error,
-  generation?: SqliteFileGeneration,
-): boolean {
-  return terminalOpenLatch.record(resolveDatabasePath({ path: pathname }), error, generation);
+export function recordOpenClawStateDatabaseOpenFailure(pathname: string, error: Error): void {
+  terminalOpenLatch.record(resolveDatabasePath({ path: pathname }), error);
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
@@ -410,19 +388,8 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
   signal?: AbortSignal,
 ): Promise<Error | undefined> {
   context.admission.assertCurrent();
-  const failure = await terminalOpenLatch.getAsync(
-    context.admission.databasePath,
-    async (pathname, generation) => {
-      signal?.throwIfAborted();
-      context.admission.assertCurrent();
-      const current = await readSqliteFileGeneration(pathname, signal);
-      signal?.throwIfAborted();
-      context.admission.assertCurrent();
-      return sameSqliteFileGeneration(generation, current);
-    },
-  );
-  context.admission.assertCurrent();
-  return failure;
+  signal?.throwIfAborted();
+  return terminalOpenLatch.get(context.admission.databasePath);
 }
 
 /** Reject shared-state access after a process-local terminal failure. */

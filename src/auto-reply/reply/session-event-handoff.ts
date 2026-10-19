@@ -24,13 +24,16 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
-import type { ReplyOperation } from "./reply-run-registry.contracts.js";
 import type {
   SessionEventOutcome,
   SessionEventReceipt,
@@ -183,6 +186,7 @@ export function enqueueSessionEventForHost(
     throw new Error("Session event was not enqueued: an identical occurrence is already pending");
   }
   const eventText = occurrences.map((event) => event.text).join("\n");
+  const occurrenceId = occurrence.id;
   const ownership = claimSystemEventTurn(
     resolveSystemEventQueueKey(sessionKey, agentId),
     occurrences,
@@ -207,7 +211,7 @@ export function enqueueSessionEventForHost(
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
   let readmittedReceipt: SessionEventReceipt | undefined;
   let operation: ReplyOperation | undefined;
-  let replyRunRegistry: (typeof import("./reply-run-registry.js"))["replyRunRegistry"];
+  let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
@@ -230,12 +234,12 @@ export function enqueueSessionEventForHost(
     options.expectedTarget?.assertCurrent?.();
     const currentConfig = getSessionEventRuntimeConfig();
     resolveConfiguredAgentId(currentConfig, agentId);
-    if (isAgentDeletionBlocked(agentId)) {
+    if (isAgentDeletionBlocked(agentId, { env })) {
       throw new Error("Session event agent is being deleted");
     }
     if (
       operation &&
-      (operation.abortSignal.aborted || replyRunRegistry.get(sessionKey) !== operation)
+      (operation.abortSignal.aborted || !isCurrentSessionControllerOperation(operation))
     ) {
       throw new Error("Session event admission no longer owns its destination");
     }
@@ -299,7 +303,13 @@ export function enqueueSessionEventForHost(
       return;
     }
     settlement = "settling";
-    const complete = () => {
+    const complete = async () => {
+      try {
+        inputRecorder?.finishPendingInput?.(signal.aborted ? "cancelled" : "interrupted");
+        await inputRecorder?.waitForPendingInputSettlement?.();
+      } catch (error) {
+        failure ??= error instanceof Error ? error : String(error);
+      }
       settlement = "finished";
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
@@ -408,7 +418,7 @@ export function enqueueSessionEventForHost(
     if (operation?.ownerSettlement) {
       void operation.ownerSettlement.then(complete, complete);
     } else {
-      complete();
+      void complete();
     }
   };
   const onAbort = () => {
@@ -467,8 +477,8 @@ export function enqueueSessionEventForHost(
   void runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
+      await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
       assertOwnerCurrent();
-      ({ replyRunRegistry } = await import("./reply-run-registry.js"));
       const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
       const { prepareSessionGenerationFacts } =
         await import("../../config/sessions/session-delivery-generation.js");
@@ -545,13 +555,22 @@ export function enqueueSessionEventForHost(
               preparedBinding = binding;
             }
           },
-          onReplyOperationOwned: (owned) => {
-            operation = owned;
-          },
           queueModeOverride: "followup",
           suppressTyping: true,
           typingPolicy: "system_event",
+          onReplyOperationAdmitted: (owned) => {
+            operation = owned;
+          },
           internalEventExecution: {
+            prepareInput: async (recorder) => {
+              inputRecorder = recorder;
+              if (
+                !recorder.stageApproved ||
+                !(await recorder.stageApproved({ runId: occurrenceId, assertCurrent }))
+              ) {
+                throw new Error("Session event input was not durably admitted");
+              }
+            },
             execRequestOwners,
             deliver: options.deliver === false || target.deliver === false ? false : undefined,
             assertCurrent: assertEffectCurrent,
@@ -618,7 +637,6 @@ export function enqueueSessionEventForHost(
             },
             onAdopted: async () => {
               adopted = true;
-              operation = replyRunRegistry.get(sessionKey);
               if (!operation) {
                 throw new Error("Session event has no admitted reply owner");
               }

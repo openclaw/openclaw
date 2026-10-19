@@ -1,13 +1,14 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -15,11 +16,24 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { removeChatAbortControllerEntry } from "../chat-abort.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  rpcSourceTesting,
+  setRpcSourceIdentityForTest,
+} from "../../sessions/session-lifecycle-admission.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
-import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
-import { sessionAbortHandlers } from "./sessions-abort.js";
+import { createActiveRun } from "./chat.abort.test-helpers.js";
+import {
+  abortContext,
+  expectAbortFailure,
+  revocableAuthority,
+  seedYieldedSession,
+  stopSession,
+} from "./sessions.abort-lifecycle.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const fixture = useChatAbortRegistryFixture();
@@ -28,8 +42,10 @@ const sessionId = "native-parent-session";
 const runId = "native-parent-run";
 const lifecycleRevision = "original-incarnation";
 const target = { agentId: "main", sessionKey };
+const requester = { ...target, sessionId, lifecycleRevision, requesterTurnRunId: runId };
+type DescendantCancellation = NonNullable<AgentHarness["withDescendantCancellation"]>;
 
-function installHarness(hook: NonNullable<AgentHarness["withDescendantCancellation"]>) {
+function installHarness(hook: DescendantCancellation) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "core",
@@ -50,35 +66,7 @@ function installHarness(hook: NonNullable<AgentHarness["withDescendantCancellati
 afterEach(() => resetPluginRuntimeStateForTest());
 
 async function seedYieldedParent() {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    ...target,
-    defaultSessionId: sessionId,
-    lifecycleRevision,
-  });
-  const startedAt = Date.now() - 100;
-  for (const data of [
-    { phase: "start", startedAt },
-    {
-      phase: "end",
-      startedAt,
-      endedAt: startedAt + 50,
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-    },
-  ]) {
-    await persistGatewaySessionLifecycleEvent({
-      ...target,
-      event: {
-        runId,
-        sessionId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        ts: Date.now(),
-        data,
-      },
-    });
-  }
+  await seedYieldedSession(fixture.stateDir, sessionKey, sessionId, runId, lifecycleRevision);
   expect(loadSessionEntry(target)?.status).toBeUndefined();
 }
 
@@ -109,9 +97,7 @@ it.each([
             ...(race === "partial settlement"
               ? { errors: [new Error("Sibling cancellation failed")] }
               : {}),
-            cancelledRequesters: [
-              { ...target, sessionId, lifecycleRevision, requesterTurnRunId: runId },
-            ],
+            cancelledRequesters: [requester],
           };
     });
     installHarness(async (params, run) => {
@@ -123,30 +109,11 @@ it.each([
       return result;
     });
     const respond = vi.fn<RespondFn>();
-    const context = createChatAbortContext({
-      getRuntimeConfig,
-      getSessionEventSubscriberConnIds: () => new Set(),
-    });
-    const stop = Promise.resolve(
-      sessionAbortHandlers["sessions.abort"]!({
-        req: { type: "req", id: "stop", method: "sessions.abort" },
-        params: { key: sessionKey },
-        respond,
-        context: context as never,
-        client: {
-          connId: "operator",
-          connect: { scopes: ["operator.read", "operator.write"] },
-        } as never,
-        isWebchatConnect: () => false,
-      }),
-    );
+    const stop = Promise.resolve(stopSession(sessionKey, respond));
     try {
       await awaitGateBeforeSettlement(entered.promise, stop, "Stop skipped its registered harness");
       expect(respond).not.toHaveBeenCalled();
-      const before = loadSessionEntry(target);
-      if (!before) {
-        throw new Error("Missing yielded requester");
-      }
+      const before = expectDefined(loadSessionEntry(target), "yielded requester");
       if (race === "new revision") {
         await replaceSessionEntry(target, { ...before, lifecycleRevision: "replacement" });
       } else if (race === "new run" || race === "natural success") {
@@ -173,15 +140,8 @@ it.each([
       settled.resolve();
       await stop;
       expect(cancel).toHaveBeenCalledOnce();
-      if (
-        race === "failed settlement" ||
-        race === "partial settlement" ||
-        race === "retired owner"
-      ) {
-        expect(respond.mock.calls[0]?.[0]).toBe(false);
-      } else {
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-      }
+      const failures = ["failed settlement", "partial settlement", "retired owner"];
+      expect(respond.mock.calls[0]?.[0]).toBe(!failures.includes(race));
       if (race === "cancelled" || race === "partial settlement" || race === "retired owner") {
         expect(loadSessionEntry(target)).toMatchObject({
           sessionId,
@@ -209,13 +169,10 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
       defaultSessionId: sessionId,
       lifecycleRevision,
     });
-    const context = createChatAbortContext({
-      getRuntimeConfig,
-      getSessionEventSubscriberConnIds: () => new Set(),
-    });
-    const parent = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-    const successor = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-    context.chatAbortControllers.set(runId, parent);
+    const context = abortContext();
+    const parent = createActiveRun(sessionKey, { runId, sessionId, agentId: "main" });
+    rpcSourceTesting.set(runId, parent);
+    let successor: ReturnType<typeof createActiveRun> | undefined;
     const entered = createDeferred();
     const resume = createDeferred();
     const cancel = vi.fn(async () => ({ killed: 0, cancelledRequesters: [] }));
@@ -225,28 +182,31 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
       return run(cancel);
     });
     const respond = vi.fn<RespondFn>();
-    const stop = Promise.resolve(
-      sessionAbortHandlers["sessions.abort"]!({
-        req: { type: "req", id: "exact-stop", method: "sessions.abort" },
-        params: { key: sessionKey, runId },
-        respond,
-        context: context as never,
-        client: { connect: { scopes: ["operator.admin"] } } as never,
-        isWebchatConnect: () => false,
-      }),
-    );
+    const admin = { connect: { scopes: ["operator.admin"] } };
+    const stop = Promise.resolve(stopSession(sessionKey, respond, context, { runId }, admin));
     void stop.catch(() => {});
     try {
       await awaitGateBeforeSettlement(entered.promise, stop, "Stop skipped native preparation");
       expect(respond).not.toHaveBeenCalled();
       if (ending === "retargeted") {
-        parent.sessionId = "replacement-session";
+        setRpcSourceIdentityForTest(parent, { sessionId: "replacement-session" });
       } else {
-        removeChatAbortControllerEntry(context.chatAbortControllers, runId, parent);
-        if (ending === "replaced") {
-          context.chatAbortControllers.set(runId, successor);
-        } else if (ending === "queued successor") {
-          context.chatQueuedTurns.set(runId, successor);
+        const claim = parent.input.claim;
+        claim?.operation?.complete();
+        if (claim) {
+          releaseSessionControllerClaim(claim);
+        }
+        retireSessionControllerInput(parent.input);
+        rpcSourceTesting.deleteExpected(runId, parent);
+        await parent.input.settlement.promise;
+        if (ending === "replaced" || ending === "queued successor") {
+          successor = createActiveRun(sessionKey, {
+            runId,
+            sessionId,
+            agentId: "main",
+            queued: ending === "queued successor",
+          });
+          rpcSourceTesting.set(runId, successor);
         }
       }
       const session = loadSessionEntry(target);
@@ -263,8 +223,8 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
         await expect(stop).rejects.toThrow("Run changed before cancellation; retry Stop.");
         expect(respond).not.toHaveBeenCalled();
       }
-      expect(parent.controller.signal.aborted).toBe(false);
-      expect(successor.controller.signal.aborted).toBe(false);
+      expect(parent.input.abortSignal.aborted).toBe(false);
+      expect(successor?.input.abortSignal.aborted ?? false).toBe(false);
       expect(cancel).not.toHaveBeenCalled();
       expect(loadSessionEntry(target)).toEqual(session);
     } finally {
@@ -274,32 +234,10 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
   },
 );
 
-it("does not consume registered native cancellation when the captured parent declines Stop", async () => {
-  await seedYieldedParent();
-  const cancel = vi.fn(async () => ({ killed: 0, cancelledRequesters: [] }));
-  installHarness((_params, run) => run(cancel));
-  const beforeKill = vi.fn(() => false);
-  expect(
-    await abortControlledSubagents({
-      cfg: getRuntimeConfig(),
-      ...target,
-      sessionId,
-      lifecycleRevision,
-      requesterTurnRunId: runId,
-      beforeKill,
-    }),
-  ).toBeUndefined();
-  expect(beforeKill).toHaveBeenCalledOnce();
-  expect(cancel).not.toHaveBeenCalled();
-});
-
 it("stops a captured old embedded run when native preparation rejects after row replacement", async () => {
   await seedYieldedParent();
-  const original = loadSessionEntry(target);
-  if (!original) {
-    throw new Error("Missing original requester");
-  }
-  const abort = vi.fn();
+  const original = expectDefined(loadSessionEntry(target), "original requester");
+  const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
   const handle = createEmbeddedRunHandle({ runId, abort });
   setActiveEmbeddedRun(sessionId, handle, sessionKey);
   await replaceSessionEntry(target, {
@@ -309,72 +247,49 @@ it("stops a captured old embedded run when native preparation rejects after row 
     lifecycleRunId: "replacement-run",
   });
   const replacement = loadSessionEntry(target);
-  const prepare = vi.fn(
-    async (
-      params: Parameters<NonNullable<AgentHarness["withDescendantCancellation"]>>[0],
-    ): Promise<never> => {
-      expect(params).toMatchObject({ sessionId, requesterTurnRunId: runId });
-      expect(params.lifecycleRevision).toBeUndefined();
-      throw new Error("Original native generation is unavailable");
-    },
-  );
+  const prepare = vi.fn(async (params: Parameters<DescendantCancellation>[0]) => {
+    expect(params).toMatchObject({ sessionId, requesterTurnRunId: runId });
+    expect(params.lifecycleRevision).toBeUndefined();
+    throw new Error("Original native generation is unavailable");
+  });
   installHarness(prepare);
   const respond = vi.fn<RespondFn>();
   try {
-    await sessionAbortHandlers["sessions.abort"]!({
-      req: { type: "req", id: "exact-stop", method: "sessions.abort" },
-      params: { key: sessionKey, runId },
-      respond,
-      context: createChatAbortContext({
-        getRuntimeConfig,
-        getSessionEventSubscriberConnIds: () => new Set(),
-      }) as never,
-      client: {
-        connId: "operator",
-        connect: { scopes: ["operator.read", "operator.write"] },
-      } as never,
-      isWebchatConnect: () => false,
-    });
+    await stopSession(sessionKey, respond, abortContext(), { runId });
     expect(prepare).toHaveBeenCalledOnce();
     expect(abort).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("Original native generation is unavailable"),
-      }),
-    ]);
+    expectAbortFailure(
+      respond,
+      expect.stringContaining("Original native generation is unavailable"),
+    );
     expect(loadSessionEntry(target)).toEqual(replacement);
   } finally {
     clearActiveEmbeddedRun(sessionId, handle);
   }
 });
 
-it.each(["declined", "revoked"] as const)(
-  "preserves the %s parent fence when native preparation rejects before callback entry",
+it.each(["declined", "revoked", "prepared"] as const)(
+  "preserves the parent fence with %s native preparation",
   async (ending) => {
     await seedYieldedParent();
-    let current = true;
-    installHarness(async () => {
-      if (ending === "revoked") {
-        current = false;
-      }
-      throw new Error("Native preparation failed");
-    });
+    const authority = revocableAuthority("Stop authority revoked");
+    const cancel = vi.fn(async () => ({ killed: 0, cancelledRequesters: [] }));
+    installHarness(
+      ending === "prepared"
+        ? (_params, run) => run(cancel)
+        : async () => {
+            if (ending === "revoked") {
+              authority.revoke();
+            }
+            throw new Error("Native preparation failed");
+          },
+    );
     const beforeKill = vi.fn(() => false);
     const stop = abortControlledSubagents({
       cfg: getRuntimeConfig(),
-      ...target,
-      sessionId,
-      lifecycleRevision,
-      requesterTurnRunId: runId,
+      ...requester,
       beforeKill,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("Stop authority revoked");
-        }
-      },
+      assertCurrent: authority.assertCurrent,
     });
     if (ending === "revoked") {
       await expect(stop).rejects.toThrow("Stop authority revoked");
@@ -384,5 +299,6 @@ it.each(["declined", "revoked"] as const)(
       expect(beforeKill).toHaveBeenCalledOnce();
     }
     expect(loadSessionEntry(target)?.status).toBeUndefined();
+    expect(cancel).not.toHaveBeenCalled();
   },
 );

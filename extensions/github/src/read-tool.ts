@@ -4,7 +4,7 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import { parseGitHubLinkParams } from "./targets.js";
+import { parseGitHubReadParams } from "./targets.js";
 
 export function createGitHubReadTool(
   api: OpenClawPluginApi,
@@ -14,7 +14,7 @@ export function createGitHubReadTool(
     name: "github_read",
     label: "Read GitHub",
     description:
-      "Read a known public GitHub issue, pull request, or commit URL. Returns the description, bounded discussion and review comments, file changes, and PR checks where applicable. Inspect partial and truncation flags before treating the result as complete. The Gateway reads GitHub; no credentials or network access are needed in the sandbox. Does not search or modify GitHub.",
+      "Read a known public GitHub issue, pull request, commit, or Actions workflow-job URL. Returns the description, bounded discussion and review comments, file changes, PR checks, or the bounded end of a completed job log with its run and commit identity. Inspect partial and truncation flags before treating the result as complete. The Gateway reads GitHub; no credentials or network access are needed in the sandbox. Does not search or modify GitHub.",
     parameters: {
       type: "object",
       properties: {
@@ -22,7 +22,8 @@ export function createGitHubReadTool(
           type: "string",
           minLength: 1,
           maxLength: 4096,
-          description: "Public github.com issue, pull request, or commit URL.",
+          description:
+            "Public github.com issue, pull request, commit, or Actions workflow-job URL.",
         },
         refresh: {
           type: "boolean",
@@ -35,9 +36,11 @@ export function createGitHubReadTool(
     async execute(_toolCallId, input, signal) {
       context.assertInvocationCurrent();
       signal?.throwIfAborted();
-      const parsed = parseGitHubLinkParams(input);
+      const parsed = parseGitHubReadParams(input);
       if (!parsed) {
-        throw new Error("Provide a public github.com issue, pull request, or commit URL.");
+        throw new Error(
+          "Provide a public github.com issue, pull request, commit, or Actions workflow-job URL.",
+        );
       }
       const document = await api.runtime.gateway.request(
         "tools.github.read",

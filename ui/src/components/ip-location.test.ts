@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import "./ip-location.ts";
+import "./ip-location.tsx";
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
@@ -75,6 +75,27 @@ describe("openclaw-ip-location", () => {
     );
     await element.updateComplete;
     expect(element.textContent?.trim()).toBe("");
+  });
+
+  it("clears the previous location while a replacement address is pending", async () => {
+    const replacement = createDeferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ found: true, city: "Vienna", country: "Austria" }))
+      .mockReturnValueOnce(replacement.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const element = document.createElement("openclaw-ip-location");
+    element.ip = "203.0.113.24";
+    document.body.append(element);
+    await settleUntil(element, () => element.textContent?.trim() === "Vienna, Austria");
+
+    element.ip = "203.0.113.25";
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(element.textContent?.trim()).toBe("");
+
+    replacement.resolve(jsonResponse({ found: true, city: "Berlin", country: "Germany" }));
+    await settleUntil(element, () => element.textContent?.trim() === "Berlin, Germany");
   });
 
   it("does not request anything without an address", async () => {

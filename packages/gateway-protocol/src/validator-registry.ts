@@ -188,6 +188,8 @@ export const validateFsListDirParams = compile(S.FsListDirParamsSchema);
 export const validateFsListDirResult = compile(S.FsListDirResultSchema);
 export const validateAgentsCreateParams = compile(S.AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = compile(S.AgentsUpdateParamsSchema);
+export const validateAgentsAvatarGenerateParams = compile(S.AgentsAvatarGenerateParamsSchema);
+export const validateAgentsAvatarGenerateResult = compile(S.AgentsAvatarGenerateResultSchema);
 export const validateAgentsDeleteParams = compile(S.AgentsDeleteParamsSchema);
 export const validateAgentsFilesListParams = compile(S.AgentsFilesListParamsSchema);
 export const validateAgentsFilesGetParams = compile(S.AgentsFilesGetParamsSchema);
@@ -295,6 +297,10 @@ function checkPulseBoundaries(data: unknown) {
     : undefined;
 }
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema, checkPulseBoundaries);
+export const validateSessionsSubscribeParams = compile(
+  S.SessionsSubscribeParamsSchema,
+  checkPulseBoundaries,
+);
 export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);

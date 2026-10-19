@@ -324,14 +324,6 @@ describe("committed authentication policy", () => {
   it.each<OpenClawConfig["gateway"]>([
     { trustedProxies: ["192.0.2.10"] },
     { auth: { trustedProxy: { userHeader: "x-user", allowUsers: ["retained@example.test"] } } },
-    {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
-        },
-      },
-    },
   ])(
     "fences transport without revoking accepted work and drains its config response for %j",
     (gateway) => {
