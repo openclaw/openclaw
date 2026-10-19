@@ -10,7 +10,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createQuestionPromptState, listQuestionPrompts } from "../../app/question-prompt.ts";
+import { createQuestionPromptState } from "../../app/question-prompt.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
@@ -93,38 +93,23 @@ export abstract class ChatPaneStateOwner {
   historySentinel: HTMLElement | null = null;
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
-  protected readonly registerHeaderElement = (element: HTMLElement) => {
-    this.headerElement = element;
-    return () => {
-      if (this.headerElement === element) {
-        this.headerElement = null;
-      }
+  private registerPaneElement(
+    key: "headerElement" | "historySentinel" | "transcriptAnnouncement" | "composerShell",
+  ) {
+    return (element: HTMLElement) => {
+      this[key] = element;
+      return () => {
+        if (this[key] === element) {
+          this[key] = null;
+        }
+      };
     };
-  };
-  protected readonly registerHistorySentinel = (element: HTMLElement) => {
-    this.historySentinel = element;
-    return () => {
-      if (this.historySentinel === element) {
-        this.historySentinel = null;
-      }
-    };
-  };
-  protected readonly registerTranscriptAnnouncement = (element: HTMLElement) => {
-    this.transcriptAnnouncement = element;
-    return () => {
-      if (this.transcriptAnnouncement === element) {
-        this.transcriptAnnouncement = null;
-      }
-    };
-  };
-  protected readonly registerComposerShell = (element: HTMLElement) => {
-    this.composerShell = element;
-    return () => {
-      if (this.composerShell === element) {
-        this.composerShell = null;
-      }
-    };
-  };
+  }
+  protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
+  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
+  protected readonly registerTranscriptAnnouncement =
+    this.registerPaneElement("transcriptAnnouncement");
+  protected readonly registerComposerShell = this.registerPaneElement("composerShell");
 
   abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
   abstract afterRender(focusComposerChanged: boolean): void;
@@ -417,10 +402,7 @@ export abstract class ChatPaneStateOwner {
   }
 
   readonly questionPromptState = createQuestionPromptState();
-  protected get questionPrompts() {
-    return listQuestionPrompts(this.questionPromptState);
-  }
-  protected state: ChatPageHost | undefined;
+  state: ChatPageHost | undefined;
 
   protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
     const state = this.state;

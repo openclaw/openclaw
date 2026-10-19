@@ -17,7 +17,6 @@ import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessio
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
   dispatchChatSlashCommand,
   requireChatSessionAction,
@@ -214,7 +213,14 @@ export async function handleSendChat(
   const message =
     rawParsedCommand || intent
       ? userMessage
-      : composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+      : [
+          ...attachmentsToSend.map(({ browserAnnotation }) =>
+            browserAnnotation?.modelContext.trim(),
+          ),
+          userMessage,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   const deliveredAttachments = rawParsedCommand
     ? attachmentsToSend.filter(

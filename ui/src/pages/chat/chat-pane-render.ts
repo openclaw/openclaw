@@ -71,14 +71,6 @@ import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  get realtimeTalk() {
-    return this.state?.realtimeTalk;
-  }
-
-  readState() {
-    return this.state;
-  }
-
   render(readProviderReview?: () => ChatProviderReviewOwner) {
     const state = this.state;
     if (!state) {
@@ -502,7 +494,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenTalkSettings: () => this.context.navigate("talk"),
       onOpenDictationSettings: () => this.context.navigate("model-setup"),
       suggestionComposer: suggestionViewer,
-      typingActors: multiIdentity ? this.typingActorViews() : [],
+      typingActors: multiIdentity ? this.collaboration.typingViews : [],
       typingOverflow: multiIdentity ? this.collaboration.typingOverflow : undefined,
       onTypingChange: typingEnabled
         ? (typing, preview, cursor) => this.sendTypingState(typing, preview, cursor)
