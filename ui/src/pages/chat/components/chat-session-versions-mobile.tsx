@@ -1,4 +1,4 @@
-import { createMemo, createProjection, createUniqueId, For, Show } from "solid-js";
+import { createMemo, createProjection, createUniqueId, For, onSettled, Show } from "solid-js";
 import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -19,6 +19,7 @@ export type ChatSessionVersionsMobileProps = {
 /** Interior only: the mobile host owns its header, navigation, retention and scrolling. */
 export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps) {
   const id = createUniqueId();
+  const buttons = new Map<string, HTMLButtonElement>();
   // Retain presentation order across active-first server responses, never branch facts.
   const order = createProjection<{ scopeKey: string; ids: string[] }>(
     (draft) => {
@@ -92,9 +93,10 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
             }
             event.stopPropagation();
             event.preventDefault();
-            const radios = [
-              ...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
-            ];
+            const radios = order.ids.flatMap((key) => {
+              const button = buttons.get(key);
+              return button?.isConnected ? [button] : [];
+            });
             const index = radios.findIndex((radio) => radio === event.target);
             if (index < 0 || props.branchSwitchDisabledReason) {
               return;
@@ -106,6 +108,12 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
         >
           <For each={order.ids}>
             {(leafEntryId) => {
+              let button: HTMLButtonElement | undefined;
+              onSettled(() => () => {
+                if (buttons.get(leafEntryId) === button) {
+                  buttons.delete(leafEntryId);
+                }
+              });
               const branch = () => branchesById().get(leafEntryId);
               const relativeTime = () =>
                 formatRelativeTimestamp(Date.parse(branch()?.updatedAt ?? ""), { fallback: "" });
@@ -114,6 +122,10 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
                   {(version) => (
                     <li class="chat-session-versions-mobile__row" role="none">
                       <button
+                        ref={(element) => {
+                          button = element;
+                          buttons.set(leafEntryId, element);
+                        }}
                         type="button"
                         role="radio"
                         class="chat-session-versions-mobile__select"
