@@ -1,7 +1,5 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -14,7 +12,7 @@ import { buildMcpClientCapabilities } from "./mcp-metadata.js";
 async function fixture() {
   const client = new Client(
     { name: "test", version: "1" },
-    { capabilities: buildMcpClientCapabilities(true) },
+    { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
   );
   const server = new Server({ name: "test", version: "1" }, { capabilities: { tools: {} } });
   const call = bindMcpClientElicitation(client);
@@ -34,7 +32,7 @@ describe("direct MCP elicitation binding", () => {
   it("advertises and answers OpenAI forms on the actual MCP connection", async () => {
     const f = await fixture();
     try {
-      f.server.setRequestHandler(CallToolRequestSchema, async () => {
+      f.server.setRequestHandler("tools/call", async () => {
         const result = await f.server.request(
           {
             method: "openai/elicitation/create",

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createEffect, createMemo, untrack } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -108,13 +108,23 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       ]}
     >
       <span class="session-glyph__content">{props.content}</span>
-      <Show when={props.running}>
-        <SessionGlyphRun
-          pair={props.ring === "pair"}
-          queued={props.queued}
-          label={label()}
-          runVisibility={props.runVisibility}
-        />
+      <Show when={props.running && (props.runVisibility ?? true)} keyed>
+        {(createVisibility) =>
+          renderSessionGlyphRun(
+            {
+              get pair() {
+                return props.ring === "pair";
+              },
+              get queued() {
+                return props.queued;
+              },
+              get label() {
+                return label();
+              },
+            },
+            typeof createVisibility === "function" ? createVisibility : undefined,
+          )
+        }
       </Show>
       {props.badge}
     </span>
@@ -128,32 +138,25 @@ export function SessionGlyph(props: SessionGlyphOptions) {
   );
 }
 
-function SessionGlyphRun(props: {
-  pair: boolean;
-  queued?: boolean;
-  label: string;
-  runVisibility?: SessionRunVisibility;
-}) {
-  const observe = untrack(() => props.runVisibility?.());
-  let indicator: Element | undefined;
-  // Class bindings can clear the offscreen class; refresh native visibility after that commit.
-  createEffect(
-    () => [props.queued, props.pair],
-    () => {
-      if (indicator) {
-        observe?.(indicator);
-      }
-    },
-  );
+function renderSessionGlyphRun(
+  props: { pair: boolean; queued?: boolean; label: string },
+  createVisibility: SessionRunVisibility | undefined,
+) {
+  const [offscreen, setOffscreen] = createSignal(false);
+  const observe = createVisibility?.(setOffscreen);
   return (
     <Show
       when={props.pair}
       fallback={
         <span
-          ref={(element) => {
-            indicator = element;
-          }}
-          class={["session-glyph__ring", { "session-glyph__ring--queued": props.queued }]}
+          ref={(element) => observe?.(element)}
+          class={[
+            "session-glyph__ring",
+            {
+              "session-glyph__ring--queued": props.queued,
+              "session-run-indicator--offscreen": offscreen(),
+            },
+          ]}
           role="img"
           aria-label={props.label}
         />
@@ -167,10 +170,8 @@ function SessionGlyphRun(props: {
       >
         <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
         <path
-          ref={(element) => {
-            indicator = element;
-          }}
-          class="session-glyph__trace-run"
+          ref={(element) => observe?.(element)}
+          class={["session-glyph__trace-run", { "session-run-indicator--offscreen": offscreen() }]}
           d={PAIR_TRACE_PATH}
           pathLength="100"
         />

@@ -47,6 +47,7 @@ export default defineConfig({
   plugins: sharedVitestConfig.plugins,
   resolve: sharedVitestConfig.resolve,
   test: {
+    testTimeout: sharedVitestConfig.test.testTimeout,
     isolate: false,
     fileParallelism: false,
     maxWorkers: 1,

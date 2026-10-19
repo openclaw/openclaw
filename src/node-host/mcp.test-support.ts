@@ -1,5 +1,5 @@
 import "./mcp-manager.test-support.js";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
 import { vi } from "vitest";
 
 const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
@@ -8,7 +8,7 @@ type ManagerOptions = Parameters<typeof startNodeHostMcpManager>[1];
 type ManagerDeps = Omit<ManagerOptions, "resolveTransport"> &
   Partial<Pick<ManagerOptions, "resolveTransport">>;
 type Client = ReturnType<NonNullable<ManagerDeps["createClient"]>>;
-type CallOptions = Parameters<Client["callTool"]>[2];
+type CallOptions = Parameters<Client["callTool"]>[1];
 type ClientParams = {
   connectError?: Error;
   connect?: () => Promise<void>;
@@ -41,12 +41,12 @@ export function createClient(params: ClientParams = {}) {
       }
       return params.connect?.();
     }),
-    request: vi.fn<Client["request"]>(async (request, _schema, options) =>
+    request: vi.fn<Client["request"]>(async (request, options) =>
       params.list
         ? params.list(request.params, options)
         : { tools: typeof params.tools === "function" ? params.tools() : (params.tools ?? []) },
     ),
-    callTool: vi.fn<Client["callTool"]>(async (input, _schema, options) =>
+    callTool: vi.fn<Client["callTool"]>(async (input, options) =>
       params.call ? params.call(input, options) : { content: [{ type: "text", text: "ok" }] },
     ),
     close: vi.fn(async () => {}),

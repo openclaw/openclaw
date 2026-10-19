@@ -210,6 +210,9 @@ openclaw sessions delete "agent:main:scratch-1" --yes --json
 Repeated keys are processed once, in first-occurrence order, after surrounding
 whitespace is removed. This also applies to `sessions archive`.
 
+Human-readable archive/delete reports escape terminal control characters in
+session keys, paths, and diagnostics. JSON output preserves the original values.
+
 <Warning>
   Delete is destructive. In an interactive terminal it asks once before
   deleting the valid keys. Non-interactive and `--json` deletion requires
@@ -547,6 +550,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
 - `--json`: print the raw RPC payload.
+
+Human-readable compaction reports escape terminal control characters in session
+keys and error details. JSON output preserves the original values.
 
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
@@ -49,13 +49,10 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
   const [saved, setSaved] = createSignal<SaveState>((previous) =>
     previous === "saving" && status() === "saved" ? "saved-visible" : status(),
   );
-  const savedTimeout = createTimeout(() => setSaved("saved"), SAVED_VISIBLE_MS);
-  createEffect(saved, (current) => {
-    if (current === "saved-visible") {
-      savedTimeout.schedule();
-    }
-    return savedTimeout.cancel;
-  });
+  createTimeout(
+    () => setSaved("saved"),
+    () => (saved() === "saved-visible" ? SAVED_VISIBLE_MS : undefined),
+  );
   const state = createMemo(() => {
     const props = input.props;
     if (!props) {

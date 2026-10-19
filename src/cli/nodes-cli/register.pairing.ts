@@ -1,6 +1,7 @@
 // Node pairing commands: list, approve, reject, remove, and rename paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
@@ -181,7 +182,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { warn } = getNodesTheme();
-          defaultRuntime.log(warn(`Removed paired node ${nodeId}`));
+          defaultRuntime.log(warn(sanitizeTerminalText(`Removed paired node ${nodeId}`)));
         });
       }),
   );
@@ -210,7 +211,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { ok } = getNodesTheme();
-          defaultRuntime.log(ok(`node rename ok: ${nodeId} -> ${name}`));
+          defaultRuntime.log(ok(sanitizeTerminalText(`node rename ok: ${nodeId} -> ${name}`)));
         });
       }),
   );

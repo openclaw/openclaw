@@ -5,6 +5,7 @@ import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -57,6 +58,13 @@ function permissionIcon(mode: PermissionSelection | undefined) {
 export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   const id = createUniqueId();
   let menu: MenuHandle | undefined;
+  let stopSurface: (() => void) | undefined;
+  let stopTrigger: (() => void) | undefined;
+  // Menu publishes its handle from onSettled; teardown registration belongs in setup.
+  onCleanup(() => {
+    stopSurface?.();
+    stopTrigger?.();
+  });
   const disabled = createMemo(() => props.disabled || props.pending);
   const selectedMode = createMemo(() => props.mode ?? null);
   const defaultMode = createMemo(() => props.defaultMode);
@@ -154,10 +162,6 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       menu.close();
     }
   };
-  onCleanup(() => {
-    menu?.overlay.surface.removeEventListener("keydown", keydown, true);
-    menu?.overlay.trigger?.removeEventListener("keydown", keydown, true);
-  });
   return (
     <Menu
       lazy
@@ -177,8 +181,10 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       items={items()}
       ref={(handle) => {
         menu = handle;
-        handle.overlay.surface.addEventListener("keydown", keydown, true);
-        handle.overlay.trigger?.addEventListener("keydown", keydown, true);
+        stopSurface = listen(handle.overlay.surface, "keydown", keydown, true);
+        if (handle.overlay.trigger) {
+          stopTrigger = listen(handle.overlay.trigger, "keydown", keydown, true);
+        }
       }}
       onSelect={(item) => {
         const mode = permissionSelection(item.id);
