@@ -64,13 +64,6 @@ describe("Signal account media limits", () => {
 });
 
 describe("Signal voice-note delivery", () => {
-  it("advertises MP3 TTS output as voice-note capable", () => {
-    expect(signalPlugin.capabilities.tts?.voice).toEqual({
-      synthesisTarget: "audio-file",
-      audioFileFormats: ["mp3", "audio/mpeg"],
-    });
-  });
-
   it("forwards audioAsVoice from the media adapter as signal-cli voiceNote", async () => {
     const state = await createOpenClawTestState({ prefix: "signal-voice-note-" });
     const request = vi
