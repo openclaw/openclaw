@@ -43,12 +43,12 @@ async function change(payload: unknown = {}) {
   fixture.emit("plugin.workboard.changed", payload);
   await tick();
 }
-function query<T extends Element>(selector: string, root: ParentNode = document): T {
-  return expectDefined(root.querySelector<T>(selector), selector);
-}
 const clickDialog = (confirm: boolean) =>
-  query<HTMLButtonElement>(
-    `[data-test-dialog] ${confirm ? ".danger" : "button:not(.danger)"}`,
+  expectDefined(
+    document.querySelector<HTMLButtonElement>(
+      `[data-test-dialog] ${confirm ? ".danger" : "button:not(.danger)"}`,
+    ),
+    "dialog button",
   ).click();
 async function mountPage(props: Record<string, string>) {
   const { host, registrations } = fixture;
@@ -251,7 +251,10 @@ it.each(["open", "another board", "hidden"] as const)(
     }
     const item = registrations.get("navigation/board-ops") as ControlUiNavigationItem;
     const pending = item.actions?.find(({ id }) => id === "delete")?.run();
-    const dialog = query<HTMLElement>("[data-test-dialog]");
+    const dialog = expectDefined(
+      document.querySelector<HTMLElement>("[data-test-dialog]"),
+      "dialog",
+    );
     expect(dialog.getAttribute("aria-label")).toBe("Delete “Operations”?");
     expect(request.mock.calls.some(([method]) => method === "workboard.boards.delete")).toBe(false);
     clickDialog(true);
@@ -357,8 +360,14 @@ it("disambiguates a created board and its sibling before pinning through a stale
   await vi.advanceTimersByTimeAsync(0);
   read.mockReturnValue(stale.promise);
   fixture.emit("plugin.workboard.changed", {});
-  const form = query<HTMLFormElement>(".workboard-board-draft", container);
-  const name = query<HTMLInputElement>(".workboard-board-draft__name input", form);
+  const form = expectDefined(
+    container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+    "board draft form",
+  );
+  const name = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+    "board name input",
+  );
   name.value = board.name;
   name.dispatchEvent(new Event("input", { bubbles: true }));
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
