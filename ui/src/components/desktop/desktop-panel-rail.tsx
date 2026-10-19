@@ -7,9 +7,8 @@ import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.t
 import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
-import type { DesktopSizingMode } from "./desktop-client.ts";
 import { DesktopIcon } from "./desktop-icon.tsx";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
+import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
 import "../../styles/session-panel-rail.css";
 
 registerEnglishCatalog(registerDesktopEnglish);

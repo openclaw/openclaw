@@ -25,7 +25,7 @@ import {
   createDesktopPanelLifecycle,
   type DesktopPanelInputSnapshot,
 } from "./desktop-panel-lifecycle.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
+import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
 import { projectDesktopPanelView } from "./desktop-panel-view-data.ts";
 import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
@@ -54,7 +54,7 @@ export function createDesktopPanel(
   let connectionTransition: "connecting" | "taking-control" | "switching-to-viewing" = "connecting";
   let connectionFailure: "error" | "lost" | "closed" | null = null;
   let desktopApps: WorkerDesktopAppId[] = [];
-  let sizingMode: desktopTransport.DesktopSizingMode = "fit";
+  let sizingMode: DesktopSizingMode = "fit";
   let canResize = false;
   const handoff = new DesktopConnectionHandoff();
   let savedCredentials: DesktopCredentials | undefined;

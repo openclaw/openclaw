@@ -1,6 +1,7 @@
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 import { createDesktopViewport } from "./desktop-viewport.ts";
 
 export type DesktopDisconnectDetail = {
@@ -13,8 +14,6 @@ type DesktopSecurityFailureDetail = {
   reason?: string;
   status?: number;
 };
-
-export type DesktopSizingMode = "fit" | "actual" | "fit-height" | "fit-width" | "match";
 
 /** noVNC creates and owns the canvas inside the retained desktop surface. */
 export function desktopCanvas(surface: HTMLElement | undefined): HTMLCanvasElement | null {

@@ -5,8 +5,8 @@ import { expect, it } from "vitest";
 import type {
   DesktopClient,
   DesktopConnectionHandle,
-  DesktopSizingMode,
 } from "../components/desktop/desktop-client.ts";
+import type { DesktopSizingMode } from "../components/desktop/desktop-panel-state.ts";
 import {
   takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
@@ -300,7 +300,7 @@ sizingSuite.define(() => {
       await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
 
       // The launch flag must also be absent; CSS alone cannot override --hide-scrollbars.
-      await overlayScrollbars.evaluate((element) => element.remove());
+      await overlayScrollbars.evaluate((element) => element.parentNode?.removeChild(element));
       // Custom Chromium scrollbars consume real layout space even on overlay-scrollbar hosts.
       await page.addStyleTag({
         content:
