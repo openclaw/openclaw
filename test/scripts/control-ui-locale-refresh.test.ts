@@ -17,13 +17,7 @@ import {
   flattenTranslations,
 } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  readWorkflow,
-  runGit,
-  runWorkflowShellScript,
-  writeExecutable,
-  type WorkflowStep,
-} from "./ci-workflow.test-support.js";
+import { readWorkflow, runGit, type WorkflowStep } from "./ci-workflow.test-support.js";
 import { prepareGeneratedPublisherFixture } from "./generated-publisher.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -407,39 +401,6 @@ describe("same-run locale finalization", () => {
       }),
     ).rejects.toThrow("checkout differs");
   });
-
-  it.skipIf(process.platform === "win32").each([false, true])(
-    "routes forced regeneration only to discarded workers (full_refresh=%s)",
-    (force) => {
-      const root = tempDirs.make("locale-force-");
-      const calls = path.join(root, "calls");
-      writeExecutable(path.join(root, "node"), ["#!/bin/sh", 'printf "%s\\n" "$*" >> "$CALLS"']);
-      const step = workflow.jobs.finalize.steps.find(
-        (candidate: WorkflowStep) => candidate.name === "Finalize control UI generated artifacts",
-      );
-      const result = runWorkflowShellScript(step.run, {
-        cwd: root,
-        env: {
-          ...process.env,
-          PATH: root + path.delimiter + process.env.PATH,
-          CALLS: calls,
-          OPENAI_API_KEY: "fixture-key",
-          OPENCLAW_CONTROL_UI_I18N_MODEL: "fixture-primary",
-          OPENCLAW_I18N_FALLBACK_MODEL: "fixture-fallback",
-          FULL_REFRESH: String(force),
-          INVALIDATED_LOCALES: '["sv"]',
-        },
-        linuxWorkflow: true,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
-        ...(force
-          ? ["--import tsx scripts/control-ui-i18n.ts sync --locale sv --write --force"]
-          : []),
-        "--import tsx scripts/control-ui-i18n.ts sync --write",
-      ]);
-    },
-  );
 
   it("uses only same-run transport and the unchanged terminal publisher", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });

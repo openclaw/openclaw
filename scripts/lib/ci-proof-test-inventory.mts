@@ -50,6 +50,7 @@ export const CI_PROOF_TEST_FILES = [
   "test/e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
   "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",
   "test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts",
+  "test/scripts/control-ui-locale-finalizer.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/frv.release.test.ts",
   "test/scripts/install-ps1.release.test.ts",
