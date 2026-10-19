@@ -949,7 +949,7 @@ async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
   }
   return states;
 }
-async function waitForCurrentRecaps(text: string) {
+async function waitForCurrentRecaps(text: string, since = 0, pendingKeys: string[] = keys) {
   const started = performance.now();
   while (performance.now() - started < 15_000) {
     assertGatewayAlive();
@@ -957,7 +957,11 @@ async function waitForCurrentRecaps(text: string) {
       perClientRecaps.every((rows) =>
         keys.every((key) => {
           const row = rows.get(key);
-          return row?.state === "current" && row.text === text;
+          return (
+            row?.state === "current" &&
+            row.text === text &&
+            (!pendingKeys.includes(key) || row.receivedAtEpochMs >= since)
+          );
         }),
       )
     ) {
@@ -999,8 +1003,13 @@ async function runRecapBurst(
       await delay(Math.max(0, recapBurstIntervalMs - (epochNow() - started)));
     }
   }
+  const lastRepeat = repeats.at(-1);
+  await waitForCurrentRecaps(
+    text,
+    lastRepeat?.startedAtEpochMs,
+    keys.filter((_, index) => lastRepeat?.responseStates[index] === "updating"),
+  );
   await drainEvents();
-  await waitForCurrentRecaps(text);
   const completedAtEpochMs = epochNow();
   const repeatCpu = measureGatewayCpuUsage(beforeRepeatCpu, await readGatewayCpuUsage(child));
   if (profilePath) {
@@ -1047,7 +1056,6 @@ async function runRecapBurst(
       };
     }),
   );
-  const lastRepeat = repeats.at(-1);
   return {
     latestValueDelivery,
     finalRecapsMatch: true,

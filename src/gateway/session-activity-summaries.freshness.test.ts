@@ -25,6 +25,7 @@ import {
   scope,
   target,
 } from "./session-activity-summaries.test-support.js";
+import * as summarySource from "./session-activity-summary-source.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
@@ -99,16 +100,19 @@ it("keeps committed recap progress across stale requests and summarizes new acti
   expectPrompt(1, "Earlier work.", []);
 
   changed.mockClear();
+  const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
   for (let request = 0; request < 3; request += 1) {
     const response = await ensure(requestedEntry);
     expect(response.text).toBe(recap);
     expect(complete).toHaveBeenCalledTimes(1);
   }
   expect(changed).not.toHaveBeenCalled();
+  expect(sourceReads).not.toHaveBeenCalled();
 
   await messages(1, 1);
   await ensure(requestedEntry);
   expectPrompt(2, recap, ["assistant: Outcome 1"]);
+  expect(sourceReads).toHaveBeenCalledTimes(1);
   await ensure(requestedEntry);
   expect(complete).toHaveBeenCalledTimes(2);
   expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });

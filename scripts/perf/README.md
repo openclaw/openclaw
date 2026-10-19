@@ -473,8 +473,11 @@ parameters for both revisions. No extra agent turns occur inside this phase.
 including frame/byte counts by audience, recap model request counts, RPC response
 states, timestamps, and repeated-ensure main-thread/process CPU. A zero model
 request count during repeated ensures establishes unchanged-source churn rather
-than additional inference. CPU includes RPC admission, source checks, and the
-one-second event drain. With `--cpu-profile`, the repeated-ensure phase also saves
+than additional inference. Current ensure responses enqueue no recap source work.
+If the last ensure reports `updating`, every socket must receive a current recap
+after that sweep started; a receipt retained from the initial phase cannot satisfy
+this wait. CPU includes RPC admission, source checks, and the subsequent one-second
+event drain. With `--cpu-profile`, the repeated-ensure phase also saves
 a main-isolate profile and reports `broadcastSampledMs`: inclusive sampled time
 under `broadcastInternal`, including recipient projection, encoding, and sends.
 This is a sampling estimate, not a precise socket-only timer. The driver uses

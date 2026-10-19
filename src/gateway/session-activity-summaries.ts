@@ -593,16 +593,17 @@ export function createSessionActivitySummaries(deps: {
       return { state: "unavailable" as const };
     }
     const state = admit(target, entry);
-    if (state) {
-      schedule(state, true);
-    }
-    const view = await prepareSessionActivitySummaryView({
+    const readView = await prepareSessionActivitySummaryView({
       ...target,
       cfg: deps.getConfig(),
       entry: state?.entry ?? entry,
       storePath: scope(target).storePath,
       admitted: state !== undefined,
     });
+    if (state && readView().state !== "current") {
+      schedule(state, true);
+    }
+    const view = readView();
     // A stale recap is admitted work even before the queued source read starts.
     return state && view.state === "stale" ? { ...view, state: "updating" as const } : view;
   };
@@ -661,12 +662,11 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       const sessionId = event.target?.sessionId ?? event.sessionId;
-      const lifecycleRevision = event.lifecycleRevision;
       requestInBackground(
         target,
         (state) =>
           (!sessionId || sessionId === state.sessionId) &&
-          (!lifecycleRevision || lifecycleRevision === state.lifecycleRevision),
+          (!event.lifecycleRevision || event.lifecycleRevision === state.lifecycleRevision),
       );
     },
     handleEvent(event) {
