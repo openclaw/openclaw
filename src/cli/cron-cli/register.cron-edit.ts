@@ -52,6 +52,9 @@ const assignIf = (
 };
 
 type CronJobForEdit = CronJob & { configRevision?: string };
+type CronEditOptions = GatewayRpcOpts &
+  Parameters<typeof resolveCronEditScheduleRequest>[0] &
+  Record<string, unknown>;
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
@@ -124,7 +127,7 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
-      .action(async (idArg, opts: GatewayRpcOpts & Record<string, unknown>) => {
+      .action(async (idArg, opts: CronEditOptions) => {
         try {
           const id = requireCronJobId(idArg);
           if (opts.clearTools && opts.tools !== undefined) {
