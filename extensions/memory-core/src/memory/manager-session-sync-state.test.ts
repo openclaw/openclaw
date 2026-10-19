@@ -1,9 +1,44 @@
 import { describe, expect, it } from "vitest";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
+  isMemorySessionIndexable,
   resolveMemorySessionStartupState,
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
+
+describe("memory session indexability", () => {
+  it("skips Active Memory recall runs, by session id or key", () => {
+    expect(
+      isMemorySessionIndexable({
+        sessionKind: "interactive",
+        sessionId: "active-memory-mvd4zk3v-d58af102",
+      }),
+    ).toBe(false);
+    expect(
+      isMemorySessionIndexable({
+        sessionKind: "interactive",
+        sessionId: "4c9e2b83-4dd0-43af-87df-4cc3ea75aedf",
+        sessionKey: "agent:main:explicit:portal-1:active-memory:0123456789ab",
+      }),
+    ).toBe(false);
+    expect(
+      isMemorySessionIndexable(
+        { sessionKind: "interactive" },
+        "agent:main:telegram:direct:owner:active-memory:0123456789ab",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps ordinary conversations, including ones that mention active memory", () => {
+    expect(
+      isMemorySessionIndexable({
+        sessionKind: "interactive",
+        sessionId: "4c9e2b83-4dd0-43af-87df-4cc3ea75aedf",
+        sessionKey: "agent:main:explicit:active-memory-notes",
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("memory session sync state", () => {
   it("tracks active paths and source state without rebuilding unchanged full scans", () => {
