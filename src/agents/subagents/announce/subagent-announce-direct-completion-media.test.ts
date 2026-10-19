@@ -1,9 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -14,13 +12,11 @@ import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delive
 import type { SubagentAnnounceDeliveryTestDeps } from "./subagent-announce-overrides.test-support.js";
 
 type SendMessage = SubagentAnnounceDeliveryTestDeps["sendMessage"];
+type DeliveryParams = Parameters<typeof deliverSubagentAnnouncement>[0];
 const image = "/tmp/generated.png";
-const hidden = [
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  "This context is runtime-generated, not user-authored. Keep internal details private.",
-  "MEDIA:/tmp/hidden.png",
-  INTERNAL_RUNTIME_CONTEXT_END,
-].join("\n");
+const voice = "/tmp/voice.ogg";
+const imageEvent = { mediaUrls: [image] };
+const hidden = `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nMEDIA:/tmp/hidden.png\n${INTERNAL_RUNTIME_CONTEXT_END}`;
 const sent = {
   channel: "discord",
   to: "dm:U123",
@@ -33,8 +29,8 @@ async function deliver(params: {
   event?: Partial<AgentInternalEvent>;
   payloads?: Record<string, unknown>[];
   sendMessage?: SendMessage;
-  onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
-  onDeliveryError?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryError"];
+  onDeliveryResult?: DeliveryParams["onDeliveryResult"];
+  onDeliveryError?: DeliveryParams["onDeliveryError"];
 }) {
   const sendMessage = params.sendMessage ?? vi.fn<SendMessage>(async () => sent);
   testing.setDepsForTest({
@@ -86,149 +82,117 @@ async function deliver(params: {
   return { result, sendMessage: vi.mocked(sendMessage) };
 }
 
-afterEach(() => {
-  setActivePluginRegistry(createTestRegistry());
-  testing.setDepsForTest();
+afterEach(() => testing.setDepsForTest());
+
+it("retains the original failed text fallback error", async () => {
+  const failure = Object.assign(new Error("synthetic channel failure"), { code: "ECONNRESET" });
+  const onDeliveryError = vi.fn();
+  const sendMessage = vi.fn<SendMessage>().mockRejectedValue(failure);
+  const { result } = await deliver({ sendMessage, onDeliveryError });
+  expect(onDeliveryError).toHaveBeenCalledExactlyOnceWith(failure);
+  expect(result).toMatchObject({
+    delivered: false,
+    path: "direct",
+    error: "text completion direct delivery failed: synthetic channel failure",
+  });
+  expect(sendMessage).toHaveBeenCalledOnce();
 });
 
-type MediaCase = {
-  name: string;
-  input: Parameters<typeof deliver>[0];
-  expected: { content?: string; mediaUrls?: string[]; asVoice?: boolean } | null;
-};
-function mediaCase(
-  name: string,
-  event: Partial<AgentInternalEvent>,
-  expected: MediaCase["expected"] = { content: "Image ready", mediaUrls: [image] },
-): MediaCase {
-  return { name, input: { event }, expected };
-}
-
-describe("subagent completion media after requester wake failure", () => {
-  it("retains the original failed text fallback error", async () => {
-    const failure = Object.assign(new Error("synthetic channel failure"), { code: "ECONNRESET" });
-    const onDeliveryError = vi.fn();
-    const sendMessage = vi.fn<SendMessage>().mockRejectedValue(failure);
-    const { result } = await deliver({ sendMessage, onDeliveryError });
-    expect(onDeliveryError).toHaveBeenCalledExactlyOnceWith(failure);
-    expect(result).toMatchObject({
-      delivered: false,
-      path: "direct",
-      error: "text completion direct delivery failed: synthetic channel failure",
-    });
-    expect(sendMessage).toHaveBeenCalledOnce();
-  });
-
-  it.each<MediaCase>([
-    mediaCase("structured media", { mediaUrls: [image] }),
-    mediaCase(
-      "captionless media",
-      { result: "", mediaUrls: [image] },
-      { content: "", mediaUrls: [image] },
-    ),
-    mediaCase("attachment metadata", { attachments: [{ type: "image", path: image }] }),
-    mediaCase("visible directive beside hidden context", {
-      result: `Image ready\nMEDIA:${image}\n${hidden}`,
-    }),
-    mediaCase(
-      "voice directive",
-      { result: "[[audio_as_voice]]\nMEDIA:/tmp/voice.ogg" },
-      { content: "", mediaUrls: ["/tmp/voice.ogg"], asVoice: true },
-    ),
-    mediaCase(
-      "hidden-only media",
-      { result: `Image ready\n${hidden}` },
-      { content: "Image ready" },
-    ),
-    mediaCase(
-      "genuine placeholder-shaped result",
-      { result: "(no output)" },
-      { content: "(no output)" },
-    ),
-    {
-      name: "requester voice payload",
-      input: {
-        payloads: [
-          {
-            text: `Voice ready\nMEDIA:/tmp/voice.ogg\n${hidden}`,
-            mediaUrls: ["/tmp/voice.ogg"],
-            audioAsVoice: true,
-          },
-        ],
+it.each<
+  [
+    name: string,
+    event: Partial<AgentInternalEvent>,
+    expected?: [content?: string, mediaUrls?: string[], asVoice?: boolean] | null,
+    payloads?: Record<string, unknown>[],
+  ]
+>([
+  ["structured media", imageEvent],
+  ["captionless media", { result: "", mediaUrls: [image] }, ["", [image]]],
+  ["attachment metadata", { attachments: [{ type: "image", path: image }] }],
+  ["visible beside hidden", { result: `Image ready\nMEDIA:${image}\n${hidden}` }],
+  ["voice directive", { result: `[[audio_as_voice]]\nMEDIA:${voice}` }, ["", [voice], true]],
+  ["hidden-only media", { result: `Image ready\n${hidden}` }, ["Image ready"]],
+  ["literal (no output)", { result: "(no output)" }, ["(no output)"]],
+  [
+    "requester voice payload",
+    {},
+    ["Voice ready", [voice], true],
+    [
+      {
+        text: `Voice ready\nMEDIA:${voice}\n${hidden}`,
+        mediaUrls: [voice],
+        audioAsVoice: true,
       },
-      expected: { content: "Voice ready", mediaUrls: ["/tmp/voice.ogg"], asVoice: true },
-    },
-    mediaCase("recorded absent result", { result: "(no output)", noVisibleResult: true }, null),
-    mediaCase(
-      "failed completion without its media",
-      { status: "error", statusLabel: "failed", result: "(no output)", mediaUrls: [image] },
-      {},
-    ),
-  ])("delivers only visible completed content: $name", async ({ input, expected }) => {
-    const { result, sendMessage } = await deliver(input);
-    if (expected === null) {
-      expect(sendMessage).not.toHaveBeenCalled();
-      return;
-    }
-    expect(result).toMatchObject({ delivered: true, path: "direct" });
-    expect(sendMessage).toHaveBeenCalledOnce();
-    const payload = mockCallArg(sendMessage);
-    if (expected.content !== undefined) {
-      expect(payload.content).toBe(expected.content);
-    }
-    expect(payload.mediaUrls).toEqual(expected.mediaUrls);
-    expect(payload.asVoice).toBe(expected.asVoice);
+    ],
+  ],
+  ["recorded absent result", { result: "(no output)", noVisibleResult: true }, null],
+  [
+    "failed completion without its media",
+    { status: "error", statusLabel: "failed", result: "(no output)", mediaUrls: [image] },
+    [],
+  ],
+])("delivers only visible completed content: %s", async (_name, event, rawExpected, payloads) => {
+  const expected = rawExpected === undefined ? (["Image ready", [image]] as const) : rawExpected;
+  const { result, sendMessage } = await deliver({ event, payloads });
+  if (expected === null) {
+    expect(sendMessage).not.toHaveBeenCalled();
+    return;
+  }
+  expect(result).toMatchObject({ delivered: true, path: "direct" });
+  expect(sendMessage).toHaveBeenCalledOnce();
+  const payload = mockCallArg(sendMessage);
+  const [content, mediaUrls, asVoice] = expected;
+  expect(payload).toMatchObject({
+    ...(content === undefined ? {} : { content }),
+    mediaUrls,
+    asVoice,
   });
+});
 
-  it("does not settle or retry a partially sent media batch", async () => {
-    const onDeliveryResult = vi.fn();
-    const sendMessage = vi.fn<SendMessage>(async (params) => {
-      await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
-      throw new OutboundDeliveryError("second attachment failed", {
-        cause: new Error("platform rejected media"),
-        results: [{ channel: "discord", messageId: "msg-1" }],
-      });
+it("does not settle or retry a partially sent media batch", async () => {
+  const onDeliveryResult = vi.fn();
+  const sendMessage = vi.fn<SendMessage>(async (params) => {
+    await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
+    throw new OutboundDeliveryError("second attachment failed", {
+      cause: new Error("platform rejected media"),
+      results: [{ channel: "discord", messageId: "msg-1" }],
     });
-    const { result } = await deliver({
-      event: { mediaUrls: [image] },
-      sendMessage,
-      onDeliveryResult,
-    });
-    expect(result).toMatchObject({
-      delivered: false,
-      terminal: true,
-      disposition: "permanent_failure",
-      missingMediaUrls: [image],
-    });
-    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+  const { result } = await deliver({ event: imageEvent, sendMessage, onDeliveryResult });
+  expect(result).toMatchObject({
+    delivered: false,
+    terminal: true,
+    disposition: "permanent_failure",
+    missingMediaUrls: [image],
+  });
+  expect(sendMessage).toHaveBeenCalledOnce();
+  expect(onDeliveryResult).not.toHaveBeenCalled();
+});
+
+it("settles the full batch before mirroring, retaining delivery if bookkeeping fails", async () => {
+  const mirror = createDeferredCore();
+  const settled = createDeferredCore();
+  const onDeliveryResult = vi.fn(() => settled.resolve());
+  const sendMessage = vi.fn<SendMessage>(async (params) => {
+    await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
     expect(onDeliveryResult).not.toHaveBeenCalled();
+    params.onDeliveredPayload?.({ text: "Image ready", mediaUrls: [image] });
+    await mirror.promise;
+    throw new Error("post-send bookkeeping failed");
   });
-
-  it("settles the full batch before mirroring, retaining delivery if bookkeeping fails", async () => {
-    const mirror = createDeferredCore();
-    const settled = createDeferredCore();
-    const onDeliveryResult = vi.fn(() => settled.resolve());
-    const sendMessage = vi.fn<SendMessage>(async (params) => {
-      await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
-      expect(onDeliveryResult).not.toHaveBeenCalled();
-      params.onDeliveredPayload?.({ text: "Image ready", mediaUrls: [image] });
-      await mirror.promise;
-      throw new Error("post-send bookkeeping failed");
-    });
-    const delivery = deliver({ event: { mediaUrls: [image] }, sendMessage, onDeliveryResult });
-    try {
-      await settled.promise;
-      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          delivered: true,
-          path: "direct",
-          deliveredAt: expect.any(Number),
-        }),
-      );
-    } finally {
-      mirror.resolve();
-    }
-    expect((await delivery).result).toMatchObject({ delivered: true, path: "direct" });
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-  });
+  const delivery = deliver({ event: imageEvent, sendMessage, onDeliveryResult });
+  try {
+    await settled.promise;
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+        deliveredAt: expect.any(Number),
+      }),
+    );
+  } finally {
+    mirror.resolve();
+  }
+  expect((await delivery).result).toMatchObject({ delivered: true, path: "direct" });
+  expect(onDeliveryResult).toHaveBeenCalledOnce();
 });

@@ -51,7 +51,7 @@ describe("late exact requester recovery", () => {
     ],
   };
 
-  function setup() {
+  function setup(sourceTool = "subagent_settle") {
     const controller = new AbortController();
     let ownedDelivery: ReturnType<typeof deliverSubagentAnnouncement> | undefined;
     const dispatchEntered = createDeferredCore();
@@ -93,21 +93,15 @@ describe("late exact requester recovery", () => {
         };
       });
     onTestFinished(async () => {
-      // Revoke permission before releasing held boundaries, then join the
-      // invocation before restoring its reader spy and shared dependencies.
+      // Revoke, release, and join before restoring shared dependencies.
       controller.abort();
       dispatchDone.resolve({ status: "error", stopReason: "rpc" });
       readDone.resolve();
+      await Promise.allSettled(ownedDelivery ? [ownedDelivery] : []);
       try {
-        if (ownedDelivery) {
-          await Promise.allSettled([ownedDelivery]);
-        }
+        read.mockRestore();
       } finally {
-        try {
-          read.mockRestore();
-        } finally {
-          testing.setDepsForTest();
-        }
+        testing.setDepsForTest();
       }
     });
     const send = vi.fn<typeof sendMessage>().mockResolvedValue({
@@ -140,9 +134,9 @@ describe("late exact requester recovery", () => {
       targetRequesterSessionKey: sessionKey,
       triggerMessage: "All children settled",
       directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
-      sourceTool: "subagent_settle",
+      sourceTool,
       requesterIsSubagent: false,
-      expectsCompletionMessage: false,
+      expectsCompletionMessage: sourceTool === "subagent_announce",
       requireVisibleReply: true,
       directIdempotencyKey: sourceRunId,
       isSourceSessionEffectsAllowed: () => state.allowed,
@@ -256,7 +250,9 @@ describe("late exact requester recovery", () => {
   it.for(["current", "revoked"] as const)(
     "settles a rejected recovery handoff before releasing the parent turn (%s source)",
     async (source, { signal }) => {
-      const fixture = setup();
+      const fixture = setup("subagent_announce");
+      const gate = <T>(pending: Promise<T>, active: Promise<unknown>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(pending, active, message), signal);
       const { target } = fixture;
       const recoveryEntered = createDeferredCore();
       const releaseRecovery = createDeferredCore();
@@ -285,13 +281,10 @@ describe("late exact requester recovery", () => {
       let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
       let handoffSettled = false;
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            recoveryEntered.promise,
-            recovery,
-            "Recovery exited before retaining its controller turn",
-          ),
-          signal,
+        await gate(
+          recoveryEntered.promise,
+          recovery,
+          "Recovery exited before retaining its controller turn",
         );
         input = reserveSessionControllerSource(sessionKey, {
           target,
@@ -309,19 +302,14 @@ describe("late exact requester recovery", () => {
           phase: "preflight_compacting",
           result: null,
         });
-        fixture.params.sourceTool = "subagent_announce";
-        fixture.params.expectsCompletionMessage = true;
         fixture.params.controllerInput = input;
         delivery = fixture.startDelivery().finally(() => {
           handoffSettled = true;
         });
-        await withinTest(
-          awaitGateBeforeSettlement(
-            retirementEntered.promise,
-            delivery,
-            "Completion returned before retiring its rejected controller input",
-          ),
-          signal,
+        await gate(
+          retirementEntered.promise,
+          delivery,
+          "Completion returned before retiring its rejected controller input",
         );
         expect(handoffSettled).toBe(false);
         expect(input.mailbox.entries).toContain(input);
@@ -331,13 +319,10 @@ describe("late exact requester recovery", () => {
           fixture.state.allowed = false;
         }
         releaseRetirement.resolve();
-        const result = await withinTest(
-          awaitGateBeforeSettlement(
-            delivery,
-            recovery,
-            "Recovery released before the completion handoff settled",
-          ),
-          signal,
+        const result = await gate(
+          delivery,
+          recovery,
+          "Recovery released before the completion handoff settled",
         );
         await input.settlement.promise;
         expect(result).toMatchObject(
@@ -455,9 +440,7 @@ describe("late exact requester recovery", () => {
   it.each(["subagent_settle", "subagent_announce"])(
     "joins an interrupted %s continuation and consumes its final receipt without replay",
     async (sourceTool) => {
-      const fixture = setup();
-      fixture.params.sourceTool = sourceTool;
-      fixture.params.expectsCompletionMessage = sourceTool === "subagent_announce";
+      const fixture = setup(sourceTool);
       fixture.state.entry = {
         ...fixture.state.entry,
         restartRecoveryDeliverySourceRunId: sourceRunId,
@@ -579,48 +562,47 @@ describe("late exact requester recovery", () => {
     expect(clearTyping).toHaveBeenCalledOnce();
   });
 
-  type LateOutcome = {
+  type DirectOutcome = {
     name: string;
     sourceTool?: string;
-    response?: unknown;
-    error?: Error;
-    patch: Partial<SessionEntry>;
-    expected: { delivered: boolean; requesterVisibleFinalDelivered?: boolean; reason?: string };
-    disposition?: string;
+    input: unknown;
+    patch?: Partial<SessionEntry>;
+    expected: Partial<Awaited<ReturnType<typeof deliverSubagentAnnouncement>>>;
+    preserve?: true;
   };
-  function recovered(
-    name: string,
-    outcome: Pick<LateOutcome, "response" | "error" | "sourceTool">,
-  ): LateOutcome {
+  function recovered(name: string, input: unknown, sourceTool?: string): DirectOutcome {
     return {
       name,
-      ...outcome,
-      patch: finalReceipt,
-      expected: { delivered: true, requesterVisibleFinalDelivered: true },
+      input,
+      sourceTool,
+      expected: { delivered: true, requesterVisibleFinalDelivered: true, disposition: undefined },
     };
   }
   function missingReceipt(
     name: string,
     patch: Partial<SessionEntry>,
-    disposition = "retryable",
-    reason = "visible_reply_missing",
-  ): LateOutcome {
-    return {
-      name,
-      patch,
-      disposition,
-      response: response(),
-      expected: { delivered: false, reason },
-    };
+    disposition: DirectOutcome["expected"]["disposition"] = "retryable",
+    reason: DirectOutcome["expected"]["reason"] = "visible_reply_missing",
+  ): DirectOutcome {
+    return { name, patch, input: response(), expected: { delivered: false, reason, disposition } };
   }
-  it.each<LateOutcome>([
-    recovered("announcement completed while waiting for recovery", {
-      sourceTool: "subagent_announce",
-      error: createSessionWorkStartChangedError(sessionKey),
-    }),
-    recovered("empty final", { response: response() }),
-    recovered("restart interruption", { response: { status: "error", stopReason: "restart" } }),
-    recovered("old keyed-input rejection", { error: new Error("old keyed input rejected") }),
+  function original(
+    name: string,
+    input: unknown,
+    delivered = false,
+    disposition?: DirectOutcome["expected"]["disposition"],
+  ): DirectOutcome {
+    return { name, input, preserve: true, expected: { delivered, disposition } };
+  }
+  it.each<DirectOutcome>([
+    recovered(
+      "announcement completed while waiting for recovery",
+      createSessionWorkStartChangedError(sessionKey),
+      "subagent_announce",
+    ),
+    recovered("empty final", response()),
+    recovered("restart interruption", { status: "error", stopReason: "restart" }),
+    recovered("old keyed-input rejection", new Error("old keyed input rejected")),
     missingReceipt(
       "live claim",
       {
@@ -643,36 +625,14 @@ describe("late exact requester recovery", () => {
         { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
       ],
     }),
-  ])("reconciles the exact late receipt for $name without replay", async (outcome) => {
-    const fixture = setup();
-    if (outcome.sourceTool) {
-      fixture.params.sourceTool = outcome.sourceTool;
-      fixture.params.expectsCompletionMessage = true;
-    }
-    const delivery = fixture.startDelivery();
-    await fixture.dispatchEntered.promise;
-    fixture.state.entry = { ...fixture.state.entry, ...outcome.patch };
-    fixture.readDone.resolve();
-    if (outcome.error) {
-      fixture.dispatchDone.reject(outcome.error);
-    } else {
-      fixture.dispatchDone.resolve(outcome.response);
-    }
-    const result = await delivery;
-    expect(result).toMatchObject(outcome.expected);
-    expect(result.disposition).toBe(outcome.disposition);
-    expectNoReplay(fixture);
-  });
-
-  it.each<[string, unknown, boolean, string?]>([
-    ["committed final", response([{ text: "Sent final" }], sentDeliveryStatus), true],
-    [
+    original("committed final", response([{ text: "Sent final" }], sentDeliveryStatus), true),
+    original(
       "partial send",
       { status: "ok", result: { deliveryStatus: { status: "partial_failed", resultCount: 1 } } },
       false,
       "ambiguous",
-    ],
-    [
+    ),
+    original(
       "intentional suppression",
       {
         status: "ok",
@@ -686,51 +646,52 @@ describe("late exact requester recovery", () => {
       },
       false,
       "intentional_non_delivery",
-    ],
-    ["explicit stop", { status: "error", stopReason: "rpc" }, false],
-    [
+    ),
+    original("explicit stop", { status: "error", stopReason: "rpc" }),
+    original(
       "permanent failure",
       Object.assign(new Error("unsupported channel: fixture"), { code: "UNSUPPORTED" }),
       false,
       "permanent_failure",
-    ],
-    [
+    ),
+    original(
       "flattened transcript turn assertion",
       new Error("Error: Session transcript keyed user is outside the current turn: old-input"),
       false,
       "permanent_failure",
-    ],
-    [
+    ),
+    original(
       "send ambiguity",
       Object.assign(new Error("send outcome unknown"), { sentBeforeError: true }),
       false,
       "ambiguous",
-    ],
-  ])("preserves the original %s", async (_name, outcome, delivered, disposition) => {
-    const fixture = setup();
+    ),
+  ])("reconciles the direct outcome for $name without replay", async (outcome) => {
+    const fixture = setup(outcome.sourceTool);
     const onDeliveryError = vi.fn();
-    fixture.params.onDeliveryError = onDeliveryError;
+    if (outcome.preserve) {
+      fixture.params.onDeliveryError = onDeliveryError;
+    }
     const delivery = fixture.startDelivery();
     await fixture.dispatchEntered.promise;
-    fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
+    fixture.state.entry = { ...fixture.state.entry, ...(outcome.patch ?? finalReceipt) };
     fixture.readDone.resolve();
-    if (outcome instanceof Error) {
-      fixture.dispatchDone.reject(outcome);
+    if (outcome.input instanceof Error) {
+      fixture.dispatchDone.reject(outcome.input);
     } else {
-      fixture.dispatchDone.resolve(outcome);
+      fixture.dispatchDone.resolve(outcome.input);
     }
     const result = await delivery;
-    expect(result).toMatchObject({
-      delivered,
-      disposition,
-    });
-    if (outcome instanceof Error) {
-      expect(onDeliveryError).toHaveBeenCalledWith(outcome);
-      expect(result.error).toBe(outcome.message);
-    } else {
-      expect(onDeliveryError).not.toHaveBeenCalled();
+    expect(result).toMatchObject(outcome.expected);
+    if (outcome.preserve) {
+      expect(fixture.read).not.toHaveBeenCalled();
+      if (outcome.input instanceof Error) {
+        expect(onDeliveryError).toHaveBeenCalledWith(outcome.input);
+        expect(result.error).toBe(outcome.input.message);
+      } else {
+        expect(onDeliveryError).not.toHaveBeenCalled();
+      }
     }
-    expect(fixture.read).not.toHaveBeenCalled();
     expectNoReplay(fixture);
   });
 
@@ -776,12 +737,11 @@ describe("late exact requester recovery", () => {
       await fixture.dispatchEntered.promise;
       fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
       fixture.dispatchDone.reject(new Error("gateway unavailable before admission"));
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         fixture.readEntered.promise,
-        delivery.then(() => {
-          throw new Error("Delivery settled before reading its late recovery receipt");
-        }),
-      ]);
+        delivery,
+        "Delivery settled before reading its late recovery receipt",
+      );
       if (change === "source retired") {
         fixture.state.allowed = false;
       }

@@ -95,27 +95,29 @@ async function dispatchThroughTestGateway(
   );
 }
 
-function install<T extends (...args: never[]) => unknown>(
-  original: T,
-  createSpy: () => MockInstance<T>,
-  implementation?: Implementation<T>,
-) {
-  if (!implementation || Object.is(original, implementation)) {
-    return;
-  }
-  const alreadyMocked = vi.isMockFunction(original);
-  const spy = createSpy();
-  const previous = spy.getMockImplementation();
-  spy.mockImplementation(implementation);
-  restoreOverrides.push(() => {
-    if (!alreadyMocked) {
-      spy.mockRestore();
-    } else if (previous) {
-      spy.mockImplementation(previous);
-    } else {
-      spy.mockReset();
+type Callable = Extract<NonNullable<Parameters<typeof vi.fn>[0]>, (...args: never[]) => unknown>;
+type MethodKeys<T> = keyof { [K in keyof T as T[K] extends Callable ? K : never]: T[K] };
+function install<T extends object, K extends keyof T & MethodKeys<Required<T>>>(owner: T, key: K) {
+  const createSpy = () => vi.spyOn(owner, key);
+  return (implementation?: Parameters<ReturnType<typeof createSpy>["mockImplementation"]>[0]) => {
+    const original = owner[key];
+    if (!implementation || Object.is(original, implementation)) {
+      return;
     }
-  });
+    const alreadyMocked = vi.isMockFunction(original);
+    const spy = createSpy();
+    const previous = spy.getMockImplementation();
+    spy.mockImplementation(implementation);
+    restoreOverrides.push(() => {
+      if (!alreadyMocked) {
+        spy.mockRestore();
+      } else if (previous) {
+        spy.mockImplementation(previous);
+      } else {
+        spy.mockReset();
+      }
+    });
+  };
 }
 
 function replaceOverrides(scope: Scope, overrides?: Overrides) {
@@ -138,121 +140,72 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
   for (const entry of scopes.values()) {
     Object.assign(current, entry);
   }
+  install(announceRuntime, "callSubagentLifecycleGateway")(current.callGateway);
   install(
-    announceRuntime.callSubagentLifecycleGateway,
-    () => vi.spyOn(announceRuntime, "callSubagentLifecycleGateway"),
-    current.callGateway,
-  );
-  install(
-    announceRuntime.dispatchGatewayMethodInProcess,
-    () => vi.spyOn(announceRuntime, "dispatchGatewayMethodInProcess"),
-    current.dispatchGatewayMethodInProcess,
-  );
-  install(
-    announceRuntime.getRuntimeConfig,
-    () => vi.spyOn(announceRuntime, "getRuntimeConfig"),
-    current.getRuntimeConfig,
-  );
-  install(
-    configRuntime.getRuntimeConfig,
-    () => vi.spyOn(configRuntime, "getRuntimeConfig"),
-    current.getRuntimeConfig,
-  );
+    announceRuntime,
+    "dispatchGatewayMethodInProcess",
+  )(current.dispatchGatewayMethodInProcess);
+  install(announceRuntime, "getRuntimeConfig")(current.getRuntimeConfig);
+  install(configRuntime, "getRuntimeConfig")(current.getRuntimeConfig);
   if (current.readSubagentSessionEntry) {
     install(
-      announceRuntime.readSubagentSessionEntry,
-      () => vi.spyOn(announceRuntime, "readSubagentSessionEntry"),
-      async (...args) => current.readSubagentSessionEntry!(...args),
-    );
+      announceRuntime,
+      "readSubagentSessionEntry",
+    )(async (...args) => current.readSubagentSessionEntry!(...args));
   }
+  install(announceRuntime, "readSessionMessagesAsync")(current.readSessionMessagesAsync);
+  install(announceRuntime, "resolveSessionStorePathCore")(current.resolveSessionStorePathCore);
+  install(sessionAccessor, "findTranscriptEvent")(current.findTranscriptEvent);
   install(
-    announceRuntime.readSessionMessagesAsync,
-    () => vi.spyOn(announceRuntime, "readSessionMessagesAsync"),
-    current.readSessionMessagesAsync,
-  );
-  install(
-    announceRuntime.resolveSessionStorePathCore,
-    () => vi.spyOn(announceRuntime, "resolveSessionStorePathCore"),
-    current.resolveSessionStorePathCore,
-  );
-  install(
-    sessionAccessor.findTranscriptEvent,
-    () => vi.spyOn(sessionAccessor, "findTranscriptEvent"),
-    current.findTranscriptEvent,
-  );
-  install(
-    sessionHistory.findSessionTranscriptArchiveEventReadOnly,
-    () => vi.spyOn(sessionHistory, "findSessionTranscriptArchiveEventReadOnly"),
-    current.findSessionTranscriptArchiveEventReadOnly,
-  );
+    sessionHistory,
+    "findSessionTranscriptArchiveEventReadOnly",
+  )(current.findSessionTranscriptArchiveEventReadOnly);
   if (current.loadSessionEntry) {
+    install(sessionAccessor, "loadSessionEntryReadOnly")(current.loadSessionEntry);
     install(
-      sessionAccessor.loadSessionEntryReadOnly,
-      () => vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly"),
-      current.loadSessionEntry,
-    );
+      sessionEntryWorker,
+      "readSessionEntryReadOnlyInWorker",
+    )(async (readScope, assertCurrent) => {
+      assertCurrent?.();
+      return current.loadSessionEntry!(readScope);
+    });
     install(
-      sessionEntryWorker.readSessionEntryReadOnlyInWorker,
-      () => vi.spyOn(sessionEntryWorker, "readSessionEntryReadOnlyInWorker"),
-      async (readScope, assertCurrent) => {
-        assertCurrent?.();
-        return current.loadSessionEntry!(readScope);
-      },
-    );
-    install(
-      sessionEntryWorker.withSessionEntryReadOnlyInWorker,
-      () => vi.spyOn(sessionEntryWorker, "withSessionEntryReadOnlyInWorker"),
-      async (readScope, assertCurrent, consume) => {
-        assertCurrent();
-        const result = await consume(
-          { ok: true, value: current.loadSessionEntry!(readScope) },
-          { kind: "file", assertCurrent },
-        );
-        assertCurrent();
-        return result;
-      },
-    );
+      sessionEntryWorker,
+      "withSessionEntryReadOnlyInWorker",
+    )(async (readScope, assertCurrent, consume) => {
+      assertCurrent();
+      const result = await consume(
+        { ok: true, value: current.loadSessionEntry!(readScope) },
+        { kind: "file", assertCurrent },
+      );
+      assertCurrent();
+      return result;
+    });
   }
   if (current.loadRequesterSessionEntry) {
     install(
-      deliveryRuntime.loadRequesterSessionEntry,
-      () => vi.spyOn(deliveryRuntime, "loadRequesterSessionEntry"),
-      async (...args) => current.loadRequesterSessionEntry!(...args),
-    );
+      deliveryRuntime,
+      "loadRequesterSessionEntry",
+    )(async (...args) => current.loadRequesterSessionEntry!(...args));
     install(
-      deliveryRuntime.captureRequesterSessionEntryCurrent,
-      () => vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent"),
-      async (...args) => ({
-        readCurrent: () => current.loadRequesterSessionEntry!(...args).entry,
-        release() {},
-      }),
-    );
+      deliveryRuntime,
+      "captureRequesterSessionEntryCurrent",
+    )(async (...args) => ({
+      readCurrent: () => current.loadRequesterSessionEntry!(...args).entry,
+      release() {},
+    }));
   }
+  install(deliveryRuntime, "loadSessionEntryByKey")(current.loadSessionEntryByKey);
   install(
-    deliveryRuntime.loadSessionEntryByKey,
-    () => vi.spyOn(deliveryRuntime, "loadSessionEntryByKey"),
-    current.loadSessionEntryByKey,
-  );
+    deliveryRuntime,
+    "getSubagentRequesterSessionActivity",
+  )(current.getRequesterSessionActivity);
+  install(sessionQueries, "isSessionRunActive")(current.isSessionRunActive);
   install(
-    deliveryRuntime.getSubagentRequesterSessionActivity,
-    () => vi.spyOn(deliveryRuntime, "getSubagentRequesterSessionActivity"),
-    current.getRequesterSessionActivity,
-  );
-  install(
-    sessionQueries.isSessionRunActive,
-    () => vi.spyOn(sessionQueries, "isSessionRunActive"),
-    current.isSessionRunActive,
-  );
-  install(
-    embeddedRuns.resolveEmbeddedRunAbandonment,
-    () => vi.spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment"),
-    current.resolveRequesterSessionAbandonment,
-  );
-  install(
-    deliveryRuntime.sendSubagentAnnounceMessage,
-    () => vi.spyOn(deliveryRuntime, "sendSubagentAnnounceMessage"),
-    current.sendMessage,
-  );
+    embeddedRuns,
+    "resolveEmbeddedRunAbandonment",
+  )(current.resolveRequesterSessionAbandonment);
+  install(deliveryRuntime, "sendSubagentAnnounceMessage")(current.sendMessage);
 }
 
 export const announceTesting = {
