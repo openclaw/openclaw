@@ -57,6 +57,7 @@ import {
   resolveMcpAppAllowedToolNames,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
@@ -238,6 +239,7 @@ export function createBoardHandlers(
         if (isIncognitoSessionKey(boardSession.sessionKey) && !memory) {
           throw new BoardValidationError("not_found", "board session no longer exists");
         }
+        let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
         try {
           const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
           let content: BoardWidgetMaterializedPutParams["content"];
@@ -254,9 +256,24 @@ export function createBoardHandlers(
             }
             content = { kind: "html", html: document.html };
           } else if (requestParams.content.kind === "mcp-app") {
+            requester = await captureGatewayOperatorRunAuthority({
+              client: invocation.client,
+              context,
+              hasCurrentClientAuthority: invocation.hasCurrentClientAuthority,
+              invocationAuthority: {
+                assertCurrent: () => invocation.signal?.throwIfAborted(),
+                signal: invocation.signal,
+              },
+            });
+            authority.assertActive = composeSessionSourceAssertion([
+              authority.assertActive,
+              requester?.authority.assertCurrent,
+            ]);
+            authority.assertActive();
             const active = await mcpApp.resolveActiveView({
               ...boardSession,
               viewId: requestParams.content.viewId,
+              requesterId: requester?.authority.profileId,
               cfg: context.getRuntimeConfig(),
             });
             authority.assertActive();
@@ -387,9 +404,8 @@ export function createBoardHandlers(
                 [identity?.assertSelected ?? authority.assertActive],
                 (assertSources) => {
                   assertSources();
-                  const cfg = context.getRuntimeConfig();
                   const current = resolveRequestedSessionStoreTarget(
-                    cfg,
+                    context.getRuntimeConfig(),
                     boardSession.sessionKey,
                     boardSession.agentId,
                   );
@@ -489,7 +505,11 @@ export function createBoardHandlers(
           };
           await (memory ? runWithSessionActorStorage(memory, putAndApprove) : putAndApprove());
         } finally {
-          await memory?.actor.release();
+          try {
+            await memory?.actor.release();
+          } finally {
+            requester?.release();
+          }
         }
       },
     ),

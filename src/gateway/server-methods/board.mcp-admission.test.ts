@@ -41,14 +41,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
-  "retains only current source tool authority after queueing (%s)",
+it.for(["keep", "revoke", "cancel", "retire", "sharing", "requester"] as const)(
+  "keeps MCP App pins bound to current source and requester authority (%s)",
   (outcome, { signal: testSignal }) =>
     withOpenClawTestState(profileState, async ({ workspaceDir }) => {
       const revoke = outcome === "revoke";
       const cancel = outcome === "cancel";
       const retire = outcome === "retire";
       const sharing = outcome === "sharing";
+      const requesterMismatch = outcome === "requester";
       const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
       const cfg: OpenClawConfig = {
         ...rolePolicyConfig(),
@@ -64,20 +65,24 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
       };
       client.connect.scopes = [...scopes];
       const clientProfileId = client.authenticatedUserProfile!.profileId;
+      const sourceClient = requesterMismatch
+        ? { ...roleClient("view", "mcp-admission-source"), connId: "mcp-admission-source" }
+        : client;
+      sourceClient.connect.scopes = [...scopes];
       const creatorId = sharing
         ? roleClient("view", "mcp-admission-other").authenticatedUserProfile!.profileId
-        : clientProfileId;
+        : sourceClient.authenticatedUserProfile!.profileId;
       await upsertSessionEntryCore(target, {
         sessionId: "mcp-admission-session",
         updatedAt: 1,
-        visibility: sharing ? ("shared" as const) : ("draft" as const),
+        visibility: sharing || requesterMismatch ? ("shared" as const) : ("draft" as const),
         createdActor: {
           type: "human" as const,
           source: "profile" as const,
           id: creatorId,
         },
       });
-      if (sharing) {
+      if (sharing || requesterMismatch) {
         addSessionMember(target, {
           identityId: clientProfileId,
           addedBy: creatorId,
@@ -152,6 +157,7 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
               ...options,
               runtime,
               ...sourceDescriptor,
+              requesterId: sourceClient.authenticatedUserProfile!.profileId,
               toolInput: {},
               toolResult: { content: [] },
               ...(readOnly ? { readOnly: true } : {}),
@@ -172,11 +178,12 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         method: string,
         input: Record<string, unknown>,
         signal?: AbortSignal,
+        requester = client,
       ) => {
         const respond = vi.fn<RespondFn>();
         await handleGatewayRequest({
           req: { type: "req", id: "mcp-admission", method, params: { ...target, ...input } },
-          client,
+          client: requester,
           context: board.context,
           respond,
           isWebchatConnect: () => false,
@@ -185,11 +192,20 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         });
         return respond;
       };
-      const appView = async (name: string, { revision, instanceId }: typeof sourceWidget) => {
-        const response = await invoke("board.widget.appView", { name, revision, instanceId });
+      const appView = async (
+        name: string,
+        { revision, instanceId }: typeof sourceWidget,
+        requester = client,
+      ) => {
+        const response = await invoke(
+          "board.widget.appView",
+          { name, revision, instanceId },
+          undefined,
+          requester,
+        );
         expect(response.mock.calls[0]?.[0]).toBe(true);
       };
-      await appView("source", sourceWidget);
+      await appView("source", sourceWidget, sourceClient);
       const sourceView = views[0]!;
       await requireMcpAppInteraction(sourceView.view);
       const authorizeSource = sourceView.view.authorizeAppInteraction!;
@@ -234,6 +250,19 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
           },
           controller.signal,
         );
+        if (requesterMismatch) {
+          const response = await pin;
+          expect(response.mock.calls[0]?.[0]).toBe(false);
+          expect(response.mock.calls[0]?.[2]).toMatchObject({
+            message: expect.stringContaining(
+              "MCP App view expired or is not authorized for this session",
+            ),
+          });
+          expect(await boardStore.readWidgetMcpApp(target, "destination")).toBeUndefined();
+          expect(board.broadcast).not.toHaveBeenCalled();
+          expect(callTool).not.toHaveBeenCalled();
+          return;
+        }
         await waitForPinGate(putEntered.promise, "pin skipped source preflight");
         expect(put).toHaveBeenCalledOnce();
         if (revoke) {
