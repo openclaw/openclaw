@@ -1,8 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { beforeEach, afterEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { afterEach, expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -13,6 +12,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Control UI session transcript search" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
 const searchScope = {
   agentId: "main",
   excludeDock: true,
@@ -20,13 +20,6 @@ const searchScope = {
   includeUnknown: false,
   configuredAgentsOnly: true,
 };
-let artifactDir: string;
-beforeEach(() => {
-  if (captureProof) {
-    artifactDir = createControlUiE2eArtifactDir("session-transcript-search");
-  }
-});
-
 let context: BrowserContext | undefined;
 let page: Page | undefined;
 
@@ -37,13 +30,17 @@ async function newPage(height = 800, width = 1200, proof = false, light = false)
     viewport: { height, width },
     ...(light ? { colorScheme: "light" as const } : {}),
     ...(proof && captureProof
-      ? { recordVideo: { dir: artifactDir, size: { height, width } } }
+      ? { recordVideo: { dir: suite.artifactDir, size: { height, width } } }
       : {}),
   });
   return (page = await context.newPage());
 }
 
-function listResponse(sessions: unknown[], timestamp: number, model: string | null = null) {
+function sessionRow(name: string, label?: string, updatedAt = timestamp) {
+  return { key: `agent:main:${name}`, kind: "direct", label, updatedAt };
+}
+
+function listResponse(sessions: unknown[], model: string | null = null) {
   return {
     count: sessions.length,
     defaults: { contextTokens: null, model, modelProvider: model ? "openai" : null },
@@ -53,13 +50,7 @@ function listResponse(sessions: unknown[], timestamp: number, model: string | nu
   };
 }
 
-function searchHit(
-  session: string,
-  snippet: string,
-  timestamp: number,
-  role = "assistant",
-  score = 1,
-) {
+function searchHit(session: string, snippet: string, role = "assistant", score = 1) {
   return {
     messageId: `message-${session}`,
     role,
@@ -84,14 +75,14 @@ async function captureUiProof(fileName: string) {
   }
   if (page.video()) {
     await writeFile(
-      path.join(artifactDir, fileName),
+      path.join(suite.artifactDir, fileName),
       await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
         page.locator("#control-ui-main"),
       ]),
     );
     return;
   }
-  await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
+  await page.screenshot({ fullPage: true, path: path.join(suite.artifactDir, fileName) });
 }
 
 async function resolveDeferredAndDrain(
@@ -124,7 +115,6 @@ suite.define(() => {
   });
 
   it("searches once on submit, shows provenance, and opens the matching chat", async () => {
-    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
     page = await newPage(900, 1440, true, true);
     const gateway = await installMockGateway(page, {
       // Core search remains usable even when omitted from the feature catalog.
@@ -140,16 +130,12 @@ suite.define(() => {
         "sessions.list": listResponse(
           [
             {
+              ...sessionRow("launch", "Launch planning"),
               displayName: "Launch planning",
-              key: "agent:main:launch",
-              kind: "direct",
-              label: "Launch planning",
               status: "done",
               totalTokens: 1200,
-              updatedAt: timestamp,
             },
           ],
-          timestamp,
           "gpt-5.5",
         ),
         "sessions.search": {
@@ -157,7 +143,6 @@ suite.define(() => {
             searchHit(
               "launch",
               "The nebula launch checklist is ready for final review.",
-              timestamp,
               "assistant",
               3.4,
             ),
@@ -184,9 +169,9 @@ suite.define(() => {
       query: "nebula launch",
       scope: searchScope,
     });
-    await expect.poll(() => result.textContent()).toContain("Launch planning");
-    await expect.poll(() => result.textContent()).toContain("Assistant");
-    await expect.poll(() => result.textContent()).toContain("nebula launch checklist");
+    for (const text of ["Launch planning", "Assistant", "nebula launch checklist"]) {
+      await expect.poll(() => result.textContent()).toContain(text);
+    }
     await captureUiProof("03-results.png");
 
     await search.getByRole("button", { name: "Clear" }).click();
@@ -209,32 +194,17 @@ suite.define(() => {
   });
 
   it("clears transcript matches when switching from active to archived sessions", async () => {
-    const timestamp = Date.parse("2026-08-26T12:00:00.000Z");
     page = await newPage(1000, 1440, true);
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
       sessionArchiveFiltering: true,
       methodResponses: {
-        "sessions.list": listResponse(
-          [
-            {
-              key: "agent:main:active",
-              label: "Active task",
-              kind: "direct",
-              updatedAt: timestamp,
-            },
-            {
-              key: "agent:main:archived",
-              label: "Archived task",
-              kind: "direct",
-              archived: true,
-              updatedAt: timestamp,
-            },
-          ],
-          timestamp,
-        ),
+        "sessions.list": listResponse([
+          sessionRow("active", "Active task"),
+          { ...sessionRow("archived", "Archived task"), archived: true },
+        ]),
         "sessions.search": {
-          results: [searchHit("active", "Release notes from the active task.", timestamp)],
+          results: [searchHit("active", "Release notes from the active task.")],
         },
       },
     });
@@ -275,20 +245,14 @@ suite.define(() => {
   });
 
   it("finds an older off-roster transcript without enumerating session pages", async () => {
-    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
-    const first = { key: "agent:main:first", kind: "direct", updatedAt: timestamp };
-    const missed = {
-      key: "agent:main:missed",
-      label: "Earlier launch planning",
-      kind: "direct",
-      updatedAt: timestamp - 86_400_000,
-    };
+    const first = sessionRow("first");
+    const missed = sessionRow("missed", "Earlier launch planning", timestamp - 86_400_000);
     page = await newPage();
     const gateway = await installMockGateway(page, {
       sessions: [first, missed],
       methodResponses: {
         "sessions.list": {
-          ...listResponse([first], timestamp),
+          ...listResponse([first]),
           hasMore: true,
           nextOffset: 1,
           offset: 0,
@@ -296,9 +260,7 @@ suite.define(() => {
         },
         "sessions.search": {
           sessions: [missed],
-          results: [
-            { ...searchHit("missed", "the recovered launch code", timestamp), sessionId: "missed" },
-          ],
+          results: [{ ...searchHit("missed", "the recovered launch code"), sessionId: "missed" }],
         },
       },
     });
@@ -330,24 +292,13 @@ suite.define(() => {
   });
 
   it("ignores stale results and exposes indexing and request errors", async () => {
-    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
     page = await newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
       methodResponses: {
-        "sessions.list": listResponse(
-          [
-            {
-              key: "agent:main:stale",
-              kind: "direct",
-              label: "Stale search fixture",
-              status: "done",
-              totalTokens: 0,
-              updatedAt: timestamp,
-            },
-          ],
-          timestamp,
-        ),
+        "sessions.list": listResponse([
+          { ...sessionRow("stale", "Stale search fixture"), status: "done", totalTokens: 0 },
+        ]),
         "sessions.search": { indexing: true, results: [] },
       },
     });
@@ -372,7 +323,7 @@ suite.define(() => {
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
     await input.fill("new phrase");
     await resolveDeferredAndDrain(page, "sessions.search", {
-      results: [searchHit("stale", "stale result must stay hidden", timestamp, "user")],
+      results: [searchHit("stale", "stale result must stay hidden", "user")],
     });
     expect(await page.getByText("stale result must stay hidden", { exact: true }).count()).toBe(0);
     await input.press("Enter");

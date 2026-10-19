@@ -1,13 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "sessions-navigation-identity" });
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const targetKey = "agent:main:thread:12345678-aaaa-4000-8000-000000000001";
 const targetText = "Selected target transcript 741";
 const timestamp = Date.parse("2026-09-15T12:00:00.000Z");
@@ -18,15 +15,13 @@ async function primaryKeys(page: Page) {
     (context) => context.sessions.state.result?.sessions.map((row) => row.key) ?? null,
   );
 }
-async function capture(page: Page, name: string) {
-  if (captureProof) {
-    await page.screenshot({ path: path.join(suite.artifactDir, name), fullPage: true });
-  }
+async function requestParams(gateway: MockGatewayControls, method: string) {
+  return (await gateway.getRequests(method)).map((request) => request.params);
 }
-async function receipt(name: string, data: () => Promise<object>) {
-  if (captureProof) {
-    await writeFile(path.join(suite.artifactDir, name), JSON.stringify(await data(), null, 2));
-  }
+async function expectTargetOnly(gateway: MockGatewayControls, method: string, otherKey: string) {
+  const params = await requestParams(gateway, method);
+  expect(params).toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
+  expect(params).not.toContainEqual(expect.objectContaining({ sessionKey: otherKey }));
 }
 function session(key: string, sessionId: string, displayName: string) {
   return { key, sessionId, displayName, kind: "direct", updatedAt: timestamp };
@@ -167,7 +162,6 @@ suite.define(() => {
             scope: { agentId: "main" },
           });
         }
-        await capture(page, "before-click.png");
         if (scenario.source === "href") {
           const href = await selected.getAttribute("href");
           expect(href).toBeTruthy();
@@ -181,15 +175,6 @@ suite.define(() => {
           .or(page.getByText(targetText, { exact: true }))
           .or(page.getByRole("heading", { name: "Choose a session", exact: true }));
         await visibleDestination.first().waitFor({ state: "visible" });
-        await capture(page, "after-click.png");
-        await receipt("receipt.json", async () => ({
-          scenario,
-          primaryBeforeClick,
-          searchRequests,
-          url: page.url(),
-          resolveRequests: await gateway.getRequests("sessions.resolve"),
-          startupRequests: await gateway.getRequests("chat.startup"),
-        }));
         expect(
           await page.getByRole("heading", { name: "Choose a session", exact: true }).isVisible(),
         ).toBe(false);
@@ -201,23 +186,14 @@ suite.define(() => {
             await page.getByText(targetText, { exact: true }).waitFor({ state: "visible" });
           }
           await expect
-            .poll(async () =>
-              (await gateway.getRequests("chat.startup")).map((request) => request.params),
-            )
+            .poll(() => requestParams(gateway, "chat.startup"))
             .toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
-          expect(
-            (await gateway.getRequests("chat.startup")).map((request) => request.params),
-          ).not.toContainEqual(expect.objectContaining({ sessionKey: other.key }));
+          await expectTargetOnly(gateway, "chat.startup", other.key);
           expect(
             await page.getByText("Different synthetic transcript 982", { exact: true }).isVisible(),
           ).toBe(false);
           if (scenario.face) {
-            expect(
-              (await gateway.getRequests("board.get")).map((request) => request.params),
-            ).toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
-            expect(
-              (await gateway.getRequests("board.get")).map((request) => request.params),
-            ).not.toContainEqual(expect.objectContaining({ sessionKey: other.key }));
+            await expectTargetOnly(gateway, "board.get", other.key);
           }
         };
         await assertDestination();
@@ -230,14 +206,6 @@ suite.define(() => {
             beforeReloadRequests.every((previous) => previous.id !== request.id),
           ),
         ).toBe(true);
-        await capture(page, "after-reload.png");
-        await receipt("reload-receipt.json", async () => ({
-          scenario,
-          url: page.url(),
-          beforeReloadRequests,
-          afterReloadRequests,
-          boardRequests: await gateway.getRequests("board.get"),
-        }));
       },
     );
   });
