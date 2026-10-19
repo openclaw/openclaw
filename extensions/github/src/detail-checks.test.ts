@@ -36,8 +36,6 @@ function run(overrides: Record<string, unknown> = {}) {
     status: "completed",
     conclusion: "success",
     head_sha: sha,
-    app: { id: 1 },
-    check_suite: { id: 1 },
     html_url: "https://github.com/octocat/repo/actions/runs/1/job/10",
     ...overrides,
   };
@@ -55,23 +53,26 @@ function runs(items: unknown[] = [], headers: Record<string, string> = {}) {
   return json({ total_count: items.length, check_runs: items }, 200, headers);
 }
 function statuses(items: unknown[] = [], commit = sha) {
-  return json({
-    sha: commit,
-    state: items.length ? "success" : "pending",
-    total_count: items.length,
-    statuses: items,
-  });
+  return json({ sha: commit, total_count: items.length, statuses: items });
 }
-function publicFetch(checks = runs(), legacy = statuses(), headSha: unknown = sha) {
-  return vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-    .mockResolvedValueOnce(json(pull(headSha)))
-    .mockResolvedValueOnce(checks)
-    .mockResolvedValueOnce(legacy);
+function publicFetch(
+  checks = runs(),
+  legacy = statuses(),
+  item = pull(),
+  fetchMock = vi.fn<typeof fetch>(),
+) {
+  const pages = [json({ private: false, visibility: "public" }), json(item), checks, legacy];
+  for (const response of pages) {
+    fetchMock.mockResolvedValueOnce(response);
+  }
+  return fetchMock;
 }
 function readChecks(checks: Response, legacy: Response) {
   return loadGitHubDetail(target(), undefined, publicFetch(checks, legacy));
+}
+function reader(fetchMock: typeof fetch, section?: "checks", input = target()) {
+  return (refresh = false, fetchImpl = fetchMock) =>
+    loadGitHubDetail(input, undefined, fetchImpl, refresh, section);
 }
 function expectChecksDocument(
   document: Awaited<ReturnType<typeof loadGitHubDetail>>,
@@ -87,15 +88,13 @@ afterEach(() => {
 });
 
 describe("GitHub PR checks through the document loader", () => {
-  it("reads both anonymous CI sources for the exact head, projects branch/tone facts, and coalesces reads", async () => {
+  it("coalesces anonymous exact-head CI reads and projects branch/tone facts", async () => {
     vi.stubEnv("GH_TOKEN", "test-ambient-token");
     vi.stubEnv("GITHUB_TOKEN", "test-other-token");
     const input = target();
     const fetchMock = publicFetch(runs([run()]), statuses([commitStatus()]));
-    const [detail, shared] = await Promise.all([
-      loadGitHubDetail(input, undefined, fetchMock),
-      loadGitHubDetail(input, undefined, fetchMock),
-    ]);
+    const read = reader(fetchMock, undefined, input);
+    const [detail, shared] = await Promise.all([read(), read()]);
     expect(shared).toBe(detail);
     expect(detail).toMatchObject({
       body: "Keep the PR body",
@@ -132,7 +131,7 @@ describe("GitHub PR checks through the document loader", () => {
     }
   });
 
-  it("prioritizes failed then pending checks without treating skipped jobs as passes", async () => {
+  it("orders failed/pending checks ahead of passes and skipped jobs", async () => {
     const result = await readChecks(
       runs([
         run({ id: 1, name: "Build", status: "in_progress", conclusion: null }),
@@ -144,13 +143,13 @@ describe("GitHub PR checks through the document loader", () => {
     expect(result.checks).toMatchObject({
       state: "failure",
       summary: "1 failed · 1 pending · 1 passed · 1 skipped or neutral",
+      items: [
+        { name: "Deploy", state: "failure", detail: "Failed" },
+        { name: "Build", state: "pending", detail: "In progress" },
+        { name: "Lint", state: "success", detail: "Passed" },
+        { name: "Optional", state: "neutral", detail: "Skipped" },
+      ],
     });
-    expect(result.checks?.items).toMatchObject([
-      { name: "Deploy", state: "failure", detail: "Failed" },
-      { name: "Build", state: "pending", detail: "In progress" },
-      { name: "Lint", state: "success", detail: "Passed" },
-      { name: "Optional", state: "neutral", detail: "Skipped" },
-    ]);
   });
 
   it("preserves distinct check run IDs and deduplicates legacy status contexts", async () => {
@@ -170,50 +169,49 @@ describe("GitHub PR checks through the document loader", () => {
       total: 3,
       summary: "1 failed · 2 passed",
       truncated: false,
+      items: expect.arrayContaining([
+        expect.objectContaining({ name: "Build", state: "failure", detail: "Failed" }),
+        expect.objectContaining({ name: "build", state: "success", detail: "Passed" }),
+        expect.objectContaining({ name: "Build", state: "success", detail: "Passed" }),
+      ]),
     });
     expect(result.checks?.items).toHaveLength(3);
-    expect(result.checks?.items.map((item) => [item.name, item.state, item.detail])).toEqual(
-      expect.arrayContaining([
-        ["Build", "failure", "Failed"],
-        ["build", "success", "Passed"],
-        ["Build", "success", "Passed"],
-      ]),
-    );
   });
 
-  it("preserves the PR and successful sibling when checks are unavailable", async () => {
-    const detail = await readChecks(
-      json({ message: "sensitive upstream diagnostic" }, 503),
-      statuses([commitStatus()]),
-    );
-    expectChecksDocument(detail, {
-      state: "unavailable",
-      summary: "Checks incomplete · 1 passed",
-      total: 1,
-      truncated: true,
-    });
-    expect(detail.checks?.items).toHaveLength(1);
-    expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
-  });
+  it.each([
+    [503, "success", "unavailable", "Checks incomplete · 1 passed", "Passed"],
+    [403, "pending", "pending", "Checks incomplete · 1 pending", "Pending"],
+  ] as const)(
+    "preserves the PR with HTTP %s checks and its sibling",
+    async (status, legacy, state, summary, label) => {
+      const detail = await readChecks(
+        json({ message: "sensitive upstream diagnostic" }, status),
+        statuses([commitStatus({ state: legacy })]),
+      );
+      expectChecksDocument(detail, {
+        state,
+        summary,
+        total: 1,
+        truncated: true,
+        items: [{ state: legacy, detail: label }],
+      });
+      expect(detail.checks?.items).toHaveLength(1);
+      expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
+    },
+  );
 
   it("refreshes a cached failed checks section for the same head", async () => {
-    const input = target();
-    const failed = await loadGitHubDetail(
-      input,
-      undefined,
-      publicFetch(json({}, 503), statuses()),
-      false,
-      "checks",
-    );
+    const read = reader(publicFetch(json({}, 503), statuses()), "checks");
+    const failed = await read();
     expect(failed).toMatchObject({
       revision: sha,
       partial: true,
       checks: { state: "unavailable", truncated: true },
     });
     const recoveredFetch = publicFetch(runs([run()]), statuses());
-    expect(await loadGitHubDetail(input, undefined, recoveredFetch, false, "checks")).toBe(failed);
+    expect(await read(false, recoveredFetch)).toBe(failed);
     expect(recoveredFetch).not.toHaveBeenCalled();
-    const recovered = await loadGitHubDetail(input, undefined, recoveredFetch, true, "checks");
+    const recovered = await read(true, recoveredFetch);
     expect(recovered).toMatchObject({
       revision: sha,
       partial: false,
@@ -222,38 +220,26 @@ describe("GitHub PR checks through the document loader", () => {
     expect(recoveredFetch).toHaveBeenCalledTimes(4);
   });
 
-  it("retains known pending checks above incomplete data", async () => {
-    const state = "pending";
-    const result = await readChecks(json({}, 403), statuses([commitStatus({ state })]));
-    expectChecksDocument(result, {
-      state,
-      truncated: true,
-      summary: expect.stringMatching(/^Checks incomplete/u),
-      items: [{ state, detail: "Pending" }],
-    });
-  });
-
-  it("honors anonymous quota cooldown, preserves the body, and does not spend another request", async () => {
+  it("honors anonymous quota cooldown without losing the body or spending requests", async () => {
     const fetchMock = publicFetch(json({}, 429, { "retry-after": "60" }));
-    const input = target();
-    const first = await loadGitHubDetail(input, undefined, fetchMock);
+    const read = reader(fetchMock);
+    const first = await read();
     expectChecksDocument(first, {
       state: "unavailable",
       summary: "Checks unavailable",
       items: [],
     });
-    expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(first);
+    expect(await read()).toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it.each([undefined, "../main"])(
-    "does not substitute a branch or merge SHA for invalid head %s",
+    "rejects invalid head %s without substituting branch or merge SHA",
     async (headSha) => {
-      const fetchMock = publicFetch();
-      fetchMock
-        .mockReset()
-        .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-        .mockResolvedValueOnce(json({ ...pull(), head: { sha: headSha, ref: "feature/checks" } }));
+      const fetchMock = publicFetch(runs(), statuses(), {
+        ...pull(),
+        head: { sha: headSha, ref: "feature/checks" },
+      });
       const detail = await loadGitHubDetail(target(), undefined, fetchMock);
       expectChecksDocument(detail, { state: "unavailable", items: [] });
       expect(detail.checks?.commit).toBeUndefined();
@@ -298,7 +284,6 @@ describe("GitHub PR checks through the document loader", () => {
   );
 
   it("does not let a late old-head read overwrite the refreshed document cache", async () => {
-    const input = target();
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
@@ -315,35 +300,32 @@ describe("GitHub PR checks through the document loader", () => {
       }
       return json({ private: false, visibility: "public" });
     });
-    const older = loadGitHubDetail(input, undefined, fetchMock);
+    const read = reader(fetchMock);
+    const older = read();
     await requested.promise;
     const freshFetch = publicFetch(
       runs([run({ head_sha: nextSha, conclusion: "failure" })]),
       statuses([], nextSha),
-      nextSha,
+      pull(nextSha),
     );
-    const fresh = await loadGitHubDetail(input, undefined, freshFetch, true);
+    const fresh = await read(true, freshFetch);
     deferred.resolve(runs([run()]));
     expect((await older).checks).toMatchObject({ state: "success", commit: sha });
     expect(fresh.checks).toMatchObject({ state: "failure", commit: nextSha });
-    expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(fresh);
+    expect(await read()).toBe(fresh);
     expect(freshFetch).toHaveBeenCalledTimes(4);
   });
 
-  it("expires complete PR snapshots after 30 seconds rather than keeping checks for five minutes", async () => {
+  it("expires complete PR snapshots after 30 seconds, not five minutes", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-    const input = target();
     const fetchMock = publicFetch();
-    const first = await loadGitHubDetail(input, undefined, fetchMock);
+    const read = reader(fetchMock);
+    const first = await read();
     now.mockReturnValue(30_999);
-    expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(first);
-    fetchMock
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(json(pull()))
-      .mockResolvedValueOnce(runs([run()]))
-      .mockResolvedValueOnce(statuses());
+    expect(await read()).toBe(first);
+    publicFetch(runs([run()]), statuses(), pull(), fetchMock);
     now.mockReturnValue(31_001);
-    expect((await loadGitHubDetail(input, undefined, fetchMock)).checks?.state).toBe("success");
+    expect((await read()).checks?.state).toBe("success");
     expect(fetchMock).toHaveBeenCalledTimes(8);
   });
 });
