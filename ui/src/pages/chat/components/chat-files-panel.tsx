@@ -1,5 +1,5 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createMemo, onCleanup, onSettled, refresh } from "solid-js";
+import { For, Show, createMemo, onCleanup, onSettled, refresh, untrack } from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -185,7 +185,9 @@ defineSolidBridge<Props, Methods>(
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
-              onCleanup(() => pages.delete(preview().id));
+              // Registration and cleanup follow the keyed row's lifetime, not its current data.
+              const initialPreviewId = untrack(() => preview().id);
+              onCleanup(() => pages.delete(initialPreviewId));
               const entry = () => {
                 rendered();
                 return preview();
@@ -198,7 +200,7 @@ defineSolidBridge<Props, Methods>(
               };
               return (
                 <div
-                  ref={(element) => pages.set(preview().id, element)}
+                  ref={(element) => pages.set(initialPreviewId, element)}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}
