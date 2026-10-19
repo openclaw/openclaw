@@ -1,5 +1,4 @@
 /** Tests web-tool secret metadata resolution from config and plugins. */
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -23,38 +22,26 @@ import {
   type ProviderUnderTest,
 } from "./runtime-web-tools-provider.test-support.js";
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+const { fallbackSearch } = vi.hoisted(() => ({
+  fallbackSearch: vi.fn(() => buildTestWebSearchProviders()),
 }));
 
-const { resolvePluginWebFetchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
+const { fallbackFetch } = vi.hoisted(() => ({
+  fallbackFetch: vi.fn(() => buildTestWebFetchProviders()),
 }));
-const {
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock,
-  resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock,
-} = vi.hoisted(() => ({
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock: vi.fn<
+const { explicitSearch, explicitFetch } = vi.hoisted(() => ({
+  explicitSearch: vi.fn<
     typeof import("../plugins/web-provider-public-artifacts.explicit.js").resolveBundledExplicitWebSearchProvidersFromPublicArtifacts
   >(() => buildTestWebSearchProviders()),
-  resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock: vi.fn<
+  explicitFetch: vi.fn<
     typeof import("../plugins/web-provider-public-artifacts.explicit.js").resolveBundledExplicitWebFetchProvidersFromPublicArtifacts
   >(() => buildTestWebFetchProviders()),
 }));
-const {
-  resolveBundledWebSearchProvidersFromPublicArtifactsMock,
-  resolveBundledWebFetchProvidersFromPublicArtifactsMock,
-} = vi.hoisted(() => ({
-  resolveBundledWebSearchProvidersFromPublicArtifactsMock: vi.fn(() =>
-    buildTestWebSearchProviders(),
-  ),
-  resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => buildTestWebFetchProviders()),
+const { bundledSearch, bundledFetch } = vi.hoisted(() => ({
+  bundledSearch: vi.fn(() => buildTestWebSearchProviders()),
+  bundledFetch: vi.fn(() => buildTestWebFetchProviders()),
 }));
-const {
-  resolveManifestContractPluginIdsMock,
-  resolveManifestContractOwnerPluginIdMock,
-  defaultManifestOwner,
-} = vi.hoisted(() => {
+const { manifestIds, manifestOwner, defaultManifestOwner } = vi.hoisted(() => {
   const owners: Record<string, string | undefined> = {
     brave: "brave",
     firecrawl: "firecrawl",
@@ -65,20 +52,13 @@ const {
   };
   const resolveOwner = ({ value }: { value: string }) => owners[value];
   return {
-    resolveManifestContractPluginIdsMock: vi.fn(() => [
-      "brave",
-      "duckduckgo",
-      "google",
-      "moonshot",
-      "perplexity",
-      "xai",
-    ]),
-    resolveManifestContractOwnerPluginIdMock: vi.fn(resolveOwner),
+    manifestIds: vi.fn(() => ["brave", "duckduckgo", "google", "moonshot", "perplexity", "xai"]),
+    manifestOwner: vi.fn(resolveOwner),
     defaultManifestOwner: resolveOwner,
   };
 });
-const { loadInstalledPluginIndexInstallRecordsSyncMock } = vi.hoisted(() => ({
-  loadInstalledPluginIndexInstallRecordsSyncMock: vi.fn(() => ({})),
+const { installedPlugins } = vi.hoisted(() => ({
+  installedPlugins: vi.fn(() => ({})),
 }));
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
@@ -87,34 +67,30 @@ let restoreResolveSecretRefValuesSpy: (() => void) | undefined;
 
 vi.mock("./runtime-web-tools-fallback.runtime.js", () => ({
   runtimeWebToolsFallbackProviders: {
-    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-    resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
+    resolvePluginWebSearchProviders: fallbackSearch,
+    resolvePluginWebFetchProviders: fallbackFetch,
   },
 }));
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
-    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock,
-  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts:
-    resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: explicitSearch,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: explicitFetch,
 }));
 
 vi.mock("../plugins/web-provider-public-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/web-provider-public-artifacts.js")>()),
-  resolveBundledWebSearchProvidersFromPublicArtifacts:
-    resolveBundledWebSearchProvidersFromPublicArtifactsMock,
-  resolveBundledWebFetchProvidersFromPublicArtifacts:
-    resolveBundledWebFetchProvidersFromPublicArtifactsMock,
+  resolveBundledWebSearchProvidersFromPublicArtifacts: bundledSearch,
+  resolveBundledWebFetchProvidersFromPublicArtifacts: bundledFetch,
 }));
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
-  resolveManifestContractPluginIds: resolveManifestContractPluginIdsMock,
-  resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
+  resolveManifestContractPluginIds: manifestIds,
+  resolveManifestContractOwnerPluginId: manifestOwner,
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
-  loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
+  loadInstalledPluginIndexInstallRecordsSync: installedPlugins,
 }));
 
 function envRef(id: string) {
@@ -210,37 +186,8 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
   return pluginConfig?.webSearch?.apiKey;
 }
 
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function diagnostics(value: unknown) {
-  expect(Array.isArray(value), "diagnostics").toBe(true);
-  return value as Array<Record<string, unknown>>;
-}
-
-function expectDiagnostic(
-  value: unknown,
-  fields: { code: string; path?: string; messageIncludes?: string },
-) {
-  const diagnostic = diagnostics(value).find(
-    (candidate) =>
-      candidate.code === fields.code &&
-      (fields.path === undefined || candidate.path === fields.path),
-  );
-  if (!diagnostic) {
-    throw new Error(`Expected diagnostic ${fields.code}${fields.path ? ` ${fields.path}` : ""}`);
-  }
-  if (fields.messageIncludes) {
-    expect(typeof diagnostic.message).toBe("string");
-    expect(diagnostic.message).toContain(fields.messageIncludes);
-  }
-}
-
-function firstMockArg(source: { mock: { calls: Array<Array<unknown>> } }) {
-  const call = source.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock call options");
-  }
-  return requireRecord(call[0], "mock call options");
+function expectDiagnostic(value: unknown, fields: { code: string; path: string }) {
+  expect(value).toEqual(expect.arrayContaining([expect.objectContaining(fields)]));
 }
 
 function explicitArtifactCalls(
@@ -265,15 +212,15 @@ describe("runtime web tools resolution", () => {
   });
 
   beforeEach(() => {
-    resolvePluginWebSearchProvidersMock.mockReset().mockImplementation(buildTestWebSearchProviders);
-    resolvePluginWebFetchProvidersMock.mockClear();
-    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock.mockClear();
-    resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock.mockClear();
-    resolveBundledWebSearchProvidersFromPublicArtifactsMock.mockClear();
-    resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
-    resolveManifestContractOwnerPluginIdMock.mockReset().mockImplementation(defaultManifestOwner);
-    resolveManifestContractPluginIdsMock.mockClear();
-    loadInstalledPluginIndexInstallRecordsSyncMock.mockReset().mockReturnValue({});
+    fallbackSearch.mockReset().mockImplementation(buildTestWebSearchProviders);
+    fallbackFetch.mockClear();
+    explicitSearch.mockClear();
+    explicitFetch.mockClear();
+    bundledSearch.mockClear();
+    bundledFetch.mockClear();
+    manifestOwner.mockReset().mockImplementation(defaultManifestOwner);
+    manifestIds.mockClear();
+    installedPlugins.mockReset().mockReturnValue({});
   });
 
   afterEach(() => {
@@ -292,11 +239,13 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.selectedProvider).toBeUndefined();
     expect(metadata.search.providerSource).toBe("none");
-    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
-    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+    expect(metadata.fetch).toMatchObject({
+      selectedProvider: "firecrawl",
+      selectedProviderKeySource: "secretRef",
+    });
+    expect(explicitSearch).not.toHaveBeenCalled();
+    expect(bundledSearch).not.toHaveBeenCalled();
+    expect(fallbackSearch).not.toHaveBeenCalled();
   });
 
   it("skips fetch provider discovery when web fetch only configures runtime limits", async () => {
@@ -312,9 +261,9 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.fetch.providerSource).toBe("none");
     expect(metadata.fetch.selectedProvider).toBeUndefined();
-    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+    expect(explicitFetch).not.toHaveBeenCalled();
+    expect(bundledFetch).not.toHaveBeenCalled();
+    expect(fallbackFetch).not.toHaveBeenCalled();
   });
 
   it("keeps active fetch provider SecretRefs on the discovery path", async () => {
@@ -334,14 +283,11 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(metadata.fetch.providerSource).toBe("configured");
-    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(
-      explicitArtifactCalls(
-        resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock,
-        context.env,
-      ),
-    ).toContainEqual({
+    expect(metadata.fetch).toMatchObject({
+      providerSource: "configured",
+      selectedProvider: "firecrawl",
+    });
+    expect(explicitArtifactCalls(explicitFetch, context.env)).toContainEqual({
       onlyPluginIds: ["firecrawl"],
       env: context.env,
       manifestRecords: manifestRegistry.plugins,
@@ -369,10 +315,12 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(metadata.search.providerConfigured).toBe(provider);
-    expect(metadata.search.providerSource).toBe("configured");
-    expect(metadata.search.selectedProvider).toBe(provider);
-    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(metadata.search).toMatchObject({
+      providerConfigured: provider,
+      providerSource: "configured",
+      selectedProvider: provider,
+      selectedProviderKeySource: "secretRef",
+    });
     expect(readProviderKey(resolvedConfig, provider)).toBe(resolvedKey);
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
@@ -422,11 +370,11 @@ describe("runtime web tools resolution", () => {
       ...createTestProvider({ provider: "brave", pluginId, order: 10 }),
       id: "dotted",
     };
-    resolvePluginWebSearchProvidersMock.mockReturnValue([dottedProvider]);
-    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+    fallbackSearch.mockReturnValue([dottedProvider]);
+    installedPlugins.mockReturnValue({
       [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
     });
-    resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
+    manifestOwner.mockReturnValue(undefined);
     const sourceConfig = asConfig({
       tools: { web: { search: { enabled: true, provider: "dotted" } } },
       ...pluginEntries({
@@ -474,13 +422,12 @@ describe("runtime web tools resolution", () => {
       },
       createTool: () => null,
     };
-    resolvePluginWebFetchProvidersMock.mockReturnValueOnce([provider]);
-    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+    fallbackFetch.mockReturnValueOnce([provider]);
+    installedPlugins.mockReturnValue({
       [pluginId]: { source: "npm", spec: "@openclaw/external-fetch" },
     });
-    resolveManifestContractOwnerPluginIdMock.mockImplementation(
-      ({ value, origin }: { value: string; origin?: string }) =>
-        value === "external-fetch" && origin !== "bundled" ? pluginId : undefined,
+    manifestOwner.mockImplementation(({ value, origin }: { value: string; origin?: string }) =>
+      value === "external-fetch" && origin !== "bundled" ? pluginId : undefined,
     );
 
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
@@ -498,13 +445,15 @@ describe("runtime web tools resolution", () => {
       env: { EXTERNAL_FETCH_API_KEY: "test-token-placeholder" },
     });
 
-    expect(metadata.fetch.selectedProvider).toBe("external-fetch");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
+    expect(metadata.fetch).toMatchObject({
+      selectedProvider: "external-fetch",
+      selectedProviderKeySource: "secretRef",
+    });
     expect(
       (resolvedConfig.tools?.web?.fetch as { external?: { apiKey?: unknown } } | undefined)
         ?.external?.apiKey,
     ).toBe("test-token-placeholder");
-    expect(firstMockArg(resolvePluginWebFetchProvidersMock).sandboxed).toBe(true);
+    expect(fallbackFetch).toHaveBeenNthCalledWith(1, expect.objectContaining({ sandboxed: true }));
   });
 
   it("does not reuse a web credential after its plugin routing config changes", async () => {
@@ -513,11 +462,11 @@ describe("runtime web tools resolution", () => {
       ...createTestProvider({ provider: "brave", pluginId, order: 10 }),
       id: "external",
     };
-    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
-    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+    fallbackSearch.mockReturnValue([provider]);
+    installedPlugins.mockReturnValue({
       [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
     });
-    resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
+    manifestOwner.mockReturnValue(undefined);
     const config = (baseUrl: string) =>
       asConfig({
         tools: { web: { search: { enabled: true, provider: "external" } } },
@@ -560,8 +509,10 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(metadata.search.providerSource).toBe("auto-detect");
-    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(metadata.search).toMatchObject({
+      providerSource: "auto-detect",
+      selectedProvider: "gemini",
+    });
     expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-runtime-key");
     expectDiagnostic(context.warnings, {
       code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
@@ -603,9 +554,11 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(metadata.search.providerSource).toBe("auto-detect");
-    expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(metadata.search.selectedProviderKeySource).toBe("config");
+    expect(metadata.search).toMatchObject({
+      providerSource: "auto-detect",
+      selectedProvider: "gemini",
+      selectedProviderKeySource: "config",
+    });
     expect(readProviderKey(resolvedConfig, "gemini")).toBe("google-provider-runtime-key");
   });
 
@@ -621,9 +574,11 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(metadata.search.providerSource).toBe("auto-detect");
-    expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(metadata.search).toMatchObject({
+      providerSource: "auto-detect",
+      selectedProvider: "gemini",
+      selectedProviderKeySource: "env",
+    });
     expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-env-runtime-key");
     expect(resolvedConfig.models?.providers?.google?.apiKey).toBe("google-provider-ref-key");
   });
@@ -699,9 +654,9 @@ describe("runtime web tools resolution", () => {
     expect(metadata.fetch.selectedProvider).toBeUndefined();
     expect(metadata.fetch.selectedProviderKeySource).toBeUndefined();
     expect(context.warnings).toStrictEqual([]);
-    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+    expect(explicitFetch).not.toHaveBeenCalled();
+    expect(bundledFetch).not.toHaveBeenCalled();
+    expect(fallbackFetch).not.toHaveBeenCalled();
   });
 
   it("skips provider discovery when no web surfaces are configured", async () => {
@@ -709,8 +664,8 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.providerSource).toBe("none");
-    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
-    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+    expect(fallbackSearch).not.toHaveBeenCalled();
+    expect(fallbackFetch).not.toHaveBeenCalled();
   });
 
   it("isolates an explicit web fetch provider when its ref is unavailable", async () => {
@@ -831,8 +786,10 @@ describe("runtime web tools resolution", () => {
       env: { FIRECRAWL_API_KEY: "firecrawl-search-ref-key" },
     });
 
-    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(metadata.fetch).toMatchObject({
+      selectedProvider: "firecrawl",
+      selectedProviderKeySource: "env",
+    });
     expect(readFetchKey(resolvedConfig)).toBe("firecrawl-search-ref-key");
   });
 
@@ -842,9 +799,11 @@ describe("runtime web tools resolution", () => {
       env: { FIRECRAWL_API_KEY: "firecrawl-runtime-key" },
     });
 
-    expect(metadata.fetch.providerSource).toBe("auto-detect");
-    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
+    expect(metadata.fetch).toMatchObject({
+      providerSource: "auto-detect",
+      selectedProvider: "firecrawl",
+      selectedProviderKeySource: "secretRef",
+    });
     expect(readFetchKey(resolvedConfig)).toBe("firecrawl-runtime-key");
   });
 
@@ -887,11 +846,13 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(
-      explicitArtifactCalls(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock),
-    ).toContainEqual({ onlyPluginIds: ["firecrawl"], env: {}, manifestRecords: undefined });
-    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+    expect(explicitArtifactCalls(explicitFetch)).toContainEqual({
+      onlyPluginIds: ["firecrawl"],
+      env: {},
+      manifestRecords: undefined,
+    });
+    expect(bundledFetch).not.toHaveBeenCalled();
+    expect(fallbackFetch).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
