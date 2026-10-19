@@ -20,6 +20,31 @@ export type OverlayRegistry = {
   events?: ReturnType<typeof createRegistryEvents>;
 };
 const registries = new WeakMap<Document, OverlayRegistry>();
+const modalSurfaces = new Set<HTMLElement>();
+
+/** Non-popover modal surfaces publish their owned element for keyboard admission. */
+export function registerModalSurface(surface: HTMLElement): () => void {
+  modalSurfaces.add(surface);
+  return () => modalSurfaces.delete(surface);
+}
+
+export function hasModalSurface(doc: Document): boolean {
+  if (doc.openClawModalLayers?.size) {
+    return true;
+  }
+  for (const surface of modalSurfaces) {
+    if (
+      surface.ownerDocument === doc &&
+      surface.isConnected &&
+      surface.matches("dialog[open], [aria-modal='true']")
+    ) {
+      return true;
+    }
+  }
+  return [...(registries.get(doc)?.members.keys() ?? [])].some(
+    (overlay) => overlay.open && overlay.surface.getAttribute("aria-modal") === "true",
+  );
+}
 
 export function containsComposed(container: Element | undefined, target: Node | null): boolean {
   if (!container) {

@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { promisify } from "node:util";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -462,15 +463,7 @@ export async function startMatrixQaFaultProxy(
       targetBaseUrl = new URL(nextTargetBaseUrl);
     },
     stop: async () => {
-      const closePromise = new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
+      const closePromise = promisify(server.close.bind(server))();
       for (const controller of activeAbortControllers) {
         controller.abort();
       }

@@ -13,6 +13,16 @@ describe("config schema regressions", () => {
     expect(MarkdownConfigSchema.parse({ tables: "block" })).toEqual({ tables: "block" });
   });
 
+  it("accepts string-array media provider options", () => {
+    const providerOptions = { deepgram: { keyterm: ["OpenClaw", "Deepgram"] } };
+    const media = {
+      audio: { providerOptions },
+      models: [{ provider: "deepgram", model: "nova-3", providerOptions }],
+    };
+
+    expect(OpenClawSchema.parse({ tools: { media } }).tools?.media).toEqual(media);
+  });
+
   it("rejects invalid cron.sessionRetention durations", () => {
     expect(() => OpenClawSchema.parse({ cron: { sessionRetention: "abc" } })).toThrow(
       /sessionRetention|duration/i,

@@ -11,9 +11,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./node-runtime-diagnostics.js", () => ({ collectNodeRuntimeFindings: async () => [] }));
 vi.mock("./status.scan.js", () => ({ scanStatus: mocks.scan }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scan }));
+// mock-isolation: Inject scan failures without starting live status or database probes.
 vi.mock("./status.scan-overview.ts", () => ({
   collectStatusScanOverview: mocks.overview,
-  resolveStatusSummaryFromOverview: vi.fn(),
+  prepareStatusSummaryFromOverview: vi.fn(),
 }));
 vi.mock("./status.daemon.js", () => ({
   getDaemonStatusSummary: mocks.gateway,

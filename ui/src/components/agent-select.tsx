@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -24,6 +24,7 @@ type AgentSelectProps = {
   variant: "default" | "compact";
   onSelect: (value: string) => void;
   onCreateAgent: (() => void) | null;
+  focusTargetsRef?: (readTargets: () => readonly HTMLElement[]) => void;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
 defineSolidBridge<AgentSelectProps>(
@@ -155,19 +156,16 @@ defineSolidBridge<AgentSelectProps>(
           ]
         : []),
     ]);
-    createEffect(
-      () => props.disabled,
-      (disabled) => {
-        if (disabled) {
-          menu?.close();
-        }
-      },
-    );
     return (
       <Menu
         id={id}
         ref={(handle) => {
           menu = handle;
+          props.focusTargetsRef?.(() => {
+            const elements = handle.itemElements();
+            const trigger = handle.overlay.trigger;
+            return trigger ? [trigger, ...elements] : elements;
+          });
         }}
         class={props.variant === "compact" ? "agent-select agent-select--compact" : "agent-select"}
         panelClass="agent-select__menu"
@@ -182,8 +180,10 @@ defineSolidBridge<AgentSelectProps>(
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
-          const option = surface?.querySelector<HTMLElement>(":focus");
-          if (surface && option) {
+          const root = surface?.getRootNode();
+          const option =
+            root instanceof ShadowRoot ? root.activeElement : surface?.ownerDocument.activeElement;
+          if (surface && option instanceof HTMLElement && surface.contains(option)) {
             revealInScrollRegion(surface, option);
           }
         }}
@@ -233,6 +233,7 @@ defineSolidBridge<AgentSelectProps>(
       variant: { default: "default", attribute: false },
       onSelect: { default: () => {}, attribute: false },
       onCreateAgent: { default: null, attribute: false },
+      focusTargetsRef: { default: undefined, attribute: false },
     },
   },
 );

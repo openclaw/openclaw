@@ -1,6 +1,9 @@
-import { GetPromptResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { JsonSchemaType } from "@modelcontextprotocol/client";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
+import {
+  GetPromptResultSchema as LegacyGetPromptResultSchema,
+  type CallToolResult as LegacyCallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -75,7 +78,8 @@ afterEach(async () => {
 
 describe("Code Mode MCP namespace", () => {
   it("preserves native MCP results through bundled materialization and the guest namespace", async () => {
-    const success: CallToolResult = {
+    // SessionMcpRuntime retains its published v1 result shapes during the deprecation window.
+    const success: LegacyCallToolResult = {
       content: [
         {
           type: "text",
@@ -92,7 +96,7 @@ describe("Code Mode MCP namespace", () => {
       isError: false,
       _meta: { privateAppState: "must-not-reach-guest" },
     };
-    const failure: CallToolResult = {
+    const failure: LegacyCallToolResult = {
       content: [{ type: "text", text: "recoverable failure" }],
       structuredContent: { retryable: true },
       isError: true,
@@ -182,7 +186,7 @@ describe("Code Mode MCP namespace", () => {
       listResources: async () => privateUtilityResults.resources_list,
       readResource: async () => privateUtilityResults.resources_read,
       listPrompts: async () => privateUtilityResults.prompts_list,
-      getPrompt: async () => GetPromptResultSchema.parse(privateUtilityResults.prompts_get),
+      getPrompt: async () => LegacyGetPromptResultSchema.parse(privateUtilityResults.prompts_get),
       dispose: async () => {},
     };
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
@@ -491,7 +495,7 @@ describe("MCP declaration consumers", () => {
     const value = details.value as {
       file: { content: string; bytes: number };
       api: { header: string };
-      results: CallToolResult[];
+      results: LegacyCallToolResult[];
     };
     expect(
       value.results.map((result) => JSON.parse((result.content[0] as { text: string }).text)),

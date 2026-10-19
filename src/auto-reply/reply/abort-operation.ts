@@ -1,10 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
-import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
+import {
+  captureSessionMcpRuntimeRetirement,
+  retireSessionMcpRuntime,
+} from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
-import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
-import { prepareEmbeddedAgentRunAbort } from "../../agents/embedded-agent-runner/runs.abort-target.js";
 import { captureExecRequestSubagentSelection } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
@@ -12,166 +12,288 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   markSessionAbortTarget,
   resolveSessionAbortTarget,
-  type SessionAbortTargetContext,
   type SessionAbortTargetIdentity,
-  type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecRequestIdentity } from "../../infra/exec-request-context.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { captureSessionControllerSourceStopAcknowledgment } from "../../sessions/session-controller.mailbox-source.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
+import { getAttachedBackend } from "../../sessions/session-controller.state.js";
 import {
-  type AbortCutoff,
-  resolveAbortCutoffFromContext,
-  shouldPersistAbortCutoff,
-} from "./abort-cutoff.js";
+  captureSessionControllerStop,
+  captureSessionControllerStopCandidates,
+  stopSession,
+  type SessionControllerStopCapture,
+  type SessionStopHookContext,
+  type SessionStopRequest,
+} from "../../sessions/session-controller.stop.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import { setAbortMemory } from "./abort-primitives.js";
+import { completeAbortRetirements } from "./abort-retirements.js";
 import type { FastAbortRequestParams, FastAbortResult, PreparedFastAbortRequest } from "./abort.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
-import { prepareSessionLifecycleQueueCleanup } from "./queue/cleanup.js";
-import { resolveReplyOperationsForSession } from "./reply-run-registry.js";
-import { getAttachedBackend } from "./reply-run-registry.state.js";
 import { resolveSessionConversationBindingContext } from "./session-conversation-binding.js";
 
-export function prepareSessionRunTargetAbort(params: {
-  agentId: string;
+type ChannelStopTarget = SessionControllerInput | ReplyOperation;
+export type ChannelStopCapture = {
+  controller: SessionControllerStopCapture;
+  sessionId?: string;
+  mcpSessionIds: ReadonlyMap<ChannelStopTarget, readonly string[]>;
+  idleMcpRetirements: readonly NonNullable<ReturnType<typeof captureSessionMcpRuntimeRetirement>>[];
+  commands: readonly ReturnType<typeof captureExecRequestCancellation>[];
+  requestRunIds: ReadonlySet<string>;
+};
+
+function matchesStopCandidate(
+  candidate: Pick<
+    ReturnType<typeof captureSessionControllerStopCandidates>[number],
+    "aliases" | "agentId" | "storeScope"
+  >,
+  params: { key: string; storePath: string; agentId?: string },
+): boolean {
+  if (!candidate.aliases.has(params.key)) {
+    return false;
+  }
+  if (candidate.storeScope && candidate.storeScope !== params.storePath) {
+    return false;
+  }
+  return (
+    !candidate.agentId ||
+    !params.agentId ||
+    normalizeAgentId(candidate.agentId) === normalizeAgentId(params.agentId)
+  );
+}
+
+/** Physical identity and runtime references are captured together, before channel I/O. */
+export function captureChannelSessionStop(params: {
   key?: string;
   sessionId?: string;
-}) {
+  storePath: string;
+  agentId?: string;
+  aliases?: readonly (string | undefined)[];
+  includeQueued?: boolean;
+  resolveGatewayContext?: GatewayContextResolver;
+}): ChannelStopCapture {
   const key = normalizeOptionalString(params.key);
-  const operations = resolveReplyOperationsForSession({
-    ...params,
-    sessionKeys: key ? [key] : [],
-  });
-  const sessionIds = new Set(operations.map((operation) => operation.sessionId));
-  const explicitSessionId = normalizeOptionalString(params.sessionId);
-  const commands =
-    key || explicitSessionId
-      ? captureExecRequestCancellation({
-          sessionKey: key,
-          sessionId: explicitSessionId,
+  const candidates = key
+    ? captureSessionControllerStopCandidates({
+        resolveGatewayContext: params.resolveGatewayContext,
+      }).filter((candidate) =>
+        matchesStopCandidate(candidate, {
+          key,
+          storePath: params.storePath,
           agentId: params.agentId,
-        })
-      : undefined;
-  if (explicitSessionId) {
-    sessionIds.add(explicitSessionId);
-  }
-  if (key) {
-    const activeSessionId = resolveActiveEmbeddedRunSessionId(key);
-    if (
-      activeSessionId &&
-      (sessionIds.has(activeSessionId) ||
-        parseAgentSessionKey(key)?.agentId === normalizeAgentId(params.agentId))
-    ) {
-      sessionIds.add(activeSessionId);
-    }
-  }
+        }),
+      )
+    : [];
+  const controller = captureSessionControllerStop({
+    targets: key
+      ? [
+          captureSessionTarget({
+            storeScope: params.storePath,
+            sessionKey: key,
+            incarnation: params.sessionId,
+            agentId: params.agentId,
+            aliases: params.aliases,
+          }),
+        ]
+      : [],
+    inputs: candidates.flatMap((candidate) => candidate.capture.inputs),
+    operations: candidates.flatMap((candidate) => candidate.capture.operations),
+    includeQueued: params.includeQueued,
+    resolveGatewayContext: params.resolveGatewayContext,
+  });
+  return captureChannelStopResources(controller, params.sessionId, {
+    sessionKey: key,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+  });
+}
 
-  const runs = [...sessionIds].map((sessionId) => ({
-    sessionId,
-    abort: prepareEmbeddedAgentRunAbort(sessionId),
-  }));
-  const requestRunIds = new Set([
-    ...(commands?.requestRunIds ?? []),
-    ...operations.flatMap((operation) => {
-      const runId = getAttachedBackend(operation)?.runId;
-      return runId ? [runId] : [];
-    }),
-  ]);
-  const abort = (selectedSessionId = explicitSessionId) => {
-    const selectedOperations = operations.filter(
-      (operation) => !selectedSessionId || operation.sessionId === selectedSessionId,
+function captureChannelStopResources(
+  controller: SessionControllerStopCapture,
+  capturedSessionId?: string,
+  commandTarget?: ExecRequestIdentity,
+): ChannelStopCapture {
+  const selectedSessionId =
+    controller.activeInputs[0]?.claim?.operation?.sessionId ??
+    controller.operations[0]?.sessionId ??
+    capturedSessionId;
+  const mcpSessionIds = new Map<ChannelStopTarget, readonly string[]>();
+  for (const operation of controller.operations) {
+    mcpSessionIds.set(operation, [...operation.captureOwnedSessionIds()]);
+  }
+  for (const input of controller.activeInputs) {
+    const sessionId = input.source?.run.sessionId ?? capturedSessionId;
+    mcpSessionIds.set(
+      input,
+      input.claim?.operation
+        ? [...input.claim.operation.captureOwnedSessionIds()]
+        : sessionId
+          ? [sessionId]
+          : [],
     );
-    const selectedSessionIds = new Set(
-      [...sessionIds].filter((sessionId) => !selectedSessionId || sessionId === selectedSessionId),
-    );
-    if (selectedSessionId) {
-      selectedSessionIds.add(selectedSessionId);
-    }
-    let active = selectedOperations.some((operation) => !operation.result);
-    // The first cancellation signal clears the provider's live wait.
-    const hadLocalModelWait = runs.some(
-      (run) =>
-        (!selectedSessionId || run.sessionId === selectedSessionId) &&
-        run.abort.isWaitingForLocalModel(),
-    );
-    const failures: unknown[] = [];
-    let aborted =
-      commands?.cancel(
-        (identity) => !selectedSessionId || identity.sessionId === selectedSessionId,
-      ) === true;
-    for (const operation of selectedOperations) {
-      for (const sessionId of operation.captureOwnedSessionIds()) {
-        selectedSessionIds.add(sessionId);
-      }
-      try {
-        aborted = operation.abortByUser() || aborted;
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    for (const run of runs) {
-      if (selectedSessionId && run.sessionId !== selectedSessionId) {
-        continue;
-      }
-      try {
-        const outcome = run.abort();
-        active ||= outcome.active;
-        aborted ||= outcome.aborted;
-        if (outcome.sessionId) {
-          selectedSessionIds.add(outcome.sessionId);
-        }
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    // Stop owns these captured IDs; a later turn may rebind the session key.
-    // Join command cleanup even when another cancellation or retirement fails.
-    const retirement =
-      !active || aborted || failures.length > 0
-        ? Promise.allSettled([
-            ...[...selectedSessionIds].map((sessionId) =>
-              retireSessionMcpRuntime({
-                sessionId,
-                reason: "session-stop",
-                preserveActiveLeases: true,
-              }),
-            ),
-            commands?.settle(),
-          ]).then((results) => {
-            for (const result of results) {
-              if (result.status === "rejected") {
-                failures.push(result.reason);
-              }
-            }
-            if (failures.length === 1) {
-              throw failures[0];
-            }
-            if (failures.length > 1) {
-              throw new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
-            }
-          })
-        : undefined;
-    return {
-      active,
-      aborted,
-      retirement,
-      ...(aborted && hadLocalModelWait ? { localModelMayStillBeFinishing: true as const } : {}),
-    };
+  }
+  const active = controller.activeInputs.length > 0 || controller.operations.length > 0;
+  const idleMcpRetirement = active
+    ? undefined
+    : captureSessionMcpRuntimeRetirement({
+        sessionId: capturedSessionId,
+        sessionKey: commandTarget?.sessionKey,
+      });
+  const operations = [
+    ...controller.operations,
+    ...controller.activeInputs.flatMap((input) => input.claim?.operation ?? []),
+  ];
+  const commands = [
+    ...(commandTarget
+      ? [
+          captureExecRequestCancellation({
+            ...commandTarget,
+            sessionId: commandTarget.sessionId ?? selectedSessionId,
+          }),
+        ]
+      : []),
+    ...operations.map((operation) =>
+      captureExecRequestCancellation({
+        sessionKey: operation.key,
+        sessionId: operation.sessionId,
+        agentId: operation.agentId,
+      }),
+    ),
+  ];
+  return {
+    controller,
+    sessionId: selectedSessionId,
+    mcpSessionIds,
+    idleMcpRetirements: idleMcpRetirement ? [idleMcpRetirement] : [],
+    commands,
+    requestRunIds: new Set([
+      ...commands.flatMap((command) => command.requestRunIds),
+      ...operations.flatMap((operation) => getAttachedBackend(operation)?.runId ?? []),
+      ...controller.effects.flatMap((effect) => effect.run?.runId ?? []),
+    ]),
   };
-  return Object.assign(abort, { requestRunIds });
+}
+
+function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): ChannelStopCapture {
+  return {
+    controller: captureSessionControllerStop({
+      inputs: captures.flatMap((capture) => [...capture.controller.inputs]),
+      operations: captures.flatMap((capture) => [...capture.controller.operations]),
+      effects: captures.flatMap((capture) => [...capture.controller.effects]),
+      pendingCaptures: captures.map((capture) => capture.controller),
+    }),
+    mcpSessionIds: new Map(captures.flatMap((capture) => [...capture.mcpSessionIds])),
+    idleMcpRetirements: captures.flatMap((capture) =>
+      capture.idleMcpRetirements.filter((retirement) => retirement.sessionId === capture.sessionId),
+    ),
+    commands: captures.flatMap((capture) => capture.commands),
+    requestRunIds: new Set(captures.flatMap((capture) => [...capture.requestRunIds])),
+  };
+}
+
+/** Scope adapter only: cancellation and acceptance belong to the captured Stop kernel. */
+export function abortSessionRunTargetWithOutcome(params: {
+  capture: ChannelStopCapture | (() => ChannelStopCapture);
+  assertCurrent?: () => void;
+  afterQueued?: () => void;
+  hookContext: SessionStopHookContext;
+  messageIdentity?: unknown;
+  recordAbortTarget?: SessionStopRequest["recordAbortTarget"];
+  stopChildren?: SessionStopRequest["stopChildren"];
+  retirements: Promise<void>[];
+}) {
+  let selectedCapture: ChannelStopCapture | undefined;
+  const resolveCapture = () =>
+    (selectedCapture ??= typeof params.capture === "function" ? params.capture() : params.capture);
+  const retiring = new Set<string>();
+  const trackRetirement = (sessionId: string, start: () => Promise<void>) => {
+    if (retiring.has(sessionId)) {
+      return;
+    }
+    params.assertCurrent?.();
+    retiring.add(sessionId);
+    const retirement = start();
+    void retirement.catch(() => {});
+    params.retirements.push(retirement);
+  };
+  const retire = (sessionIds: readonly string[]) => {
+    for (const sessionId of sessionIds) {
+      trackRetirement(sessionId, async () => {
+        const retired = await retireSessionMcpRuntime({
+          sessionId,
+          reason: "session-stop",
+          preserveActiveLeases: true,
+        });
+        if (!retired) {
+          throw new Error("Session MCP runtime retirement failed.");
+        }
+      });
+    }
+  };
+  return stopSession({
+    source: "channel-user",
+    capture: () => resolveCapture().controller,
+    assertCurrent: params.assertCurrent,
+    hookContext: params.hookContext,
+    messageIdentity: params.messageIdentity,
+    recordAbortTarget: params.recordAbortTarget,
+    stopChildren: params.stopChildren,
+    externalParent: {
+      stop: () => {
+        let aborted = false;
+        for (const commands of resolveCapture().commands) {
+          params.assertCurrent?.();
+          aborted = commands.cancel() || aborted;
+        }
+        return aborted ? "aborted" : "unchanged";
+      },
+      get settled() {
+        const settlement = Promise.all(
+          resolveCapture().commands.map((commands) => commands.settle()),
+        ).then(() => undefined);
+        params.retirements.push(settlement);
+        return settlement;
+      },
+    },
+    afterQueued: () => {
+      const capture = resolveCapture();
+      params.afterQueued?.();
+      for (const retirement of capture.idleMcpRetirements) {
+        trackRetirement(retirement.sessionId, () =>
+          retirement.retire(() => params.assertCurrent?.()),
+        );
+      }
+    },
+    onCancelled: (target) => {
+      const capture = resolveCapture();
+      // Raw preparation and active producers retain custody after the Stop acknowledgment.
+      if (!capture.mcpSessionIds.has(target) && "mailbox" in target) {
+        params.retirements.push(captureSessionControllerSourceStopAcknowledgment(target));
+      }
+      retire(capture.mcpSessionIds.get(target) ?? []);
+    },
+  });
 }
 
 type RequesterSession = Pick<
@@ -191,6 +313,7 @@ export async function stopSubagentsForRequester(params: {
 }): Promise<{ stopped: number; failed: number; execAborted?: boolean }> {
   const cleaned = normalizeOptionalString(params.requesterSessionKey);
   if (!cleaned) {
+    params.assertCurrent?.();
     await params.beforeKill?.(() => {});
     return { stopped: 0, failed: 0 };
   }
@@ -280,60 +403,48 @@ export async function executeFastAbortRequest(
 ): Promise<FastAbortResult> {
   const { ctx, cfg } = params;
   const { commandSessionKey, targetKey, resolveTargetAgentId } = request;
-
   const agentId = resolveTargetAgentId();
+  const resolveGatewayContext =
+    readChannelContextGatewayContextResolver(ctx) ??
+    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const assertCurrent = () => {
+    if (params.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
+      params.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+      return;
+    }
+    if (params.isCommandTargetCurrent?.() === false) {
+      throw new Error("The selected session changed before it could be stopped.");
+    }
+  };
 
   if (targetKey) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-    const abortCutoffForTarget = (target: SessionAbortTargetContext): AbortCutoff | undefined =>
-      shouldPersistAbortCutoff({
-        commandSessionKey,
-        targetSessionKey: target.sessionKey,
-      })
-        ? resolveAbortCutoffFromContext(ctx)
-        : undefined;
-    const selection: { target: SessionAbortTargetIdentity | null } = { target: null };
     const resolvedTargetKey = normalizeStoreSessionKey(targetKey);
-    const assertCurrent = () => {
-      if (params.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
-        params.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
-        return;
-      }
-      if (params.isCommandTargetCurrent?.() === false) {
-        throw new Error("The selected session changed before it could be stopped.");
-      }
-    };
-    const prepareTarget = (key: string) => {
+    const captureTarget = (key: string) => {
       const targetAgentId =
         key === resolvedTargetKey
           ? agentId
-          : resolveSessionAgentId({
-              config: cfg,
-              sessionKey: key,
-              fallbackAgentId: ctx.AgentId ?? agentId,
-            });
-      const sessionId = resolveReplyOperationsForSession({
-        sessionKeys: [key],
-        agentId: targetAgentId,
-      })[0]?.sessionId;
-      const target = { key, agentId: targetAgentId, sessionId };
-      return {
+          : resolveSessionAgentId({ config: cfg, sessionKey: key, fallbackAgentId: ctx.AgentId });
+      return captureChannelSessionStop({
         key,
-        sessionId,
-        abort: prepareSessionRunTargetAbort(target),
-        clearQueues: prepareSessionLifecycleQueueCleanup({
-          ...target,
-          keys: [key, sessionId],
-          sessionKey: key,
-          assertCurrent,
-        }),
-      };
+        agentId: targetAgentId,
+        resolveGatewayContext,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+      });
     };
-    // Capture process-owned work before metadata preparation yields to another turn.
-    const preparedTargets = new Map(
-      [resolvedTargetKey, ...(commandSessionKey ? [commandSessionKey] : [])].map(
-        (key) => [key, prepareTarget(key)] as const,
-      ),
+    // Capture process owners before metadata or channel routing can yield.
+    const mainCapture = captureTarget(resolvedTargetKey);
+    const sourceCapture =
+      commandSessionKey && commandSessionKey !== resolvedTargetKey
+        ? captureTarget(commandSessionKey)
+        : undefined;
+    const boundCandidates = captureSessionControllerStopCandidates({ resolveGatewayContext }).map(
+      (candidate) => ({
+        aliases: candidate.aliases,
+        agentId: candidate.agentId,
+        storeScope: candidate.storeScope,
+        channel: captureChannelStopResources(candidate.capture),
+      }),
     );
     const targetRead = resolveSessionAbortTarget({
       agentId,
@@ -345,184 +456,187 @@ export async function executeFastAbortRequest(
       );
       return null;
     });
+    const selection: { target: SessionAbortTargetIdentity | null } = { target: null };
+    const retirements: Promise<void>[] = [];
+    let selectedCapture = mainCapture;
     let authorized = false;
-    let aborted = false;
-    let activeAbortRejected = false;
-    let localModelMayStillBeFinishing = false;
-    const acpCancellations: Promise<void>[] = [];
-    try {
-      const { stopped, failed, execAborted } = await stopSubagentsForRequester({
-        cfg,
-        requesterSessionKey: targetKey,
-        requesterAgentId: agentId,
-        prepareRequesterSession: async () => {
-          selection.target = await targetRead;
-          return selection.target?.sessionId
-            ? {
-                storePath,
-                sessionId: selection.target.sessionId,
-                lifecycleRevision: selection.target.entry.lifecycleRevision ?? null,
-              }
-            : undefined;
-        },
-        acceptsRequest: (identity) =>
-          !selection.target || identity.sessionId === selection.target.sessionId,
-        assertCurrent,
-        beforeKill: async (sealRootSelection) => {
-          // Authorization still belongs at the cancellation effect.
-          const auth = await resolveCommandAuthorizationAsync({
-            ctx,
-            cfg,
-            commandAuthorized: ctx.CommandAuthorized,
-          });
-          authorized = auth.isAuthorizedSender;
-          if (!authorized) {
-            return false;
-          }
-          const bindingContext = commandSessionKey
-            ? resolveSessionConversationBindingContext(cfg, ctx)
-            : undefined;
-          const conversationBoundAcpTargetKey = commandSessionKey
-            ? await (bindingContext
-                ? resolveEffectiveResetTargetSessionKey({
+    const stopState: { execution?: ReturnType<typeof abortSessionRunTargetWithOutcome> } = {};
+    const abortCutoff = shouldPersistAbortCutoff({
+      commandSessionKey,
+      targetSessionKey: resolvedTargetKey,
+    })
+      ? resolveAbortCutoffFromContext(ctx)
+      : undefined;
+    const childrenCompleted =
+      createDeferredCore<Awaited<ReturnType<typeof stopSubagentsForRequester>>>();
+    void childrenCompleted.promise.catch(() => {});
+    const { children, executionOutcome } = await completeAbortRetirements(async () => {
+      try {
+        const stoppedChildren = await stopSubagentsForRequester({
+          cfg,
+          requesterSessionKey: targetKey,
+          requesterAgentId: agentId,
+          prepareRequesterSession: async () => {
+            selection.target = await targetRead;
+            if (
+              mainCapture.controller.activeInputs.length === 0 &&
+              mainCapture.controller.operations.length === 0
+            ) {
+              // Metadata confirms the original MCP capture; never select a runtime after this wait.
+              mainCapture.sessionId = selection.target?.sessionId;
+            }
+            return selection.target?.sessionId
+              ? {
+                  storePath,
+                  sessionId: selection.target.sessionId,
+                  lifecycleRevision: selection.target.entry.lifecycleRevision ?? null,
+                }
+              : undefined;
+          },
+          acceptsRequest: (identity) =>
+            !selection.target || identity.sessionId === selection.target.sessionId,
+          assertCurrent,
+          beforeKill: async (sealRootSelection) => {
+            const auth = await resolveCommandAuthorizationAsync({
+              ctx,
+              cfg,
+              commandAuthorized: ctx.CommandAuthorized,
+            });
+            authorized = auth.isAuthorizedSender;
+            if (!authorized) {
+              return false;
+            }
+            const bindingContext = commandSessionKey
+              ? resolveSessionConversationBindingContext(cfg, ctx)
+              : undefined;
+            const conversationBoundAcpTargetKey =
+              commandSessionKey && bindingContext
+                ? await resolveEffectiveResetTargetSessionKey({
                     cfg,
                     ...bindingContext,
                     activeSessionKey: commandSessionKey,
                     skipConfiguredFallbackWhenActiveSessionNonAcp: false,
                     fallbackToActiveAcpWhenUnbound: false,
                   })
-                : undefined)
-            : undefined;
-          const boundAcpTargetKey = !isAcpSessionKey(resolvedTargetKey)
-            ? conversationBoundAcpTargetKey
-            : undefined;
-          const abortTargetKeys = [resolvedTargetKey];
-          if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
-            abortTargetKeys.push(boundAcpTargetKey);
-          }
-          const sourceAbortKey =
-            commandSessionKey &&
-            !abortTargetKeys.includes(commandSessionKey) &&
-            conversationBoundAcpTargetKey &&
-            abortTargetKeys.includes(conversationBoundAcpTargetKey)
-              ? commandSessionKey
+                : undefined;
+            const captures = [mainCapture];
+            const boundKey = !isAcpSessionKey(resolvedTargetKey)
+              ? conversationBoundAcpTargetKey
               : undefined;
-          const targets = [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
-            (key) => preparedTargets.get(key) ?? prepareTarget(key),
-          );
-          const current = params.isCommandTargetCurrent?.();
-          if (
-            (typeof current === "boolean" || current === undefined ? current : await current) ===
-            false
-          ) {
-            throw new Error("The selected session changed before it could be stopped.");
-          }
-          sealRootSelection();
-          try {
-            for (const target of targets) {
-              const selectedSessionId =
-                target.key === resolvedTargetKey
-                  ? (target.sessionId ?? selection.target?.sessionId)
-                  : target.sessionId;
-              target.clearQueues(selectedSessionId);
-            }
-            for (const target of targets) {
-              const outcome = target.abort(
-                target.key === resolvedTargetKey
-                  ? (target.sessionId ?? selection.target?.sessionId)
-                  : target.sessionId,
+            if (boundKey && boundKey !== resolvedTargetKey) {
+              const boundAgentId = resolveSessionAgentId({ config: cfg, sessionKey: boundKey });
+              const boundStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+                agentId: boundAgentId,
+              });
+              captures.push(
+                ...boundCandidates
+                  .filter((candidate) =>
+                    matchesStopCandidate(candidate, {
+                      key: boundKey,
+                      storePath: boundStorePath,
+                      agentId: boundAgentId,
+                    }),
+                  )
+                  .map((candidate) => candidate.channel),
               );
-              if (outcome.retirement) {
-                // Child settlement may yield before the final join observes this failure.
-                void outcome.retirement.catch(() => {});
-                acpCancellations.push(outcome.retirement);
-              }
-              activeAbortRejected ||= outcome.active && !outcome.aborted;
-              aborted = outcome.aborted || aborted;
-              localModelMayStillBeFinishing ||= outcome.localModelMayStillBeFinishing === true;
             }
-          } finally {
-            // The tree already holds queued reservations. Initiate ACP without awaiting
-            // either backend so native cleanup cannot delay signal-less ACP steer turns.
-            const acpManager = getAcpSessionManager();
-            for (const acpTargetKey of abortTargetKeys) {
-              acpCancellations.push(
-                acpManager
-                  .resolveSessionAsync({
-                    cfg,
-                    sessionKey: acpTargetKey,
-                    agentId: acpTargetKey === resolvedTargetKey ? agentId : undefined,
-                  })
-                  .then((resolution) => {
-                    if (resolution.kind === "none") {
-                      return undefined;
-                    }
-                    return acpManager.cancelSession({
-                      cfg,
-                      sessionKey: resolution.sessionKey,
-                      agentId: resolution.agentId,
-                      reason: "fast-abort",
-                    });
-                  })
-                  .catch((error: unknown) => {
+            if (
+              sourceCapture &&
+              conversationBoundAcpTargetKey &&
+              (conversationBoundAcpTargetKey === resolvedTargetKey ||
+                conversationBoundAcpTargetKey === boundKey)
+            ) {
+              captures.push(sourceCapture);
+            }
+            selectedCapture = combineChannelStopCaptures(captures);
+            const current = params.isCommandTargetCurrent?.();
+            if (
+              (typeof current === "boolean" || current === undefined ? current : await current) ===
+              false
+            ) {
+              throw new Error("The selected session changed before it could be stopped.");
+            }
+            sealRootSelection();
+            const parentApplied = createDeferredCore<boolean>();
+            stopState.execution = abortSessionRunTargetWithOutcome({
+              capture: selectedCapture,
+              assertCurrent,
+              retirements,
+              stopChildren: async (applyParentStop) => {
+                try {
+                  parentApplied.resolve(await applyParentStop());
+                } catch (error) {
+                  parentApplied.reject(error);
+                  throw error;
+                }
+                return await childrenCompleted.promise;
+              },
+              hookContext: {
+                sessionKey: resolvedTargetKey,
+                sessionEntry: selection.target?.entry,
+                sessionId: mainCapture.sessionId ?? selection.target?.sessionId,
+                commandSource: ctx.Surface ?? ctx.Provider ?? ctx.OriginatingChannel,
+                senderId: ctx.SenderId,
+              },
+              messageIdentity: abortCutoff,
+              recordAbortTarget: async ({ recordCutoff }) => {
+                const writerRunId = selection.target?.entry.activeWriterRunId;
+                if (
+                  (mainCapture.sessionId &&
+                    mainCapture.sessionId !== selection.target?.sessionId) ||
+                  (writerRunId && !mainCapture.requestRunIds.has(writerRunId))
+                ) {
+                  logVerbose(`abort: skipped metadata for a replacement writer on ${targetKey}`);
+                  return;
+                }
+                try {
+                  const persisted = await markSessionAbortTarget({
+                    isCurrent: params.isCommandTargetCurrent,
+                    expectedTarget: selection.target?.entry ?? null,
+                    scope: { agentId, sessionKey: targetKey, storePath },
+                    resolveAbortCutoff: recordCutoff ? () => abortCutoff : undefined,
+                  });
+                  if (persisted?.persisted === false) {
                     logVerbose(
-                      `abort: ACP cancel failed for ${acpTargetKey}: ${formatErrorMessage(error)}`,
+                      `abort: failed to persist abort metadata for ${targetKey}: ${persisted.persistenceError ?? "unknown error"}`,
                     );
-                  }),
-              );
-            }
-          }
-          return true;
-        },
-      });
-      if (!authorized) {
-        return { handled: false, aborted: false };
+                  }
+                } catch (error) {
+                  logVerbose(
+                    `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
+                  );
+                }
+              },
+            });
+            // The pre-captured subtree proceeds after parent signaling; the Stop owner
+            // waits for its result before persistence and command hooks.
+            return await parentApplied.promise;
+          },
+        });
+        childrenCompleted.resolve(stoppedChildren);
+        const stoppedExecution = await stopState.execution?.completed;
+        return { children: stoppedChildren, executionOutcome: stoppedExecution };
+      } catch (error) {
+        childrenCompleted.reject(error);
+        throw error;
       }
-      aborted ||= execAborted === true;
-      const rejectionReason = activeAbortRejected && !aborted ? "finalizing" : undefined;
-      const activeWriterRunId = selection.target?.entry.activeWriterRunId;
-      const capturedTarget = preparedTargets.get(resolvedTargetKey);
-      const ownsAbortMetadata =
-        (!capturedTarget?.sessionId || capturedTarget.sessionId === selection.target?.sessionId) &&
-        (!activeWriterRunId || capturedTarget?.abort.requestRunIds.has(activeWriterRunId));
-      if (!rejectionReason && ownsAbortMetadata) {
-        let persistedAbortTarget: SessionAbortTargetResult | null = null;
-        try {
-          persistedAbortTarget = await markSessionAbortTarget({
-            isCurrent: params.isCommandTargetCurrent,
-            expectedTarget: selection.target?.entry ?? null,
-            scope: {
-              agentId,
-              sessionKey: targetKey,
-              storePath,
-            },
-            resolveAbortCutoff: abortCutoffForTarget,
-          });
-        } catch (error) {
-          logVerbose(
-            `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
-          );
-        }
-        if (persistedAbortTarget?.persisted === false) {
-          logVerbose(
-            `abort: failed to persist abort metadata for ${targetKey}: ${persistedAbortTarget.persistenceError ?? "unknown error"}`,
-          );
-        }
-      } else if (!ownsAbortMetadata) {
-        logVerbose(`abort: skipped metadata for a replacement writer on ${targetKey}`);
-      }
-      return {
-        handled: true,
-        aborted,
-        ...(rejectionReason ? { rejectionReason } : {}),
-        ...(localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
-        stoppedSubagents: stopped,
-        failedSubagents: failed,
-      };
-    } finally {
-      // Join even when native signaling or metadata exits exceptionally.
-      await Promise.all(acpCancellations);
+    }, retirements);
+    if (!authorized || !executionOutcome) {
+      return { handled: false, aborted: false };
     }
+    const aborted = executionOutcome.aborted || children.execAborted === true;
+    const rejectionReason =
+      executionOutcome.alreadyFinalizing && !aborted ? "finalizing" : undefined;
+    return {
+      handled: true,
+      aborted,
+      ...(rejectionReason ? { rejectionReason } : {}),
+      ...(executionOutcome.localModelMayStillBeFinishing
+        ? { localModelMayStillBeFinishing: true }
+        : {}),
+      stoppedSubagents: children.stopped,
+      failedSubagents: children.failed,
+    };
   }
 
   const auth = await resolveCommandAuthorizationAsync({
@@ -536,11 +650,13 @@ export async function executeFastAbortRequest(
   const abortKey = auth.from ?? auth.to;
   const requesterSessionKey = ctx.SessionKey ?? abortKey;
   if (abortKey) {
+    assertCurrent();
     setAbortMemory(abortKey, true);
   }
   const { stopped, failed, execAborted } = await stopSubagentsForRequester({
     cfg,
     requesterSessionKey,
+    assertCurrent,
   });
   return {
     handled: true,

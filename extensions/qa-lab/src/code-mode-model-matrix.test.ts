@@ -683,6 +683,124 @@ describe("Code Mode model matrix artifacts", () => {
     },
   );
 
+  it.each([
+    ["aggregate only", 9, undefined],
+    ["outer only, including zero", undefined, 0],
+    ["both scopes", 9, 4],
+    ["unavailable", undefined, undefined],
+  ] as const)("keeps tool summary scopes separate: %s", async (_name, calls, outerCalls) => {
+    const repoRoot = tempDirs.make("openclaw-code-mode-metrics-");
+    const result = await runCodeModeModelMatrix(
+      {
+        allowFailures: false,
+        dryRun: false,
+        keepState: false,
+        models: ["ollama/fixture"],
+        modes: ["code"],
+        outputDir: "artifacts",
+        repetitions: 1,
+        repoRoot,
+        tasks: ["read"],
+        thinking: "off",
+        timeoutSeconds: 10,
+      },
+      {
+        buildCliArtifacts: async () => {},
+        readBuildSha256: async () => "build123",
+        readSourceIdentity: async () => ({
+          gitSha: "abc123",
+          sourceDirty: false,
+          sourcePatchSha256: null,
+        }),
+        runCell: async (params) => ({
+          ...params.cell,
+          buildSha256: params.buildSha256,
+          gitSha: params.gitSha,
+          sourceDirty: false,
+          sourcePatchSha256: null,
+          codeModeEngaged: true,
+          elapsedMs: 10,
+          expected: "CM-EXPECTED",
+          final: "CM-EXPECTED",
+          failureCategory: null,
+          observedModel: "fixture",
+          observedProvider: "ollama",
+          oracle: {
+            answer: true,
+            effect: true,
+            engagement: true,
+            identity: true,
+            toolExecution: true,
+          },
+          passed: true,
+          status: "ok",
+          timestamp: "2026-07-28T12:00:00.000Z",
+          // This envelope models mixed outer/nested terminals, not nine outer calls.
+          ...(calls !== undefined
+            ? {
+                toolSummary: { calls, tools: ["exec", "read", "write"] },
+                bridgeCalls: { search: 0, describe: 0, call: 5 },
+              }
+            : {}),
+          ...(outerCalls !== undefined
+            ? {
+                gateway: {
+                  outerCalls,
+                  promptSha256: "prompt123",
+                  fixtureSha256: "fixture123",
+                  settings: {
+                    executor: "node",
+                    thinking: "off",
+                    timeoutSeconds: 10,
+                    execTimeoutMs: 10,
+                    maxOutputBytes: 1024,
+                    maxModelOutputTokens: 128,
+                    runtime: "openclaw",
+                    fast: false,
+                    allowedTools: ["read"],
+                  },
+                  behavior: {},
+                  startupMs: 0,
+                  traceAvailable: true,
+                  interview: {
+                    traceAvailable: false,
+                    answer: null,
+                    rationaleReview: "required",
+                    checks: {},
+                  },
+                  artifacts: {
+                    taskTrace: "task.json",
+                    interviewTrace: "interview.json",
+                    receipts: "receipts.json",
+                    taskReceipts: "task-receipts.json",
+                    interviewReceipts: "interview-receipts.json",
+                    log: "gateway.log",
+                  },
+                },
+              }
+            : {}),
+        }),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const summary = JSON.parse(
+      await fs.readFile(path.join(repoRoot, "artifacts", "summary.json"), "utf8"),
+    );
+    const unavailable = { samples: 0, total: null, p50: null };
+    expect(summary.groups).toMatchObject([
+      {
+        metrics: {
+          toolCalls: calls === undefined ? unavailable : { samples: 1, total: 9, p50: 9 },
+          outerToolCalls:
+            outerCalls === undefined
+              ? unavailable
+              : { samples: 1, total: outerCalls, p50: outerCalls },
+          bridgeToolCalls: calls === undefined ? unavailable : { samples: 1, total: 5, p50: 5 },
+        },
+      },
+    ]);
+  });
+
   it("continues after cell crashes and reports first-pass versus eventual success", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-test-"));
     try {
@@ -786,7 +904,8 @@ describe("Code Mode model matrix artifacts", () => {
           metrics: {
             assistantTurns: { samples: 0, total: null, p50: null },
             costUsd: { samples: 0, total: null, p50: null },
-            outerToolCalls: { samples: 1, total: 1, p50: 1 },
+            toolCalls: { samples: 1, total: 1, p50: 1 },
+            outerToolCalls: { samples: 0, total: null, p50: null },
             bridgeToolCalls: { samples: 1, total: 1, p50: 1 },
             bridgeSearchCalls: { samples: 1, total: 0, p50: 0 },
             bridgeDescribeCalls: { samples: 1, total: 0, p50: 0 },

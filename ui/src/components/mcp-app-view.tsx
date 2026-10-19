@@ -1,6 +1,4 @@
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { onCleanup, onSettled, Show } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -8,13 +6,9 @@ import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
-import {
-  createMcpAppView,
-  type McpAppViewOwner,
-  type McpAppViewProps,
-  type McpAppViewElement,
-  type ViewMethods,
-} from "./mcp-app-view-owner.ts";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
+import { createMcpAppView, type McpAppViewOwner } from "./mcp-app-view-owner.ts";
+import type { McpAppViewProps, McpAppViewElement, ViewMethods } from "./mcp-app-view-types.ts";
 import "../styles/mcp-app-view.css";
 
 const owners = new WeakMap<McpAppViewElement, McpAppViewOwner>();
@@ -24,55 +18,16 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
   (props, host) => {
     const context = useApplication();
     const gateway = projectGateway(context.gateway);
-    const owner = createMcpAppView(host, context);
+    const owner = createMcpAppView(host, context, onSettled);
     const read = projectOwner(owner, (current) => current.read()).read;
     owners.set(host, owner);
-    let { client, phase, hello } = context.gateway.snapshot;
-    const stopConnection = context.gateway.subscribe((snapshot) => {
-      if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
-        owner.connectionChanged();
-      }
-      ({ client, phase, hello } = snapshot);
-    });
-    const binding = createMemo(
-      () => {
-        gateway.read();
-        return [
-          context.gateway.snapshot.client,
-          props.sessionKey,
-          props.viewId,
-          props.agentId,
-          context.gateway.connectionRevision,
-          gatewayPresentationScope(context.gateway).key,
-          context.gateway.snapshot.phase === "connected" &&
-            context.gateway.snapshot.hello !== null &&
-            !hasOperatorReadAccess(context.gateway.snapshot.hello.auth ?? null),
-        ] as const;
-      },
-      { equals: (a, b) => a.every((value, index) => value === b[index]) },
-    );
-    createEffect(binding, () => {
-      void owner.setup(owner.currentBinding());
-    });
-    createEffect(
-      () => [props.title, t("mcpApp.title")],
-      () => {
-        owner.updateTitle();
-      },
-    );
-    const presentation = createMemo(
-      () => [props.height, props.fillContainer, props.displayMode, props.deepLink],
-      { equals: (a, b) => a.every((value, index) => value === b[index]) },
-    );
-    createEffect(presentation, () => owner.updatePresentation());
-    createEffect(
-      () => props.surface,
-      () => owner.updateReservedHeight(),
-    );
+    const unregister = registerMcpAppUnmountTarget(host);
+    onSettled(() => owner.start());
+    // Retire bridge methods and host registration even if disposal precedes the first settle.
     onCleanup(() => {
-      stopConnection();
+      unregister();
       owners.delete(host);
-      void owner.teardown();
+      owner.dispose();
     });
     const relaunch = () => (read().inactive === "ended" ? props.onRelaunch : undefined);
     return (
@@ -140,6 +95,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       relaunching: { default: false },
       displayMode: { default: "inline", attribute: "display-mode", reflect: true },
     },
+    propertyChanged: (host) => owners.get(host)?.inputChanged(),
     methods: {
       teardown: (host) => owners.get(host)?.teardown() ?? Promise.resolve(),
       restartAfterTeardown: (host) => owners.get(host)?.restartAfterTeardown(),

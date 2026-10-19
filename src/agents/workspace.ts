@@ -63,7 +63,6 @@ import {
   mergeWorkspaceSetupState,
   replaceWorkspaceAttestation,
   type WorkspaceAttestation,
-  type WorkspaceStateSnapshot,
   type WorkspaceSetupState,
 } from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
@@ -111,6 +110,7 @@ const RETIRED_GENERATED_TEMPLATE_SHA256: Readonly<Record<string, readonly string
     "490fc2b32865dd310a3af1225a409ac5c942d89ba456167feb0fd95e2807aaff",
   ],
   [DEFAULT_SOUL_FILENAME]: ["4f9042f259b076e429d0f01ce39340030f47ea5b7f5befe306296c36baf1f60f"],
+  [DEFAULT_IDENTITY_FILENAME]: ["59b223766c8dd978162044e333a684c72e22af753d1ba3dc3bff4b2d915c54e2"],
 };
 
 async function isGeneratedTemplateContent(fileName: string, content: string): Promise<boolean> {
@@ -174,7 +174,7 @@ export function isExpectedAbsentBootstrapFile(name: string): boolean {
   return OPTIONAL_BOOTSTRAP_FILENAMES.has(name) || name === DEFAULT_MEMORY_FILENAME;
 }
 
-async function fileContentDiffersFromTemplate(dir: string, fileName: string): Promise<boolean> {
+export async function fileDiffersFromTemplate(dir: string, fileName: string): Promise<boolean> {
   try {
     return await retryAsync(
       async () =>
@@ -273,7 +273,7 @@ async function workspaceProfileLooksConfigured(params: {
 }): Promise<boolean> {
   const profileFileDiffs = await Promise.all(
     WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
-      fileContentDiffersFromTemplate(params.dir, fileName),
+      fileDiffersFromTemplate(params.dir, fileName),
     ),
   );
   return (
@@ -301,7 +301,7 @@ async function workspaceRequiredBootstrapLooksCustomized(
       return false;
     }
   }
-  return fileContentDiffersFromTemplate(dir, DEFAULT_AGENTS_FILENAME);
+  return fileDiffersFromTemplate(dir, DEFAULT_AGENTS_FILENAME);
 }
 
 async function workspaceAttestedGeneratedFilesIntact(
@@ -457,24 +457,11 @@ async function workspaceAttestationHasSurvivalEvidence(params: {
 async function workspaceSetupStateHasSurvivalEvidence(params: {
   dir: string;
   bootstrapPath: string;
-  initialState: WorkspaceStateSnapshot;
-  guard?: WorkspaceStateGuard;
 }): Promise<boolean> {
   if (await pathExists(params.bootstrapPath)) {
     return true;
   }
   if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
-    return true;
-  }
-  const currentState = await readCanonicalWorkspaceStateSnapshot(
-    params.dir,
-    undefined,
-    params.guard,
-  );
-  if (
-    currentState.setup.bootstrapSeededAt !== params.initialState.setup.bootstrapSeededAt ||
-    currentState.setup.setupCompletedAt !== params.initialState.setup.setupCompletedAt
-  ) {
     return true;
   }
   const generatedHashes = await collectGeneratedBootstrapHashes(params.dir);
@@ -701,8 +688,6 @@ async function ensureAgentWorkspaceOwned(
       !(await workspaceSetupStateHasSurvivalEvidence({
         dir,
         bootstrapPath,
-        initialState,
-        guard,
       }))
     ) {
       if (recentSetupState) {
@@ -772,8 +757,6 @@ async function ensureAgentWorkspaceOwned(
     !(await workspaceSetupStateHasSurvivalEvidence({
       dir,
       bootstrapPath,
-      initialState,
-      guard,
     }))
   ) {
     // Setup can outlive a best-effort attestation write or arrive alone from

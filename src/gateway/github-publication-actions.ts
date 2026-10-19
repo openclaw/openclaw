@@ -16,6 +16,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
+import { uploadGitHubPublicationEvidence } from "./github-publication-evidence.js";
 import {
   githubPublicationApiArgs,
   runPublicationCommand,
@@ -159,8 +160,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
+  const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
-  const ownPublicationAction = Boolean(edit || requestReview);
+  const ownPublicationAction = Boolean(edit || requestReview || evidenceUpload);
   const editsMetadata = edit && (edit.title !== undefined || edit.body !== undefined);
   if (
     edit &&
@@ -290,7 +292,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   const present = (
     state: ReturnType<typeof pullRequestState>,
-    reviewRequest?: SessionGitHubActionResult["reviewRequest"],
+    extra?: Pick<SessionGitHubActionResult, "reviewRequest" | "evidence">,
   ): void => {
     const { nodeId: _, title, body, ...facts } = state;
     const result: SessionGitHubActionResult = {
@@ -298,7 +300,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       publishingSessionKey: session.sessionKey,
       ...facts,
       ...(edit ? { title, body } : {}),
-      ...(reviewRequest ? { reviewRequest } : {}),
+      ...extra,
     };
     assertCurrent();
     options.respond(true, result);
@@ -315,6 +317,43 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertHead(before);
+  if (evidenceUpload) {
+    const assertOpen = (state: ReturnType<typeof pullRequestState>) => {
+      assertHead(state);
+      if (state.state === "closed" || state.state === "merged") {
+        throw new Error("Evidence can be uploaded only for this session's open PR.");
+      }
+    };
+    assertOpen(before);
+    const evidence = await uploadGitHubPublicationEvidence({
+      evidence: evidenceUpload.evidence,
+      sandbox: caller?.workspaceEvidenceSandbox,
+      sessionKey: session.sessionKey,
+      repository: publication.repository,
+      identity,
+      signal: admitted.requester.signal,
+      assertCurrent,
+      prepareEffect: async () => {
+        const current = await service.latestPublishedShared(session, () =>
+          target.selected.readCurrent(),
+        );
+        assertCurrent();
+        if (
+          current?.result.status !== "published" ||
+          current.result.requestId !== publication.requestId ||
+          current.result.headCommit !== publication.headCommit ||
+          current.result.url !== publication.url
+        ) {
+          throw new Error(
+            "The publication changed; read the current PR before uploading evidence.",
+          );
+        }
+        assertOpen(await read());
+        assertCurrent();
+      },
+    });
+    return present(before, { evidence });
+  }
   const metadataMatches = (state: ReturnType<typeof pullRequestState>) =>
     edit &&
     (edit.title === undefined || state.title === edit.title) &&
@@ -469,10 +508,12 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (requestReview) {
     if (reviewCommentUrl) {
       return present(before, {
-        status: "posted",
-        url: reviewCommentUrl,
-        message:
-          "ClawSweeper re-review request posted; review acceptance and completion are not confirmed.",
+        reviewRequest: {
+          status: "posted",
+          url: reviewCommentUrl,
+          message:
+            "ClawSweeper re-review request posted; review acceptance and completion are not confirmed.",
+        },
       });
     }
     throw new Error(

@@ -305,12 +305,12 @@ describe("runCliRespawnPlan", () => {
         windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
-    const [bridgeChild, bridgeOptions] = expectDefined<unknown[]>(
+    const [bridgeChild, onSignal] = expectDefined<unknown[]>(
       attachChildProcessBridge.mock.calls[0],
       "child process bridge attach call",
     );
     expect(bridgeChild).toBe(child);
-    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
+    expect(onSignal).toEqual(expect.any(Function));
 
     child.emit("exit", 7, null);
     expect(process.exitCode).toBeUndefined();

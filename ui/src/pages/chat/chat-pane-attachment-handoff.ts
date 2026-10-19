@@ -363,20 +363,19 @@ export function replacePaneStagedAttachmentGatewayOwner(
   return nextOwner;
 }
 
-type StagedAttachmentPane = Element & {
-  paneId: string;
+type StagedAttachmentPane = {
+  paneId?: string;
   resumeStagedAttachments?: () => void;
 };
 
 export function resumeStagedPanes(
-  root: ParentNode,
+  panes: Iterable<StagedAttachmentPane>,
   layout: ChatSplitLayout,
   narrow: boolean,
 ): void {
   const visiblePaneIds = new Set(visiblePanesOf(layout, narrow).map((pane) => pane.id));
-  // The page resumes retained native pane hosts across their renderer boundaries.
-  for (const pane of root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")) {
-    if (visiblePaneIds.has(pane.paneId)) {
+  for (const pane of panes) {
+    if (pane.paneId && visiblePaneIds.has(pane.paneId)) {
       pane.resumeStagedAttachments?.();
     }
   }

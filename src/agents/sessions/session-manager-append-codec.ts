@@ -58,6 +58,8 @@ export function sessionMetadataAppendNeedsReload(
       (committed.before.generation !== version.generation ||
         committed.before.rawSeq !== version.rawSeq),
     ) ||
-    (parent !== undefined && parent !== event.parentId)
+    (parent !== undefined && parent !== event.parentId) ||
+    (value.initialModelParentId !== undefined &&
+      value.initialModelParentId !== input.initialModel?.parentId)
   );
 }

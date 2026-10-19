@@ -1,4 +1,3 @@
-/** Handles /goal session objective commands and continuation prompt formatting. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,

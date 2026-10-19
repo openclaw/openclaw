@@ -16,7 +16,6 @@ import {
 } from "./session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "./session-cost-usage-rollup.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
-import { UsageCostHostEffectError } from "./session-cost-usage-worker.types.js";
 import type {
   UsageCacheStatus,
   UsageCostTranscriptFile,
@@ -235,7 +234,7 @@ export async function readUsageCostReportEntry(params: {
     if (error === exhausted) {
       return null;
     }
-    if (error instanceof UsageCostHostEffectError || error instanceof WorkerTaskError) {
+    if (error instanceof WorkerTaskError) {
       throw error;
     }
     // Omit failed replays so the report stays partial without publishing incomplete usage.

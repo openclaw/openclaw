@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createUniqueId, onCleanup, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
@@ -23,20 +23,13 @@ const actions: readonly [CatalogSessionMenuAction, string, IconName][] = [
   ["terminal", "chat.catalog.openInTerminal", "terminal"],
   ["delete", "chat.catalog.deleteSession", "trash"],
 ];
+const menus = new WeakMap<HTMLElement, MenuHandle>();
 
 export const CatalogSessionMenu = defineSolidBridge<Props>(
   "openclaw-catalog-session-menu",
   (props, host) => {
     const id = createUniqueId();
-    let menu: MenuHandle | undefined;
-    createEffect(
-      () => props.trigger,
-      (trigger) => {
-        if (trigger) {
-          menu?.overlay.setReturnTarget(trigger);
-        }
-      },
-    );
+    onCleanup(() => menus.delete(host));
     const label = () => t("chat.catalog.sessionMenu");
     // Queued menu selections must reuse JSX descriptors created under this owner.
     const items = createMemo<MenuItem[]>(() =>
@@ -73,7 +66,7 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
         label={label()}
         items={items()}
         ref={(handle) => {
-          menu = handle;
+          menus.set(host, handle);
           if (props.trigger) {
             handle.overlay.setReturnTarget(props.trigger);
           }
@@ -114,6 +107,11 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
     );
   },
   {
+    propertyChanged(host, key) {
+      if (key === "trigger" && host.trigger) {
+        menus.get(host)?.overlay.setReturnTarget(host.trigger);
+      }
+    },
     properties: {
       x: { default: 0, attribute: false },
       y: { default: 0, attribute: false },

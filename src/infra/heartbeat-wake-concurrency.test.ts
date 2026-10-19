@@ -43,7 +43,6 @@ describe("heartbeat wake target concurrency", () => {
 
   it.each([
     { reason: "requests-in-flight", delay: 1_000, siblingAllowed: false },
-    { reason: "cron-in-progress", delay: 4_500, siblingAllowed: false },
     { reason: "throw", delay: 1_000, siblingAllowed: false },
     { reason: "min-spacing", delay: 4_500, siblingAllowed: true },
   ])(

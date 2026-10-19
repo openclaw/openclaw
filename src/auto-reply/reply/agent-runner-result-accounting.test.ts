@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const mocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
@@ -104,10 +104,6 @@ function createParams(
           entry = next;
           sessionStore.main = next;
         }
-      },
-      adopt: (next: SessionEntry) => {
-        entry = next;
-        sessionStore.main = next;
       },
     },
     sessionStore,

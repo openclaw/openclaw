@@ -25,7 +25,6 @@ import {
   assertInteractionCurrent,
   awaitActionWithAbort,
   awaitNavigationGuardedInteraction,
-  createAbortPromiseWithListener,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
   interactionNavigationPolicy,
@@ -162,10 +161,9 @@ export async function waitForViaPlaywright(
   const fn = opts.fn;
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
   const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
+    await awaitActionWithAbort(stepPromise, opts.signal, reconcileRemoteDialog);
   };
   const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
     await stepPromise;
@@ -226,32 +224,28 @@ export async function waitForViaPlaywright(
     }
   };
 
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Only executable waits need the
-    // request guard, which must own the full sequence before their predicate.
-    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
-    // this guard owns navigation during the action, not jobs trusted JS schedules later.
-    if (!fn) {
-      await runWaitSequence(waitForStep);
-      return;
-    }
-    await awaitNavigationGuardedInteraction(
-      {
-        action: async () => await runWaitSequence(waitForSettledStep),
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      abortPromise,
-      opts.signal,
-      reconcileRemoteDialog,
-    );
-  } finally {
-    cleanup();
+  // Playwright exposes no per-wait cancellation; retiring the shared
+  // connection would disrupt sibling tabs. Only executable waits need the
+  // request guard, which must own the full sequence before their predicate.
+  // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+  // this guard owns navigation during the action, not jobs trusted JS schedules later.
+  if (!fn) {
+    await runWaitSequence(waitForStep);
+    return;
   }
+  await awaitNavigationGuardedInteraction(
+    {
+      action: async () => await runWaitSequence(waitForSettledStep),
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+      assertCurrent: opts.assertCurrent,
+    },
+    opts.signal,
+    opts.signal,
+    reconcileRemoteDialog,
+  );
 }
 
 type ScreenshotOptions = {
@@ -392,7 +386,6 @@ export async function takeScreenshotViaPlaywright(
 type LabeledScreenshotOptions = InteractionTargetOptions &
   ScreenshotOptions & {
     refs?: Record<string, { role: string; name?: string; nth?: number }>;
-    maxLabels?: number;
     ref?: string;
     element?: string;
   };
@@ -414,11 +407,6 @@ async function screenshotWithLabelsOnPage(
   annotations: AnnotationItem[];
 }> {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const maxLabels =
-    typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
-      ? Math.max(1, Math.floor(opts.maxLabels))
-      : ANNOTATION_MAX_LABELS_DEFAULT;
-
   const refKey = normalizeOptionalString(opts.ref);
   const elementSelector = normalizeOptionalString(opts.element);
   const locator = screenshotLocator(page, refKey, elementSelector);
@@ -481,7 +469,7 @@ async function screenshotWithLabelsOnPage(
     }
     const target = refLocator(page, ref);
     // Full-page tail refs cannot contribute annotations after the label budget fills.
-    if (space === "fullpage" && inputs.length >= maxLabels) {
+    if (space === "fullpage" && inputs.length >= ANNOTATION_MAX_LABELS_DEFAULT) {
       skippedRefs += 1;
       continue;
     }
@@ -510,7 +498,6 @@ async function screenshotWithLabelsOnPage(
     scroll: origin,
     viewport: view,
     elementRect,
-    maxLabels,
   });
 
   try {

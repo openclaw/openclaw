@@ -300,9 +300,13 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 When a profile fails due to auth or rate-limit errors, OpenClaw marks it in cooldown and moves to the next profile. A timeout that looks like rate limiting counts as such a failure.
 
+After bounded recovery, a model-silent or request timeout records profile cooldown only when an authorized replacement profile is selected or a model fallback is configured; otherwise the profile stays available for the next turn.
+
 A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
+
+A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
 
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">

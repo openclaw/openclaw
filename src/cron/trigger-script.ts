@@ -42,7 +42,7 @@ import {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
-import { resolveSandboxContext } from "../agents/sandbox.js";
+import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,

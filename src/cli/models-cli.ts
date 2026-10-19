@@ -1,4 +1,3 @@
-// Commander registration for model catalog, status, auth, alias, and fallback commands.
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";

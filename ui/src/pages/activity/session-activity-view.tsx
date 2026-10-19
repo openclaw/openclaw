@@ -123,10 +123,10 @@ function SessionLinkView(props: {
   );
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
   // The mounted route owns this application context; only its stores publish updates.
-  const context = untrack(() => props.context);
-  const agents = projectAgents(context.agents);
+  const initialContext = untrack(() => props.context);
+  const agents = projectAgents(initialContext.agents);
   const agentIdentity = projectAgentIdentity({
-    identities: context.agentIdentity,
+    identities: initialContext.agentIdentity,
     get agentId() {
       return props.row.agentId;
     },

@@ -1,4 +1,3 @@
-import { addAbortListener } from "node:events";
 import path from "node:path";
 import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -92,7 +91,6 @@ class NodeWorkerSupervisor {
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
       : undefined;
-    const containerImage = options.containerImage;
     this.workspace =
       options.workspace ??
       new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: this.workerEnv });
@@ -105,6 +103,7 @@ class NodeWorkerSupervisor {
       isRecoveryActive: () => !this.closed,
     });
     this.children = new NodeWorkerChildLifecycle({
+      onProcessesChanged: options.onProcessesChanged,
       bundleRoot,
       ...startup,
       store: this.store,
@@ -112,7 +111,7 @@ class NodeWorkerSupervisor {
       capacity: this.capacity,
       containerEngine,
       containerLifecycle: this.containerLifecycle,
-      containerImage,
+      containerImage: options.containerImage,
       starting: this.starting,
       initialize: () => this.initialize(),
       isClosed: () => this.closed,
@@ -282,13 +281,7 @@ class NodeWorkerSupervisor {
       signal.throwIfAborted();
       if (owner.retiring) {
         // Shutdown must abort admission before stopping its retiring physical owner.
-        const aborted = createDeferredCore();
-        const listener = addAbortListener(signal, () => aborted.resolve());
-        try {
-          await Promise.race([owner.done, aborted.promise]);
-        } finally {
-          listener[Symbol.dispose]();
-        }
+        await racePromiseWithAbortSignal(owner.done, signal, (aborted) => aborted.reason);
       }
       signal.throwIfAborted();
       if (this.children.active.get(owner.launchId) !== owner) {

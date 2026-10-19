@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
-  preparePluginHarnessPolicyToolsAllow,
+  resolvePluginHarnessPolicyToolsAllow,
   preparePluginHarnessToolPolicies,
 } from "./execution-environment.js";
 
@@ -179,9 +179,11 @@ describe("native harness tool policy", () => {
   ] satisfies Array<{ name: string; config: OpenClawConfig; restricted: boolean }>)(
     "preserves plugin side-question restrictions for $name",
     async ({ config, restricted }) => {
-      expect(await preparePluginHarnessPolicyToolsAllow({ ...input, config })).toEqual(
-        restricted ? [] : undefined,
-      );
+      expect(
+        resolvePluginHarnessPolicyToolsAllow(
+          await preparePluginHarnessToolPolicies({ ...input, config }),
+        ),
+      ).toEqual(restricted ? [] : undefined);
     },
   );
 
@@ -189,12 +191,14 @@ describe("native harness tool policy", () => {
     "applies wildcard WebChat sender denial only to non-owners (owner: %s)",
     async (senderIsOwner) => {
       expect(
-        await preparePluginHarnessPolicyToolsAllow({
-          ...input,
-          config: { tools: { toolsBySender: { "*": { deny: ["*"] } } } },
-          messageProvider: "webchat",
-          senderIsOwner,
-        }),
+        resolvePluginHarnessPolicyToolsAllow(
+          await preparePluginHarnessToolPolicies({
+            ...input,
+            config: { tools: { toolsBySender: { "*": { deny: ["*"] } } } },
+            messageProvider: "webchat",
+            senderIsOwner,
+          }),
+        ),
       ).toEqual(senderIsOwner ? undefined : []);
     },
   );

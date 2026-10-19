@@ -91,9 +91,6 @@ export async function readSharedGitHubPublication(
     }
     const result = await pending;
     context.admission.assertCurrent();
-    if (result && (!result.ok || result.type !== "githubPublication.sharedObservation")) {
-      throw new Error("Shared GitHub publication observation is unavailable.");
-    }
     const row = result?.row;
     // Missing or terminal by-id receipts do not qualify the current workspace.
     workspaceIndependent =

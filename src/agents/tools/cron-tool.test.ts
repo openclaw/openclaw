@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
@@ -29,6 +29,7 @@ import {
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import * as gatewayModule from "./gateway.js";
 
 type Options = Parameters<typeof createCronTool>[0];
 const ok = { ok: true };
@@ -47,20 +48,7 @@ function createTestCronTool(opts?: Options): ReturnType<typeof createCronTool> {
   if (opts?.config) {
     setRuntimeConfigSnapshot(opts.config);
   }
-  return createCronTool(opts, {
-    callGatewayTool: async (method, gatewayOpts, params) => {
-      const result = await callGatewayMock({ method, params }, gatewayOpts);
-      if (
-        method === "cron.get" &&
-        isRecord(result) &&
-        Object.hasOwn(result, "payload") &&
-        !Object.hasOwn(result, "configRevision")
-      ) {
-        return { ...result, configRevision: "sha256:test" };
-      }
-      return result;
-    },
-  });
+  return createCronTool(opts);
 }
 
 function executeCron(args: Record<string, unknown>, opts?: Options) {
@@ -163,6 +151,21 @@ async function executeAddAndReadDelivery({
 }
 
 beforeEach(() => {
+  const gatewaySpy = vi
+    .spyOn(gatewayModule, "callGatewayTool")
+    .mockImplementation(async (method, gatewayOpts, params) => {
+      const result = await callGatewayMock({ method, params }, gatewayOpts);
+      if (
+        method === "cron.get" &&
+        isRecord(result) &&
+        Object.hasOwn(result, "payload") &&
+        !Object.hasOwn(result, "configRevision")
+      ) {
+        return { ...result, configRevision: "sha256:test" };
+      }
+      return result;
+    });
+  onTestFinished(() => gatewaySpy.mockRestore());
   setRuntimeConfigSnapshot({});
   callGatewayMock.mockClear().mockResolvedValue(ok);
   extractDeliveryInfoMock

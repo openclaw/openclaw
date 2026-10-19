@@ -59,7 +59,6 @@ describe("authenticated Talk permission parity", () => {
       config,
       sessionTarget,
       context: {
-        chatAbortControllers: new Map(),
         logGateway: createSubsystemLogger("test/talk-permission-parity"),
       },
       authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
@@ -72,7 +71,6 @@ describe("authenticated Talk permission parity", () => {
   async function retainSource(isCurrent = () => true) {
     const context = {
       getRuntimeConfig: () => config,
-      chatAbortControllers: new Map(),
       logGateway: { warn: vi.fn() },
     } as unknown as GatewayRequestContext;
     const source = captureGatewayDeviceRevocation(

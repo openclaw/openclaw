@@ -49,15 +49,19 @@ export {
 } from "./app-sidebar-session-menu-renderers.tsx";
 export { renderSidebarPluginNavigationMenuForMenus } from "./app-sidebar-plugin-navigation-menu.tsx";
 export { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
+export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 
 export function renderSidebarRailPinMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["railPinMenuPosition"]>,
 ): JSX.Element {
-  const entries = [...menus.element.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
-    (pin) => pin.dataset.sidebarEntry!,
-  );
+  const entries = [...menus.railPins]
+    .filter(([, element]) => element.isConnected)
+    .toSorted(([, left], [, right]) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    .map(([entry]) => entry);
   const index = entries.indexOf(position.entry);
   const before = index >= 0 ? entries[index - 1] : undefined;
   const after = index >= 0 ? entries[index + 1] : undefined;
@@ -104,6 +108,7 @@ export function renderSidebarAgentMenuForMenus(
   avatars: () => IdentityAvatars,
 ): JSX.Element {
   const trigger = menus.triggers.get("agent");
+  const menuRef = menus.menuRef("agent");
   const chipAgent = createMemo(() => host.activeChipAgent());
   const activeName = createMemo(() => {
     const current = chipAgent();
@@ -113,6 +118,7 @@ export function renderSidebarAgentMenuForMenus(
     <SidebarAgentMenu
       {...{
         position,
+        ref: menuRef,
         basePath: host.basePath,
         activeId: chipAgent().agent ? chipAgent().activeId : "",
         activeName: activeName(),
@@ -134,11 +140,7 @@ export function renderSidebarAgentMenuForMenus(
             if (!committed) {
               return;
             }
-            menus.element
-              .querySelector<HTMLElement>(
-                ".sidebar-workspace-header__main, .sidebar-agent-card__main",
-              )
-              ?.focus();
+            menus.focusAgentRoster?.();
           });
         },
         connected: host.connected,
@@ -313,6 +315,7 @@ export function renderSidebarSessionMenuForMenus(
         cloudWorkerStopAction: session().cloudWorkerStopAction,
       }),
       ...(!access.allowed ? { "assign-owner": access.reason } : {}),
+      ...(!host.connected ? { plugin: t("sessionsView.actionRequiresConnection") } : {}),
     };
   });
   return (
@@ -347,7 +350,7 @@ export function renderSidebarSessionMenuForMenus(
       lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
       anchor={menu}
       trigger={menus.triggers.get("session") ?? null}
-      disabled={!host.connected}
+      disabled={false}
       actionDisabledReasons={actionDisabledReasons()}
       navigationAllowed={Boolean(context())}
       copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}

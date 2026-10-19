@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -79,6 +83,7 @@ describe("worker inference lifecycle caller", () => {
           (value) => ({ ok: true as const, value }),
           (error: unknown) => ({ ok: false as const, error }),
         );
+        let successor: Promise<void> | undefined;
         try {
           await Promise.race([
             entered.promise,
@@ -87,18 +92,40 @@ describe("worker inference lifecycle caller", () => {
             }),
           ]);
           if (failureMode !== "refusal") {
-            await runExclusiveSessionLifecycleMutation("patch", {
-              scope: state.statePath("sessions.sqlite"),
-              identities,
+            let successorEntered = false;
+            successor = withSessionTurn(
+              {
+                storePath: state.statePath("sessions.sqlite"),
+                sessionKey,
+                sessionId: REQUEST.sessionId,
+              },
+              async () => {
+                successorEntered = true;
+              },
+            );
+            // The mutation mutex is free, but accepted worker custody still
+            // blocks a successor and keeps the lifecycle caller pending.
+            await runSessionMutation({
+              target: captureSessionTarget({
+                storeScope: state.statePath("sessions.sqlite"),
+                sessionKey,
+                aliases: identities,
+                incarnation: REQUEST.sessionId,
+                agentId: "main",
+              }),
+              policy: "allow-live",
               run: async () => {},
             });
             expect(settled).not.toHaveBeenCalled();
             expect(release).not.toHaveBeenCalled();
+            expect(successorEntered).toBe(false);
             if (failureMode === "start") {
               drained.resolve();
             } else {
               drained.reject(drainFailure);
             }
+            await successor;
+            expect(successorEntered).toBe(true);
           }
           const result = await outcome;
           if (result.ok) {
@@ -129,6 +156,7 @@ describe("worker inference lifecycle caller", () => {
         } finally {
           releaseRawDrain();
           await outcome;
+          await successor;
           signal.removeEventListener("abort", releaseRawDrain);
         }
       });

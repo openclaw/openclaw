@@ -54,7 +54,7 @@ export async function readUpdatePostgresState(
     return await withDatabaseEngineSelection(selection, () =>
       pool.run(
         {
-          input: { stateDir, config, env, includeRetainedAgentPaths },
+          input: { stateDir, config, env: env && { ...env }, includeRetainedAgentPaths },
           files: [...files],
           sourcePath,
         },

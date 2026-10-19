@@ -1,5 +1,5 @@
 import { setTimeout as waitForRuntimeTick } from "node:timers/promises";
-import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";

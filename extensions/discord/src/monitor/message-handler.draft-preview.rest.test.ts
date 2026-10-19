@@ -235,19 +235,53 @@ describe("Discord draft preview REST lifecycle", () => {
     expect(visible.size).toBe(0);
   });
 
-  it("shows running work without a preamble or utility narration", async () => {
-    const { controller, visible } = createContinuationHarness({ discordConfig: {} });
-    await controller.pushItemEvent(
-      projectAgentToolActivity({
-        name: "exec",
-        toolCallId: "long-exec",
-        phase: "start",
-        args: { command: "PRIVATE_COMMAND_ARGUMENT" },
-      }),
-    );
-    await advancePreview(controller);
-    expectCard(visible, ["Exec: running"], ["PRIVATE_COMMAND_ARGUMENT"]);
-  });
+  it.each([undefined, false, true])(
+    "shows tool activity only when opted in (%s)",
+    async (toolProgress) => {
+      const { controller, visible } = createContinuationHarness({
+        discordConfig:
+          toolProgress === undefined ? {} : { streaming: { progress: { toolProgress } } },
+      });
+      await controller.pushItemEvent(
+        projectAgentToolActivity({
+          name: "sessions_search",
+          toolCallId: "search",
+          phase: "start",
+          args: { query: "PRIVATE_SEARCH_QUERY" },
+        }),
+      );
+      await advancePreview(controller);
+      expectCard(
+        visible,
+        [toolProgress ? "Session Search" : "Working"],
+        toolProgress ? [] : ["PRIVATE_SEARCH_QUERY"],
+      );
+      if (!toolProgress) {
+        expect([...visible.values()][0]).not.toContain("Session Search");
+      }
+      await controller.pushItemEvent({
+        kind: "preamble",
+        itemId: "status",
+        progressText: "Checking the invitation history.",
+      });
+      await advancePreview(controller, 1_200);
+      expectCard(visible, ["Checking the invitation history."]);
+      await controller.pushItemEvent(
+        projectAgentToolActivity({
+          name: "sessions_search",
+          toolCallId: "search",
+          phase: "result",
+          status: "completed",
+        }),
+      );
+      await controller.pushNarrationProgress("Comparing the results with the pending invitations.");
+      await advancePreview(controller, 20_000);
+      expectCard(visible, ["Comparing the results with the pending invitations."]);
+      if (!toolProgress) {
+        expect([...visible.values()][0]).not.toMatch(/Session Search|Last activity/);
+      }
+    },
+  );
 
   it("keeps one confirmed card after yield and isolates a queued turn's cleanup", async () => {
     const harness = createContinuationHarness({ discordConfig: {} });
@@ -261,7 +295,7 @@ describe("Discord draft preview REST lifecycle", () => {
     await controller.cleanup();
     draft.push(childProgress("running"));
     await advancePreview(stream, 1_200);
-    expect(visible.get("1")).toContain("Review: running");
+    expect(visible.get("1")).toBe("Checking the implementation with delegated reviewers.");
     expect(visible.size).toBe(1);
     await controller.pushItemEvent({ kind: "preamble", progressText: "Late parent text" });
     expect(controller.handleQueuedFollowupAdmitted()).toBe(true);
@@ -271,13 +305,13 @@ describe("Discord draft preview REST lifecycle", () => {
     );
     await advancePreview(controller);
     expect(visible.size).toBe(2);
-    expect(visible.get("2")).toContain("Read: running");
+    expect(visible.get("2")).toBe("Working");
     await controller.lifecycle.observeDelivery({ visibleReplySent: true });
     await controller.cleanup();
     expect([...visible.keys()]).toEqual(["1"]);
     draft.push(childProgress("completed"));
     await advancePreview(stream, 1_200);
-    expect(visible.get("1")).toContain("Review: completed");
+    expect(visible.get("1")).toBe("Checking the implementation with delegated reviewers.");
     expect(visible.get("1")).not.toContain("Late parent text");
     draft.retire();
     draft.retire();
@@ -348,7 +382,9 @@ describe("Discord draft preview REST lifecycle", () => {
     let requesterOpen = true;
     const serviceAssertion = vi.fn(assertAuthority("channel stopped", () => serviceOpen));
     const harness = withDiscordRequestAuthority(serviceAssertion, () =>
-      createContinuationHarness({ discordConfig: {} }),
+      createContinuationHarness({
+        discordConfig: { streaming: { progress: { toolProgress: true } } },
+      }),
     );
     const { controller, visible } = harness;
     harness.admission.beforeCleanup = async () => {
@@ -372,7 +408,8 @@ describe("Discord draft preview REST lifecycle", () => {
       draft.push(childProgress("completed"));
     });
     await advancePreview(stream, 1_200);
-    expect(visible.get("1")).toContain("Review: completed");
+    expect(visible.get("1")).toContain("• Review");
+    expect(visible.get("1")).not.toContain("Review: running");
     expect(serviceAssertion).toHaveBeenCalled();
     const accepted = visible.get("1");
     serviceOpen = false;
@@ -385,7 +422,7 @@ describe("Discord draft preview REST lifecycle", () => {
     "fences a retained edit waiting for %s when the draft retires",
     async (boundary) => {
       const harness = createContinuationHarness({
-        discordConfig: {},
+        discordConfig: { streaming: { progress: { toolProgress: true } } },
         queueRequests: boundary === "rate-limit retry",
       });
       const { controller, visible, requests, admission, failures, rateLimited } = harness;

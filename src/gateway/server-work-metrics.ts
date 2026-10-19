@@ -70,9 +70,9 @@ export function startGatewayWorkMetrics(params: {
       });
       const selection = runSynchronousWork(selectSessionEntries(filters));
       const sessions = { running: 0, queued: 0 };
-      for (const [key, entry] of selection.entries) {
+      for (const [key] of selection.entries) {
         const target = prepared.getTarget(key)!;
-        const active = presentation.active(target.key, entry, target.agentId)!;
+        const active = presentation.active(target)!;
         sessions[active.status === "queued" ? "queued" : "running"]++;
       }
       const { agentRuns, chatRuns, queuedTurns } = createGatewayActiveWorkSnapshot(

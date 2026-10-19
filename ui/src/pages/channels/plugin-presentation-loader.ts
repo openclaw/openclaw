@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import {
   createChannelSettingsPresentation,
   type ChannelSettingsHooks,
@@ -34,7 +34,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
   });
   let request: { client: GatewayBrowserClient; controller: AbortController } | null = null;
   let disposed = false;
-  const icons = new PluginIconController({
+  const icons = new PluginIconOwner({
     getFetchContext: () => pluginIconFetchContext(hooks.getContext()),
     isConnected: hooks.isConnected,
     onUrlsChange: (urls) => {

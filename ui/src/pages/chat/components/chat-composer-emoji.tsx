@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createStore, For, onSettled, Show, untrack } from "solid-js";
+import { createStore, For, onSettled, Show } from "solid-js";
 import {
   createOverlay,
   findOverlayParent,
@@ -124,6 +124,7 @@ export function createComposerEmojiMenu() {
       draft.items = next ? suggestEmoji(next.query) : [];
       draft.index = 0;
       draft.dismissed = null;
+      updatePresentation(target, next?.start ?? null);
     });
   }
 
@@ -323,26 +324,23 @@ function EmojiPopup(props: {
   textarea: HTMLTextAreaElement;
 }) {
   let surface!: HTMLDivElement;
-  // The popup keeps this menu and overlay identity until its Show branch retires.
-  const { menu, paneId } = untrack(() => ({ menu: props.menu, paneId: props.paneId }));
-  const placement = createMemo(() => [props.textarea, menu.state.target?.start ?? null] as const);
-  const overlay = createOverlay(paneDomId(paneId, "emoji-popup"), undefined, {
-    acquireOcclusion: acquireNativeOverlaySurface,
-    exclusiveGroup: "menu",
-    dismissOutsideFocus: false,
-  });
   onSettled(() => {
-    const [target, start] = untrack(placement);
+    const menu = props.menu;
+    const target = props.textarea;
+    const overlay = createOverlay(paneDomId(props.paneId, "emoji-popup"), undefined, {
+      acquireOcclusion: acquireNativeOverlaySurface,
+      exclusiveGroup: "menu",
+      dismissOutsideFocus: false,
+    });
     overlay.bindSurface(surface);
     overlay.setParent(findOverlayParent(target));
     menu.popupRef(overlay);
-    menu.updatePresentation(target, start);
+    menu.updatePresentation(target, menu.state.target?.start ?? null);
     return () => {
       menu.popupRef();
       overlay.dispose();
     };
   });
-  createEffect(placement, ([target, start]) => menu.updatePresentation(target, start));
   return (
     <div
       ref={(node) => {
@@ -356,7 +354,7 @@ function EmojiPopup(props: {
         id={paneDomId(props.paneId, "emoji-menu-listbox")}
         label={t("chat.composer.emojiSuggestions")}
         activeId={props.menu.activeId(props.paneId)}
-        revision={menu.state.items}
+        revision={props.menu.state.items}
       >
         {props.menu.renderOptions(props.paneId, props.textarea)}
       </ComposerMenu>

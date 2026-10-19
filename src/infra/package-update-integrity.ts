@@ -163,12 +163,12 @@ export function packageLauncherDifferences(
   options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  // A copied launcher must restore the same bytes or link target; npm may
-  // recreate its metadata. Exact-object mutation authority is checked separately.
+  // Symlink modes vary with umask. Exact-object mutation authority is checked separately.
   return (["type", "mode", "contents"] as const)
     .filter(
       (field) =>
-        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+        (field !== "mode" || (!symlink && options?.checkMode === true)) &&
+        expected[field] !== actual[field],
     )
     .map((field) =>
       field === "contents" && symlink

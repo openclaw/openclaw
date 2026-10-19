@@ -79,11 +79,22 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
-// mock-isolation: Timeout fixtures supply requester depth without opening a session database.
+vi.mock("../../../sessions/session-controller.queries.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../sessions/session-controller.queries.js")>()),
+  isSessionRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
+}));
+vi.mock("../../../sessions/session-controller.native-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../sessions/session-controller.native-runtime.js")
+  >()),
+  waitForSessionRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
+}));
+// mock-isolation: Timeout scenarios supply requester depth directly without opening a session database.
 vi.mock("../spawn/subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),
-  ...(await createSubagentAnnounceDeliveryRuntimeMock({
+// mock-isolation: timeout tests replace the complete transport runtime with deterministic adapters.
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: async (request: unknown) => {
       const typed = request as GatewayCall;
       gatewayCalls.push(typed);
@@ -96,15 +107,10 @@ vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
     loadSessionStore: () => sessionStore,
     resolveMainSessionKey: () => "agent:main:main",
     resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
-    isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
-    queueEmbeddedAgentMessageWithOutcome: (sessionId: string) => ({
-      queued: false,
-      sessionId,
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    }),
-  })),
-}));
+    isSessionRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
+  }),
+);
+// mock-isolation: The fixture controls delivery deadlines and requester records without starting transport or session-store work.
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (params: {
     targetRequesterSessionKey: string;
@@ -147,6 +153,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: configOverride,
     canonicalKey: sessionKey,
+    agentId: "main",
+    storePath: "/synthetic/announce-timeout.sqlite",
     entry: sessionStore[sessionKey],
   }),
   loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
@@ -174,8 +182,8 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   readSubagentSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
-  isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
-  waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
+  isSessionRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
+  waitForSessionRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
 vi.mock("../registry/subagent-registry-read.js", () => ({

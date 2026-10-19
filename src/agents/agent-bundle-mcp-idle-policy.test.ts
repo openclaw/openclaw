@@ -91,3 +91,76 @@ it("sweeps admitted runtimes only with an opt-in idle timer and stops maintenanc
     await manager.disposeAll();
   }
 });
+
+it("preserves transferred view leases and last use during capacity eviction", async () => {
+  const manager = createSessionMcpRuntimeManager({ scheduler });
+  const input: RuntimeParams = {
+    sessionId: "transferred-view",
+    workspaceDir: "/workspace",
+    cfg: {
+      plugins: { enabled: false },
+      mcp: { servers: { shared: { command: "shared" }, changed: { command: "old" } } },
+    },
+  };
+  let releaseView: (() => void) | undefined;
+  try {
+    const original = await manager.getOrCreate(input);
+    releaseView = original.acquireLease!();
+    const replacement = await manager.getOrCreate({
+      ...input,
+      cfg: {
+        plugins: { enabled: false },
+        mcp: { servers: { shared: { command: "shared" }, changed: { command: "new" } } },
+      },
+    });
+    expect(replacement.activeLeases).toBeGreaterThan(0);
+    await clock.advanceBy(1_000);
+    for (let index = 1; index < 256; index += 1) {
+      await manager.getOrCreate({ ...input, sessionId: `peer-${index}` });
+    }
+    await manager.getOrCreate({ ...input, sessionId: "first-overflow" });
+    expect(manager.peekSession({ sessionId: input.sessionId })).toBe(replacement);
+    expect(manager.peekSession({ sessionId: "peer-1" })).toBeUndefined();
+
+    await clock.advanceBy(1_000);
+    original.markUsed();
+    releaseView();
+    releaseView = undefined;
+    await manager.getOrCreate({ ...input, sessionId: "next-overflow" });
+    expect(manager.peekSession({ sessionId: input.sessionId })).toBe(replacement);
+    expect(manager.peekSession({ sessionId: "peer-2" })).toBeUndefined();
+  } finally {
+    releaseView?.();
+    await manager.disposeAll();
+  }
+});
+
+it("reserves capacity for uncertain child cleanup", async () => {
+  const manager = createSessionMcpRuntimeManager({ scheduler });
+  const params: RuntimeParams = {
+    sessionId: "uncertain-child",
+    workspaceDir: "/workspace",
+    cfg: { plugins: { enabled: false }, mcp: { servers: { child: { command: "true" } } } },
+  };
+  const leases = [];
+  try {
+    const previous = await manager.getOrCreate(params);
+    previous.joinCleanup = async () => {
+      throw new Error("child cleanup uncertain");
+    };
+    await expect(manager.getOrCreate({ ...params, workspaceDir: "/replacement" })).rejects.toThrow(
+      "child cleanup uncertain",
+    );
+    for (let index = 0; index < 255; index += 1) {
+      leases.push(await manager.acquire({ ...params, sessionId: `other-${index}` }));
+    }
+    const overflow = await manager.getOrCreate({ ...params, sessionId: "overflow" });
+    expect((await overflow.getCatalog()).diagnostics?.[0]?.message).toContain(
+      "all 256 Gateway MCP runtimes are in use",
+    );
+    expect(manager.peekSession({ sessionId: "overflow" })).toBeUndefined();
+  } finally {
+    leases.forEach((lease) => lease.releaseLease());
+    await manager.disposeAll();
+  }
+});

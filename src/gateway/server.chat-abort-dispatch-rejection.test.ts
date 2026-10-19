@@ -23,10 +23,10 @@ import { appendTranscriptMessage } from "../config/sessions/session-accessor.sql
 import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import {
-  getSessionWorkAdmissionRelease,
-  interruptSessionWorkAdmissions,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionControllerSettlement,
+  interruptSessionControllerEffects,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import * as sessionRunError from "../sessions/session-run-error.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
@@ -260,7 +260,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           message: { content: sendParameters.message },
         });
         expect(signal.aborted).toBe(false);
-        admissionRelease = getSessionWorkAdmissionRelease({
+        admissionRelease = captureSessionControllerSettlement({
           scope: storePath,
           identities: [scope.sessionKey, scope.sessionId],
         });
@@ -333,7 +333,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         expect(recorder.getAdmissionReceipt()).toEqual(receipt);
       },
       async () => {
-        admissionRelease ??= getSessionWorkAdmissionRelease({
+        admissionRelease ??= captureSessionControllerSettlement({
           scope: storePath,
           identities: [scope.sessionKey, scope.sessionId],
         });
@@ -399,7 +399,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         expect(started.payload).toMatchObject({ runId, status: "started" });
         await dispatchEntered.promise;
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-        admissionRelease = getSessionWorkAdmissionRelease({
+        admissionRelease = captureSessionControllerSettlement({
           scope: storePath,
           identities: ["main", "agent:main:main", "sess-main"],
         });
@@ -520,7 +520,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         expect(started.payload).toMatchObject({ runId, status: "started" });
         const capturedAbortSignal = await withinTest(dispatchEntered.promise, signal);
 
-        interruption = interruptSessionWorkAdmissions({
+        interruption = interruptSessionControllerEffects({
           scope: storePath,
           identities: ["main", "agent:main:main", "sess-main"],
           reason,
@@ -674,7 +674,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       const started = await rpcReq(socket, "chat.send", sendParameters);
       expect(started.payload).toMatchObject({ runId, status: "started" });
       await commentaryPersisted.promise;
-      admissionRelease = getSessionWorkAdmissionRelease({
+      admissionRelease = captureSessionControllerSettlement({
         scope: storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
@@ -792,7 +792,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     const bytes = "synthetic attachment awaiting staging";
     let inboundPath: string | undefined;
     let filePresentAtResponse: boolean | undefined;
-    let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
+    let interruption: ReturnType<typeof startSessionControllerInterruption> | undefined;
     let send: ReturnType<typeof rpcReq> | undefined;
     const stageSpy = vi.spyOn(staging, "stageSandboxMedia").mockImplementation(async ({ ctx }) => {
       inboundPath = ctx.media?.[0]?.path;
@@ -830,7 +830,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       expect(await fs.readFile(inboundPath, "utf8")).toBe(bytes);
       // This is the real admitted-work interruption path after registration,
       // which forwards its reason without creating an explicit RPC abort marker.
-      interruption = startSessionWorkAdmissionInterruption({
+      interruption = startSessionControllerInterruption({
         scope: storePath,
         identities: ["main", "agent:main:main", "sess-attachment-abort"],
         reason,

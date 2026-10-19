@@ -127,7 +127,7 @@ export function sessionStoreRoutingConfig(
   };
 }
 
-/** Native discovery policy shared by synchronous readers and the admitted history worker. */
+/** Resolve captured native discovery facts inside the admitted history worker. */
 export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStoreSourceRequest) {
   const cfg = sessionStoreRoutingConfig(params.routing);
   return withAgentRosterFactsBatch(cfg, () => {
@@ -210,7 +210,6 @@ export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStor
     }
     return {
       sources: Object.fromEntries(sources),
-      isCurrent: () => isSameDatabasePath.isCurrent(),
     };
   });
 }

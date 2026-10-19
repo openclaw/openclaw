@@ -86,7 +86,8 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
-  if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
+  const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
+  if (validChannel) {
     const settlement = await settlePendingPackageActivation(
       resolveUpdateInstallRoot(discoveredRoot),
       (settled) => {
@@ -123,7 +124,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     !inheritedRunId &&
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
-    (opts.channel === undefined || normalizeUpdateChannel(opts.channel))
+    validChannel
       ? await (
           await prepareManagedHandoffLeaseStore()
         ).prepareRepair(await resolveUpdateRoot(), env, timeoutMs)

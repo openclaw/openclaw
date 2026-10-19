@@ -11,8 +11,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import {
   initSessionState,
@@ -40,12 +41,16 @@ async function admit(scope: Scope, sessionId: string, resetTriggered: boolean) {
   if (admitted.status !== "owned" || !admitted.databaseClaim) {
     throw new Error("Fixture requires a retained reply admission");
   }
+  const controller = getSessionControllerEntryForOperation(admitted.operation);
   return {
     ...admitted,
+    controller,
     databaseClaim: admitted.databaseClaim,
     async [Symbol.asyncDispose]() {
       admitted.operation.complete();
-      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null);
+      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null, {
+        target: controller.target,
+      });
     },
   };
 }
@@ -190,7 +195,9 @@ export function registerSessionInitializationAdmissionTests({
           expect(next.isCurrent()).toBe(false);
         }
         let closed = false;
-        closing = waitForReplyRunSuccessorAdmission(sessionKey, null).then((result) => {
+        closing = waitForReplyRunSuccessorAdmission(sessionKey, null, {
+          target: admitted.controller.target,
+        }).then((result) => {
           closed = true;
           return result;
         });
@@ -203,7 +210,7 @@ export function registerSessionInitializationAdmissionTests({
         );
         expect(await withinTest(closing, signal)).toMatchObject({ settled: true });
         expect(next.isCurrent()).toBe(false);
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(admitted.controller.active).toBeUndefined();
       } finally {
         continueHandoff.resolve();
         prepareSpy.mockRestore();

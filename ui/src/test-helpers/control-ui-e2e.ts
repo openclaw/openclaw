@@ -597,6 +597,7 @@ export async function startControlUiE2eServer(
     { controlUiPluginDistributionsPlugin },
     {
       commonJsOptimizeDeps,
+      controlUiRuntimeDefines,
       resolveExternalPackageAliasesForVite,
       resolveSourcePackageAliasesForVite,
       resolveTsconfigPathAliasesForVite,
@@ -616,9 +617,7 @@ export async function startControlUiE2eServer(
     cacheDir: path.join(repoRoot, ".artifacts", "control-ui-e2e-vite"),
     clearScreen: false,
     configFile: false,
-    define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(resolvedBuildInfo),
-    },
+    define: controlUiRuntimeDefines("serve", resolvedBuildInfo),
     logLevel: "error",
     optimizeDeps: {
       include: ["ipaddr.js", ...commonJsOptimizeDeps],

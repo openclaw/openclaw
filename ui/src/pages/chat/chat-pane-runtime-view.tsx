@@ -7,7 +7,6 @@ import {
   onSettled,
   runWithOwner,
   Show,
-  untrack,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
@@ -126,8 +125,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     void waitForCommit();
     focusPending ||= runtime.focusComposer !== previousFocusComposer;
     previousFocusComposer = runtime.focusComposer;
-    // Persistence/scroll bookkeeping samples state; it is not a render dependency.
-    untrack(() => runtime.chatState.prepareRender());
+    // Other source frames may show a buffered stream before its normal RAF publishes it.
+    runtime.chatState.captureRenderChanges();
     // Target/activation checks make reconciliation idempotent; apply layout before sampling it.
     runtime.synchronizeInputs({});
   }
@@ -213,16 +212,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           a.target?.agentId === b.target?.agentId,
       },
     );
-    // Seed the watch from the same memo identity its first effect will publish.
-    const progress = projectProgressCard(untrack(progressScope));
+    const progress = projectProgressCard(progressScope);
     const cacheProgress = () => {
       const { target, store, options } = runtime.readProgressCardScope();
       if (target && options.admitAutomaticRead()) {
         runtime.cacheProgressCard(target, store.get(target));
       }
     };
-    // Bind the imperative store watch to the current connection and conversation.
-    createEffect(progressScope, (next) => progress.replaceSource(next));
     onSettled(() => {
       // Parking may stop rendering, but reset/delete events must still retire card lifetimes.
       const stop = progress.subscribe(cacheProgress);
@@ -257,6 +253,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createParkedProjection(
       () => {
         relativeTime();
+        gateway.read();
         publication()?.read();
         repository()?.read();
         parentSession.read();

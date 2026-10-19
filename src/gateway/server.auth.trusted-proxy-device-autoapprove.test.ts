@@ -416,20 +416,35 @@ describe("trusted-proxy operator device auto-approval", () => {
     ).toMatchObject({ roles: ["node", "operator"] });
   });
 
-  test("caps omitted scopes to the declared proxy scopes", async () => {
-    const { identityPath, identity } = await prepareAutoApproval(WITH_APPROVALS);
+  test.each([
+    {
+      configuredScopes: WITH_APPROVALS,
+      declaredProxyScopes: "operator.read",
+      expectedScopes: READ,
+    },
+    {
+      configuredScopes: ["operator.write"],
+      declaredProxyScopes: "operator.read",
+      expectedScopes: READ,
+    },
+    { configuredScopes: WITH_APPROVALS, declaredProxyScopes: "", expectedScopes: [] },
+  ])(
+    "caps omitted scopes $configuredScopes to declared proxy scopes '$declaredProxyScopes'",
+    async ({ configuredScopes, declaredProxyScopes, expectedScopes }) => {
+      const { identityPath, identity } = await prepareAutoApproval(configuredScopes);
 
-    await withSharedProxyGateway(async ({ port }) => {
-      const res = await connectBrowserWithoutScopes({
-        port,
-        identityPath,
-        declaredProxyScopes: "operator.read",
+      await withSharedProxyGateway(async ({ port }) => {
+        const res = await connectBrowserWithoutScopes({
+          port,
+          identityPath,
+          declaredProxyScopes,
+        });
+        expect(res.ok).toBe(true);
       });
-      expect(res.ok).toBe(true);
-    });
 
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
-  });
+      expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(expectedScopes);
+    },
+  );
 
   test("caps requested scopes to the configured and declared proxy scopes", async () => {
     const { identityPath, identity } = await prepareAutoApproval(WITH_APPROVALS);

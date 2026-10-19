@@ -19,7 +19,6 @@ import {
 import { resolveCronMutationCommitGuard } from "../../gateway/server-methods/cron-caller-scope.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
-  clearCommandLane,
   enqueueCommandInLane,
   getTotalQueueSize,
   setCommandLaneConcurrency,
@@ -133,7 +132,6 @@ it("transfers queued manual runs out of the released request root", async () => 
   resetGatewayWorkAdmission();
 
   const childLane = "cron-manual-admission-child";
-  clearCommandLane(childLane);
   setCommandLaneConcurrency(childLane, 1);
   const now = Date.parse("2026-02-06T10:05:00.000Z");
   const job = dueJob("manual-admission-continuation", now);
@@ -172,7 +170,6 @@ it("transfers queued manual runs out of the released request root", async () => 
     requestRoot?.release();
     enterRunner.resolve();
     await Promise.allSettled(state.queuedManualRuns.values());
-    clearCommandLane(childLane);
     resetGatewayWorkAdmission();
   }
 });

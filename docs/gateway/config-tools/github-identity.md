@@ -139,6 +139,26 @@ read existing PR comments before making another request, since the comment may
 already exist. The Gateway never retries the comment POST automatically. Closed
 or merged PRs reject this operation; publisher credentials remain on the Gateway.
 
+Use `github_publish` with `action: "upload_evidence"` to upload inspected image or
+video proof from the current conversation's sandbox workspace to its existing
+shared GitHub.com PR. Read the PR with `edit`, then supply its `requestId` and
+`expectedHeadCommit`, plus `evidence` containing a workspace-relative `path`, the
+inspected lowercase `sha256`, and `sizeBytes`. Inspect and redact the media before
+uploading. PNG, JPEG, GIF, WebP, MP4, MOV and WebM files up to 10 MB are supported;
+the bytes must match their filename type, digest and size. Absolute paths, remote
+URLs, other mounts and arbitrary repository or PR selectors are not accepted.
+The Gateway retains the selected publisher credentials and checks the current
+creator, role, session, publisher and PR before sending.
+
+An `evidence.status: "uploaded"` result supplies the attachment URL and inspected
+byte facts, with `publicAccess: "unverified"`. Use `edit` to include that URL in the
+PR body and verify reviewer access afterward; upload acceptance alone does not
+establish public accessibility. An `unconfirmed` result can follow an accepted
+write whose response was lost or invalid. The Gateway never retries that upload;
+reconcile the original attachment before requesting another transfer.
+If upload authority changes after the request begins, the denial also warns that
+an attachment may already exist.
+
 A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `requestId` and `expectedHeadCommit`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.

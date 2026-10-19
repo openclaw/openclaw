@@ -409,7 +409,6 @@ async function appendPreparedSessionTranscriptTurn(
           result = committed.result;
           if (
             !stageSqliteTransactionState(transactionDb.db, {
-              stage: () => undefined,
               commit: () => {
                 try {
                   completion = completeSessionTranscriptCommit(
@@ -422,7 +421,6 @@ async function appendPreparedSessionTranscriptTurn(
                   failures.push(error);
                 }
               },
-              rollback: () => undefined,
             })
           ) {
             throw new Error("Transcript completion requires managed commit settlement");
@@ -438,7 +436,6 @@ async function appendPreparedSessionTranscriptTurn(
             const entry = result.sessionEntry;
             if (
               !stageSqliteTransactionState(transactionDb.db, {
-                stage: () => undefined,
                 commit: () => {
                   try {
                     options.onCommittedSource?.(source, entry);
@@ -446,7 +443,6 @@ async function appendPreparedSessionTranscriptTurn(
                     failures.push(error);
                   }
                 },
-                rollback: () => undefined,
               })
             ) {
               throw new Error("Transcript source publication requires managed commit settlement");

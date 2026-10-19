@@ -10,6 +10,7 @@ import type { CompactionRequestBudget } from "../../agents/sessions/compaction/r
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { markReplyOperationGlobalLaneWaitProgress } from "../../sessions/session-controller.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -27,7 +28,6 @@ import { buildFallbackCandidateTurnParams } from "./agent-runner-run-params.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
-import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,

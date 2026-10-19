@@ -1,6 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import {
   createHistogram,
+  monitorEventLoopDelay,
   performance,
   PerformanceObserver,
   type RecordableHistogram,
@@ -100,6 +101,10 @@ function summarizeMetrics(metrics: Record<string, Metric>) {
 /** Bounded numeric aggregates for the benchmark's main isolate; profiles cover workers. */
 export function startGatewayBenchDiagnostics() {
   const startedAt = performance.now();
+  const startedAtEpochMs = performance.timeOrigin + startedAt;
+  const startedAtMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
+  const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelay.enable();
   const groups = new Map<string, Group>();
   let droppedEvents = 0;
   let collectionErrors = 0;
@@ -204,6 +209,7 @@ export function startGatewayBenchDiagnostics() {
   observer.observe({ entryTypes: ["gc"] });
   return () => {
     const endedAt = performance.now();
+    eventLoopDelay.disable();
     for (const unsubscribe of subscriptions) {
       unsubscribe();
     }
@@ -211,7 +217,16 @@ export function startGatewayBenchDiagnostics() {
     observer.disconnect();
     return {
       scope: "main-isolate",
+      startedAtEpochMs,
+      startedAtMonotonicMicros,
+      endedAtEpochMs: performance.timeOrigin + endedAt,
       durationMs: endedAt - startedAt,
+      eventLoopDelay: {
+        resolutionMs: 20,
+        count: eventLoopDelay.count,
+        maxMs: eventLoopDelay.max / 1_000_000,
+        p99Ms: eventLoopDelay.count ? eventLoopDelay.percentile(99) / 1_000_000 : null,
+      },
       droppedEvents,
       collectionErrors,
       droppedHistogramSamples,

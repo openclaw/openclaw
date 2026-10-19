@@ -151,10 +151,14 @@ describe("subagent suspended delivery pressure", () => {
   });
 
   it("still reports and deduplicates suspended backlog pressure when a sweep fails", async () => {
-    const { entry, resumeRequesterSettleWake, sweeper, warn } = createSuspendedBacklog(25);
-    entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-    resumeRequesterSettleWake.mockImplementation(() => {
-      throw new Error("requester wake failed");
+    const { entry, discardTerminalDelivery, sweeper, warn } = createSuspendedBacklog(25);
+    entry.delivery = {
+      status: "suspended",
+      suspendedAt: Date.now() - 7 * 24 * 60 * 60_000,
+      suspendedReason: "expiry",
+    };
+    discardTerminalDelivery.mockImplementation(() => {
+      throw new Error("discard failed");
     });
 
     await sweeper.runTick();
@@ -165,11 +169,13 @@ describe("subagent suspended delivery pressure", () => {
         "subagent suspended delivery backlog reached warning threshold",
         { suspendedCount: 25, warningThreshold: 25 },
       ],
-      ["subagent run sweep failed: requester wake failed"],
-      ["subagent run sweep failed: requester wake failed"],
+      ["subagent run sweep failed: discard failed"],
+      ["subagent run sweep failed: discard failed"],
     ]);
-    resumeRequesterSettleWake.mockReset();
+    discardTerminalDelivery.mockReset();
     await sweeper.sweepOnce();
-    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls.slice(3).map(([message]) => message)).toEqual([
+      "subagent suspended delivery discarded",
+    ]);
   });
 });

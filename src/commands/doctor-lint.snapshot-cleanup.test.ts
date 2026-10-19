@@ -9,7 +9,7 @@ import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const mocks = vi.hoisted(() => ({ checks: vi.fn() }));
+const mocks = vi.hoisted(() => ({ checks: vi.fn(), forked: vi.fn() }));
 vi.mock("../flows/doctor-health-contributions.js", () => ({
   resolveDoctorContributionHealthChecks: mocks.checks,
 }));
@@ -17,20 +17,9 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
   return {
     ...actual,
-    async prepareSqliteReadOnlyLocation(
-      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
-    ) {
-      const prepared = await actual.prepareSqliteReadOnlyLocation(...args);
-      return {
-        ...prepared,
-        cleanupAsync: vi
-          .fn()
-          .mockRejectedValueOnce(new Error("SQLite read-only worker snapshot cleanup failed"))
-          .mockImplementation(prepared.cleanupAsync),
-      };
-    },
-    prepareSqliteReadOnlyLocationSync(pathname: string) {
-      const prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
+    async forkSqlitePrivateSnapshot(...args: Parameters<typeof actual.forkSqlitePrivateSnapshot>) {
+      const prepared = await actual.forkSqlitePrivateSnapshot(...args);
+      mocks.forked(prepared.location);
       return {
         ...prepared,
         async cleanupAsync() {
@@ -42,7 +31,10 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   };
 });
 
-beforeEach(() => clearHealthChecksForTest());
+beforeEach(() => {
+  clearHealthChecksForTest();
+  mocks.forked.mockClear();
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -98,6 +90,7 @@ it.each(["json", "human"] as const)(
       },
       { gateway: { mode: "fixture-invalid-mode" } },
     );
+    expect(mocks.forked).toHaveBeenCalledOnce();
     expect(exitCode).toBe(1);
     if (mode === "json") {
       const report = JSON.parse(lastOutput);
@@ -149,6 +142,7 @@ it("preserves detector failures when ordinary snapshot cleanup fails in human ou
     },
   );
   expect(detect).toHaveBeenCalledOnce();
+  expect(mocks.forked).toHaveBeenCalledOnce();
   expect(exitCode).toBe(1);
   expect(output).toContain("[error] core/doctor/runtime-tool-schemas");
   expect(output).toContain("Authoritative detector fixture failure.");

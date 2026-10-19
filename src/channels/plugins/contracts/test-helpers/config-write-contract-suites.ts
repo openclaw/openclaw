@@ -1,8 +1,3 @@
-/**
- * Channel config-write contract suites.
- *
- * Proves origin and target channel/account policy before plugin writes mutate config.
- */
 import { describe, expect, it } from "vitest";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../../utils/message-channel.js";
 import {
@@ -17,20 +12,14 @@ const demoOriginChannelId = "demo-origin";
 const demoTargetChannelId = "demo-target";
 
 function makeDemoConfigWritesCfg(accountIdKey: string) {
+  const channel = () => ({
+    configWrites: true,
+    accounts: { [accountIdKey]: { configWrites: false } },
+  });
   return {
     channels: {
-      [demoOriginChannelId]: {
-        configWrites: true,
-        accounts: {
-          [accountIdKey]: { configWrites: false },
-        },
-      },
-      [demoTargetChannelId]: {
-        configWrites: true,
-        accounts: {
-          [accountIdKey]: { configWrites: false },
-        },
-      },
+      [demoOriginChannelId]: channel(),
+      [demoTargetChannelId]: channel(),
     },
   };
 }
@@ -60,34 +49,6 @@ function expectConfigWriteBlocked(params: {
       },
     },
   });
-}
-
-function expectAuthorizedConfigWriteCase(
-  input: Parameters<typeof authorizeConfigWrite>[0],
-  expected: ReturnType<typeof authorizeConfigWrite>,
-) {
-  expect(authorizeConfigWrite(input)).toEqual(expected);
-}
-
-function expectResolvedConfigWriteTargetCase(pathSegments: readonly string[], expected: unknown) {
-  expect(resolveConfigWriteTargetFromPath([...pathSegments])).toEqual(expected);
-}
-
-function expectExplicitConfigWriteTargetCase(
-  input: Parameters<typeof resolveExplicitConfigWriteTarget>[0],
-  expected: ReturnType<typeof resolveExplicitConfigWriteTarget>,
-) {
-  expect(resolveExplicitConfigWriteTarget(input)).toEqual(expected);
-}
-
-function expectFormattedDeniedMessage(
-  result: Exclude<ReturnType<typeof authorizeConfigWrite>, { allowed: true }>,
-) {
-  expect(
-    formatConfigWriteDeniedMessage({
-      result,
-    }),
-  ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
 }
 
 /** Installs policy tests for allowed, denied, and bypassed config writes. */
@@ -137,7 +98,7 @@ export function describeChannelConfigWritePolicyContract() {
         expected: { allowed: true },
       },
     ] as const)("$name", ({ input, expected }) => {
-      expectAuthorizedConfigWriteCase(input, expected);
+      expect(authorizeConfigWrite(input)).toEqual(expected);
     });
   });
 }
@@ -146,55 +107,43 @@ export function describeChannelConfigWritePolicyContract() {
 export function describeChannelConfigWriteTargetContract() {
   describe("authorizeConfigWrite target contract", () => {
     it.each([
-      {
-        name: "rejects bare channel collection writes",
-        pathSegments: ["channels", "demo-channel"],
-        expected: { kind: "ambiguous", scopes: [{ channelId: "demo-channel" }] },
-      },
-      {
-        name: "rejects account collection writes",
-        pathSegments: ["channels", "demo-channel", "accounts"],
-        expected: { kind: "ambiguous", scopes: [{ channelId: "demo-channel" }] },
-      },
-    ] as const)("$name", ({ pathSegments, expected }) => {
-      expectResolvedConfigWriteTargetCase(pathSegments, expected);
+      ["rejects bare channel collection writes", ["channels", "demo-channel"]],
+      ["rejects account collection writes", ["channels", "demo-channel", "accounts"]],
+    ] as const)("%s", (_name, pathSegments) => {
+      expect(resolveConfigWriteTargetFromPath([...pathSegments])).toEqual({
+        kind: "ambiguous",
+        scopes: [{ channelId: "demo-channel" }],
+      });
     });
 
     it.each([
       {
         name: "resolves explicit channel target",
         input: { channelId: demoOriginChannelId },
-        expected: {
-          kind: "channel",
-          scope: { channelId: demoOriginChannelId },
-        },
+        expected: { kind: "channel", scope: { channelId: demoOriginChannelId } },
       },
       {
         name: "resolves explicit account target",
         input: { channelId: demoTargetChannelId, accountId: "work" },
-        expected: {
-          kind: "account",
-          scope: { channelId: demoTargetChannelId, accountId: "work" },
-        },
+        expected: { kind: "account", scope: { channelId: demoTargetChannelId, accountId: "work" } },
       },
     ] as const)("$name", ({ input, expected }) => {
-      expectExplicitConfigWriteTargetCase(input, expected);
+      expect(resolveExplicitConfigWriteTarget(input)).toEqual(expected);
     });
 
-    it.each([
-      {
-        name: "formats denied messages consistently",
-        result: {
-          allowed: false,
-          reason: "target-disabled",
-          blockedScope: {
-            kind: "target",
-            scope: { channelId: demoTargetChannelId, accountId: "work" },
+    it("formats denied messages consistently", () => {
+      expect(
+        formatConfigWriteDeniedMessage({
+          result: {
+            allowed: false,
+            reason: "target-disabled",
+            blockedScope: {
+              kind: "target",
+              scope: { channelId: demoTargetChannelId, accountId: "work" },
+            },
           },
-        } as const,
-      },
-    ] as const)("$name", ({ result }) => {
-      expectFormattedDeniedMessage(result);
+        }),
+      ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
     });
   });
 }

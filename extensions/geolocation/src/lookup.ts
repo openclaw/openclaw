@@ -12,13 +12,12 @@ type GeolocationResult = {
   countryCode?: string;
 };
 
-export type GeolocationLookupResult = GeolocationResult & {
+type GeolocationLookupResult = GeolocationResult & {
   ip: string;
   status: "found" | "not-found" | "unavailable";
   attribution: GeolocationSettings["attribution"];
 };
 
-export type GeolocationLookup = ReturnType<typeof createGeolocationLookup>;
 type AssertCurrent = () => void | Promise<void>;
 
 export function createGeolocationLookup(deps: {

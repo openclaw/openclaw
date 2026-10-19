@@ -1,7 +1,5 @@
-import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
-import { createMessageCliHelpers } from "./helpers.js";
-import { registerMessageDiscordAdminCommands } from "./register.discord-admin.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createMessageCliProgram, messageCliMocks } from "./command.test-support.js";
 
 type AdminCase = [
   command: string,
@@ -61,31 +59,32 @@ function argumentsFor(options: Record<string, string>) {
 }
 
 function setup() {
-  const command = new Command()
-    .name("message")
-    .exitOverride()
-    .configureOutput({ writeErr() {}, writeOut() {} });
-  const runMessageAction = vi.fn(async () => {});
-  registerMessageDiscordAdminCommands(command, {
-    ...createMessageCliHelpers("discord|matrix|msteams|slack"),
-    runMessageAction,
-  });
-  return { command, runMessageAction };
+  messageCliMocks.command.mockClear();
+  return { command: createMessageCliProgram(), runMessageAction: messageCliMocks.command };
 }
 
 describe("Discord-admin message registration", () => {
+  beforeEach(() => messageCliMocks.command.mockClear());
   it.each(cases)(
     "%s forwards the exact action, defaults and options",
     async (path, action, required, optional = {}) => {
       const { command, runMessageAction } = setup();
       const options = { ...required, ...optional, channel: "discord" };
-      await command.parseAsync([...path.split(" "), ...argumentsFor(options)], { from: "user" });
-      expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(action, {
-        json: false,
-        dryRun: false,
-        verbose: false,
-        ...options,
+      await command.parseAsync(["message", ...path.split(" "), ...argumentsFor(options)], {
+        from: "user",
       });
+      expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(
+        {
+          json: false,
+          dryRun: false,
+          verbose: false,
+          ...options,
+          accountId: undefined,
+          action,
+        },
+        expect.anything(),
+        expect.anything(),
+      );
     },
   );
 
@@ -98,7 +97,9 @@ describe("Discord-admin message registration", () => {
           Object.entries(required).filter(([key]) => key !== missing),
         );
         await expect(
-          command.parseAsync([...path.split(" "), ...argumentsFor(remaining)], { from: "user" }),
+          command.parseAsync(["message", ...path.split(" "), ...argumentsFor(remaining)], {
+            from: "user",
+          }),
         ).rejects.toMatchObject({ code: "commander.missingMandatoryOptionValue" });
         expect(runMessageAction).not.toHaveBeenCalled();
       }
@@ -107,12 +108,20 @@ describe("Discord-admin message registration", () => {
 
   it("keeps guild and conversation optional for member info", async () => {
     const { command, runMessageAction } = setup();
-    await command.parseAsync(["member", "info", "--user-id", "user-1"], { from: "user" });
-    expect(runMessageAction).toHaveBeenCalledExactlyOnceWith("member-info", {
-      json: false,
-      dryRun: false,
-      verbose: false,
-      userId: "user-1",
+    await command.parseAsync(["message", "member", "info", "--user-id", "user-1"], {
+      from: "user",
     });
+    expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(
+      {
+        json: false,
+        dryRun: false,
+        verbose: false,
+        userId: "user-1",
+        accountId: undefined,
+        action: "member-info",
+      },
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

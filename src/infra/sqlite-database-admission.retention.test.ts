@@ -31,6 +31,10 @@ import {
   readSqliteDatabaseAdmissions,
   readSqliteDatabasePendingWriteToken,
   readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseScopedWriteTokensForPath,
+  readSqliteDatabasePendingScopedWriteToken,
+  retainSqliteDatabaseWriteScopesForPath,
+  retireSqliteDatabaseWriteScopes,
   prepareSqliteDatabaseCleanClose,
   recordSqliteDatabaseIntegrity,
   readSqliteDatabaseWriteTokenForPath,
@@ -65,6 +69,113 @@ function createDatabase(location: string) {
 function recordsFor(location: string) {
   return captureSqliteDatabaseAdmissions().filter((record) => record.location === location);
 }
+
+it("keeps cold pinned receipts current across physical-fact reads until release", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-cold-pins-"), "proof.sqlite");
+  const database = createDatabase(location);
+  database.close();
+  const release = retainSqliteDatabaseWriteScopesForPath(location, ["held"])!;
+  try {
+    const before = readSqliteDatabaseScopedWriteTokensForPath(location, ["held"]);
+    expect(before?.[0]).toBeTypeOf("string");
+    expect(
+      getOrLoadSqliteDatabaseAdmissionForPath(
+        location,
+        { ...key, name: "test.cold-pinned-fact", lifetime: "process" },
+        () => "loaded",
+      ),
+    ).toBe("loaded");
+    expect(readSqliteDatabaseScopedWriteTokensForPath(location, ["held"])).toEqual(before);
+    release();
+    expect(recordsFor(location)).toEqual([]);
+  } finally {
+    release();
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
+it("retains active source receipts until their last release without suppressing invalidation", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-pinned-scopes-"), "proof.sqlite");
+  const database = createDatabase(location);
+  const key = "x".repeat(600_000);
+  const release = retainSqliteDatabaseWriteScopesForPath(location, [key])!;
+  const releaseSibling = retainSqliteDatabaseWriteScopesForPath(location, [key])!;
+  try {
+    const before = readSqliteDatabaseScopedWriteToken(database, key);
+    for (let index = 0; index < 160; index++) {
+      readSqliteDatabaseScopedWriteToken(database, `${index}:${"y".repeat(4096)}`);
+    }
+    expect(readSqliteDatabaseScopedWriteToken(database, key)).toBe(before);
+    release();
+    release();
+    expect(readSqliteDatabaseScopedWriteToken(database, key)).toBe(before);
+    database.prepare("UPDATE proof SET value = 43").run();
+    const committed = readSqliteDatabaseScopedWriteToken(database, key);
+    expect(committed).not.toBe(before);
+    releaseSibling();
+    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    const releaseDeleted = retainSqliteDatabaseWriteScopesForPath(location, ["deleted"])!;
+    try {
+      retireSqliteDatabaseWriteScopes(database, ["deleted"]);
+      expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    } finally {
+      releaseDeleted();
+    }
+  } finally {
+    release();
+    releaseSibling();
+    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    database.close();
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
+it("bounds cold session receipts by bytes without evicting hot receipts or reviving stale ones", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-scope-budget-"), "proof.sqlite");
+  const database = createDatabase(location);
+  try {
+    const cold = readSqliteDatabaseScopedWriteToken(database, "cold");
+    const hot = readSqliteDatabaseScopedWriteToken(database, "hot");
+    const stale = structuredClone(recordsFor(location));
+    const scopes = Array.from({ length: 160 }, (_, index) => `${index}:${"x".repeat(4096)}`);
+    for (const key of scopes) {
+      expect(readSqliteDatabaseScopedWriteToken(database, key)).toBeTypeOf("string");
+      expect(readSqliteDatabaseScopedWriteToken(database, "hot")).toBe(hot);
+    }
+    const retained = () => recordsFor(location)[0]!.writeScopes;
+    expect([...retained().keys()].reduce((bytes, key) => bytes + key.length * 2, 0)).toBeLessThan(
+      1024 * 1024,
+    );
+    expect(retained().has('["key","cold"]')).toBe(false);
+    installSqliteDatabaseAdmissions(stale);
+    expect(retained().has('["key","cold"]')).toBe(false);
+    expect(readSqliteDatabaseScopedWriteToken(database, "cold")).not.toBe(cold);
+    expect(readSqliteDatabaseScopedWriteTokensForPath(location, scopes)).toHaveLength(
+      scopes.length,
+    );
+    const oversized = "x".repeat(600_000);
+    const before = readSqliteDatabaseScopedWriteToken(database, oversized);
+    expect(before).toBeTypeOf("string");
+    let pending: string | undefined;
+    withSqlitePostCommitPublications(database, () =>
+      runSqliteImmediateTransactionSync(database, () => {
+        database.prepare("UPDATE proof SET value = 43").run();
+        pending = readSqliteDatabasePendingScopedWriteToken(database, oversized);
+      }),
+    );
+    expect(pending).toBeTypeOf("string");
+    expect(pending).not.toBe(before);
+    expect(readSqliteDatabaseScopedWriteToken(database, oversized)).toBe(pending);
+    expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
+    database.close();
+    expect(recordsFor(location)).toEqual([]);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
 
 it("retires the final closed handle's facts while preserving open siblings and descriptor custody", () => {
   const location = path.join(tempDirs.make("sqlite-admission-retention-"), "proof.sqlite");

@@ -13,6 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -27,6 +28,7 @@ import {
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
+  tempDir,
 } from "./run-attempt-test-harness.js";
 
 function callTool(
@@ -194,6 +196,30 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       await run;
       vi.useRealTimers();
     }
+  });
+
+  it("prepares hosted search policy for a recovered dashboard turn", async () => {
+    // Restart recovery resumes Control UI sessions before the Gateway projection
+    // serves their just-rewritten rows, so policy must prepare its own facts.
+    vi.stubEnv("OPENCLAW_STATE_DIR", `${tempDir}/state`);
+    const sessionKey = "agent:main:dashboard:recovered";
+    const harness = createStartedThreadHarness();
+    const params = Object.assign(createTestParams(), {
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      config: {},
+      inputProvenance: {
+        kind: "internal_system" as const,
+        sourceSessionKey: sessionKey,
+        sourceTool: "main_session_restart_recovery",
+      },
+    });
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
+    setRuntimeConfigSnapshot(params.config);
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    await completeRun(harness, run);
   });
 
   it("retains a required command as one native pending call until terminal collection", async () => {

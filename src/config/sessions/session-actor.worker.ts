@@ -86,7 +86,9 @@ function transcriptPayloadBytes(command: Command): number | undefined {
         typeof append.input.event === "string"
           ? append.input.event
           : JSON.stringify(append.input.event),
-      ) + Buffer.byteLength(append.input.message?.messageJson ?? "")
+      ) +
+      Buffer.byteLength(append.input.message?.messageJson ?? "") +
+      (append.input.initialModel ? Buffer.byteLength(JSON.stringify(append.input.initialModel)) : 0)
     );
   }
   if ("eventJson" in input) {
@@ -197,8 +199,6 @@ export function createSessionActorWorker(
         working.hot.version = version;
         if (singleStatement) {
           stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-            stage() {},
-            rollback() {},
             commit() {
               const committedToken = token(
                 database,
@@ -280,7 +280,7 @@ export function createSessionActorWorker(
         captureSessionEntrySnapshot({
           entry: structuredClone(previousEntry),
           row: {
-            ...structuredClone(selected.row),
+            ...selected.row,
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
             board_present: before.hasBoard ? 1 : 0,
@@ -339,8 +339,6 @@ export function createSessionActorWorker(
           const mutationRevision = readSqliteNativeMutationRevision(opened.db);
           if (
             !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-              stage() {},
-              rollback() {},
               commit() {
                 // A later nested writer must not install this intermediate transcript.
                 if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
@@ -554,8 +552,6 @@ export function createSessionActorWorker(
             });
             if (
               !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-                stage() {},
-                rollback() {},
                 commit() {
                   committed = true;
                   residents.remember(working);

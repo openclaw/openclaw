@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -7,12 +7,23 @@ import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
 import { createApiKeyCredential as apiKey } from "./credential-fixtures.test-support.js";
-import { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
+import { recordRuntimeAuthProfileStorePersistedMutation } from "./mutation-lineage.js";
+import { runtimeAuthProfileRowsCache as cache } from "./runtime-persisted-rows.js";
 import { deleteAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { readAuthProfileRows } from "./sqlite-json.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => cache.clear());
+afterEach(() => cache.clear());
+
+function noteCredentialMutation(databasePath: string) {
+  recordRuntimeAuthProfileStorePersistedMutation(databasePath, {
+    credentialsChanged: true,
+    stateChanged: false,
+    profileIds: ["example:key"],
+  });
+}
 const profileStore = (key = "fixture"): AuthProfileStore => ({
   version: 1,
   profiles: { "example:key": apiKey("example", key) },
@@ -28,7 +39,6 @@ function emptyRows(): AuthProfileRowRead {
 
 it("preserves absent source provenance through first database admission", () => {
   const databasePath = path.join(tempDirs.make("auth-row-first-admission-"), "auth.sqlite");
-  const cache = createRuntimeAuthProfileRowsCache(() => "1");
   cache.recordSource(databasePath, "absent", null);
   expect(cache.hasSource(databasePath)).toBe(true);
 
@@ -45,7 +55,6 @@ it("releases retired database baselines while retaining named live owners", asyn
   const databasePath = path.join(tempDirs.make("auth-row-retirement-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
   database.exec("CREATE TABLE cache_fixture (value)");
-  const cache = createRuntimeAuthProfileRowsCache(() => "1");
   const read = vi.fn(async () => emptyRows());
   const resolve = () => cache.prepare(databasePath, { read, assertCurrent() {} }).read();
   await resolve();
@@ -84,7 +93,6 @@ it.each([true, false])(
       cacheable,
     };
     const read = vi.fn(async () => rows);
-    const cache = createRuntimeAuthProfileRowsCache(() => "1");
     const resolve = () => cache.prepare(databasePath, { read, assertCurrent: () => {} }).read();
     const first = await resolve();
     expect(await resolve()).toBe(first);
@@ -109,14 +117,12 @@ it("serves a committed postimage without rereading or freezing its publisher", a
   const databasePath = path.join(tempDirs.make("auth-row-postimage-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
   database.exec("CREATE TABLE cache_fixture (value)");
-  let revision = "1";
-  const cache = createRuntimeAuthProfileRowsCache(() => revision);
   const read = vi.fn(async () => emptyRows());
   const resolve = () =>
     cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }).read();
   await resolve();
   const committed = { ...profileStore("fixture-new"), lastGood: { example: "example:key" } };
-  revision = "2";
+  noteCredentialMutation(databasePath);
   cache.recordSource(databasePath, "fixture", committed);
   committed.profiles = {};
   committed.lastGood!.example = "caller-edit";
@@ -133,8 +139,6 @@ it("serves a committed postimage without rereading or freezing its publisher", a
 
 it("retains private lifetimes across runtime publication and reloads incomplete postimages", async () => {
   const databasePath = path.join(tempDirs.make("auth-row-lifetimes-"), "auth.sqlite");
-  let revision = "1";
-  const cache = createRuntimeAuthProfileRowsCache(() => revision);
   const store = profileStore();
   const rows = {
     ...emptyRows(),
@@ -154,7 +158,7 @@ it("retains private lifetimes across runtime publication and reloads incomplete 
   expect(await resolve("canonical")).toEqual(rows);
   expect(read).toHaveBeenCalledOnce();
 
-  revision = "2";
+  noteCredentialMutation(databasePath);
   cache.recordSource(databasePath, "fixture", store);
   expect((await resolve("runtime")).store).toEqual({ status: "readable", raw: store });
   expect(await resolve("canonical")).toEqual(rows);
@@ -179,7 +183,6 @@ it.each(["agent", "shared-state"] as const)(
       writeAuthProfileJsonCell(database, "store", kind, profileStore());
       writeAuthProfileJsonCell(database, "state", kind, { lastGood: {} });
     });
-    const cache = createRuntimeAuthProfileRowsCache(() => "1");
     const read = vi.fn(async () => readAuthProfileRows(database, databasePath, kind));
     const resolve = () =>
       cache.prepare(databasePath, { read, assertCurrent() {} }, "canonical").read();

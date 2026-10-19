@@ -1,11 +1,9 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -66,19 +64,20 @@ class SkillWorkshopPageState {
     private readonly revision: () => number,
     private readonly changed: () => void,
   ) {
-    const gateway = projectGateway(context.gateway);
-    const selection = projectAgentSelection(context.agentSelection);
-    const agents = projectAgents(context.agents);
-    const config = projectRuntimeConfig(context.runtimeConfig);
-    // Connection and agent changes retire the workshop scope before issuing Gateway reads.
-    createEffect(
-      () =>
-        [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,
-      () => {
+    onSettled(() => {
+      const sync = () => {
         this.syncScope();
         changed();
-      },
-    );
+      };
+      const stops = [
+        context.gateway.subscribe(sync),
+        context.agentSelection.subscribe(sync),
+        context.agents.subscribe(sync),
+        context.runtimeConfig.subscribe(sync),
+      ];
+      sync();
+      return () => stops.forEach((stop) => stop());
+    });
     onCleanup(() => {
       this.scope = null;
     });

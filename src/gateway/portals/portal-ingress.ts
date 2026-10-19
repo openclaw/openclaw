@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { closeHttpServers } from "../../infra/http-server-lifecycle.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
-import { closePortalServers, removePortalServers } from "./portal-listeners.js";
+import { removePortalServers } from "./portal-listeners.js";
 
 /** Dedicated loopback ingress; registry lookup remains owned by the portal service. */
 export function createPortalIngress(params: {
@@ -50,7 +51,7 @@ export function createPortalIngress(params: {
       // Settle binding before closing: close during startup must not leave a late listener alive.
       await startup?.catch(() => undefined);
       removePortalServers(params.httpServers, [server]);
-      await closePortalServers([server]);
+      await closeHttpServers([server], { force: true });
     },
   };
 }

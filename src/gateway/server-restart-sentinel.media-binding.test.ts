@@ -18,7 +18,7 @@ import * as queueRuntime from "../infra/session-delivery-queue-runtime.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "../infra/session-delivery-queue.records.js";
 import { createGrayscaleAlphaPngBuffer } from "../plugin-sdk/test-helpers/image-fixtures.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -154,7 +154,7 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
     wake,
     schedule,
     acquire: () =>
-      beginSessionWorkAdmission({
+      beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, "original-requester"],
         assertAllowed: () => {},
@@ -170,7 +170,7 @@ describe("original requester media handoff", () => {
     "keeps media queued while the %s owns requester work",
     (ownerTiming) =>
       withMediaSession(async ({ wake, acquire, pending, dispatch, drain }) => {
-        let owner: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+        let owner: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
         const markAttempt = queue.markSessionDeliveryAttemptStarted;
         if (ownerTiming === "attempt-marker admission") {
           vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
@@ -400,7 +400,11 @@ describe("queued media completion past the handoff deadline", () => {
           }
           return { ...f.generate(), wakeResult: "Generated a synthetic lighthouse." };
         });
-        const backgroundWork = originalOwner.run(f.schedule(generated, diagnostic));
+        const scheduled = f.schedule(generated, diagnostic);
+        // Launch under the original context; its scope does not own the background job's completion.
+        const { backgroundWork } = await originalOwner.run(async () => ({
+          backgroundWork: scheduled(),
+        }));
         try {
           await Promise.race([backgroundWork, observedQueuedRetry.promise]);
           const pending = await f.pending();
@@ -417,6 +421,7 @@ describe("queued media completion past the handoff deadline", () => {
           expect(f.operation()?.terminalOutcome).toBeUndefined();
         } finally {
           originalOwner.release();
+          await originalOwner.released;
         }
         assert(queueId, "Expected durable completion custody");
         await f.drain(queueId);

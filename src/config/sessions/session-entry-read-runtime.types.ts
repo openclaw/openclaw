@@ -7,6 +7,7 @@ import type {
   SessionEntryCohortRequest,
   SessionEntryCohortResult,
   SessionExactEntriesWorkerRequest,
+  SessionEntryListWorkerInput,
 } from "./session-entry-read.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -38,6 +39,12 @@ export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "age
   defaultAgentId?: string;
   projection?: SessionEntryWorkerRead["projection"] | SessionEntryReadScope["projection"];
 };
+
+export type SessionEntrySummaryWorkerRead = Omit<SessionStoreWorkerReadScope, "agentId"> &
+  Pick<
+    SessionEntryListWorkerInput["scope"],
+    "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
+  >;
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;

@@ -98,9 +98,7 @@ export function emitPreparedSessionSharingChange(
     const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
     if (
       !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-        stage() {},
         commit: seal,
-        rollback() {},
       })
     ) {
       seal();

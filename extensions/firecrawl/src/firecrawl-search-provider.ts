@@ -3,6 +3,7 @@ import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import {
   createWebSearchProviderContractFields,
   enablePluginInConfig,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,13 +15,7 @@ const loadFirecrawlClientModule = createLazyRuntimeModule(() => import("./firecr
 const GenericFirecrawlSearchSchema = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   },
   additionalProperties: false,
 } satisfies Record<string, unknown>;

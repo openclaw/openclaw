@@ -136,11 +136,14 @@ describe("reply runtime public dispatcher compatibility", () => {
     >;
     type Resolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof Options>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof Options>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof Options>();
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof RuntimeOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof RuntimeOptions>();
     type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof Options>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
@@ -152,6 +155,7 @@ describe("reply runtime public dispatcher compatibility", () => {
       isHeartbeat: true,
       onReplyStart: callback,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
+      onReplyOperationAdmitted: callback,
       onReplyOperationOwned: callback,
       [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const },
     };
@@ -170,6 +174,7 @@ describe("reply runtime public dispatcher compatibility", () => {
       dispatchReplyFromConfig: async ({ replyOptions }) => {
         dispatched = true;
         expect(replyOptions).not.toHaveProperty("internalEventExecution");
+        expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
         expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
         expect(replyOptions).toMatchObject({
           isHeartbeat: true,
@@ -183,6 +188,7 @@ describe("reply runtime public dispatcher compatibility", () => {
     expect(dispatched).toBe(true);
     expect(delivered).toEqual(["public reply"]);
     expect(options.internalEventExecution.onStarted).toBe(callback);
+    expect(options.onReplyOperationAdmitted).toBe(callback);
     expect(options.onReplyOperationOwned).toBe(callback);
   });
 

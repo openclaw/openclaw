@@ -33,9 +33,9 @@ const sqliteAdmission = vi.hoisted(() => ({
   initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
   selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
 }));
-vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
-  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+vi.mock("../infra/sqlite-runtime-initialize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-runtime-initialize.js")>()),
+  initializeSqliteRuntime: sqliteAdmission.initialize,
 }));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
 // Keep Commander parsing independent of native startup; run-main.exit and

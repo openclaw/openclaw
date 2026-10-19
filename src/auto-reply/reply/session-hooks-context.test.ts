@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -25,7 +25,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -462,7 +463,7 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.runSessionStart.mockImplementation(async () => {
       try {
         // The plugin runtime's runWithWorkAdmission API requests this broad writer barrier.
-        const admission = await beginSessionWorkAdmission({
+        const admission = await beginSessionEffect({
           scope: storePath,
           identities: ["agent:main:dashboard:hook-target"],
           assertAllowed: () => {},
@@ -480,6 +481,40 @@ describe("session hook context wiring", () => {
     });
     await withinTest(Promise.all([initialized, completed.promise]), signal);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+  });
+
+  it("runs an unawaited session_start hook outside the reply turn that emitted it", async () => {
+    // The hook outlives the turn; resuming that retired admission would reject its own turn.
+    const sessionKey = "agent:main:hook-after-turn";
+    const storePath = await createStorePath("openclaw-session-hook-after-turn");
+    await writeStore(storePath, {});
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const turnSettled = createDeferred();
+    const hookAdmission = createDeferred<unknown>();
+    hookRunnerMocks.runSessionStart.mockImplementation(async (event) => {
+      await turnSettled.promise;
+      try {
+        hookAdmission.resolve(
+          await withSessionTurn(
+            { storePath, sessionKey, sessionId: event.sessionId },
+            async (operation) => operation?.key,
+          ),
+        );
+      } catch (error) {
+        hookAdmission.resolve(error);
+      }
+    });
+
+    await withSessionTurn({ storePath, sessionKey }, () =>
+      initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      }),
+    );
+    turnSettled.resolve();
+
+    await expect(hookAdmission.promise).resolves.toBe(sessionKey);
   });
 
   it("starts the first reply lifecycle for a session created by admission without resetting it", async () => {

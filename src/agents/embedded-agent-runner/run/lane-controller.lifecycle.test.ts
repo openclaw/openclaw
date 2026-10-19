@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -14,6 +14,7 @@ import { createTestAdmittedRunContext } from "../../admitted-run-context.test-su
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import * as sessionBootstrap from "./session-bootstrap.js";
 
 type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 
@@ -43,7 +44,6 @@ function createController(
     lifecycleGeneration,
     globalLane: "global-lane",
     initialQueuedLifecycleGeneration: initialQueuedLifecycleGeneration ?? lifecycleGeneration,
-    sessionLane: "session:agent:main:session-1",
   });
 }
 
@@ -72,17 +72,22 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
   beforeEach(() => resetAgentEventsForTest());
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it("marks user session work as foreground", async () => {
+  it.each([
+    { trigger: "user" as const, expected: "foreground" },
+    { trigger: "cron" as const, expected: "background" },
+  ])("marks $trigger session work as $expected", async ({ trigger, expected }) => {
+    using writer = vi.spyOn(sessionBootstrap, "claimAgentSessionWriter");
+    writer.mockResolvedValue(undefined);
     const priorities: Array<CommandQueueEnqueueOptions["priority"]> = [];
     const { controller } = createController({
-      trigger: "user",
+      trigger,
       enqueue: async (task, options) => {
         priorities.push(options?.priority);
         return await task();
       },
     });
-    await controller.enqueueSession(async () => undefined);
-    expect(priorities).toEqual(["foreground"]);
+    await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+    expect(priorities).toEqual([expected]);
   });
 
   it("applies the current swarm capacity only to global execution admission", async () => {
@@ -102,7 +107,7 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     });
     maxConcurrent = 8;
     await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
-    expect(capacities).toEqual([undefined, 8]);
+    expect(capacities).toEqual([8]);
   });
 
   it("preserves the selected agent for sessionless admitted runtime events", async () => {

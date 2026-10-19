@@ -70,6 +70,8 @@ export async function probeMcpServers(
   config: OpenClawConfig,
   servers: Record<string, Record<string, unknown>>,
 ) {
+  const { recoverMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
+  await recoverMcpDockerServers(Object.values(servers));
   const runtime = await createSessionMcpRuntime({
     sessionId,
     workspaceDir: process.cwd(),

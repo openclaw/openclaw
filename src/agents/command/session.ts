@@ -108,6 +108,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoveryOperatorSource: undefined,
+    restartRecoveryRequesterSource: undefined,
     restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryReceiptState: undefined,
     restartRecoveryDeliveryToolCallId: undefined,
@@ -477,12 +478,10 @@ async function resolveSessionKeyForRequestInternal(
     ? normalizeAgentId(knownAgentId)
     : requestedSessionId
       ? undefined
-      : normalizeAgentId(
-          resolveDefaultAgentId(opts.cfg, {
-            surface: "agent command session routing",
-            hint: "Pass --agent <id> or an agent-prefixed --session-key.",
-          }),
-        );
+      : resolveDefaultAgentId(opts.cfg, {
+          surface: "agent command session routing",
+          hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+        });
   const storeAgentId = explicitSessionKey
     ? unownedBareSessionKey
       ? sessionIdScanAnchor

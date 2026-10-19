@@ -30,6 +30,7 @@ import {
   bindSessionPendingInputSources,
   listSessionPendingInputs,
   readSessionPendingInput,
+  readSessionPendingInputRequesterOrigin,
   stageSessionPendingInput,
   withSessionPendingInputPersistence as withPersistence,
   type SessionPendingInputReceipt,
@@ -197,6 +198,41 @@ it("keeps accepted input outside the active transcript and applies its hook once
   expect(() => receipt.run(() => {})).toThrow("ownership ended");
 });
 
+it("keeps requester facts with exact accepted custody through projection edits and restart replay", async () => {
+  const requesterOrigin = {
+    sessionKey: "agent:research:telegram:group:requesters",
+    messageProvider: "telegram",
+    senderId: "bob",
+  };
+  const input = { ...message("requester-custody"), __openclaw: { requesterOrigin } };
+  const receipt = await stage("requester-custody", { message: input });
+  receipt.message["__openclaw"] = {
+    requesterOrigin: { ...requesterOrigin, senderId: "alice" },
+  };
+  expect(readSessionPendingInputRequesterOrigin(receipt)).toMatchObject(requesterOrigin);
+  const captured = readSessionPendingInputRequesterOrigin(receipt);
+  expect(Object.isFrozen(captured)).toBe(true);
+  expect(captured?.sessionKey).toBe(requesterOrigin.sessionKey);
+  expect(readSessionPendingInputRequesterOrigin({ ...receipt })).toBeUndefined();
+  receipt.finish("interrupted");
+  await receipt.settled?.();
+  rotateAgentEventLifecycleGeneration();
+  const recovered = await stage("requester-custody", {
+    message: input,
+    trackCompletion: true,
+  });
+  expect(readSessionPendingInputRequesterOrigin(recovered)).toMatchObject(requesterOrigin);
+  await expect(
+    stage("requester-custody", {
+      message: {
+        ...input,
+        __openclaw: { requesterOrigin: { ...requesterOrigin, senderId: "alice" } },
+      },
+      trackCompletion: true,
+    }),
+  ).rejects.toThrow("conflicts");
+});
+
 it("mirrors a correlated input to another session without borrowing or consuming source custody", async () => {
   const target = {
     ...scope(),
@@ -244,6 +280,9 @@ it.each([
     }
     receipt.finish("interrupted");
     await receipt.settled?.();
+    expect(() => readSessionPendingInputRequesterOrigin(receipt)).toThrow(
+      SessionPendingInputCustodyError,
+    );
     if (restart) {
       rotateAgentEventLifecycleGeneration();
     }

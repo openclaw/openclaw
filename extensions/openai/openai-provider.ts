@@ -60,10 +60,9 @@ import {
   OPENAI_GPT_54_PRO_MODEL_ID,
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_56_LUNA_MODEL_ID,
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
-  OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
   OPENAI_GPT_61_SOL_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
@@ -552,12 +551,7 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
     patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
   },
   {
-    match: [
-      OPENAI_GPT_56_MODEL_ID,
-      OPENAI_GPT_56_SOL_MODEL_ID,
-      OPENAI_GPT_56_TERRA_MODEL_ID,
-      OPENAI_GPT_56_LUNA_MODEL_ID,
-    ],
+    match: [OPENAI_GPT_56_MODEL_ID, ...OPENAI_GPT_56_VARIANT_MODEL_IDS],
     templateIds: [OPENAI_GPT_55_MODEL_ID],
   },
   {
@@ -584,9 +578,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   if (
     OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||
     OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
-    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
-    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
-    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+    OPENAI_GPT_56_VARIANT_MODEL_IDS.some((id) => id === modelId)
   ) {
     if (exactModel) {
       return exactModel;

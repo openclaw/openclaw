@@ -226,7 +226,7 @@ function CuratedSections(props: {
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
   // A retained handler belongs to this mounted config target, not a later owner.
-  const sectionPath = untrack(() => props.path);
+  const initialSectionPath = untrack(() => props.path);
   let active = true;
   onCleanup(() => {
     active = false;
@@ -236,14 +236,14 @@ function CuratedSections(props: {
       return props.config;
     },
     get values() {
-      return asConfigRecord(fieldAtPath(props.config, sectionPath).value);
+      return asConfigRecord(fieldAtPath(props.config, initialSectionPath).value);
     },
     get disabled() {
       return props.disabled;
     },
     onPatch: (path, value) => {
       if (active && !props.disabled) {
-        props.onPatch(sectionPath, path, value);
+        props.onPatch(initialSectionPath, path, value);
       }
     },
   };

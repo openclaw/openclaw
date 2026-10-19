@@ -281,11 +281,13 @@ export function createClaudeSessionCatalogRuntime(
       return await catalogTerminal.openClaudeCatalogTerminal({
         api,
         ...request,
-        listClaudeSessions: () =>
-          listClaudeSessions(
-            resolveClaudeCatalogHomeDir(),
-            gatewayClaudeScanOptions(request.allowProcessHomeFallback),
-          ),
+        listClaudeSessions: async () =>
+          (
+            await listClaudeSessions(resolveClaudeCatalogHomeDir(), {
+              ...gatewayClaudeScanOptions(request.allowProcessHomeFallback),
+              sessionId: request.threadId,
+            })
+          ).records,
         resolveNodeClaudeRecord,
       });
     },
