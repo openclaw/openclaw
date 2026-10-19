@@ -3,6 +3,7 @@ import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -181,34 +182,35 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     }
   };
   createEffect(
-    () =>
-      [
+    () => ({
+      content: [
         props.layout,
         props.query,
         activeFile()?.path,
         activeFile()?.contents,
         activeFile()?.message,
       ] as const,
+      reveal: [props.activePath, props.query, props.files, props.layout] as const,
+    }),
     (next, previous) => {
       // A sibling inventory read must not move the document being read.
-      if (!previous || next.some((value, index) => value !== previous[index])) {
+      if (!previous || next.content.some((value, index) => value !== previous.content[index])) {
         const body = ordered("body")[0];
         if (body) {
           body.scrollTop = 0;
           body.scrollLeft = 0;
         }
       }
-    },
-  );
-  createEffect(
-    () => [props.activePath, props.query, props.files, props.layout] as const,
-    (next, previous) => {
-      activeItem()?.scrollIntoView?.({ block: "nearest" });
-      if (!previous || (next[3] === "document" && next[0] !== previous[0])) {
-        focusModal();
+      if (!previous || next.reveal.some((value, index) => value !== previous.reveal[index])) {
+        activeItem()?.scrollIntoView?.({ block: "nearest" });
       }
     },
   );
+  createPendingFocus(() => ({ path: props.activePath, layout: props.layout }), {
+    requested: (next, previous) =>
+      !previous || (next.layout === "document" && next.path !== previous.path),
+    focus: focusModal,
+  });
   const item = (file: FilePreviewModalFile) => (
     <button
       ref={capture("item")}

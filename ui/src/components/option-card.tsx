@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import "../styles/option-card.css";
 
 type OptionCardOption = {
@@ -42,24 +43,23 @@ export function OptionCard(input: { props?: OptionCardProps }) {
   // A new request resets the local selection; display-only option refreshes preserve it.
   const [selected, setSelected] = createSignal(() => request().recommended);
   const choices = new Set<HTMLButtonElement>();
-  let focusPreselection = false;
-  createEffect(
-    () => ({ key: request().key, disabled: input.props?.disabled, selected: selected() }),
-    (current, previous) => {
-      if (current.key !== previous?.key) {
-        focusPreselection = Boolean(current.selected);
-      }
-      if (!focusPreselection || current.disabled) {
-        return;
-      }
-      focusPreselection = false;
-      const active = host.ownerDocument.activeElement;
-      if (active && active !== host.ownerDocument.body && !host.contains(active)) {
-        return;
-      }
-      [...choices]
-        .find((button) => button.dataset.optionValue === current.selected)
-        ?.focus({ preventScroll: true });
+  createPendingFocus(
+    () => ({ request: request(), disabled: input.props?.disabled, selected: selected() }),
+    {
+      requested: (current, previous) =>
+        current.request.key !== previous?.request.key
+          ? Boolean(current.request.recommended)
+          : undefined,
+      ready: (current) => !current.disabled,
+      focus: (current) => {
+        const active = host.ownerDocument.activeElement;
+        if (active && active !== host.ownerDocument.body && !host.contains(active)) {
+          return;
+        }
+        [...choices]
+          .find((button) => button.dataset.optionValue === current.selected)
+          ?.focus({ preventScroll: true });
+      },
     },
   );
   const select = (value: string) => {
