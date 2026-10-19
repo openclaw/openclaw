@@ -157,17 +157,38 @@ type Target = { agentId: string; sessionId: string; sessionKey: string; storePat
 function withTrajectoryState(
   sessionId: string,
   run: (fixture: { state: OpenClawTestState; target: Target }) => Promise<void>,
+  initial: { activeWriterRunId?: string } = {},
 ) {
-  return withOpenClawTestState({ scenario: "minimal" }, (state) =>
-    run({
-      state,
-      target: {
-        agentId: "main",
-        sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-        storePath: state.statePath("agents", "main", "agent.sqlite"),
-      },
-    }),
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath: state.statePath("agents", "main", "agent.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId, updatedAt: 1, ...initial });
+    return run({ state, target });
+  });
+}
+
+function pauseAppend(error?: Error, hideCommit = false) {
+  const committed = createDeferredCore();
+  const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
+  delivery.settlement = settlement.promise;
+  delivery.hideCommit = hideCommit;
+  delivery.afterResult = () => {
+    committed.resolve();
+    if (error) {
+      throw error;
+    }
+  };
+  return { committed, settlement };
+}
+
+function observe(result: Promise<void>) {
+  return result.then(
+    () => ({ ok: true as const }),
+    (error: unknown) => ({ ok: false as const, error }),
   );
 }
 
@@ -209,7 +230,6 @@ async function eventTypes(target: Target) {
 
 it("persists repeated events and retains the worker owner without a main-thread database", async () => {
   await withTrajectoryState("trajectory-duplicates", async ({ target, state }) => {
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const databaseOptions = { agentId: target.agentId, path: target.storePath, env: state.env };
     expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
     const sink = await createSink(state, target);
@@ -237,7 +257,6 @@ it("persists repeated events and retains the worker owner without a main-thread 
 
 it("keeps a large eight-event turn in one append across writer yields", async () => {
   await withTrajectoryState("trajectory-large-turn", async ({ target, state }) => {
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const sink = await createSink(state, target);
     const events = Array.from({ length: 8 }, (_, index) =>
       createTrajectoryEvent({
@@ -269,7 +288,6 @@ it("keeps a large eight-event turn in one append across writer yields", async ()
 
 it("reuses committed trajectory facts across metadata writes and clears them after lifecycle deletion", async () => {
   await withTrajectoryState("trajectory-window", async ({ target, state }) => {
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const events = ["first", "later", "final"].map((type) =>
       createTrajectoryEvent({ type, sessionId: target.sessionId }),
     );
@@ -305,70 +323,72 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
 });
 
 it("rolls back the successful attempt's diagnostic prefix with its terminal event and retries once", async () => {
-  await withTrajectoryState("trajectory-terminal-batch", async ({ target }) => {
-    const original = {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      activeWriterRunId: "trajectory-run",
-    };
-    await replaceSessionEntry(target, original);
-    const recorder = await createRecorder(target);
-    const owner = createEmbeddedAttemptDeferredLifecycleOwner({
-      runId: "trajectory-run",
-      sessionId: target.sessionId,
-      diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+  await withTrajectoryState(
+    "trajectory-terminal-batch",
+    async ({ target }) => {
+      const original = {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        activeWriterRunId: "trajectory-run",
+      };
+      const recorder = await createRecorder(target);
+      const owner = createEmbeddedAttemptDeferredLifecycleOwner({
         runId: "trajectory-run",
         sessionId: target.sessionId,
-      }),
-      isCurrent: () => true,
-      onRetryWaitCompleted: () => {},
-      trajectoryRecorder: recorder,
-      clearActiveRun: () => {},
-    });
-    recorder.recordEvent("model.completed");
-    recorder.recordEvent("trace.artifacts");
-    owner.recordSessionEnd({ status: "success" });
-    await cleanupEmbeddedAttemptSessionPhase({
-      attempt: { sessionId: target.sessionId, runId: "trajectory-run" },
-      trajectoryRecorder: recorder,
-      trajectoryEndRecorded: true,
-      deferredLifecycleOwner: owner,
-      buildAbortSettlePromise: () => null,
-      state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
-      transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
-    });
-    const databaseOptions = { agentId: target.agentId, path: target.storePath };
-    const database = await runOpenClawAgentWriteAdmission(databaseOptions, () => {
-      const admittedDatabase = openOpenClawAgentDatabase(databaseOptions);
-      admittedDatabase.db.exec(`CREATE TRIGGER reject_trajectory_terminal
+        diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+          runId: "trajectory-run",
+          sessionId: target.sessionId,
+        }),
+        isCurrent: () => true,
+        onRetryWaitCompleted: () => {},
+        trajectoryRecorder: recorder,
+        clearActiveRun: () => {},
+      });
+      recorder.recordEvent("model.completed");
+      recorder.recordEvent("trace.artifacts");
+      owner.recordSessionEnd({ status: "success" });
+      await cleanupEmbeddedAttemptSessionPhase({
+        attempt: { sessionId: target.sessionId, runId: "trajectory-run" },
+        trajectoryRecorder: recorder,
+        trajectoryEndRecorded: true,
+        deferredLifecycleOwner: owner,
+        buildAbortSettlePromise: () => null,
+        state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
+        transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
+      });
+      const databaseOptions = { agentId: target.agentId, path: target.storePath };
+      const database = await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+        const admittedDatabase = openOpenClawAgentDatabase(databaseOptions);
+        admittedDatabase.db.exec(`CREATE TRIGGER reject_trajectory_terminal
         BEFORE INSERT ON trajectory_runtime_events
         WHEN NEW.event_json LIKE '%"type":"session.ended"%'
         BEGIN SELECT RAISE(ABORT, 'synthetic terminal append failure'); END`);
-      return admittedDatabase;
-    });
-    try {
-      await owner.complete();
-      expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
-      expect(loadSessionEntry(target)).toMatchObject(original);
-      expect(recorder.describeFlushState()).toContain("pendingRows=3");
-    } finally {
-      await runOpenClawAgentWriteAdmission(databaseOptions, () => {
-        database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+        return admittedDatabase;
       });
-    }
-    await recorder.flush();
-    expect(await eventTypes(target)).toEqual([
-      "model.completed",
-      "trace.artifacts",
-      "session.ended",
-    ]);
-    expect(recorder.describeFlushState()).toBeUndefined();
-  });
+      try {
+        await owner.complete();
+        expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
+        expect(loadSessionEntry(target)).toMatchObject(original);
+        expect(recorder.describeFlushState()).toContain("pendingRows=3");
+      } finally {
+        await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+          database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+        });
+      }
+      await recorder.flush();
+      expect(await eventTypes(target)).toEqual([
+        "model.completed",
+        "trace.artifacts",
+        "session.ended",
+      ]);
+      expect(recorder.describeFlushState()).toBeUndefined();
+    },
+    { activeWriterRunId: "trajectory-run" },
+  );
 });
 
 it("settles retention during concurrent appends and worker session patches", async () => {
   await withTrajectoryState("trajectory-during-retention", async ({ target }) => {
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     await replaceSessionEntry(
       { ...target, sessionKey: "agent:main:old-trajectory" },
       { sessionId: "old-trajectory", updatedAt: 1 },
@@ -421,7 +441,6 @@ it.each(["committed", "unknown"] as const)(
   "settles the captured trajectory prefix before another flush after a lost result (%s)",
   async (outcome) => {
     await withTrajectoryState("trajectory-settlement", async ({ target }) => {
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const recorder = await createRecorder(target);
       recorder.recordEvent("seed");
       await recorder.flush();
@@ -429,21 +448,9 @@ it.each(["committed", "unknown"] as const)(
       recorder.recordEvent("warm");
       await recorder.flush();
       await retention.accepted;
-      const committed = createDeferredCore();
-      const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       const failure = new Error("trajectory result was lost after native completion");
-      delivery.settlement = settlement.promise;
-      delivery.hideCommit = outcome === "unknown";
-      delivery.afterResult = () => {
-        committed.resolve();
-        throw failure;
-      };
+      const { committed, settlement } = pauseAppend(failure, outcome === "unknown");
       recorder.recordEvent("first");
-      const observe = (result: Promise<void>) =>
-        result.then(
-          () => ({ ok: true as const }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
       const first = observe(recorder.flush());
       let next: ReturnType<typeof observe> | undefined;
       try {
@@ -481,15 +488,11 @@ it.each(["committed", "unknown"] as const)(
 
 it("bounds 2,000 queued events while a background append awaits settlement", async () => {
   await withTrajectoryState("trajectory-long-run", async ({ target }) => {
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const maxRuntimeFileBytes = 64 * 1024;
     const recorder = await createRecorder(target, {
       maxRuntimeFileBytes,
     });
-    const committed = createDeferredCore();
-    const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
-    delivery.settlement = settlement.promise;
-    delivery.afterResult = () => committed.resolve();
+    const { committed, settlement } = pauseAppend();
     const recordCalls = (start: number, end: number) => {
       for (let index = start; index < end; index++) {
         recorder.recordEvent("tool.result", { index, text: "synthetic result ".repeat(64) });
@@ -530,17 +533,9 @@ it.each(["committed", "unknown"] as const)(
   "joins a background append with a lost result before final flushing (%s)",
   async (outcome) => {
     await withTrajectoryState("trajectory-background-settlement", async ({ target }) => {
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const recorder = await createRecorder(target);
-      const committed = createDeferredCore();
-      const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       const failure = new Error("background trajectory result lost after native completion");
-      delivery.settlement = settlement.promise;
-      delivery.hideCommit = outcome === "unknown";
-      delivery.afterResult = () => {
-        committed.resolve();
-        throw failure;
-      };
+      const { committed, settlement } = pauseAppend(failure, outcome === "unknown");
       for (let index = 0; index < 32; index++) {
         recorder.recordEvent("before-settlement", { index });
       }
@@ -604,18 +599,12 @@ it.each([3_000, 6_000])(
 
 it("keeps later queue evictions after a captured append settles", async () => {
   await withTrajectoryState("trajectory-overlapping-eviction", async ({ target }) => {
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const recorder = await createRecorder(target, {
-      maxRuntimeFileBytes: 4_096,
-    });
+    const recorder = await createRecorder(target, { maxRuntimeFileBytes: 4_096 });
     recorder.recordEvent("durable-prefix", { text: "a".repeat(1_000) });
     await recorder.flush();
     recorder.recordEvent("evicted-before", { text: "b".repeat(3_000) });
     recorder.recordEvent("first-committed", { text: "c".repeat(1_500) });
-    const committed = createDeferredCore();
-    const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
-    delivery.settlement = settlement.promise;
-    delivery.afterResult = () => committed.resolve();
+    const { committed, settlement } = pauseAppend();
     const first = recorder.flush();
     try {
       await committed.promise;
@@ -634,10 +623,7 @@ it.each(["committed", "refused"] as const)(
   "keeps the newest two rows when C arrives during an A/B append (%s)",
   async (outcome) => {
     await withTrajectoryState("trajectory-abc", async ({ target }) => {
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = await createRecorder(target, {
-        maxRuntimeFileBytes: 4_096,
-      });
+      const recorder = await createRecorder(target, { maxRuntimeFileBytes: 4_096 });
       recorder.recordEvent("A", { text: "a".repeat(1_500) });
       recorder.recordEvent("B", { text: "b".repeat(1_500) });
       const admitted = createDeferredCore();
@@ -654,10 +640,7 @@ it.each(["committed", "refused"] as const)(
           throw failure;
         };
       }
-      const first = recorder.flush().then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
+      const first = observe(recorder.flush());
       try {
         await admitted.promise;
         recorder.recordEvent("C", { text: "c".repeat(1_500) });
