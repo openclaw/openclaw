@@ -21,6 +21,15 @@ const crashedScan: SpawnSyncReturns<string> = {
   output: [],
 };
 const files = [{ file: "source.ts", parseImports: true }];
+const emptyFacts = { imports: [], mocks: [], typeOnlyImports: [], matches: [], references: [] };
+const scan = () => readTestSelectorSourceFacts(process.cwd(), files, [], 1024);
+function successfulScan(stdout: string): SpawnSyncReturns<string> {
+  return { ...crashedScan, status: 0, signal: null, stderr: "", stdout };
+}
+function expectScanFailure(message: string, calls: number) {
+  expect(scan).toThrow(message);
+  expect(spawn).toHaveBeenCalledTimes(calls);
+}
 
 beforeEach(() => spawn.mockReset());
 
@@ -36,63 +45,18 @@ export const view = <div>{value} ·</div>;`,
       erased: ["./types.js"],
       retained: ["./runtime.js", "./default-type.js", "./side-effect.js"],
     },
-    {
-      source:
-        'import type { Value } from "./types.js"; export const view = <div>{import("./types.js")}</div>;',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source:
-        'import type { Value } from "./types.js"; export const view = <div> // text {import("./types.js")} </div>;',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source: String.raw`import type { Value } from "./types.js"; export const view = <div> // text {import('./ty\u0070es.js')} </div>;`,
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source: String.raw`import type { Value } from "./types.js"; export const view = <div>{requ\u0069re('./types.js')}</div>;`,
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source:
-        'import type { Value } from "./types.js"; export const view = <div> // text {import(/* load */ "./types.js")} </div>;',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source:
-        'import type { Value } from "./types.js"; export const view = <div> // text\n</div>; export { value } from/* load */ "./types.js";',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source:
-        'import type { Value } from "./types.js"; export const view = <div />; import "./types.js";',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source:
-        '"import type { Fake } from \'./types.js\'"; import type { Value } from "./types.js"; export const view = <div />;',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source: '"import"\nimport type { Value } from "./types.js"; export const view = <div />;',
-      erased: [],
-      retained: ["./types.js"],
-    },
-    {
-      source:
-        'export const view = <div>import type Value from "./types.js"</div>; import("./types.js");',
-      erased: [],
-      retained: ["./types.js"],
-    },
+    ...[
+      'import type { Value } from "./types.js"; export const view = <div>{import("./types.js")}</div>;',
+      'import type { Value } from "./types.js"; export const view = <div> // text {import("./types.js")} </div>;',
+      String.raw`import type { Value } from "./types.js"; export const view = <div> // text {import('./ty\u0070es.js')} </div>;`,
+      String.raw`import type { Value } from "./types.js"; export const view = <div>{requ\u0069re('./types.js')}</div>;`,
+      'import type { Value } from "./types.js"; export const view = <div> // text {import(/* load */ "./types.js")} </div>;',
+      'import type { Value } from "./types.js"; export const view = <div> // text\n</div>; export { value } from/* load */ "./types.js";',
+      'import type { Value } from "./types.js"; export const view = <div />; import "./types.js";',
+      '"import type { Fake } from \'./types.js\'"; import type { Value } from "./types.js"; export const view = <div />;',
+      '"import"\nimport type { Value } from "./types.js"; export const view = <div />;',
+      'export const view = <div>import type Value from "./types.js"</div>; import("./types.js");',
+    ].map((source) => ({ source, erased: [], retained: ["./types.js"] })),
   ];
   const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-tsx-import-facts-"));
   try {
@@ -122,25 +86,8 @@ describe("test selector native crash recovery", () => {
   it.each([null, [["worker"]], [["worker", 1]]])(
     "rejects invalid runtime-worker export facts: %j",
     (workerExports) => {
-      spawn.mockReturnValue({
-        ...crashedScan,
-        status: 0,
-        signal: null,
-        stderr: "",
-        stdout: JSON.stringify([
-          {
-            imports: [],
-            mocks: [],
-            workerExports,
-            typeOnlyImports: [],
-            matches: [],
-            references: [],
-          },
-        ]),
-      });
-      expect(() => readTestSelectorSourceFacts(process.cwd(), files, [], 1024)).toThrow(
-        "Invalid runtime worker exports",
-      );
+      spawn.mockReturnValue(successfulScan(JSON.stringify([{ ...emptyFacts, workerExports }])));
+      expect(scan).toThrow("Invalid runtime worker exports");
     },
   );
 
@@ -202,25 +149,16 @@ syncBuiltinESMExports();`,
     { error: new Error("output overflow"), stderr: jitAssertion },
   ] as const)("does not retry ordinary failures or cancellation (%j)", (failure) => {
     spawn.mockReturnValue({ ...crashedScan, ...failure });
-    expect(() => readTestSelectorSourceFacts(process.cwd(), files, [], 1024)).toThrow(
-      "Test selector source scan failed",
-    );
-    expect(spawn).toHaveBeenCalledTimes(1);
+    expectScanFailure("Test selector source scan failed", 1);
   });
 
   it("fails after one unsuccessful recovery attempt", () => {
     spawn.mockReturnValue(crashedScan);
-    expect(() => readTestSelectorSourceFacts(process.cwd(), files, [], 1024)).toThrow(jitAssertion);
-    expect(spawn).toHaveBeenCalledTimes(2);
+    expectScanFailure(jitAssertion, 2);
   });
 
   it("still rejects an incomplete result from recovery", () => {
-    spawn
-      .mockReturnValueOnce(crashedScan)
-      .mockReturnValueOnce({ ...crashedScan, status: 0, signal: null, stderr: "", stdout: "[]" });
-    expect(() => readTestSelectorSourceFacts(process.cwd(), files, [], 1024)).toThrow(
-      "Invalid test selector source scan row count",
-    );
-    expect(spawn).toHaveBeenCalledTimes(2);
+    spawn.mockReturnValueOnce(crashedScan).mockReturnValueOnce(successfulScan("[]"));
+    expectScanFailure("Invalid test selector source scan row count", 2);
   });
 });
