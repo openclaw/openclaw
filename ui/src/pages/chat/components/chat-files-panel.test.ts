@@ -20,8 +20,8 @@ import {
   loadSessionWorkspace,
   sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
-import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
+import type { SessionWorkspacePreview } from "./chat-sidebar-content-types.ts";
 import "./chat-files-panel.tsx";
 
 function host(): SessionWorkspaceHost {

@@ -10,9 +10,8 @@ import {
 import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
-  SessionWorkspacePreview,
 } from "./chat-session-workspace-types.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type PreviewRead = { order: number; published?: ReturnType<typeof capturePreview> };
 const previewReads = new WeakMap<SessionWorkspacePreview, PreviewRead>();

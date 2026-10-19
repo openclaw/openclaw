@@ -4,35 +4,15 @@ import type { PanelUnavailableReason } from "../../../app/panel-availability.ts"
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
 import type {
-  FileSidebarNavigation,
-  FileReaderDraftState,
+  SessionWorkspaceFilter,
+  SessionWorkspaceTreeState,
+  SessionWorkspaceNavigation,
+  SessionWorkspaceDirectory,
+  SessionWorkspaceMobileNavigation,
+  SessionWorkspacePreview,
   SidebarContent,
   SidebarSelection,
 } from "./chat-sidebar-content-types.ts";
-
-export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
-
-type SessionWorkspaceTreeState = {
-  expandedPaths: string[];
-  searchOpen: boolean;
-  sessionExpanded: boolean;
-  treeVisible: boolean;
-  treeScroll: number;
-  sessionScroll: number;
-};
-
-/** Snapshot handed to the tabs owner; it never contains a reader or a draft. */
-export type SessionWorkspaceNavigation = SessionWorkspaceTreeState & {
-  browserPath: string;
-  browserSearch: string;
-  filter: SessionWorkspaceFilter;
-};
-
-export type SessionWorkspaceDirectory = {
-  browser?: SessionWorkspaceListResult["browser"];
-  loading: boolean;
-  error: string | null;
-};
 
 export type SessionWorkspaceArtifacts = {
   items: NonNullable<SessionWorkspaceListResult["artifacts"]>;
@@ -42,28 +22,6 @@ export type SessionWorkspaceArtifacts = {
   loaded: boolean;
   loading: boolean;
   error: string | null;
-};
-
-type SessionWorkspaceMobileGroupKind = "changed" | "read" | "artifacts" | "workspace";
-type SessionWorkspaceMobileNavigation = {
-  expandedGroups: Record<SessionWorkspaceMobileGroupKind, boolean>;
-  scrollTop: number;
-  locations: Record<string, { search: string; filter: SessionWorkspaceFilter; scrollTop: number }>;
-};
-
-export type SessionWorkspacePreview = {
-  id: string;
-  label: string;
-  content: SidebarSelection;
-  /** Only an explicit desktop preview is replaceable; retained tabs stay pinned. */
-  pinned?: boolean;
-  catalogNavigation?: SessionWorkspaceNavigation;
-  catalogVisible?: boolean;
-  readerDraft?: FileReaderDraftState;
-  canonicalKey?: string;
-  requestIds?: string[];
-  navigation?: FileSidebarNavigation;
-  navigationOrder?: number;
 };
 
 export type SessionWorkspaceState = {

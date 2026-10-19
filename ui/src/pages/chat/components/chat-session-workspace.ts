@@ -34,11 +34,10 @@ import {
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
-  SessionWorkspaceFilter,
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceFilter, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 
 registerFilePreviewEnglish();

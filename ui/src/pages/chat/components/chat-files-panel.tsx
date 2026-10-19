@@ -14,8 +14,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { createTabFocus } from "../../../lib/tabs.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
-import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type Props = {
   previews: SessionWorkspacePreview[];
