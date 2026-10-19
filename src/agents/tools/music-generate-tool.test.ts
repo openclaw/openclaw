@@ -98,7 +98,7 @@ function textOf(result: { content?: { type: string; text?: string }[] }) {
 }
 
 function registerMusicProvider(overrides: Partial<MusicGenerationProvider> = {}) {
-  musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([
+  listMusicGenerationProvidersMock.mockReturnValue([
     { id: "minimax", defaultModel: "music-2.6", models: ["music-2.6"], ...overrides },
   ]);
 }
@@ -131,8 +131,8 @@ const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
 
 const musicGenerationRuntimeMocks = vi.hoisted(() => ({
   generateMusic: vi.fn<typeof import("../../music-generation/runtime.js").generateMusic>(),
-  listRuntimeMusicGenerationProviders: vi.fn(),
 }));
+const listMusicGenerationProvidersMock = vi.hoisted(() => vi.fn());
 
 const musicGenerateBackgroundMocks = vi.hoisted(() => ({
   musicGenerationTaskLifecycle: { wakeTaskCompletion: vi.fn() },
@@ -158,6 +158,10 @@ vi.mock("../../media/web-media.js", async (importOriginal) => ({
   loadWebMedia: vi.fn(),
 }));
 vi.mock("../../music-generation/runtime.js", () => musicGenerationRuntimeMocks);
+vi.mock("../../media-generation/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../media-generation/registry.js")>()),
+  listMusicGenerationProviders: listMusicGenerationProvidersMock,
+}));
 vi.mock("../../utils/fetch-timeout.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/fetch-timeout.js")>(
     "../../utils/fetch-timeout.js",
@@ -186,7 +190,7 @@ function expectMusicGenerateTool(
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([]);
+  listMusicGenerationProvidersMock.mockReturnValue([]);
   [
     musicGenerationRuntimeMocks.generateMusic,
     ...Object.values(mediaStoreMocks),
@@ -229,7 +233,7 @@ it("runs explicit deployment refs and preserves timeout-only music defaults", as
     isConfigured: () => true,
     generateMusic: vi.fn(async () => ({ tracks })),
   };
-  musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([provider]);
+  listMusicGenerationProvidersMock.mockReturnValue([provider]);
   mockGeneratedMusic({
     provider: "music-plugin",
     model: "deployment",
@@ -279,7 +283,7 @@ it.each([
       generateMusic: fallbackGenerate,
     },
   ];
-  musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue(providers);
+  listMusicGenerationProvidersMock.mockReturnValue(providers);
   const actualRuntime = await vi.importActual<typeof import("../../music-generation/runtime.js")>(
     "../../music-generation/runtime.js",
   );

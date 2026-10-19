@@ -123,7 +123,7 @@ export class LobsterPetOwner {
 
   private active = false;
   private stopVisibility?: () => void;
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
 
   constructor(
     private readonly host: HTMLElement & Pick<contract.LobsterPetProps, "composerElements">,
@@ -156,14 +156,14 @@ export class LobsterPetOwner {
   }
 
   subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   private publish() {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.render?.();
   }
 
   update(props: contract.LobsterPetProps) {

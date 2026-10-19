@@ -1,7 +1,6 @@
 import { Show, For, type Accessor } from "solid-js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
 import type { AssistantPanelOwner } from "./assistant-panel-controller.ts";
 import { AssistantPanelLoading } from "./assistant-panel-loading.tsx";
@@ -138,9 +137,7 @@ export function AssistantPanelView(props: { state: Accessor<AssistantPanelOwner>
           prop:pageSessionKey={state().props.pageSessionKey}
           prop:pageAgentId={state().props.pageAgentId}
           prop:store={state().props.store}
-          onAssistant-custodian-store={(event: CustomEvent<CustodianSessionStore>) => {
-            state().acceptStore(event.detail);
-          }}
+          prop:onStore={(store) => state().acceptStore(store)}
         />
       ) : undefined}
       {visible() &&

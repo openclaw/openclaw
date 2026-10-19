@@ -54,14 +54,12 @@ export function createModelSetup(
   props: ModelSetupPageProps & { host: HTMLElement },
   context: ApplicationContext,
 ) {
-  const listeners = new Set<() => void>();
+  let publish: (() => void) | undefined;
   let connected = false;
   let disposed = false;
   const notify = () => {
     if (!disposed) {
-      for (const listener of listeners) {
-        listener();
-      }
+      publish?.();
       onSettled(afterRender);
     }
   };
@@ -722,8 +720,10 @@ export function createModelSetup(
   const projection = projectOwner(
     {
       subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+        publish = listener;
+        return () => {
+          publish = undefined;
+        };
       },
     },
     () => state,

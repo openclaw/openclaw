@@ -405,15 +405,15 @@ describe("broadcast transport retirement", () => {
     const retired = controlledPeer("replacement");
     const replacement = controlledPeer("replacement");
     retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([retired.client]),
-    });
+    const clients = new GatewayClientRegistry([retired.client]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("tick", {});
     expect(retired.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
     expect(retired.socket.terminate).not.toHaveBeenCalled();
 
-    retired.client.socket = replacement.client.socket;
+    clients.delete(retired.client);
+    clients.add(replacement.client);
     vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
     vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
 
@@ -456,9 +456,8 @@ describe("broadcast transport retirement", () => {
   it("keeps failed delivery terminal through late callbacks and permits a replacement socket", () => {
     const retired = controlledPeer("replacement");
     const replacement = controlledPeer("replacement");
-    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([retired.client]),
-    });
+    const clients = new GatewayClientRegistry([retired.client]);
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({ clients });
     const owner = new AbortController();
     sendError.mockClear();
     broadcast("tick", {});
@@ -476,14 +475,15 @@ describe("broadcast transport retirement", () => {
     expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
     expect(sendError).toHaveBeenCalledOnce();
 
-    retired.client.socket = replacement.client.socket;
+    clients.delete(retired.client);
+    clients.add(replacement.client);
     broadcast("chat", { text: "new socket" });
     broadcast("chat", { text: "new pending" }, { liveText: liveText(owner.signal) });
     retired.callbacks[2]!(new Error("late old failure"));
     replacement.callbacks[0]!();
     expect(replacement.frames).toEqual([
-      { type: "event", event: "chat", seq: 4, payload: { text: "new socket" } },
-      { type: "event", event: "chat", seq: 5, payload: { text: "new pending" } },
+      { type: "event", event: "chat", seq: 1, payload: { text: "new socket" } },
+      { type: "event", event: "chat", seq: 2, payload: { text: "new pending" } },
     ]);
     expect(replacement.socket.terminate).not.toHaveBeenCalled();
     replacement.callbacks[1]!();

@@ -18,6 +18,7 @@ import {
   categoryClearReturnsToGroups,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
 import {
   loadStoredCollapsedSessionSections,
   storeSidebarSessionStatusFilter,
@@ -76,8 +77,9 @@ export class SessionOrganizer {
       operations: SessionOrganizerOperations,
       scope: SidebarSessionMutationScope,
     ) => Promise<unknown>,
+    allowDeferred = false,
   ): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(allowDeferred);
     if (scope) {
       const operations = await this.loadOperations(scope);
       if (operations) {
@@ -91,7 +93,7 @@ export class SessionOrganizer {
     patch: SidebarSessionPatch,
     options: { sessionScope?: boolean } = {},
   ): Promise<SidebarSessionMutationResult> => {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(isSessionDisplayMetadataPatch(patch));
     if (!scope) {
       return "stale";
     }
@@ -442,8 +444,9 @@ export class SessionOrganizer {
   }
 
   renameSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.renameSession(this.deps, session, scope),
+    return this.runOperation(
+      (operations, scope) => operations.renameSession(this.deps, session, scope),
+      true,
     );
   }
 
@@ -532,8 +535,10 @@ export class SessionOrganizer {
     category: string | null,
     patch: { pinned?: boolean } = {},
   ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.assignSessionCategory(this.deps, session, category, scope, patch),
+    return this.runOperation(
+      (operations, scope) =>
+        operations.assignSessionCategory(this.deps, session, category, scope, patch),
+      true,
     );
   }
 

@@ -61,7 +61,6 @@ export type CommandPaletteProperties = {
 };
 /** Search and draft handoffs keep same-turn reads while Solid owns the presentation. */
 export class CommandPaletteState {
-  private readonly listeners = new Set<() => void>();
   private publicationPending = false;
   private connected = false;
   readonly changed = () => {
@@ -79,14 +78,8 @@ export class CommandPaletteState {
       }
       this.publicationPending = false;
     });
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.publish();
   };
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
   open = false;
   private pluginIconUrls: Record<string, string> = {};
   private readonly pluginIconTiles = new Set<() => string>();
@@ -166,6 +159,7 @@ export class CommandPaletteState {
     private readonly context: ApplicationContext,
     rendered: () => Promise<unknown>,
     private readonly onDraftInitialized: () => void,
+    private readonly publish: () => void,
   ) {
     this.draft = new PaletteSessionDraft(
       element,

@@ -8,6 +8,7 @@ import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-error.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
   getRuntimeConfigSnapshot,
@@ -34,7 +35,7 @@ import {
   resolveWebProviderConfig,
   type WebProviderWithCredential,
 } from "../web/provider-runtime-shared.js";
-import { executeWebSearchCandidates } from "./runtime-execution.js";
+import { isMissingCredentialCode, WebSearchProviderError } from "./runtime-error.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,
@@ -568,17 +569,64 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           return assertCurrent();
         }
       : undefined,
-    (assertRequestCurrent) =>
-      executeWebSearchCandidates({
-        candidates,
-        config,
-        searchConfig: search as Record<string, unknown> | undefined,
-        runtimeMetadata: runtimeWebSearch,
-        agentDir: params.agentDir,
-        args: params.args,
-        signal: params.signal,
-        assertCurrent: assertRequestCurrent,
-        allowFallback,
-      }),
+    async (assertRequestCurrent) => {
+      // Keep the selected provider's failure, including null or undefined rejections.
+      let firstFailure: WebSearchProviderError | undefined;
+      for (const candidate of candidates) {
+        params.signal?.throwIfAborted();
+        assertRequestCurrent?.();
+        try {
+          const definition = candidate.createTool({
+            config,
+            agentDir: params.agentDir,
+            searchConfig: search,
+            runtimeMetadata: runtimeWebSearch,
+          });
+          if (!definition) {
+            if (!allowFallback) {
+              throw new Error(`web_search provider "${candidate.id}" is not available.`);
+            }
+            continue;
+          }
+          const executed = await definition.execute(params.args, {
+            signal: params.signal,
+            ...(assertRequestCurrent ? { assertCurrent: assertRequestCurrent } : {}),
+          });
+          // Cancellation wins races with provider completion or cleanup failures. Otherwise an
+          // ignored signal could return stale work or trigger another provider fallback.
+          params.signal?.throwIfAborted();
+          assertRequestCurrent?.();
+          if (
+            allowFallback &&
+            typeof executed === "object" &&
+            executed !== null &&
+            isMissingCredentialCode(executed.error)
+          ) {
+            // Some providers report missing credentials as structured tool output.
+            // Treat that like unavailable only during auto-detected fallback.
+            firstFailure ??= new WebSearchProviderError(
+              candidate.id,
+              new Error(`web_search provider "${candidate.id}" returned ${executed.error}`),
+              executed,
+            );
+            continue;
+          }
+          return { provider: candidate.id, result: executed };
+        } catch (error) {
+          params.signal?.throwIfAborted();
+          assertRequestCurrent?.();
+          if (isTrustedToolExecutionPreflightError(error)) {
+            throw error;
+          }
+          firstFailure ??= new WebSearchProviderError(candidate.id, error);
+          if (!allowFallback) {
+            throw firstFailure;
+          }
+        }
+      }
+      throw (
+        firstFailure ?? new Error("web_search is enabled but no provider is currently available.")
+      );
+    },
   );
 }

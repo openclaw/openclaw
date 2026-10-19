@@ -18,6 +18,7 @@ import {
   useOAuthCoordinationFixture,
 } from "./oauth-coordination.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { mockOAuthProviderOperations } from "./oauth-native-provider.test-support.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import {
   createOAuthRefreshFence,
@@ -55,21 +56,8 @@ function cliCredential(authFlow = "external-cli"): OAuthCredential {
   };
 }
 
-function resolveManaged(
-  refreshCredential: () => Promise<OAuthCredential>,
-  agentDir: string,
-  credential: OAuthCredential,
-  onBootstrap?: () => void,
-) {
-  return createOAuthManager({
-    buildApiKey: async (_provider, value) => value.access,
-    refreshCredential,
-    canRefreshCredential: async () => true,
-    readBootstrapCredential: () => {
-      onBootstrap?.();
-      return null;
-    },
-  }).resolveOAuthAccess({
+function resolveManaged(agentDir: string, credential: OAuthCredential) {
+  return createOAuthManager().resolveOAuthAccess({
     store: ensureAuthProfileStore(agentDir),
     profileId,
     credential,
@@ -227,20 +215,29 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const { promise: refreshStarted, resolve: markRefreshStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
-    fx.settle(finishRefresh);
+    fx.settle(async () => {
+      finishRefresh();
+      await fx.work.drain();
+      vi.restoreAllMocks();
+    });
     const refreshCredential = vi.fn(async () => {
       markRefreshStarted();
       await finishRefreshGate;
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const owner = fx.work.track(() => resolveManaged(refreshCredential, fx.mainDir, original));
+    mockOAuthProviderOperations({ refreshCredential });
+    const owner = fx.work.track(() => resolveManaged(fx.mainDir, original));
     await refreshStarted;
     writePersistedAuthProfileStoreRaw(originalStore, latePeerAgentDir);
 
     const { promise: observerEntered, resolve: markObserverEntered } = createDeferredCore();
-    const observer = fx.work.track(() =>
-      resolveManaged(refreshCredential, fx.mainDir, original, markObserverEntered),
-    );
+    // The coordination fixture resets modules; observe its current native namespace.
+    const externalCliSync = await import("./external-cli-sync.js");
+    vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockImplementation(() => {
+      markObserverEntered();
+      return null;
+    });
+    const observer = fx.work.track(() => resolveManaged(fx.mainDir, original));
     await observerEntered;
     await withOAuthProfileLock({ provider, profileId }, async () => {});
 
@@ -267,7 +264,11 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const { promise: firstRefreshStarted, resolve: markFirstRefreshStarted } = createDeferredCore();
     const { promise: finishFirstRefreshGate, resolve: finishFirstRefresh } = createDeferredCore();
-    fx.settle(finishFirstRefresh);
+    fx.settle(async () => {
+      finishFirstRefresh();
+      await fx.work.drain();
+      vi.restoreAllMocks();
+    });
     const refreshCredential = vi.fn(async () => {
       if (refreshCredential.mock.calls.length === 1) {
         markFirstRefreshStarted();
@@ -275,15 +276,16 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       }
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const first = fx.work.track(() => resolveManaged(refreshCredential, firstAgentDir, original));
+    mockOAuthProviderOperations({ refreshCredential });
+    const first = fx.work.track(() => resolveManaged(firstAgentDir, original));
     await firstRefreshStarted;
     const firstFence = read(firstAgentDir);
     expect(firstFence?.type === "oauth" && isPendingOAuthRefreshFence(firstFence)).toBe(true);
 
     writePersistedAuthProfileStoreRaw(originalStore, secondAgentDir);
-    await expect(
-      fx.work.track(() => resolveManaged(refreshCredential, secondAgentDir, original)),
-    ).rejects.toThrow("historical OAuth refresh peer");
+    await expect(fx.work.track(() => resolveManaged(secondAgentDir, original))).rejects.toThrow(
+      "historical OAuth refresh peer",
+    );
 
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(read(firstAgentDir)).toEqual(firstFence);

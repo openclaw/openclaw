@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect } from "vitest";
 import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+} from "../../../config/sessions/session-accessor.js";
+import {
   readSessionPendingInput,
   stageSessionPendingInput,
 } from "../../../config/sessions/session-accessor.pending-inputs.js";
@@ -8,11 +12,15 @@ import { gatewayClientSenderFields } from "../../../gateway/server-methods/gatew
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.message.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
+import { captureRequesterOrigin } from "../../requester-origin.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Retain a real accepted input across the caller's registry and Gateway replacement. */
-export async function preparePrivateReplay(entry: SubagentRunRecord | undefined) {
+export async function preparePrivateReplay(
+  entry: SubagentRunRecord | undefined,
+  settleRunId?: string,
+) {
   if (!entry) {
     return undefined;
   }
@@ -22,7 +30,7 @@ export async function preparePrivateReplay(entry: SubagentRunRecord | undefined)
     sessionId: expectDefined(entry.completionRequesterSessionId, "requester session"),
     storePath: expectDefined(entry.requesterStorePath, "requester store"),
   };
-  const runId = `announce:v1:${entry.childSessionKey}:${entry.runId}`;
+  const runId = settleRunId ?? `announce:v1:${entry.childSessionKey}:${entry.runId}`;
   const current = () => expectDefined(subagentRuns.get(entry.runId), "current completion source");
   const stage = () =>
     subagentRuns.runWithCompletionAuthority(current(), () =>
@@ -32,11 +40,19 @@ export async function preparePrivateReplay(entry: SubagentRunRecord | undefined)
           text: "Retained private child result",
           display: false,
           idempotencyKey: `${runId}:user`,
-          ...gatewayClientSenderFields(getPluginRuntimeGatewayRequestScope()?.client ?? null),
+          ...(settleRunId
+            ? {}
+            : gatewayClientSenderFields(getPluginRuntimeGatewayRequestScope()?.client ?? null)),
+          requesterOrigin: captureRequesterOrigin({
+            sessionKey: entry.requesterSessionKey,
+            operatorProfileId:
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+                ?.profileId,
+          }),
           senderIsOwner: false,
           provenance: {
             kind: "inter_session",
-            sourceTool: "subagent_announce",
+            sourceTool: settleRunId ? "subagent_settle" : "subagent_announce",
             sourceSessionKey: entry.childSessionKey,
           },
         }),
@@ -45,11 +61,18 @@ export async function preparePrivateReplay(entry: SubagentRunRecord | undefined)
       }),
     );
   const input = expectDefined(await stage(), "original private input");
-  await input.completeAsync!(
-    buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
-  );
+  if (settleRunId) {
+    expect(
+      await input.run(() => appendTranscriptMessage(scope, { message: input.message })),
+    ).toMatchObject({ appended: true });
+  } else {
+    await input.completeAsync!(
+      buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
+    );
+  }
   input.finish("interrupted");
   await input.settled?.();
+  const committed = settleRunId ? await loadTranscriptEvents(scope) : undefined;
   return async () => {
     const replay = expectDefined(await stage(), "restored private input");
     expect(replay.inputId).toBe(input.inputId);
@@ -59,5 +82,8 @@ export async function preparePrivateReplay(entry: SubagentRunRecord | undefined)
     await replay.settled?.();
     expect(await readSessionPendingInput(scope, replay.inputId)).toBeUndefined();
     expect(await stage()).toMatchObject({ state: "consumed", completion: outcome });
+    if (settleRunId) {
+      expect(await loadTranscriptEvents(scope)).toEqual(committed);
+    }
   };
 }
