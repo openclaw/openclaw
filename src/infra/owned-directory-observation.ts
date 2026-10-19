@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { watchDirectory, type DirectoryWatch } from "./directory-watch-host.js";
+import { isPathInside } from "./path-guards.js";
 
 type Listener = (filename?: string) => void;
 type Directory = {
   key: string;
   path: string;
+  watchRoot: string;
   recursive: boolean;
   reconcileIntervalMs: number;
   listeners: Set<Listener>;
@@ -60,14 +62,30 @@ function scheduleFallback(changed?: Directory) {
     setTimeout(
       () => {
         fallback = undefined;
-        for (const entry of Array.from(directories.values())) {
-          if (fallbackRemaining(entry) > 0 || directories.get(entry.key) !== entry) {
-            continue;
+        const due = Array.from(directories.values()).filter(
+          (entry) => fallbackRemaining(entry) <= 0,
+        );
+        const readmit = new Set<Directory>();
+        for (const entry of due) {
+          if (
+            !entry.source ||
+            !fs.existsSync(entry.source.path) ||
+            (entry.source.path !== entry.path && fs.existsSync(entry.path))
+          ) {
+            for (const shared of entry.source?.directories ?? [entry]) {
+              readmit.add(shared);
+            }
           }
-          if (!entry.source || (entry.source.path !== entry.path && fs.existsSync(entry.path))) {
-            detach(entry);
-            attach(entry);
-          }
+        }
+        // Release every subscriber before reopening a shared watch, otherwise
+        // one remaining subscriber keeps the retired directory handle alive.
+        for (const entry of readmit) {
+          detach(entry);
+        }
+        for (const entry of readmit) {
+          attach(entry);
+        }
+        for (const entry of due) {
           // Native events are primary; recovery covers missed notifications.
           entry.nextFallback = nextFallback(entry.reconcileIntervalMs);
           notify(entry);
@@ -106,10 +124,10 @@ function watchPath(candidate: string): string {
 }
 
 function attach(directory: Directory) {
-  let candidate = directory.path;
+  let candidate = directory.watchRoot;
   while (true) {
     // Missing roots observe only their next ancestor segment, never its whole tree.
-    const recursive = directory.recursive && candidate === directory.path;
+    const recursive = directory.recursive && candidate === directory.watchRoot;
     const sourceKey = JSON.stringify([candidate, recursive]);
     const shared = sources.get(sourceKey);
     if (shared) {
@@ -127,12 +145,14 @@ function attach(directory: Directory) {
               return;
             }
             const affected = [...source.directories];
+            const changedPath = filename ? path.resolve(candidate, filename) : undefined;
             for (const entry of affected) {
               if (
                 entry.path === candidate ||
-                !filename ||
+                !changedPath ||
                 filename === path.basename(candidate) ||
-                path.relative(candidate, entry.path).split(path.sep, 1)[0] === filename
+                isPathInside(entry.path, changedPath) ||
+                isPathInside(changedPath, entry.path)
               ) {
                 notify(entry, entry.path === candidate ? filename : undefined);
               }
@@ -147,8 +167,9 @@ function attach(directory: Directory) {
               const readmit = affected.filter(
                 (entry) =>
                   renamedRoot ||
-                  (entry.path !== candidate &&
-                    path.relative(candidate, entry.path).split(path.sep, 1)[0] === filename),
+                  (entry.watchRoot !== candidate &&
+                    changedPath !== undefined &&
+                    isPathInside(changedPath, entry.watchRoot)),
               );
               for (const entry of readmit) {
                 detach(entry);
@@ -197,17 +218,24 @@ function attach(directory: Directory) {
 export function observeOwnedDirectory(
   directoryPath: string,
   onChange: Listener,
-  options: { recursive?: boolean; reconcileIntervalMs?: number } = {},
+  options: {
+    recursive?: boolean;
+    reconcileIntervalMs?: number;
+    /** Ancestor that owns the native handle; events remain scoped to directoryPath. */
+    watchRoot?: string;
+  } = {},
 ): { close(): void } {
   const directory = path.resolve(directoryPath);
+  const watchRoot = options.watchRoot ? path.resolve(options.watchRoot) : directory;
   const recursive = options.recursive ?? false;
   const reconcileIntervalMs = options.reconcileIntervalMs ?? REPAIR_INTERVAL_MS;
-  const key = JSON.stringify([directory, recursive, reconcileIntervalMs]);
+  const key = JSON.stringify([directory, watchRoot, recursive, reconcileIntervalMs]);
   let selected = directories.get(key);
   if (!selected) {
     selected = {
       key,
       path: directory,
+      watchRoot,
       recursive,
       reconcileIntervalMs,
       listeners: new Set(),
