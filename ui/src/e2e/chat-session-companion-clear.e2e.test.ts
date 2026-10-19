@@ -80,8 +80,8 @@ async function companionSurface(page: Page, artifactDir: string | undefined) {
     if (defer) {
       await gateway.deferNext("sessions.companion.reset");
     }
-    await openChatLayoutMenu(page);
-    await page.getByRole("button", { name: "Clear side chat", exact: true }).click();
+    const menu = await openChatLayoutMenu(page);
+    await menu.getByRole("button", { name: "Clear side chat", exact: true }).click();
     await closeChatLayoutMenu(page);
     await gateway.waitForRequest("sessions.companion.reset");
   };
@@ -116,6 +116,7 @@ suite.define(() => {
           await openChatDetails(page);
           await closeChatDetails(page);
           await alert.getByRole("button", { name: "Dismiss error" }).click();
+          await openChatSidePanelType(page, "Side chat");
           await clear(true);
 
           await expect

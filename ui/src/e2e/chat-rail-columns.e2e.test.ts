@@ -16,9 +16,7 @@ import {
 import {
   activateChatHeaderPanelAction,
   dockChatSidePanel,
-  focusChatSidePanel,
   openChatSidePanelType as openFromPlus,
-  restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -284,6 +282,7 @@ async function expectExpandedSidePanelFillsRegion(
   page: Page,
   placement: "main" | "side" = "main",
 ): Promise<void> {
+  await waitForPanelGeometry(page);
   const geometry = await page
     .locator(`.sidebar-region [data-region="${placement}"]:not([hidden])`)
     .evaluate((element, slot) => {
@@ -299,15 +298,14 @@ async function expectExpandedSidePanelFillsRegion(
         throw new Error("Focused panel requires its task toolbar and sidebar region");
       }
       if (slot === "side" && !tabs) {
-        throw new Error("A full-width side panel keeps its tab strip below the task toolbar");
+        throw new Error("An expanded side panel requires its retained tab strip");
       }
       return {
         bottom: Math.abs(panel.bottom - region.bottom),
         left: Math.abs(panel.left - region.left),
         right: Math.abs(panel.right - region.right),
-        top: Math.abs(header.top - region.top),
+        top: Math.abs((tabs ?? header).top - region.top),
         headerGap: Math.abs(panel.top - (tabs?.bottom ?? header.bottom)),
-        tabGap: tabs ? Math.abs(tabs.top - header.bottom) : 0,
       };
     }, placement);
   for (const delta of Object.values(geometry)) {
@@ -407,6 +405,7 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await filesClose.hover();
   await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
   expect(await tabGeometry(filesTab)).toEqual(filesGeometry);
+  await captureRichPanel(page, "rails-tab-close-hover-" + themeMode);
   const railLabels = rail.locator(sidePanelTabLabelSelector);
   let overflowingLabelIndex = -1;
   await expect
@@ -501,14 +500,23 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
     .toBe("vertical");
   await expect.poll(() => panelSize(page, "width")).toBeCloseTo(resizedWidth, 0);
 
-  await focusChatSidePanel(page);
-  await expect
-    .poll(() => computedStyle(page.locator(".sidebar-region__primary"), "display"))
-    .toBe("none");
-  await expectExpandedSidePanelFillsRegion(page);
+  const primary = page.locator(".sidebar-region__primary");
+  const retainedPrimary = await primary.elementHandle();
+  await selectChatLayoutAction(page, "Expand Side panel");
+  await expect.poll(() => primary.isVisible()).toBe(false);
+  expect(await primary.getAttribute("hidden")).not.toBeNull();
+  expect(await primary.getAttribute("inert")).not.toBeNull();
+  expect(await retainedPrimary!.evaluate((element) => element.isConnected)).toBe(true);
+  await expectExpandedSidePanelFillsRegion(page, "side");
   await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
   await selectChatLayoutAction(page, "Restore split");
-  await restoreChatAsMain(page);
+  await waitForPanelGeometry(page);
+  await expect.poll(() => primary.isVisible()).toBe(true);
+  expect(await panelSize(page, "width")).toBeCloseTo(resizedWidth, 0);
+  expect(await primary.getAttribute("inert")).toBeNull();
+  expect(await primary.evaluate((element, original) => element === original, retainedPrimary)).toBe(
+    true,
+  );
 
   await selectChatLayoutAction(page, "Minimize side panel");
   await expect.poll(() => header.isVisible()).toBe(false);
