@@ -23,6 +23,7 @@ const mockFetch = vi.fn<typeof fetch>();
 const lookup = vi.hoisted(() => vi.fn<() => Promise<LookupAddress[]>>());
 const publicAddress = [{ address: "93.184.216.34", family: 4 }];
 const contextPayload = { grounding: { generic: [] }, sources: [] };
+const cleanups: Array<() => Promise<void>> = [];
 
 function respond(payload: unknown) {
   mockFetch.mockImplementation(async () => Response.json(payload));
@@ -32,15 +33,19 @@ function resultPayload(
   mode: string,
   results: Array<{ url: string; title?: string; description?: string }>,
 ) {
-  return mode === "web"
-    ? { web: { results } }
-    : {
-        grounding: {
-          generic: results.map(({ description, ...row }) =>
-            description === undefined ? row : { ...row, snippets: [description] },
-          ),
-        },
-      };
+  const generic = results.map(({ description, ...row }) =>
+    description === undefined ? row : { ...row, snippets: [description] },
+  );
+  return mode === "web" ? { web: { results } } : { grounding: { generic } };
+}
+
+function expectResults(result: Record<string, unknown>, urls: string[]) {
+  expect(result).toMatchObject({
+    provider: "brave",
+    count: urls.length,
+    results: urls.map((url) => ({ url })),
+  });
+  expect(result.results).toHaveLength(urls.length);
 }
 
 vi.mock("node:dns/promises", async (importOriginal) => ({
@@ -56,6 +61,25 @@ afterAll(() => {
   vi.doUnmock("node:dns/promises");
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.resetModules();
+});
+
+beforeEach(() => {
+  vi.stubEnv("BRAVE_API_KEY", "");
+  lookup.mockReset().mockResolvedValue(publicAddress);
+  mockFetch.mockReset();
+  respond({ web: { results: [] } });
+  vi.stubGlobal("fetch", mockFetch);
+});
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  loggerInfoMock.mockClear();
 });
 
 function fetchCall(index = 0) {
@@ -87,55 +111,61 @@ function createBraveTool(
 }
 
 describe("brave web search provider", () => {
-  beforeEach(() => {
-    vi.stubEnv("BRAVE_API_KEY", "");
-    lookup.mockReset().mockResolvedValue(publicAddress);
-    mockFetch.mockReset();
-    respond({ web: { results: [] } });
-    vi.stubGlobal("fetch", mockFetch);
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    loggerInfoMock.mockClear();
-    vi.unstubAllGlobals();
-  });
-
-  it("points missing-key users to fetch/browser alternatives", async () => {
-    expect(await createBraveTool({ apiKey: "" }).execute({ query: "OpenClaw docs" })).toEqual({
-      error: "missing_brave_api_key",
-      message:
-        "web_search (brave) needs a Brave Search API key. Run `openclaw configure --section web` to store it, or set BRAVE_API_KEY in the Gateway environment. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+  it.each([
+    [
+      { apiKey: "" },
+      {},
+      "missing_brave_api_key",
+      "web_search (brave) needs a Brave Search API key. Run `openclaw configure --section web` to store it, or set BRAVE_API_KEY in the Gateway environment. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+    ],
+    [
+      {},
+      { date_after: "2026-03-20", date_before: "2026-03-01" },
+      "invalid_date_range",
+      "date_after must be before date_before.",
+    ],
+    [
+      { mode: "llm-context" },
+      { date_after: "2999-01-01" },
+      "invalid_date_range",
+      "date_after cannot be in the future for Brave llm-context mode.",
+    ],
+    [
+      { mode: "llm-context" },
+      { date_before: "2025-01-31" },
+      "unsupported_date_filter",
+      "Brave llm-context mode requires date_after when date_before is set. Use a bounded date range or freshness.",
+    ],
+  ] as const)("rejects invalid search: %j %j", async (config, args, error, message) => {
+    expect(await createBraveTool(config).execute({ query: "invalid search", ...args })).toEqual({
+      error,
+      message,
       docs: "https://docs.openclaw.ai/tools/web",
     });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("aborts an in-flight request with the caller's reason", async () => {
+  it("preserves in-flight cancellation reasons", async () => {
     const controller = new AbortController();
-    mockFetch.mockImplementation(
-      async (_url, init) =>
-        new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error("Brave request lost caller cancellation"));
-            return;
-          }
-          signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
-          // Abort at transport entry so DNS preparation cannot race a polling deadline.
-          controller.abort(new Error("Brave request canceled in flight"));
-        }),
-    );
+    mockFetch.mockImplementation(async (_url, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("Brave request lost caller cancellation");
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+        // Abort at transport entry so DNS preparation cannot race a polling deadline.
+        controller.abort(new Error("Brave request canceled in flight"));
+      });
+    });
     await expect(
-      createBraveTool().execute(
-        { query: "brave in-flight cancellation" },
-        { signal: controller.signal },
-      ),
+      createBraveTool().execute({ query: "in-flight" }, { signal: controller.signal }),
     ).rejects.toThrow("Brave request canceled in flight");
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(fetchCall()[1]?.signal?.aborted).toBe(true);
   });
 
-  it("does not cache a response completed after caller cancellation", async () => {
+  it("does not cache a canceled response", async () => {
     const controller = new AbortController();
     const reason = new Error("Brave llm-context canceled after response");
     respond(contextPayload);
@@ -157,8 +187,7 @@ describe("brave web search provider", () => {
       );
     });
     const tool = createBraveTool({ mode: "llm-context" });
-    const args = { query: "brave post-response cancellation llm-context" };
-
+    const args = { query: "post-response" };
     await expect(tool.execute(args, { signal: controller.signal })).rejects.toBe(reason);
     await tool.execute(args);
 
@@ -172,23 +201,21 @@ describe("brave web search provider", () => {
     ],
     [{ search_lang: "en-US" }, { error: "invalid_search_lang" }],
     [{ ui_lang: "en" }, { error: "invalid_ui_lang" }],
-  ])("normalizes language parameters through the public tool: %#", async (args, expected) => {
-    const result = await createBraveTool().execute({
-      query: "localized search",
-      ...args,
-    });
+    [{ country: "de" }, { country: "DE" }],
+    [{ country: " VN " }, { country: "ALL" }],
+  ])("normalizes locale parameters: %#", async (args, expected) => {
+    const result = await createBraveTool().execute({ query: "language", ...args });
     if ("error" in expected) {
       expect(result).toMatchObject(expected);
       expect(mockFetch).not.toHaveBeenCalled();
       return;
     }
-    const requestUrl = fetchRequestUrl();
-    expect(requestUrl.searchParams.get("search_lang")).toBe(expected.search_lang);
-    expect(requestUrl.searchParams.get("ui_lang")).toBe(expected.ui_lang);
+    const params = fetchRequestUrl().searchParams;
+    expect(Object.fromEntries(params)).toMatchObject(expected);
   });
 
   it.each(["web", "llm-context"] as const)(
-    "caps returned %s results and isolates cached responses by count",
+    "caps %s results and keys caches by count",
     async (mode) => {
       const results = ["first", "second", "third"].map((name) => ({
         url: `https://example.com/${name}`,
@@ -197,32 +224,25 @@ describe("brave web search provider", () => {
       }));
       respond(resultPayload(mode, results));
       const tool = createBraveTool({ mode });
-      const args = { query: `brave result count owner ${mode}`, count: 1 };
-
+      const args = { query: `count-${mode}`, count: 1 };
       const first = await tool.execute(args);
       const cached = await tool.execute(args);
       expect(mockFetch).toHaveBeenCalledOnce();
-      expect(fetchRequestUrl().searchParams.get("count")).toBe(mode === "web" ? "1" : null);
-      expect(fetchRequestUrl().searchParams.get("apikey")).toBeNull();
-      expect(fetchRequestUrl().searchParams.get("key")).toBeNull();
+      const params = fetchRequestUrl().searchParams;
+      expect([params.get("count"), params.get("apikey"), params.get("key")]).toEqual([
+        mode === "web" ? "1" : null,
+        null,
+        null,
+      ]);
       expect(new Headers(fetchCall()[1]?.headers).get("X-Subscription-Token")).toBe(
         "brave-test-key",
       );
-      expect(first).toMatchObject({
-        provider: "brave",
-        count: 1,
-        results: [{ url: "https://example.com/first" }],
-      });
-      expect(first.results).toHaveLength(1);
+      expectResults(first, ["https://example.com/first"]);
       expect(cached).toEqual({ ...first, cached: true });
 
       const larger = await tool.execute({ ...args, count: 2 });
       expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(larger).toMatchObject({
-        count: 2,
-        results: [{ url: "https://example.com/first" }, { url: "https://example.com/second" }],
-      });
-      expect(larger.results).toHaveLength(2);
+      expectResults(larger, ["https://example.com/first", "https://example.com/second"]);
       expect(await tool.execute({ ...args, count: 2 })).toEqual({ ...larger, cached: true });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     },
@@ -241,108 +261,76 @@ describe("brave web search provider", () => {
     });
     const cachedTool = createBraveTool({ mode }, { searchConfig: { cacheTtlMinutes: 15 } });
     const currentTool = createBraveTool({ mode }, { searchConfig: { cacheTtlMinutes } });
-    const args = { query: `brave cache TTL ${mode} ${cacheTtlMinutes}` };
+    const args = { query: `ttl-${mode}` };
+    const original = await cachedTool.execute(args);
+    expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+    expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
 
-    try {
-      const original = await cachedTool.execute(args);
-      expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+    clock.mockReturnValue(now + 60_000);
+    const fresh = await currentTool.execute(args);
+    expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+    expect(fresh).not.toHaveProperty("cached");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    if (cacheTtlMinutes === 0) {
+      expect(await currentTool.execute(args)).toMatchObject({
+        results: [{ url: "https://example.com/result-3" }],
+      });
       expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-
-      clock.mockReturnValue(now + 60_000);
-      const fresh = await currentTool.execute(args);
-      expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
-      expect(fresh).not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    } else {
+      expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
       expect(mockFetch).toHaveBeenCalledTimes(2);
-
-      if (cacheTtlMinutes === 0) {
-        expect(await currentTool.execute(args)).toMatchObject({
-          results: [{ url: "https://example.com/result-3" }],
-        });
-        expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
-        expect(mockFetch).toHaveBeenCalledTimes(3);
-      } else {
-        expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
-        expect(mockFetch).toHaveBeenCalledTimes(2);
-      }
-    } finally {
-      clock.mockRestore();
     }
   });
 
-  it("returns validation errors for invalid date ranges", async () => {
-    const result = await createBraveTool().execute({
-      query: "latest gpu news",
-      date_after: "2026-03-20",
-      date_before: "2026-03-01",
-    });
-
-    expect(result).toEqual({
-      error: "invalid_date_range",
-      message: "date_after must be before date_before.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
-  });
-
-  it("preserves Brave publication timestamps without promoting relative age or crawl time", async () => {
-    respond({
-      web: {
-        results: [
-          {
-            title: "Dated",
-            url: "https://example.com/dated",
-            age: "2 days ago",
-            page_age: "2025-04-12T14:22:41",
-          },
-          {
-            title: "Undated",
-            url: "https://example.com/undated",
-            age: "2 days ago",
-            page_fetched: "2025-04-14T14:22:41",
-          },
-        ],
-      },
-    });
-    const result = await createBraveTool().execute({ query: "publication metadata" });
-
-    expect((result.results as Array<Record<string, unknown>>).map((row) => row.published)).toEqual([
-      "2025-04-12T14:22:41",
-      undefined,
-    ]);
-  });
-
-  it("joins LLM-context publication dates by source URL, preserving unknown dates", async () => {
-    const urls = [
-      "https://example.com/timestamp",
-      "https://example.com/day",
-      "https://example.com/unknown",
-    ] as const;
-    respond({
-      grounding: {
-        generic: urls.map((url) => ({ url, title: "Source", snippets: ["text", ""] })),
-      },
-      sources: {
-        [urls[1]]: { age: ["Monday, January 15, 2024", "2024-01-15", "380 days ago"] },
-        [urls[0]]: {
-          age: ["Monday, January 15, 2024", "2024-01-15", "380 days ago", "2024-01-15T13:45:02Z"],
+  it.each(["web", "llm-context"])("preserves %s publication dates, not ages", async (mode) => {
+    const urls = {
+      timestamp: "https://example.com/timestamp",
+      day: "https://example.com/day",
+      unknown: "https://example.com/unknown",
+    };
+    const age = ["Monday, January 15, 2024", "2024-01-15", "380 days ago"];
+    if (mode === "web") {
+      respond({
+        web: {
+          results: [
+            { page_age: "2025-04-12T14:22:41", age: "2 days ago" },
+            { page_fetched: "2025-04-14T14:22:41", age: "2 days ago" },
+          ],
         },
-        [urls[2]]: { age: [] },
-      },
-    });
-    const result = await createBraveTool({ mode: "llm-context" }).execute({
-      query: "context publication metadata",
-    });
-
-    expect((result.results as Array<Record<string, unknown>>).map((row) => row.published)).toEqual([
-      "2024-01-15T13:45:02Z",
-      "2024-01-15",
-      undefined,
-    ]);
-    expect((result.results as Array<Record<string, unknown>>)[0]).toMatchObject({
-      snippets: [expect.stringContaining("text")],
-      siteName: "example.com",
-      title: expect.stringContaining("Source"),
-    });
+      });
+    } else {
+      respond({
+        grounding: {
+          generic: Object.values(urls).map((url) => ({
+            url,
+            title: "Source",
+            snippets: ["text", ""],
+          })),
+        },
+        sources: {
+          [urls.day]: { age },
+          [urls.timestamp]: { age: [...age, "2024-01-15T13:45:02Z"] },
+          [urls.unknown]: { age: [] },
+        },
+      });
+    }
+    const result = await createBraveTool({ mode }).execute({ query: `dates-${mode}` });
+    const rows = result.results as Array<Record<string, unknown>>;
+    expect(rows.map((row) => row.published)).toEqual(
+      mode === "web"
+        ? ["2025-04-12T14:22:41", undefined]
+        : ["2024-01-15T13:45:02Z", "2024-01-15", undefined],
+    );
+    if (mode === "llm-context") {
+      expect(rows[0]).toMatchObject({
+        snippets: [expect.stringContaining("text")],
+        siteName: "example.com",
+        title: expect.stringContaining("Source"),
+      });
+    }
   });
 
   it.each([
@@ -354,47 +342,11 @@ describe("brave web search provider", () => {
     { args: { date_after: "2025-01-01" }, expected: undefined },
   ])("passes LLM-context time filters: $args", async ({ args, expected }) => {
     respond(contextPayload);
-    await createBraveTool({ mode: "llm-context" }).execute({
-      query: "time filter",
-      ...args,
-    });
+    await createBraveTool({ mode: "llm-context" }).execute({ query: "time", ...args });
     const today = new Date().toISOString().slice(0, 10);
     const requestUrl = fetchRequestUrl();
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe(expected ?? `2025-01-01to${today}`);
-  });
-
-  it.each([
-    {
-      args: { date_after: "2999-01-01" },
-      error: "invalid_date_range",
-      message: "date_after cannot be in the future for Brave llm-context mode.",
-    },
-    {
-      args: { date_before: "2025-01-31" },
-      error: "unsupported_date_filter",
-      message:
-        "Brave llm-context mode requires date_after when date_before is set. Use a bounded date range or freshness.",
-    },
-  ])(
-    "rejects invalid LLM-context time filters before fetch: $args",
-    async ({ args, error, message }) => {
-      const result = await createBraveTool({ mode: "llm-context" }).execute({
-        query: "invalid filter",
-        ...args,
-      });
-      expect(result).toEqual({ error, message, docs: "https://docs.openclaw.ai/tools/web" });
-      expect(mockFetch).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["de", "DE"],
-    [" VN ", "ALL"],
-  ])("normalizes country %j through the public tool", async (country, expected) => {
-    await createBraveTool().execute({ query: "localized news", country });
-    const requestUrl = fetchRequestUrl();
-    expect(requestUrl.searchParams.get("country")).toBe(expected);
   });
 
   it("emits brave.http diagnostics for requests, responses, and cache events", async () => {
@@ -437,8 +389,6 @@ describe("brave web search provider", () => {
 
 describe("Brave preflight lifetime", () => {
   const privateAddress = [{ address: "10.20.30.40", family: 4 }];
-  const fetchNetwork = vi.fn<typeof fetch>();
-  const cleanups: Array<() => Promise<void>> = [];
   let queryId = 0;
 
   function createTool(baseUrl: string) {
@@ -476,17 +426,16 @@ describe("Brave preflight lifetime", () => {
   }
 
   beforeEach(() => {
-    lookup.mockReset().mockResolvedValue(publicAddress);
-    fetchNetwork.mockReset().mockImplementation(async (_input, init) => {
+    mockFetch.mockImplementation(async (_input, init) => {
       init?.signal?.throwIfAborted();
       return Response.json({ web: { results: [] }, ...contextPayload });
     });
     // A plain fetch adapter keeps the guard's real DNS/pinning path active. Only
     // the final network call is replaced; real dispatchers are created and released.
     vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
-      fetchNetwork(input, init),
+      mockFetch(input, init),
     );
-    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: fetchNetwork });
+    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: mockFetch });
     for (const key of [
       "HTTP_PROXY",
       "HTTPS_PROXY",
@@ -502,79 +451,56 @@ describe("Brave preflight lifetime", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   });
 
-  afterEach(async () => {
-    for (const cleanup of cleanups.splice(0)) {
-      await cleanup();
-    }
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  it.each(["http", "https"] as const)(
-    "rejects cancellation during the %s DNS-to-validator handoff before a cache hit",
-    async (protocol) => {
-      lookup.mockResolvedValue(privateAddress);
-      const tool = createTool(`${protocol}://search.example.test`);
-      const args = { query: `handoff-${++queryId}` };
-      await tool.execute(args);
-      fetchNetwork.mockClear();
-      const { dns, caller, reason, operation } = await holdRequest(tool, args);
-      // Cancel on DNS settlement, before the request's async continuation can publish a result.
-      void dns.promise.then(() => caller.abort(reason));
-      dns.resolve(privateAddress);
-      await operation.settled;
-      expect(operation.outcome()).toEqual({ error: reason });
-      expect(fetchNetwork).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
-
   it.each([
+    { protocol: "http", stop: "handoff", warmCache: true },
+    { protocol: "https", stop: "handoff", warmCache: true },
     { protocol: "http", stop: "cancel", warmCache: false },
     { protocol: "https", stop: "cancel", warmCache: false },
     { protocol: "http", stop: "deadline", warmCache: true },
     { protocol: "https", stop: "deadline", warmCache: true },
-  ])(
-    "rejects $stop during held $protocol DNS (warm cache: $warmCache)",
-    async ({ protocol, stop, warmCache }) => {
-      lookup.mockResolvedValue(privateAddress);
-      const tool = createTool(`${protocol}://search.example.test`);
-      const args = { query: `preflight-${++queryId}` };
-      if (warmCache) {
-        await expect(tool.execute(args)).resolves.toMatchObject({ provider: "brave" });
-        await expect(tool.execute(args)).resolves.toMatchObject({ cached: true });
-        expect(fetchNetwork).toHaveBeenCalledOnce();
-        fetchNetwork.mockClear();
-      }
-      const { dns, caller, reason, operation } = await holdRequest(tool, args);
-      if (stop === "cancel") {
-        caller.abort(reason);
-      }
-      await vi.advanceTimersByTimeAsync(stop === "deadline" ? 1_000 : 0);
-      expect(operation.outcome()).toEqual({
-        error: stop === "cancel" ? reason : expect.objectContaining({ name: "TimeoutError" }),
-      });
-      expect(fetchNetwork).not.toHaveBeenCalled();
+  ])("rejects $protocol DNS $stop (cache: $warmCache)", async ({ protocol, stop, warmCache }) => {
+    lookup.mockResolvedValue(privateAddress);
+    const tool = createTool(`${protocol}://search.example.test`);
+    const args = { query: `preflight-${++queryId}` };
+    if (warmCache) {
+      await expect(tool.execute(args)).resolves.toMatchObject({ provider: "brave" });
+      await expect(tool.execute(args)).resolves.toMatchObject({ cached: true });
+      expect(mockFetch).toHaveBeenCalledOnce();
+      mockFetch.mockClear();
+    }
+    const { dns, caller, reason, operation } = await holdRequest(tool, args);
+    if (stop === "handoff") {
+      // Abort between DNS settlement and the validator continuation, before a cache hit.
+      void dns.promise.then(() => caller.abort(reason));
       dns.resolve(privateAddress);
       await operation.settled;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetchNetwork).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
+    } else if (stop === "cancel") {
+      caller.abort(reason);
+    }
+    await vi.advanceTimersByTimeAsync(stop === "deadline" ? 1_000 : 0);
+    expect(operation.outcome()).toEqual({
+      error: stop === "deadline" ? expect.objectContaining({ name: "TimeoutError" }) : reason,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+    dns.resolve(privateAddress);
+    await operation.settled;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    if (stop !== "handoff") {
       await expect(tool.execute(args)).resolves.toMatchObject(
         warmCache ? { cached: true } : { provider: "brave" },
       );
-      expect(fetchNetwork).toHaveBeenCalledTimes(warmCache ? 0 : 1);
-    },
-  );
+      expect(mockFetch).toHaveBeenCalledTimes(warmCache ? 0 : 1);
+    }
+  });
 
   it.each(["fetch", "body"] as const)(
     "keeps the original budget through HTTPS %s consumption",
     async (phase) => {
       lookup.mockResolvedValue(privateAddress);
       const dispatched = createDeferred<void>();
-      fetchNetwork.mockImplementationOnce(async (_input, init) => {
+      mockFetch.mockImplementationOnce(async (_input, init) => {
         const signal = init?.signal;
         if (!signal) {
           throw new Error("missing request signal");
@@ -611,7 +537,7 @@ describe("Brave preflight lifetime", () => {
       await operation.settled;
       expect(vi.getTimerCount()).toBe(0);
       await tool.execute(args);
-      expect(fetchNetwork).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -624,7 +550,7 @@ describe("Brave preflight lifetime", () => {
   ])("preserves endpoint policy: %s", async (_name, protocol, next, allowed, redirect) => {
     lookup.mockResolvedValueOnce(publicAddress).mockResolvedValue(next);
     if (redirect) {
-      fetchNetwork.mockResolvedValueOnce(
+      mockFetch.mockResolvedValueOnce(
         new Response(null, { status: 302, headers: { location: "https://other.example.test" } }),
       );
     }
@@ -633,11 +559,11 @@ describe("Brave preflight lifetime", () => {
     });
     if (allowed) {
       await expect(result).resolves.toMatchObject({ provider: "brave" });
-      expect(fetchNetwork).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledOnce();
       expect(lookup).toHaveBeenCalledTimes(2);
     } else {
       await expect(result).rejects.toThrow(redirect ? /allowlist/ : /private|loopback/);
-      expect(fetchNetwork).toHaveBeenCalledTimes(redirect ? 1 : 0);
+      expect(mockFetch).toHaveBeenCalledTimes(redirect ? 1 : 0);
     }
     expect(vi.getTimerCount()).toBe(0);
   });
