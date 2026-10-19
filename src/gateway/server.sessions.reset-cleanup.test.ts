@@ -213,6 +213,7 @@ test("sessions.reset preempts the controller run and clears queues", async () =>
   const preferences = {
     responseUsage: "tokens",
     pinnedAt: 123,
+    maintenanceProtected: true,
     label: "Operator session",
     category: "Operator group",
     icon: "🦞",

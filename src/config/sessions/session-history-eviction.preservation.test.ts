@@ -47,7 +47,7 @@ describe("SQLite historical session preservation", () => {
     mode: "enforce" as const,
     maintenance: { maxDiskBytes, highWaterBytes, preserveRecentMs },
   });
-  it.each(["registry", "recent", "pinned", "manual"] as const)(
+  it.each(["registry", "recent", "pinned", "manual", "maintenance-protected"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
@@ -94,6 +94,7 @@ describe("SQLite historical session preservation", () => {
             ? { archivedAt: now, archiveReason: "active-session-cap" as const }
             : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
+          ...(protection === "maintenance-protected" ? { maintenanceProtected: true } : {}),
         },
       );
       await history("stale-old", "stale-live", staleKey, staleAt, "s".repeat(64 * 1024));

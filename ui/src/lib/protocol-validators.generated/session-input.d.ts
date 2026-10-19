@@ -2,12 +2,6 @@
 export function isAgentRuntimeRestrictionErrorDetails(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js").AgentRuntimeRestrictionErrorDetails;
-export function isSessionsGoalUpdateParams(
-  value: unknown,
-): value is import("../../../../packages/gateway-protocol/src/schema/sessions-goal.js").SessionsGoalUpdateParams;
-export function isSessionsGoalClearParams(
-  value: unknown,
-): value is import("../../../../packages/gateway-protocol/src/schema/sessions-goal.js").SessionsGoalClearParams;
 export function isSessionWorktreeSource(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["worktreeSource"];
@@ -29,6 +23,3 @@ export function isSessionPermissionMode(
 export function isSessionToolOverrides(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/sessions-row.js").SessionToolOverrides;
-export function isTalkVoiceChangeEvent(
-  value: unknown,
-): value is import("../../../../packages/gateway-protocol/src/schema/talk-voice.js").TalkVoiceChangeEvent;

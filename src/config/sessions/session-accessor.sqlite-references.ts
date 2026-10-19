@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { jsonBooleanIsTrue } from "../../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
@@ -55,6 +56,7 @@ export function addRetainedWindowSessionReferences(
       eb.or([
         eb("session_nodes.archived_at", "is not", null),
         eb("session_nodes.pinned_at", "is not", null),
+        jsonBooleanIsTrue(database.db, eb.ref("session_nodes.entry_json"), "maintenanceProtected"),
       ]),
     );
   if (candidateSessionIds) {

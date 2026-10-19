@@ -487,6 +487,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
           isDock: fixture.expectedIsDock ?? false,
           sessionModelRevision: expect.any(String),
           sidebarRoot: fixture.entry?.sidebarRoot === true,
+          maintenanceProtected: fixture.entry?.maintenanceProtected === true,
           effectiveCommunication: { send: "always", receive: "always" },
         });
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
@@ -499,6 +500,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
           communication: _communication,
           effectiveCommunication: _effectiveCommunication,
           sidebarRoot: _sidebarRoot,
+          maintenanceProtected: _maintenanceProtected,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(

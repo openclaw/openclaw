@@ -123,6 +123,12 @@ const SessionsToolSchema = Type.Object(
     archived: Type.Optional(
       Type.Boolean({ description: "True archives without deleting; false restores the session." }),
     ),
+    maintenanceProtected: Type.Optional(
+      Type.Boolean({
+        description:
+          "Protect this session from automatic archive, prune, and disk-budget eviction without pinning or changing its parent. Requires expectedSessionId; false restores normal maintenance. Manual archive/delete remain available.",
+      }),
+    ),
     model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
     ownerType: Type.Optional(

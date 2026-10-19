@@ -305,6 +305,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Explicit opt-in protection from automatic session maintenance, independent of sidebar pinning. */
+    maintenanceProtected?: boolean;
     /** Independent sidebar placement; origin, execution ownership, and access remain unchanged. */
     sidebarRoot?: boolean;
     /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */

@@ -675,6 +675,7 @@ async function initSessionStateAttemptLocked(
         : now,
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     pinnedAt: entry?.pinnedAt,
+    maintenanceProtected: entry?.maintenanceProtected,
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,
     snoozedAt: isSystemEvent ? entry?.snoozedAt : undefined,
     systemSent,

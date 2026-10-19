@@ -13,6 +13,13 @@ export function applySessionPatchLifecycleFlags(params: {
   archivedBy?: SessionEntry["archivedBy"];
 }): ErrorShape | undefined {
   const { patch, next, existingEntry, storeKey, now, archivedBy } = params;
+  if ("maintenanceProtected" in patch) {
+    if (patch.maintenanceProtected === true) {
+      next.maintenanceProtected = true;
+    } else {
+      delete next.maintenanceProtected;
+    }
+  }
   if ("sidebarRoot" in patch) {
     if (patch.sidebarRoot === true) {
       if (isSubagentSessionKey(storeKey)) {

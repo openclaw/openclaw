@@ -42,6 +42,7 @@ const SessionsPatchMutationProperties = {
   ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
+  maintenanceProtected: Type.Optional(Type.Boolean()),
   /** Independent sidebar placement without changing origin or execution ownership. */
   sidebarRoot: Type.Optional(Type.Boolean()),
   snoozedUntil: Type.Optional(

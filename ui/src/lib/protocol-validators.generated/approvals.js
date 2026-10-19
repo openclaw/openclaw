@@ -30,6 +30,35 @@ var __export = (target, all) => {
   for (var name in all) __defProp(target, name, { get: all[name], enumerable: !0 });
 };
 
+// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/unicode/unicode.mjs
+function CodePointCount(value) {
+  let result = 0,
+    index = 0,
+    prev = 0;
+  for (; index < value.length;) {
+    let next = value.charCodeAt(index++) >> 10;
+    ((result += +(((prev << 8) | next) !== 13879)), (prev = next));
+  }
+  return result;
+}
+function IsMaxLength(value, maxLength) {
+  return (
+    value.length <= maxLength ||
+    (value.length <= maxLength << 1 && CodePointCount(value) <= maxLength)
+  );
+}
+function IsMinLength(value, minLength) {
+  return (
+    value.length >= minLength << 1 ||
+    (value.length >= minLength && CodePointCount(value) >= minLength)
+  );
+}
+
+// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/unreachable/unreachable.mjs
+function Unreachable() {
+  throw new Error("Unreachable");
+}
+
 // node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/guard.mjs
 var guard_exports = {};
 __export(guard_exports, {
@@ -130,30 +159,6 @@ function GraphemeCount(value) {
     index = 0;
   for (; index < value.length;) ((index = NextGraphemeClusterIndex(value, index)), count++);
   return count;
-}
-
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/unicode/unicode.mjs
-function CodePointCount(value) {
-  let result = 0,
-    index = 0,
-    prev = 0;
-  for (; index < value.length;) {
-    let next = value.charCodeAt(index++) >> 10;
-    ((result += +(((prev << 8) | next) !== 13879)), (prev = next));
-  }
-  return result;
-}
-function IsMaxLength(value, maxLength) {
-  return (
-    value.length <= maxLength ||
-    (value.length <= maxLength << 1 && CodePointCount(value) <= maxLength)
-  );
-}
-function IsMinLength(value, minLength) {
-  return (
-    value.length >= minLength << 1 ||
-    (value.length >= minLength && CodePointCount(value) >= minLength)
-  );
 }
 
 // node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/guard.mjs
@@ -324,11 +329,6 @@ function IsDeepEqual(left, right) {
     : IsObject(left)
       ? DeepEqualObject(left, right)
       : IsEqual(left, right);
-}
-
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/unreachable/unreachable.mjs
-function Unreachable() {
-  throw new Error("Unreachable");
 }
 
 // node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/globals.mjs
@@ -710,13 +710,13 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
           ) &&
           typeof value.sessionKey == "string" &&
           (value.sessionKey.length >= 2 ||
-            (value.sessionKey.length >= 1 && CodePointCount2(value.sessionKey) >= 1)) &&
+            (value.sessionKey.length >= 1 && CodePointCount(value.sessionKey) >= 1)) &&
           (value.sourceSessionKey === void 0 ||
             !("sourceSessionKey" in value) ||
             (typeof value.sourceSessionKey == "string" &&
               (value.sourceSessionKey.length >= 2 ||
                 (value.sourceSessionKey.length >= 1 &&
-                  CodePointCount2(value.sourceSessionKey) >= 1)))) &&
+                  CodePointCount(value.sourceSessionKey) >= 1)))) &&
           Number.isInteger(value.updatedAtMs) &&
           (!(Number.isFinite(value.updatedAtMs) || typeof value.updatedAtMs == "bigint") ||
             value.updatedAtMs >= 0) &&
@@ -736,11 +736,11 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
           ) &&
           typeof value.approval.id == "string" &&
           (value.approval.id.length >= 2 ||
-            (value.approval.id.length >= 1 && CodePointCount2(value.approval.id) >= 1)) &&
+            (value.approval.id.length >= 1 && CodePointCount(value.approval.id) >= 1)) &&
           External[2].test(value.approval.id) &&
           typeof value.approval.urlPath == "string" &&
           (value.approval.urlPath.length >= 2 ||
-            (value.approval.urlPath.length >= 1 && CodePointCount2(value.approval.urlPath) >= 1)) &&
+            (value.approval.urlPath.length >= 1 && CodePointCount(value.approval.urlPath) >= 1)) &&
           Number.isInteger(value.approval.createdAtMs) &&
           (!(
             Number.isFinite(value.approval.createdAtMs) ||
@@ -767,7 +767,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
             typeof value.approval.presentation.commandText == "string" &&
             (value.approval.presentation.commandText.length >= 2 ||
               (value.approval.presentation.commandText.length >= 1 &&
-                CodePointCount2(value.approval.presentation.commandText) >= 1)) &&
+                CodePointCount(value.approval.presentation.commandText) >= 1)) &&
             (value.approval.presentation.commandPreview === void 0 ||
               !("commandPreview" in value.approval.presentation) ||
               typeof value.approval.presentation.commandPreview == "string" ||
@@ -785,14 +785,14 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               (typeof value.approval.presentation.nodeId == "string" &&
                 (value.approval.presentation.nodeId.length >= 2 ||
                   (value.approval.presentation.nodeId.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.nodeId) >= 1))) ||
+                    CodePointCount(value.approval.presentation.nodeId) >= 1))) ||
               value.approval.presentation.nodeId === null) &&
             (value.approval.presentation.agentId === void 0 ||
               !("agentId" in value.approval.presentation) ||
               (typeof value.approval.presentation.agentId == "string" &&
                 (value.approval.presentation.agentId.length >= 2 ||
                   (value.approval.presentation.agentId.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                    CodePointCount(value.approval.presentation.agentId) >= 1))) ||
               value.approval.presentation.agentId === null) &&
             (value.approval.presentation.scope === void 0 ||
               !("scope" in value.approval.presentation) ||
@@ -810,10 +810,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.scope.target == "string" &&
                 (value.approval.presentation.scope.target.length >= 2 ||
                   (value.approval.presentation.scope.target.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                 (value.approval.presentation.scope.target.length <= 128 ||
                   (value.approval.presentation.scope.target.length <= 256 &&
-                    CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                    CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                 Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                 (!(
                   Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -828,9 +828,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       (element, index) =>
                         typeof element == "string" &&
                         (element.length >= 2 ||
-                          (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                          (element.length >= 1 && CodePointCount(element) >= 1)) &&
                         (element.length <= 128 ||
-                          (element.length <= 256 && CodePointCount2(element) <= 128)),
+                          (element.length <= 256 && CodePointCount(element) <= 128)),
                     ) &&
                     value.approval.presentation.scope.recipients.length <= 5)) &&
                 (value.approval.presentation.scope.audience === void 0 ||
@@ -852,24 +852,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.scope.amount == "string" &&
                 (value.approval.presentation.scope.amount.length >= 2 ||
                   (value.approval.presentation.scope.amount.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                 (value.approval.presentation.scope.amount.length <= 40 ||
                   (value.approval.presentation.scope.amount.length <= 80 &&
-                    CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                    CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                 typeof value.approval.presentation.scope.currency == "string" &&
                 (value.approval.presentation.scope.currency.length >= 2 ||
                   (value.approval.presentation.scope.currency.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                 (value.approval.presentation.scope.currency.length <= 12 ||
                   (value.approval.presentation.scope.currency.length <= 24 &&
-                    CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                    CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                 typeof value.approval.presentation.scope.target == "string" &&
                 (value.approval.presentation.scope.target.length >= 2 ||
                   (value.approval.presentation.scope.target.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                 (value.approval.presentation.scope.target.length <= 128 ||
                   (value.approval.presentation.scope.target.length <= 256 &&
-                    CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                    CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
               (typeof value.approval.presentation.scope == "object" &&
                 value.approval.presentation.scope !== null &&
                 !Array.isArray(value.approval.presentation.scope) &&
@@ -882,10 +882,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.scope.target == "string" &&
                 (value.approval.presentation.scope.target.length >= 2 ||
                   (value.approval.presentation.scope.target.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                 (value.approval.presentation.scope.target.length <= 128 ||
                   (value.approval.presentation.scope.target.length <= 256 &&
-                    CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                    CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                 ((typeof value.approval.presentation.scope.visibility == "string" &&
                   value.approval.presentation.scope.visibility === "public") ||
                   (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -904,17 +904,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.scope.automation == "string" &&
                 (value.approval.presentation.scope.automation.length >= 2 ||
                   (value.approval.presentation.scope.automation.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                 (value.approval.presentation.scope.automation.length <= 128 ||
                   (value.approval.presentation.scope.automation.length <= 256 &&
-                    CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                    CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                 typeof value.approval.presentation.scope.command == "string" &&
                 (value.approval.presentation.scope.command.length >= 2 ||
                   (value.approval.presentation.scope.command.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                    CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                 (value.approval.presentation.scope.command.length <= 256 ||
                   (value.approval.presentation.scope.command.length <= 512 &&
-                    CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                    CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                 (value.approval.presentation.scope.expiresInDays === void 0 ||
                   !("expiresInDays" in value.approval.presentation.scope) ||
                   (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -955,26 +955,26 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               typeof value.approval.presentation.title == "string" &&
               (value.approval.presentation.title.length >= 2 ||
                 (value.approval.presentation.title.length >= 1 &&
-                  CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                  CodePointCount(value.approval.presentation.title) >= 1)) &&
               (value.approval.presentation.title.length <= 80 ||
                 (value.approval.presentation.title.length <= 160 &&
-                  CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                  CodePointCount(value.approval.presentation.title) <= 80)) &&
               typeof value.approval.presentation.description == "string" &&
               (value.approval.presentation.description.length >= 2 ||
                 (value.approval.presentation.description.length >= 1 &&
-                  CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                  CodePointCount(value.approval.presentation.description) >= 1)) &&
               (value.approval.presentation.description.length <= 512 ||
                 (value.approval.presentation.description.length <= 1024 &&
-                  CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                  CodePointCount(value.approval.presentation.description) <= 512)) &&
               (value.approval.presentation.detail === void 0 ||
                 !("detail" in value.approval.presentation) ||
                 (typeof value.approval.presentation.detail == "string" &&
                   (value.approval.presentation.detail.length >= 2 ||
                     (value.approval.presentation.detail.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.detail) >= 1)) &&
+                      CodePointCount(value.approval.presentation.detail) >= 1)) &&
                   (value.approval.presentation.detail.length <= 16384 ||
                     (value.approval.presentation.detail.length <= 32768 &&
-                      CodePointCount2(value.approval.presentation.detail) <= 16384)))) &&
+                      CodePointCount(value.approval.presentation.detail) <= 16384)))) &&
               ((typeof value.approval.presentation.severity == "string" &&
                 value.approval.presentation.severity === "info") ||
                 (typeof value.approval.presentation.severity == "string" &&
@@ -986,21 +986,21 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 (typeof value.approval.presentation.pluginId == "string" &&
                   (value.approval.presentation.pluginId.length >= 2 ||
                     (value.approval.presentation.pluginId.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.pluginId) >= 1))) ||
+                      CodePointCount(value.approval.presentation.pluginId) >= 1))) ||
                 value.approval.presentation.pluginId === null) &&
               (value.approval.presentation.toolName === void 0 ||
                 !("toolName" in value.approval.presentation) ||
                 (typeof value.approval.presentation.toolName == "string" &&
                   (value.approval.presentation.toolName.length >= 2 ||
                     (value.approval.presentation.toolName.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.toolName) >= 1))) ||
+                      CodePointCount(value.approval.presentation.toolName) >= 1))) ||
                 value.approval.presentation.toolName === null) &&
               (value.approval.presentation.agentId === void 0 ||
                 !("agentId" in value.approval.presentation) ||
                 (typeof value.approval.presentation.agentId == "string" &&
                   (value.approval.presentation.agentId.length >= 2 ||
                     (value.approval.presentation.agentId.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                      CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                 value.approval.presentation.agentId === null) &&
               (value.approval.presentation.scope === void 0 ||
                 !("scope" in value.approval.presentation) ||
@@ -1018,10 +1018,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.target == "string" &&
                   (value.approval.presentation.scope.target.length >= 2 ||
                     (value.approval.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                   (value.approval.presentation.scope.target.length <= 128 ||
                     (value.approval.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                      CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                   Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                   (!(
                     Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -1036,9 +1036,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                         (element, index) =>
                           typeof element == "string" &&
                           (element.length >= 2 ||
-                            (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                            (element.length >= 1 && CodePointCount(element) >= 1)) &&
                           (element.length <= 128 ||
-                            (element.length <= 256 && CodePointCount2(element) <= 128)),
+                            (element.length <= 256 && CodePointCount(element) <= 128)),
                       ) &&
                       value.approval.presentation.scope.recipients.length <= 5)) &&
                   (value.approval.presentation.scope.audience === void 0 ||
@@ -1060,24 +1060,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.amount == "string" &&
                   (value.approval.presentation.scope.amount.length >= 2 ||
                     (value.approval.presentation.scope.amount.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                   (value.approval.presentation.scope.amount.length <= 40 ||
                     (value.approval.presentation.scope.amount.length <= 80 &&
-                      CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                      CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                   typeof value.approval.presentation.scope.currency == "string" &&
                   (value.approval.presentation.scope.currency.length >= 2 ||
                     (value.approval.presentation.scope.currency.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                   (value.approval.presentation.scope.currency.length <= 12 ||
                     (value.approval.presentation.scope.currency.length <= 24 &&
-                      CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                      CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                   typeof value.approval.presentation.scope.target == "string" &&
                   (value.approval.presentation.scope.target.length >= 2 ||
                     (value.approval.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                   (value.approval.presentation.scope.target.length <= 128 ||
                     (value.approval.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                      CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                 (typeof value.approval.presentation.scope == "object" &&
                   value.approval.presentation.scope !== null &&
                   !Array.isArray(value.approval.presentation.scope) &&
@@ -1090,10 +1090,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.target == "string" &&
                   (value.approval.presentation.scope.target.length >= 2 ||
                     (value.approval.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                   (value.approval.presentation.scope.target.length <= 128 ||
                     (value.approval.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                      CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                   ((typeof value.approval.presentation.scope.visibility == "string" &&
                     value.approval.presentation.scope.visibility === "public") ||
                     (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -1112,17 +1112,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.automation == "string" &&
                   (value.approval.presentation.scope.automation.length >= 2 ||
                     (value.approval.presentation.scope.automation.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                   (value.approval.presentation.scope.automation.length <= 128 ||
                     (value.approval.presentation.scope.automation.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                      CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                   typeof value.approval.presentation.scope.command == "string" &&
                   (value.approval.presentation.scope.command.length >= 2 ||
                     (value.approval.presentation.scope.command.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                   (value.approval.presentation.scope.command.length <= 256 ||
                     (value.approval.presentation.scope.command.length <= 512 &&
-                      CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                      CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                   (value.approval.presentation.scope.expiresInDays === void 0 ||
                     !("expiresInDays" in value.approval.presentation.scope) ||
                     (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -1159,11 +1159,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.externalResolution.label == "string" &&
                   (value.approval.presentation.externalResolution.label.length >= 2 ||
                     (value.approval.presentation.externalResolution.label.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.externalResolution.label) >=
-                        1)) &&
+                      CodePointCount(value.approval.presentation.externalResolution.label) >= 1)) &&
                   (value.approval.presentation.externalResolution.label.length <= 80 ||
                     (value.approval.presentation.externalResolution.label.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.externalResolution.label) <=
+                      CodePointCount(value.approval.presentation.externalResolution.label) <=
                         80)) &&
                   Array.isArray(value.approval.presentation.externalResolution.decisions) &&
                   value.approval.presentation.externalResolution.decisions.every(
@@ -1191,17 +1190,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               typeof value.approval.presentation.title == "string" &&
               (value.approval.presentation.title.length >= 2 ||
                 (value.approval.presentation.title.length >= 1 &&
-                  CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                  CodePointCount(value.approval.presentation.title) >= 1)) &&
               (value.approval.presentation.title.length <= 80 ||
                 (value.approval.presentation.title.length <= 160 &&
-                  CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                  CodePointCount(value.approval.presentation.title) <= 80)) &&
               typeof value.approval.presentation.description == "string" &&
               (value.approval.presentation.description.length >= 2 ||
                 (value.approval.presentation.description.length >= 1 &&
-                  CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                  CodePointCount(value.approval.presentation.description) >= 1)) &&
               (value.approval.presentation.description.length <= 512 ||
                 (value.approval.presentation.description.length <= 1024 &&
-                  CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                  CodePointCount(value.approval.presentation.description) <= 512)) &&
               typeof value.approval.presentation.proposalHash == "string" &&
               External[10].test(value.approval.presentation.proposalHash) &&
               (value.approval.presentation.agentId === void 0 ||
@@ -1209,7 +1208,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 (typeof value.approval.presentation.agentId == "string" &&
                   (value.approval.presentation.agentId.length >= 2 ||
                     (value.approval.presentation.agentId.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                      CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                 value.approval.presentation.agentId === null) &&
               Array.isArray(value.approval.presentation.allowedDecisions) &&
               value.approval.presentation.allowedDecisions.every(
@@ -1229,7 +1228,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
             (typeof value.approval.sourceSessionKey == "string" &&
               (value.approval.sourceSessionKey.length >= 2 ||
                 (value.approval.sourceSessionKey.length >= 1 &&
-                  CodePointCount2(value.approval.sourceSessionKey) >= 1))))) ||
+                  CodePointCount(value.approval.sourceSessionKey) >= 1))))) ||
         (typeof value == "object" &&
           value !== null &&
           !Array.isArray(value) &&
@@ -1242,13 +1241,13 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
           ) &&
           typeof value.sessionKey == "string" &&
           (value.sessionKey.length >= 2 ||
-            (value.sessionKey.length >= 1 && CodePointCount2(value.sessionKey) >= 1)) &&
+            (value.sessionKey.length >= 1 && CodePointCount(value.sessionKey) >= 1)) &&
           (value.sourceSessionKey === void 0 ||
             !("sourceSessionKey" in value) ||
             (typeof value.sourceSessionKey == "string" &&
               (value.sourceSessionKey.length >= 2 ||
                 (value.sourceSessionKey.length >= 1 &&
-                  CodePointCount2(value.sourceSessionKey) >= 1)))) &&
+                  CodePointCount(value.sourceSessionKey) >= 1)))) &&
           Number.isInteger(value.updatedAtMs) &&
           (!(Number.isFinite(value.updatedAtMs) || typeof value.updatedAtMs == "bigint") ||
             value.updatedAtMs >= 0) &&
@@ -1271,12 +1270,12 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
             ) &&
             typeof value.approval.id == "string" &&
             (value.approval.id.length >= 2 ||
-              (value.approval.id.length >= 1 && CodePointCount2(value.approval.id) >= 1)) &&
+              (value.approval.id.length >= 1 && CodePointCount(value.approval.id) >= 1)) &&
             External[13].test(value.approval.id) &&
             typeof value.approval.urlPath == "string" &&
             (value.approval.urlPath.length >= 2 ||
               (value.approval.urlPath.length >= 1 &&
-                CodePointCount2(value.approval.urlPath) >= 1)) &&
+                CodePointCount(value.approval.urlPath) >= 1)) &&
             Number.isInteger(value.approval.createdAtMs) &&
             (!(
               Number.isFinite(value.approval.createdAtMs) ||
@@ -1303,7 +1302,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               typeof value.approval.presentation.commandText == "string" &&
               (value.approval.presentation.commandText.length >= 2 ||
                 (value.approval.presentation.commandText.length >= 1 &&
-                  CodePointCount2(value.approval.presentation.commandText) >= 1)) &&
+                  CodePointCount(value.approval.presentation.commandText) >= 1)) &&
               (value.approval.presentation.commandPreview === void 0 ||
                 !("commandPreview" in value.approval.presentation) ||
                 typeof value.approval.presentation.commandPreview == "string" ||
@@ -1321,14 +1320,14 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 (typeof value.approval.presentation.nodeId == "string" &&
                   (value.approval.presentation.nodeId.length >= 2 ||
                     (value.approval.presentation.nodeId.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.nodeId) >= 1))) ||
+                      CodePointCount(value.approval.presentation.nodeId) >= 1))) ||
                 value.approval.presentation.nodeId === null) &&
               (value.approval.presentation.agentId === void 0 ||
                 !("agentId" in value.approval.presentation) ||
                 (typeof value.approval.presentation.agentId == "string" &&
                   (value.approval.presentation.agentId.length >= 2 ||
                     (value.approval.presentation.agentId.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                      CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                 value.approval.presentation.agentId === null) &&
               (value.approval.presentation.scope === void 0 ||
                 !("scope" in value.approval.presentation) ||
@@ -1346,10 +1345,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.target == "string" &&
                   (value.approval.presentation.scope.target.length >= 2 ||
                     (value.approval.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                   (value.approval.presentation.scope.target.length <= 128 ||
                     (value.approval.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                      CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                   Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                   (!(
                     Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -1364,9 +1363,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                         (element, index) =>
                           typeof element == "string" &&
                           (element.length >= 2 ||
-                            (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                            (element.length >= 1 && CodePointCount(element) >= 1)) &&
                           (element.length <= 128 ||
-                            (element.length <= 256 && CodePointCount2(element) <= 128)),
+                            (element.length <= 256 && CodePointCount(element) <= 128)),
                       ) &&
                       value.approval.presentation.scope.recipients.length <= 5)) &&
                   (value.approval.presentation.scope.audience === void 0 ||
@@ -1388,24 +1387,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.amount == "string" &&
                   (value.approval.presentation.scope.amount.length >= 2 ||
                     (value.approval.presentation.scope.amount.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                   (value.approval.presentation.scope.amount.length <= 40 ||
                     (value.approval.presentation.scope.amount.length <= 80 &&
-                      CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                      CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                   typeof value.approval.presentation.scope.currency == "string" &&
                   (value.approval.presentation.scope.currency.length >= 2 ||
                     (value.approval.presentation.scope.currency.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                   (value.approval.presentation.scope.currency.length <= 12 ||
                     (value.approval.presentation.scope.currency.length <= 24 &&
-                      CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                      CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                   typeof value.approval.presentation.scope.target == "string" &&
                   (value.approval.presentation.scope.target.length >= 2 ||
                     (value.approval.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                   (value.approval.presentation.scope.target.length <= 128 ||
                     (value.approval.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                      CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                 (typeof value.approval.presentation.scope == "object" &&
                   value.approval.presentation.scope !== null &&
                   !Array.isArray(value.approval.presentation.scope) &&
@@ -1418,10 +1417,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.target == "string" &&
                   (value.approval.presentation.scope.target.length >= 2 ||
                     (value.approval.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                   (value.approval.presentation.scope.target.length <= 128 ||
                     (value.approval.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                      CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                   ((typeof value.approval.presentation.scope.visibility == "string" &&
                     value.approval.presentation.scope.visibility === "public") ||
                     (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -1440,17 +1439,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.scope.automation == "string" &&
                   (value.approval.presentation.scope.automation.length >= 2 ||
                     (value.approval.presentation.scope.automation.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                   (value.approval.presentation.scope.automation.length <= 128 ||
                     (value.approval.presentation.scope.automation.length <= 256 &&
-                      CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                      CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                   typeof value.approval.presentation.scope.command == "string" &&
                   (value.approval.presentation.scope.command.length >= 2 ||
                     (value.approval.presentation.scope.command.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                      CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                   (value.approval.presentation.scope.command.length <= 256 ||
                     (value.approval.presentation.scope.command.length <= 512 &&
-                      CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                      CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                   (value.approval.presentation.scope.expiresInDays === void 0 ||
                     !("expiresInDays" in value.approval.presentation.scope) ||
                     (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -1491,26 +1490,26 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.title == "string" &&
                 (value.approval.presentation.title.length >= 2 ||
                   (value.approval.presentation.title.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                    CodePointCount(value.approval.presentation.title) >= 1)) &&
                 (value.approval.presentation.title.length <= 80 ||
                   (value.approval.presentation.title.length <= 160 &&
-                    CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                    CodePointCount(value.approval.presentation.title) <= 80)) &&
                 typeof value.approval.presentation.description == "string" &&
                 (value.approval.presentation.description.length >= 2 ||
                   (value.approval.presentation.description.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                    CodePointCount(value.approval.presentation.description) >= 1)) &&
                 (value.approval.presentation.description.length <= 512 ||
                   (value.approval.presentation.description.length <= 1024 &&
-                    CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                    CodePointCount(value.approval.presentation.description) <= 512)) &&
                 (value.approval.presentation.detail === void 0 ||
                   !("detail" in value.approval.presentation) ||
                   (typeof value.approval.presentation.detail == "string" &&
                     (value.approval.presentation.detail.length >= 2 ||
                       (value.approval.presentation.detail.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.detail) >= 1)) &&
+                        CodePointCount(value.approval.presentation.detail) >= 1)) &&
                     (value.approval.presentation.detail.length <= 16384 ||
                       (value.approval.presentation.detail.length <= 32768 &&
-                        CodePointCount2(value.approval.presentation.detail) <= 16384)))) &&
+                        CodePointCount(value.approval.presentation.detail) <= 16384)))) &&
                 ((typeof value.approval.presentation.severity == "string" &&
                   value.approval.presentation.severity === "info") ||
                   (typeof value.approval.presentation.severity == "string" &&
@@ -1522,21 +1521,21 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.presentation.pluginId == "string" &&
                     (value.approval.presentation.pluginId.length >= 2 ||
                       (value.approval.presentation.pluginId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.pluginId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.pluginId) >= 1))) ||
                   value.approval.presentation.pluginId === null) &&
                 (value.approval.presentation.toolName === void 0 ||
                   !("toolName" in value.approval.presentation) ||
                   (typeof value.approval.presentation.toolName == "string" &&
                     (value.approval.presentation.toolName.length >= 2 ||
                       (value.approval.presentation.toolName.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.toolName) >= 1))) ||
+                        CodePointCount(value.approval.presentation.toolName) >= 1))) ||
                   value.approval.presentation.toolName === null) &&
                 (value.approval.presentation.agentId === void 0 ||
                   !("agentId" in value.approval.presentation) ||
                   (typeof value.approval.presentation.agentId == "string" &&
                     (value.approval.presentation.agentId.length >= 2 ||
                       (value.approval.presentation.agentId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                   value.approval.presentation.agentId === null) &&
                 (value.approval.presentation.scope === void 0 ||
                   !("scope" in value.approval.presentation) ||
@@ -1554,10 +1553,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                     (!(
                       Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -1572,9 +1571,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                           (element, index) =>
                             typeof element == "string" &&
                             (element.length >= 2 ||
-                              (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                              (element.length >= 1 && CodePointCount(element) >= 1)) &&
                             (element.length <= 128 ||
-                              (element.length <= 256 && CodePointCount2(element) <= 128)),
+                              (element.length <= 256 && CodePointCount(element) <= 128)),
                         ) &&
                         value.approval.presentation.scope.recipients.length <= 5)) &&
                     (value.approval.presentation.scope.audience === void 0 ||
@@ -1596,24 +1595,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.amount == "string" &&
                     (value.approval.presentation.scope.amount.length >= 2 ||
                       (value.approval.presentation.scope.amount.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                     (value.approval.presentation.scope.amount.length <= 40 ||
                       (value.approval.presentation.scope.amount.length <= 80 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                     typeof value.approval.presentation.scope.currency == "string" &&
                     (value.approval.presentation.scope.currency.length >= 2 ||
                       (value.approval.presentation.scope.currency.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                     (value.approval.presentation.scope.currency.length <= 12 ||
                       (value.approval.presentation.scope.currency.length <= 24 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                        CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                   (typeof value.approval.presentation.scope == "object" &&
                     value.approval.presentation.scope !== null &&
                     !Array.isArray(value.approval.presentation.scope) &&
@@ -1626,10 +1625,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     ((typeof value.approval.presentation.scope.visibility == "string" &&
                       value.approval.presentation.scope.visibility === "public") ||
                       (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -1648,17 +1647,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.automation == "string" &&
                     (value.approval.presentation.scope.automation.length >= 2 ||
                       (value.approval.presentation.scope.automation.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                     (value.approval.presentation.scope.automation.length <= 128 ||
                       (value.approval.presentation.scope.automation.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                     typeof value.approval.presentation.scope.command == "string" &&
                     (value.approval.presentation.scope.command.length >= 2 ||
                       (value.approval.presentation.scope.command.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                     (value.approval.presentation.scope.command.length <= 256 ||
                       (value.approval.presentation.scope.command.length <= 512 &&
-                        CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                        CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                     (value.approval.presentation.scope.expiresInDays === void 0 ||
                       !("expiresInDays" in value.approval.presentation.scope) ||
                       (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -1695,11 +1694,11 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.externalResolution.label == "string" &&
                     (value.approval.presentation.externalResolution.label.length >= 2 ||
                       (value.approval.presentation.externalResolution.label.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.externalResolution.label) >=
+                        CodePointCount(value.approval.presentation.externalResolution.label) >=
                           1)) &&
                     (value.approval.presentation.externalResolution.label.length <= 80 ||
                       (value.approval.presentation.externalResolution.label.length <= 160 &&
-                        CodePointCount2(value.approval.presentation.externalResolution.label) <=
+                        CodePointCount(value.approval.presentation.externalResolution.label) <=
                           80)) &&
                     Array.isArray(value.approval.presentation.externalResolution.decisions) &&
                     value.approval.presentation.externalResolution.decisions.every(
@@ -1728,17 +1727,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.title == "string" &&
                 (value.approval.presentation.title.length >= 2 ||
                   (value.approval.presentation.title.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                    CodePointCount(value.approval.presentation.title) >= 1)) &&
                 (value.approval.presentation.title.length <= 80 ||
                   (value.approval.presentation.title.length <= 160 &&
-                    CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                    CodePointCount(value.approval.presentation.title) <= 80)) &&
                 typeof value.approval.presentation.description == "string" &&
                 (value.approval.presentation.description.length >= 2 ||
                   (value.approval.presentation.description.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                    CodePointCount(value.approval.presentation.description) >= 1)) &&
                 (value.approval.presentation.description.length <= 512 ||
                   (value.approval.presentation.description.length <= 1024 &&
-                    CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                    CodePointCount(value.approval.presentation.description) <= 512)) &&
                 typeof value.approval.presentation.proposalHash == "string" &&
                 External[21].test(value.approval.presentation.proposalHash) &&
                 (value.approval.presentation.agentId === void 0 ||
@@ -1746,7 +1745,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.presentation.agentId == "string" &&
                     (value.approval.presentation.agentId.length >= 2 ||
                       (value.approval.presentation.agentId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                   value.approval.presentation.agentId === null) &&
                 Array.isArray(value.approval.presentation.allowedDecisions) &&
                 value.approval.presentation.allowedDecisions.every(
@@ -1778,13 +1777,13 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.source.agentId == "string" &&
                     (value.approval.source.agentId.length >= 2 ||
                       (value.approval.source.agentId.length >= 1 &&
-                        CodePointCount2(value.approval.source.agentId) >= 1)))) &&
+                        CodePointCount(value.approval.source.agentId) >= 1)))) &&
                 (value.approval.source.sessionKey === void 0 ||
                   !("sessionKey" in value.approval.source) ||
                   (typeof value.approval.source.sessionKey == "string" &&
                     (value.approval.source.sessionKey.length >= 2 ||
                       (value.approval.source.sessionKey.length >= 1 &&
-                        CodePointCount2(value.approval.source.sessionKey) >= 1)))))) &&
+                        CodePointCount(value.approval.source.sessionKey) >= 1)))))) &&
             (value.approval.resolver === void 0 ||
               !("resolver" in value.approval) ||
               (typeof value.approval.resolver == "object" &&
@@ -1807,7 +1806,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.resolver.id == "string" &&
                     (value.approval.resolver.id.length >= 2 ||
                       (value.approval.resolver.id.length >= 1 &&
-                        CodePointCount2(value.approval.resolver.id) >= 1)))))) &&
+                        CodePointCount(value.approval.resolver.id) >= 1)))))) &&
             typeof value.approval.status == "string" &&
             value.approval.status === "allowed" &&
             ((typeof value.approval.decision == "string" &&
@@ -1833,12 +1832,12 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               ) &&
               typeof value.approval.id == "string" &&
               (value.approval.id.length >= 2 ||
-                (value.approval.id.length >= 1 && CodePointCount2(value.approval.id) >= 1)) &&
+                (value.approval.id.length >= 1 && CodePointCount(value.approval.id) >= 1)) &&
               External[25].test(value.approval.id) &&
               typeof value.approval.urlPath == "string" &&
               (value.approval.urlPath.length >= 2 ||
                 (value.approval.urlPath.length >= 1 &&
-                  CodePointCount2(value.approval.urlPath) >= 1)) &&
+                  CodePointCount(value.approval.urlPath) >= 1)) &&
               Number.isInteger(value.approval.createdAtMs) &&
               (!(
                 Number.isFinite(value.approval.createdAtMs) ||
@@ -1865,7 +1864,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.commandText == "string" &&
                 (value.approval.presentation.commandText.length >= 2 ||
                   (value.approval.presentation.commandText.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.commandText) >= 1)) &&
+                    CodePointCount(value.approval.presentation.commandText) >= 1)) &&
                 (value.approval.presentation.commandPreview === void 0 ||
                   !("commandPreview" in value.approval.presentation) ||
                   typeof value.approval.presentation.commandPreview == "string" ||
@@ -1883,14 +1882,14 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.presentation.nodeId == "string" &&
                     (value.approval.presentation.nodeId.length >= 2 ||
                       (value.approval.presentation.nodeId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.nodeId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.nodeId) >= 1))) ||
                   value.approval.presentation.nodeId === null) &&
                 (value.approval.presentation.agentId === void 0 ||
                   !("agentId" in value.approval.presentation) ||
                   (typeof value.approval.presentation.agentId == "string" &&
                     (value.approval.presentation.agentId.length >= 2 ||
                       (value.approval.presentation.agentId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                   value.approval.presentation.agentId === null) &&
                 (value.approval.presentation.scope === void 0 ||
                   !("scope" in value.approval.presentation) ||
@@ -1908,10 +1907,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                     (!(
                       Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -1926,9 +1925,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                           (element, index) =>
                             typeof element == "string" &&
                             (element.length >= 2 ||
-                              (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                              (element.length >= 1 && CodePointCount(element) >= 1)) &&
                             (element.length <= 128 ||
-                              (element.length <= 256 && CodePointCount2(element) <= 128)),
+                              (element.length <= 256 && CodePointCount(element) <= 128)),
                         ) &&
                         value.approval.presentation.scope.recipients.length <= 5)) &&
                     (value.approval.presentation.scope.audience === void 0 ||
@@ -1950,24 +1949,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.amount == "string" &&
                     (value.approval.presentation.scope.amount.length >= 2 ||
                       (value.approval.presentation.scope.amount.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                     (value.approval.presentation.scope.amount.length <= 40 ||
                       (value.approval.presentation.scope.amount.length <= 80 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                     typeof value.approval.presentation.scope.currency == "string" &&
                     (value.approval.presentation.scope.currency.length >= 2 ||
                       (value.approval.presentation.scope.currency.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                     (value.approval.presentation.scope.currency.length <= 12 ||
                       (value.approval.presentation.scope.currency.length <= 24 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                        CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                   (typeof value.approval.presentation.scope == "object" &&
                     value.approval.presentation.scope !== null &&
                     !Array.isArray(value.approval.presentation.scope) &&
@@ -1980,10 +1979,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     ((typeof value.approval.presentation.scope.visibility == "string" &&
                       value.approval.presentation.scope.visibility === "public") ||
                       (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -2002,17 +2001,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.automation == "string" &&
                     (value.approval.presentation.scope.automation.length >= 2 ||
                       (value.approval.presentation.scope.automation.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                     (value.approval.presentation.scope.automation.length <= 128 ||
                       (value.approval.presentation.scope.automation.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                     typeof value.approval.presentation.scope.command == "string" &&
                     (value.approval.presentation.scope.command.length >= 2 ||
                       (value.approval.presentation.scope.command.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                     (value.approval.presentation.scope.command.length <= 256 ||
                       (value.approval.presentation.scope.command.length <= 512 &&
-                        CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                        CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                     (value.approval.presentation.scope.expiresInDays === void 0 ||
                       !("expiresInDays" in value.approval.presentation.scope) ||
                       (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -2053,26 +2052,26 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.title == "string" &&
                   (value.approval.presentation.title.length >= 2 ||
                     (value.approval.presentation.title.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                      CodePointCount(value.approval.presentation.title) >= 1)) &&
                   (value.approval.presentation.title.length <= 80 ||
                     (value.approval.presentation.title.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                      CodePointCount(value.approval.presentation.title) <= 80)) &&
                   typeof value.approval.presentation.description == "string" &&
                   (value.approval.presentation.description.length >= 2 ||
                     (value.approval.presentation.description.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                      CodePointCount(value.approval.presentation.description) >= 1)) &&
                   (value.approval.presentation.description.length <= 512 ||
                     (value.approval.presentation.description.length <= 1024 &&
-                      CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                      CodePointCount(value.approval.presentation.description) <= 512)) &&
                   (value.approval.presentation.detail === void 0 ||
                     !("detail" in value.approval.presentation) ||
                     (typeof value.approval.presentation.detail == "string" &&
                       (value.approval.presentation.detail.length >= 2 ||
                         (value.approval.presentation.detail.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.detail) >= 1)) &&
+                          CodePointCount(value.approval.presentation.detail) >= 1)) &&
                       (value.approval.presentation.detail.length <= 16384 ||
                         (value.approval.presentation.detail.length <= 32768 &&
-                          CodePointCount2(value.approval.presentation.detail) <= 16384)))) &&
+                          CodePointCount(value.approval.presentation.detail) <= 16384)))) &&
                   ((typeof value.approval.presentation.severity == "string" &&
                     value.approval.presentation.severity === "info") ||
                     (typeof value.approval.presentation.severity == "string" &&
@@ -2084,21 +2083,21 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.presentation.pluginId == "string" &&
                       (value.approval.presentation.pluginId.length >= 2 ||
                         (value.approval.presentation.pluginId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.pluginId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.pluginId) >= 1))) ||
                     value.approval.presentation.pluginId === null) &&
                   (value.approval.presentation.toolName === void 0 ||
                     !("toolName" in value.approval.presentation) ||
                     (typeof value.approval.presentation.toolName == "string" &&
                       (value.approval.presentation.toolName.length >= 2 ||
                         (value.approval.presentation.toolName.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.toolName) >= 1))) ||
+                          CodePointCount(value.approval.presentation.toolName) >= 1))) ||
                     value.approval.presentation.toolName === null) &&
                   (value.approval.presentation.agentId === void 0 ||
                     !("agentId" in value.approval.presentation) ||
                     (typeof value.approval.presentation.agentId == "string" &&
                       (value.approval.presentation.agentId.length >= 2 ||
                         (value.approval.presentation.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                     value.approval.presentation.agentId === null) &&
                   (value.approval.presentation.scope === void 0 ||
                     !("scope" in value.approval.presentation) ||
@@ -2116,10 +2115,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                       Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                       (!(
                         Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -2134,9 +2133,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                             (element, index) =>
                               typeof element == "string" &&
                               (element.length >= 2 ||
-                                (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                                (element.length >= 1 && CodePointCount(element) >= 1)) &&
                               (element.length <= 128 ||
-                                (element.length <= 256 && CodePointCount2(element) <= 128)),
+                                (element.length <= 256 && CodePointCount(element) <= 128)),
                           ) &&
                           value.approval.presentation.scope.recipients.length <= 5)) &&
                       (value.approval.presentation.scope.audience === void 0 ||
@@ -2158,24 +2157,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.amount == "string" &&
                       (value.approval.presentation.scope.amount.length >= 2 ||
                         (value.approval.presentation.scope.amount.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                       (value.approval.presentation.scope.amount.length <= 40 ||
                         (value.approval.presentation.scope.amount.length <= 80 &&
-                          CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                          CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                       typeof value.approval.presentation.scope.currency == "string" &&
                       (value.approval.presentation.scope.currency.length >= 2 ||
                         (value.approval.presentation.scope.currency.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                       (value.approval.presentation.scope.currency.length <= 12 ||
                         (value.approval.presentation.scope.currency.length <= 24 &&
-                          CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                          CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                          CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                     (typeof value.approval.presentation.scope == "object" &&
                       value.approval.presentation.scope !== null &&
                       !Array.isArray(value.approval.presentation.scope) &&
@@ -2188,10 +2187,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                       ((typeof value.approval.presentation.scope.visibility == "string" &&
                         value.approval.presentation.scope.visibility === "public") ||
                         (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -2210,17 +2209,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.automation == "string" &&
                       (value.approval.presentation.scope.automation.length >= 2 ||
                         (value.approval.presentation.scope.automation.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                       (value.approval.presentation.scope.automation.length <= 128 ||
                         (value.approval.presentation.scope.automation.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                       typeof value.approval.presentation.scope.command == "string" &&
                       (value.approval.presentation.scope.command.length >= 2 ||
                         (value.approval.presentation.scope.command.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                       (value.approval.presentation.scope.command.length <= 256 ||
                         (value.approval.presentation.scope.command.length <= 512 &&
-                          CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                          CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                       (value.approval.presentation.scope.expiresInDays === void 0 ||
                         !("expiresInDays" in value.approval.presentation.scope) ||
                         (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -2257,11 +2256,11 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.externalResolution.label == "string" &&
                       (value.approval.presentation.externalResolution.label.length >= 2 ||
                         (value.approval.presentation.externalResolution.label.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.externalResolution.label) >=
+                          CodePointCount(value.approval.presentation.externalResolution.label) >=
                             1)) &&
                       (value.approval.presentation.externalResolution.label.length <= 80 ||
                         (value.approval.presentation.externalResolution.label.length <= 160 &&
-                          CodePointCount2(value.approval.presentation.externalResolution.label) <=
+                          CodePointCount(value.approval.presentation.externalResolution.label) <=
                             80)) &&
                       Array.isArray(value.approval.presentation.externalResolution.decisions) &&
                       value.approval.presentation.externalResolution.decisions.every(
@@ -2290,17 +2289,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.title == "string" &&
                   (value.approval.presentation.title.length >= 2 ||
                     (value.approval.presentation.title.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                      CodePointCount(value.approval.presentation.title) >= 1)) &&
                   (value.approval.presentation.title.length <= 80 ||
                     (value.approval.presentation.title.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                      CodePointCount(value.approval.presentation.title) <= 80)) &&
                   typeof value.approval.presentation.description == "string" &&
                   (value.approval.presentation.description.length >= 2 ||
                     (value.approval.presentation.description.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                      CodePointCount(value.approval.presentation.description) >= 1)) &&
                   (value.approval.presentation.description.length <= 512 ||
                     (value.approval.presentation.description.length <= 1024 &&
-                      CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                      CodePointCount(value.approval.presentation.description) <= 512)) &&
                   typeof value.approval.presentation.proposalHash == "string" &&
                   External[33].test(value.approval.presentation.proposalHash) &&
                   (value.approval.presentation.agentId === void 0 ||
@@ -2308,7 +2307,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.presentation.agentId == "string" &&
                       (value.approval.presentation.agentId.length >= 2 ||
                         (value.approval.presentation.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                     value.approval.presentation.agentId === null) &&
                   Array.isArray(value.approval.presentation.allowedDecisions) &&
                   value.approval.presentation.allowedDecisions.every(
@@ -2340,13 +2339,13 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.source.agentId == "string" &&
                       (value.approval.source.agentId.length >= 2 ||
                         (value.approval.source.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.source.agentId) >= 1)))) &&
+                          CodePointCount(value.approval.source.agentId) >= 1)))) &&
                   (value.approval.source.sessionKey === void 0 ||
                     !("sessionKey" in value.approval.source) ||
                     (typeof value.approval.source.sessionKey == "string" &&
                       (value.approval.source.sessionKey.length >= 2 ||
                         (value.approval.source.sessionKey.length >= 1 &&
-                          CodePointCount2(value.approval.source.sessionKey) >= 1)))))) &&
+                          CodePointCount(value.approval.source.sessionKey) >= 1)))))) &&
               (value.approval.resolver === void 0 ||
                 !("resolver" in value.approval) ||
                 (typeof value.approval.resolver == "object" &&
@@ -2369,7 +2368,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.resolver.id == "string" &&
                       (value.approval.resolver.id.length >= 2 ||
                         (value.approval.resolver.id.length >= 1 &&
-                          CodePointCount2(value.approval.resolver.id) >= 1)))))) &&
+                          CodePointCount(value.approval.resolver.id) >= 1)))))) &&
               typeof value.approval.status == "string" &&
               value.approval.status === "denied" &&
               typeof value.approval.decision == "string" &&
@@ -2397,12 +2396,12 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               ) &&
               typeof value.approval.id == "string" &&
               (value.approval.id.length >= 2 ||
-                (value.approval.id.length >= 1 && CodePointCount2(value.approval.id) >= 1)) &&
+                (value.approval.id.length >= 1 && CodePointCount(value.approval.id) >= 1)) &&
               External[37].test(value.approval.id) &&
               typeof value.approval.urlPath == "string" &&
               (value.approval.urlPath.length >= 2 ||
                 (value.approval.urlPath.length >= 1 &&
-                  CodePointCount2(value.approval.urlPath) >= 1)) &&
+                  CodePointCount(value.approval.urlPath) >= 1)) &&
               Number.isInteger(value.approval.createdAtMs) &&
               (!(
                 Number.isFinite(value.approval.createdAtMs) ||
@@ -2429,7 +2428,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.commandText == "string" &&
                 (value.approval.presentation.commandText.length >= 2 ||
                   (value.approval.presentation.commandText.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.commandText) >= 1)) &&
+                    CodePointCount(value.approval.presentation.commandText) >= 1)) &&
                 (value.approval.presentation.commandPreview === void 0 ||
                   !("commandPreview" in value.approval.presentation) ||
                   typeof value.approval.presentation.commandPreview == "string" ||
@@ -2447,14 +2446,14 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.presentation.nodeId == "string" &&
                     (value.approval.presentation.nodeId.length >= 2 ||
                       (value.approval.presentation.nodeId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.nodeId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.nodeId) >= 1))) ||
                   value.approval.presentation.nodeId === null) &&
                 (value.approval.presentation.agentId === void 0 ||
                   !("agentId" in value.approval.presentation) ||
                   (typeof value.approval.presentation.agentId == "string" &&
                     (value.approval.presentation.agentId.length >= 2 ||
                       (value.approval.presentation.agentId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                   value.approval.presentation.agentId === null) &&
                 (value.approval.presentation.scope === void 0 ||
                   !("scope" in value.approval.presentation) ||
@@ -2472,10 +2471,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                     (!(
                       Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -2490,9 +2489,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                           (element, index) =>
                             typeof element == "string" &&
                             (element.length >= 2 ||
-                              (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                              (element.length >= 1 && CodePointCount(element) >= 1)) &&
                             (element.length <= 128 ||
-                              (element.length <= 256 && CodePointCount2(element) <= 128)),
+                              (element.length <= 256 && CodePointCount(element) <= 128)),
                         ) &&
                         value.approval.presentation.scope.recipients.length <= 5)) &&
                     (value.approval.presentation.scope.audience === void 0 ||
@@ -2514,24 +2513,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.amount == "string" &&
                     (value.approval.presentation.scope.amount.length >= 2 ||
                       (value.approval.presentation.scope.amount.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                     (value.approval.presentation.scope.amount.length <= 40 ||
                       (value.approval.presentation.scope.amount.length <= 80 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                     typeof value.approval.presentation.scope.currency == "string" &&
                     (value.approval.presentation.scope.currency.length >= 2 ||
                       (value.approval.presentation.scope.currency.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                     (value.approval.presentation.scope.currency.length <= 12 ||
                       (value.approval.presentation.scope.currency.length <= 24 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                        CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                   (typeof value.approval.presentation.scope == "object" &&
                     value.approval.presentation.scope !== null &&
                     !Array.isArray(value.approval.presentation.scope) &&
@@ -2544,10 +2543,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     ((typeof value.approval.presentation.scope.visibility == "string" &&
                       value.approval.presentation.scope.visibility === "public") ||
                       (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -2566,17 +2565,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.automation == "string" &&
                     (value.approval.presentation.scope.automation.length >= 2 ||
                       (value.approval.presentation.scope.automation.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                     (value.approval.presentation.scope.automation.length <= 128 ||
                       (value.approval.presentation.scope.automation.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                     typeof value.approval.presentation.scope.command == "string" &&
                     (value.approval.presentation.scope.command.length >= 2 ||
                       (value.approval.presentation.scope.command.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                     (value.approval.presentation.scope.command.length <= 256 ||
                       (value.approval.presentation.scope.command.length <= 512 &&
-                        CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                        CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                     (value.approval.presentation.scope.expiresInDays === void 0 ||
                       !("expiresInDays" in value.approval.presentation.scope) ||
                       (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -2617,26 +2616,26 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.title == "string" &&
                   (value.approval.presentation.title.length >= 2 ||
                     (value.approval.presentation.title.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                      CodePointCount(value.approval.presentation.title) >= 1)) &&
                   (value.approval.presentation.title.length <= 80 ||
                     (value.approval.presentation.title.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                      CodePointCount(value.approval.presentation.title) <= 80)) &&
                   typeof value.approval.presentation.description == "string" &&
                   (value.approval.presentation.description.length >= 2 ||
                     (value.approval.presentation.description.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                      CodePointCount(value.approval.presentation.description) >= 1)) &&
                   (value.approval.presentation.description.length <= 512 ||
                     (value.approval.presentation.description.length <= 1024 &&
-                      CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                      CodePointCount(value.approval.presentation.description) <= 512)) &&
                   (value.approval.presentation.detail === void 0 ||
                     !("detail" in value.approval.presentation) ||
                     (typeof value.approval.presentation.detail == "string" &&
                       (value.approval.presentation.detail.length >= 2 ||
                         (value.approval.presentation.detail.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.detail) >= 1)) &&
+                          CodePointCount(value.approval.presentation.detail) >= 1)) &&
                       (value.approval.presentation.detail.length <= 16384 ||
                         (value.approval.presentation.detail.length <= 32768 &&
-                          CodePointCount2(value.approval.presentation.detail) <= 16384)))) &&
+                          CodePointCount(value.approval.presentation.detail) <= 16384)))) &&
                   ((typeof value.approval.presentation.severity == "string" &&
                     value.approval.presentation.severity === "info") ||
                     (typeof value.approval.presentation.severity == "string" &&
@@ -2648,21 +2647,21 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.presentation.pluginId == "string" &&
                       (value.approval.presentation.pluginId.length >= 2 ||
                         (value.approval.presentation.pluginId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.pluginId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.pluginId) >= 1))) ||
                     value.approval.presentation.pluginId === null) &&
                   (value.approval.presentation.toolName === void 0 ||
                     !("toolName" in value.approval.presentation) ||
                     (typeof value.approval.presentation.toolName == "string" &&
                       (value.approval.presentation.toolName.length >= 2 ||
                         (value.approval.presentation.toolName.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.toolName) >= 1))) ||
+                          CodePointCount(value.approval.presentation.toolName) >= 1))) ||
                     value.approval.presentation.toolName === null) &&
                   (value.approval.presentation.agentId === void 0 ||
                     !("agentId" in value.approval.presentation) ||
                     (typeof value.approval.presentation.agentId == "string" &&
                       (value.approval.presentation.agentId.length >= 2 ||
                         (value.approval.presentation.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                     value.approval.presentation.agentId === null) &&
                   (value.approval.presentation.scope === void 0 ||
                     !("scope" in value.approval.presentation) ||
@@ -2680,10 +2679,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                       Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                       (!(
                         Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -2698,9 +2697,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                             (element, index) =>
                               typeof element == "string" &&
                               (element.length >= 2 ||
-                                (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                                (element.length >= 1 && CodePointCount(element) >= 1)) &&
                               (element.length <= 128 ||
-                                (element.length <= 256 && CodePointCount2(element) <= 128)),
+                                (element.length <= 256 && CodePointCount(element) <= 128)),
                           ) &&
                           value.approval.presentation.scope.recipients.length <= 5)) &&
                       (value.approval.presentation.scope.audience === void 0 ||
@@ -2722,24 +2721,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.amount == "string" &&
                       (value.approval.presentation.scope.amount.length >= 2 ||
                         (value.approval.presentation.scope.amount.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                       (value.approval.presentation.scope.amount.length <= 40 ||
                         (value.approval.presentation.scope.amount.length <= 80 &&
-                          CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                          CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                       typeof value.approval.presentation.scope.currency == "string" &&
                       (value.approval.presentation.scope.currency.length >= 2 ||
                         (value.approval.presentation.scope.currency.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                       (value.approval.presentation.scope.currency.length <= 12 ||
                         (value.approval.presentation.scope.currency.length <= 24 &&
-                          CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                          CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                          CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                     (typeof value.approval.presentation.scope == "object" &&
                       value.approval.presentation.scope !== null &&
                       !Array.isArray(value.approval.presentation.scope) &&
@@ -2752,10 +2751,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                       ((typeof value.approval.presentation.scope.visibility == "string" &&
                         value.approval.presentation.scope.visibility === "public") ||
                         (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -2774,17 +2773,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.automation == "string" &&
                       (value.approval.presentation.scope.automation.length >= 2 ||
                         (value.approval.presentation.scope.automation.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                       (value.approval.presentation.scope.automation.length <= 128 ||
                         (value.approval.presentation.scope.automation.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                       typeof value.approval.presentation.scope.command == "string" &&
                       (value.approval.presentation.scope.command.length >= 2 ||
                         (value.approval.presentation.scope.command.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                       (value.approval.presentation.scope.command.length <= 256 ||
                         (value.approval.presentation.scope.command.length <= 512 &&
-                          CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                          CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                       (value.approval.presentation.scope.expiresInDays === void 0 ||
                         !("expiresInDays" in value.approval.presentation.scope) ||
                         (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -2821,11 +2820,11 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.externalResolution.label == "string" &&
                       (value.approval.presentation.externalResolution.label.length >= 2 ||
                         (value.approval.presentation.externalResolution.label.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.externalResolution.label) >=
+                          CodePointCount(value.approval.presentation.externalResolution.label) >=
                             1)) &&
                       (value.approval.presentation.externalResolution.label.length <= 80 ||
                         (value.approval.presentation.externalResolution.label.length <= 160 &&
-                          CodePointCount2(value.approval.presentation.externalResolution.label) <=
+                          CodePointCount(value.approval.presentation.externalResolution.label) <=
                             80)) &&
                       Array.isArray(value.approval.presentation.externalResolution.decisions) &&
                       value.approval.presentation.externalResolution.decisions.every(
@@ -2854,17 +2853,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.title == "string" &&
                   (value.approval.presentation.title.length >= 2 ||
                     (value.approval.presentation.title.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                      CodePointCount(value.approval.presentation.title) >= 1)) &&
                   (value.approval.presentation.title.length <= 80 ||
                     (value.approval.presentation.title.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                      CodePointCount(value.approval.presentation.title) <= 80)) &&
                   typeof value.approval.presentation.description == "string" &&
                   (value.approval.presentation.description.length >= 2 ||
                     (value.approval.presentation.description.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                      CodePointCount(value.approval.presentation.description) >= 1)) &&
                   (value.approval.presentation.description.length <= 512 ||
                     (value.approval.presentation.description.length <= 1024 &&
-                      CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                      CodePointCount(value.approval.presentation.description) <= 512)) &&
                   typeof value.approval.presentation.proposalHash == "string" &&
                   External[45].test(value.approval.presentation.proposalHash) &&
                   (value.approval.presentation.agentId === void 0 ||
@@ -2872,7 +2871,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.presentation.agentId == "string" &&
                       (value.approval.presentation.agentId.length >= 2 ||
                         (value.approval.presentation.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                     value.approval.presentation.agentId === null) &&
                   Array.isArray(value.approval.presentation.allowedDecisions) &&
                   value.approval.presentation.allowedDecisions.every(
@@ -2904,13 +2903,13 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.source.agentId == "string" &&
                       (value.approval.source.agentId.length >= 2 ||
                         (value.approval.source.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.source.agentId) >= 1)))) &&
+                          CodePointCount(value.approval.source.agentId) >= 1)))) &&
                   (value.approval.source.sessionKey === void 0 ||
                     !("sessionKey" in value.approval.source) ||
                     (typeof value.approval.source.sessionKey == "string" &&
                       (value.approval.source.sessionKey.length >= 2 ||
                         (value.approval.source.sessionKey.length >= 1 &&
-                          CodePointCount2(value.approval.source.sessionKey) >= 1)))))) &&
+                          CodePointCount(value.approval.source.sessionKey) >= 1)))))) &&
               (value.approval.resolver === void 0 ||
                 !("resolver" in value.approval) ||
                 (typeof value.approval.resolver == "object" &&
@@ -2933,7 +2932,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.resolver.id == "string" &&
                       (value.approval.resolver.id.length >= 2 ||
                         (value.approval.resolver.id.length >= 1 &&
-                          CodePointCount2(value.approval.resolver.id) >= 1)))))) &&
+                          CodePointCount(value.approval.resolver.id) >= 1)))))) &&
               typeof value.approval.status == "string" &&
               value.approval.status === "expired" &&
               typeof value.approval.reason == "string" &&
@@ -2954,12 +2953,12 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               ) &&
               typeof value.approval.id == "string" &&
               (value.approval.id.length >= 2 ||
-                (value.approval.id.length >= 1 && CodePointCount2(value.approval.id) >= 1)) &&
+                (value.approval.id.length >= 1 && CodePointCount(value.approval.id) >= 1)) &&
               External[49].test(value.approval.id) &&
               typeof value.approval.urlPath == "string" &&
               (value.approval.urlPath.length >= 2 ||
                 (value.approval.urlPath.length >= 1 &&
-                  CodePointCount2(value.approval.urlPath) >= 1)) &&
+                  CodePointCount(value.approval.urlPath) >= 1)) &&
               Number.isInteger(value.approval.createdAtMs) &&
               (!(
                 Number.isFinite(value.approval.createdAtMs) ||
@@ -2986,7 +2985,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof value.approval.presentation.commandText == "string" &&
                 (value.approval.presentation.commandText.length >= 2 ||
                   (value.approval.presentation.commandText.length >= 1 &&
-                    CodePointCount2(value.approval.presentation.commandText) >= 1)) &&
+                    CodePointCount(value.approval.presentation.commandText) >= 1)) &&
                 (value.approval.presentation.commandPreview === void 0 ||
                   !("commandPreview" in value.approval.presentation) ||
                   typeof value.approval.presentation.commandPreview == "string" ||
@@ -3004,14 +3003,14 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof value.approval.presentation.nodeId == "string" &&
                     (value.approval.presentation.nodeId.length >= 2 ||
                       (value.approval.presentation.nodeId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.nodeId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.nodeId) >= 1))) ||
                   value.approval.presentation.nodeId === null) &&
                 (value.approval.presentation.agentId === void 0 ||
                   !("agentId" in value.approval.presentation) ||
                   (typeof value.approval.presentation.agentId == "string" &&
                     (value.approval.presentation.agentId.length >= 2 ||
                       (value.approval.presentation.agentId.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                        CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                   value.approval.presentation.agentId === null) &&
                 (value.approval.presentation.scope === void 0 ||
                   !("scope" in value.approval.presentation) ||
@@ -3029,10 +3028,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                     (!(
                       Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -3047,9 +3046,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                           (element, index) =>
                             typeof element == "string" &&
                             (element.length >= 2 ||
-                              (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                              (element.length >= 1 && CodePointCount(element) >= 1)) &&
                             (element.length <= 128 ||
-                              (element.length <= 256 && CodePointCount2(element) <= 128)),
+                              (element.length <= 256 && CodePointCount(element) <= 128)),
                         ) &&
                         value.approval.presentation.scope.recipients.length <= 5)) &&
                     (value.approval.presentation.scope.audience === void 0 ||
@@ -3071,24 +3070,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.amount == "string" &&
                     (value.approval.presentation.scope.amount.length >= 2 ||
                       (value.approval.presentation.scope.amount.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                     (value.approval.presentation.scope.amount.length <= 40 ||
                       (value.approval.presentation.scope.amount.length <= 80 &&
-                        CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                        CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                     typeof value.approval.presentation.scope.currency == "string" &&
                     (value.approval.presentation.scope.currency.length >= 2 ||
                       (value.approval.presentation.scope.currency.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                     (value.approval.presentation.scope.currency.length <= 12 ||
                       (value.approval.presentation.scope.currency.length <= 24 &&
-                        CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                        CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                        CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                   (typeof value.approval.presentation.scope == "object" &&
                     value.approval.presentation.scope !== null &&
                     !Array.isArray(value.approval.presentation.scope) &&
@@ -3101,10 +3100,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.target == "string" &&
                     (value.approval.presentation.scope.target.length >= 2 ||
                       (value.approval.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                     (value.approval.presentation.scope.target.length <= 128 ||
                       (value.approval.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                     ((typeof value.approval.presentation.scope.visibility == "string" &&
                       value.approval.presentation.scope.visibility === "public") ||
                       (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -3123,17 +3122,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof value.approval.presentation.scope.automation == "string" &&
                     (value.approval.presentation.scope.automation.length >= 2 ||
                       (value.approval.presentation.scope.automation.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                     (value.approval.presentation.scope.automation.length <= 128 ||
                       (value.approval.presentation.scope.automation.length <= 256 &&
-                        CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                        CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                     typeof value.approval.presentation.scope.command == "string" &&
                     (value.approval.presentation.scope.command.length >= 2 ||
                       (value.approval.presentation.scope.command.length >= 1 &&
-                        CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                        CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                     (value.approval.presentation.scope.command.length <= 256 ||
                       (value.approval.presentation.scope.command.length <= 512 &&
-                        CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                        CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                     (value.approval.presentation.scope.expiresInDays === void 0 ||
                       !("expiresInDays" in value.approval.presentation.scope) ||
                       (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -3174,26 +3173,26 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.title == "string" &&
                   (value.approval.presentation.title.length >= 2 ||
                     (value.approval.presentation.title.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                      CodePointCount(value.approval.presentation.title) >= 1)) &&
                   (value.approval.presentation.title.length <= 80 ||
                     (value.approval.presentation.title.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                      CodePointCount(value.approval.presentation.title) <= 80)) &&
                   typeof value.approval.presentation.description == "string" &&
                   (value.approval.presentation.description.length >= 2 ||
                     (value.approval.presentation.description.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                      CodePointCount(value.approval.presentation.description) >= 1)) &&
                   (value.approval.presentation.description.length <= 512 ||
                     (value.approval.presentation.description.length <= 1024 &&
-                      CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                      CodePointCount(value.approval.presentation.description) <= 512)) &&
                   (value.approval.presentation.detail === void 0 ||
                     !("detail" in value.approval.presentation) ||
                     (typeof value.approval.presentation.detail == "string" &&
                       (value.approval.presentation.detail.length >= 2 ||
                         (value.approval.presentation.detail.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.detail) >= 1)) &&
+                          CodePointCount(value.approval.presentation.detail) >= 1)) &&
                       (value.approval.presentation.detail.length <= 16384 ||
                         (value.approval.presentation.detail.length <= 32768 &&
-                          CodePointCount2(value.approval.presentation.detail) <= 16384)))) &&
+                          CodePointCount(value.approval.presentation.detail) <= 16384)))) &&
                   ((typeof value.approval.presentation.severity == "string" &&
                     value.approval.presentation.severity === "info") ||
                     (typeof value.approval.presentation.severity == "string" &&
@@ -3205,21 +3204,21 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.presentation.pluginId == "string" &&
                       (value.approval.presentation.pluginId.length >= 2 ||
                         (value.approval.presentation.pluginId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.pluginId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.pluginId) >= 1))) ||
                     value.approval.presentation.pluginId === null) &&
                   (value.approval.presentation.toolName === void 0 ||
                     !("toolName" in value.approval.presentation) ||
                     (typeof value.approval.presentation.toolName == "string" &&
                       (value.approval.presentation.toolName.length >= 2 ||
                         (value.approval.presentation.toolName.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.toolName) >= 1))) ||
+                          CodePointCount(value.approval.presentation.toolName) >= 1))) ||
                     value.approval.presentation.toolName === null) &&
                   (value.approval.presentation.agentId === void 0 ||
                     !("agentId" in value.approval.presentation) ||
                     (typeof value.approval.presentation.agentId == "string" &&
                       (value.approval.presentation.agentId.length >= 2 ||
                         (value.approval.presentation.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                     value.approval.presentation.agentId === null) &&
                   (value.approval.presentation.scope === void 0 ||
                     !("scope" in value.approval.presentation) ||
@@ -3237,10 +3236,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                       Number.isInteger(value.approval.presentation.scope.recipientCount) &&
                       (!(
                         Number.isFinite(value.approval.presentation.scope.recipientCount) ||
@@ -3255,9 +3254,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                             (element, index) =>
                               typeof element == "string" &&
                               (element.length >= 2 ||
-                                (element.length >= 1 && CodePointCount2(element) >= 1)) &&
+                                (element.length >= 1 && CodePointCount(element) >= 1)) &&
                               (element.length <= 128 ||
-                                (element.length <= 256 && CodePointCount2(element) <= 128)),
+                                (element.length <= 256 && CodePointCount(element) <= 128)),
                           ) &&
                           value.approval.presentation.scope.recipients.length <= 5)) &&
                       (value.approval.presentation.scope.audience === void 0 ||
@@ -3279,24 +3278,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.amount == "string" &&
                       (value.approval.presentation.scope.amount.length >= 2 ||
                         (value.approval.presentation.scope.amount.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.amount) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.amount) >= 1)) &&
                       (value.approval.presentation.scope.amount.length <= 40 ||
                         (value.approval.presentation.scope.amount.length <= 80 &&
-                          CodePointCount2(value.approval.presentation.scope.amount) <= 40)) &&
+                          CodePointCount(value.approval.presentation.scope.amount) <= 40)) &&
                       typeof value.approval.presentation.scope.currency == "string" &&
                       (value.approval.presentation.scope.currency.length >= 2 ||
                         (value.approval.presentation.scope.currency.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.currency) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.currency) >= 1)) &&
                       (value.approval.presentation.scope.currency.length <= 12 ||
                         (value.approval.presentation.scope.currency.length <= 24 &&
-                          CodePointCount2(value.approval.presentation.scope.currency) <= 12)) &&
+                          CodePointCount(value.approval.presentation.scope.currency) <= 12)) &&
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128))) ||
+                          CodePointCount(value.approval.presentation.scope.target) <= 128))) ||
                     (typeof value.approval.presentation.scope == "object" &&
                       value.approval.presentation.scope !== null &&
                       !Array.isArray(value.approval.presentation.scope) &&
@@ -3309,10 +3308,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.target == "string" &&
                       (value.approval.presentation.scope.target.length >= 2 ||
                         (value.approval.presentation.scope.target.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.target) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.target) >= 1)) &&
                       (value.approval.presentation.scope.target.length <= 128 ||
                         (value.approval.presentation.scope.target.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.target) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.target) <= 128)) &&
                       ((typeof value.approval.presentation.scope.visibility == "string" &&
                         value.approval.presentation.scope.visibility === "public") ||
                         (typeof value.approval.presentation.scope.visibility == "string" &&
@@ -3331,17 +3330,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.scope.automation == "string" &&
                       (value.approval.presentation.scope.automation.length >= 2 ||
                         (value.approval.presentation.scope.automation.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.automation) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.automation) >= 1)) &&
                       (value.approval.presentation.scope.automation.length <= 128 ||
                         (value.approval.presentation.scope.automation.length <= 256 &&
-                          CodePointCount2(value.approval.presentation.scope.automation) <= 128)) &&
+                          CodePointCount(value.approval.presentation.scope.automation) <= 128)) &&
                       typeof value.approval.presentation.scope.command == "string" &&
                       (value.approval.presentation.scope.command.length >= 2 ||
                         (value.approval.presentation.scope.command.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.scope.command) >= 1)) &&
+                          CodePointCount(value.approval.presentation.scope.command) >= 1)) &&
                       (value.approval.presentation.scope.command.length <= 256 ||
                         (value.approval.presentation.scope.command.length <= 512 &&
-                          CodePointCount2(value.approval.presentation.scope.command) <= 256)) &&
+                          CodePointCount(value.approval.presentation.scope.command) <= 256)) &&
                       (value.approval.presentation.scope.expiresInDays === void 0 ||
                         !("expiresInDays" in value.approval.presentation.scope) ||
                         (Number.isInteger(value.approval.presentation.scope.expiresInDays) &&
@@ -3378,11 +3377,11 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                       typeof value.approval.presentation.externalResolution.label == "string" &&
                       (value.approval.presentation.externalResolution.label.length >= 2 ||
                         (value.approval.presentation.externalResolution.label.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.externalResolution.label) >=
+                          CodePointCount(value.approval.presentation.externalResolution.label) >=
                             1)) &&
                       (value.approval.presentation.externalResolution.label.length <= 80 ||
                         (value.approval.presentation.externalResolution.label.length <= 160 &&
-                          CodePointCount2(value.approval.presentation.externalResolution.label) <=
+                          CodePointCount(value.approval.presentation.externalResolution.label) <=
                             80)) &&
                       Array.isArray(value.approval.presentation.externalResolution.decisions) &&
                       value.approval.presentation.externalResolution.decisions.every(
@@ -3411,17 +3410,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof value.approval.presentation.title == "string" &&
                   (value.approval.presentation.title.length >= 2 ||
                     (value.approval.presentation.title.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.title) >= 1)) &&
+                      CodePointCount(value.approval.presentation.title) >= 1)) &&
                   (value.approval.presentation.title.length <= 80 ||
                     (value.approval.presentation.title.length <= 160 &&
-                      CodePointCount2(value.approval.presentation.title) <= 80)) &&
+                      CodePointCount(value.approval.presentation.title) <= 80)) &&
                   typeof value.approval.presentation.description == "string" &&
                   (value.approval.presentation.description.length >= 2 ||
                     (value.approval.presentation.description.length >= 1 &&
-                      CodePointCount2(value.approval.presentation.description) >= 1)) &&
+                      CodePointCount(value.approval.presentation.description) >= 1)) &&
                   (value.approval.presentation.description.length <= 512 ||
                     (value.approval.presentation.description.length <= 1024 &&
-                      CodePointCount2(value.approval.presentation.description) <= 512)) &&
+                      CodePointCount(value.approval.presentation.description) <= 512)) &&
                   typeof value.approval.presentation.proposalHash == "string" &&
                   External[57].test(value.approval.presentation.proposalHash) &&
                   (value.approval.presentation.agentId === void 0 ||
@@ -3429,7 +3428,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.presentation.agentId == "string" &&
                       (value.approval.presentation.agentId.length >= 2 ||
                         (value.approval.presentation.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.presentation.agentId) >= 1))) ||
+                          CodePointCount(value.approval.presentation.agentId) >= 1))) ||
                     value.approval.presentation.agentId === null) &&
                   Array.isArray(value.approval.presentation.allowedDecisions) &&
                   value.approval.presentation.allowedDecisions.every(
@@ -3461,13 +3460,13 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.source.agentId == "string" &&
                       (value.approval.source.agentId.length >= 2 ||
                         (value.approval.source.agentId.length >= 1 &&
-                          CodePointCount2(value.approval.source.agentId) >= 1)))) &&
+                          CodePointCount(value.approval.source.agentId) >= 1)))) &&
                   (value.approval.source.sessionKey === void 0 ||
                     !("sessionKey" in value.approval.source) ||
                     (typeof value.approval.source.sessionKey == "string" &&
                       (value.approval.source.sessionKey.length >= 2 ||
                         (value.approval.source.sessionKey.length >= 1 &&
-                          CodePointCount2(value.approval.source.sessionKey) >= 1)))))) &&
+                          CodePointCount(value.approval.source.sessionKey) >= 1)))))) &&
               (value.approval.resolver === void 0 ||
                 !("resolver" in value.approval) ||
                 (typeof value.approval.resolver == "object" &&
@@ -3490,7 +3489,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     (typeof value.approval.resolver.id == "string" &&
                       (value.approval.resolver.id.length >= 2 ||
                         (value.approval.resolver.id.length >= 1 &&
-                          CodePointCount2(value.approval.resolver.id) >= 1)))))) &&
+                          CodePointCount(value.approval.resolver.id) >= 1)))))) &&
               typeof value.approval.status == "string" &&
               value.approval.status === "cancelled" &&
               ((typeof value.approval.reason == "string" &&
@@ -3538,7 +3537,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
         Object.getOwnPropertyNames(value).length === 4 &&
         typeof value.sessionKey == "string" &&
         (value.sessionKey.length >= 2 ||
-          (value.sessionKey.length >= 1 && CodePointCount2(value.sessionKey) >= 1)) &&
+          (value.sessionKey.length >= 1 && CodePointCount(value.sessionKey) >= 1)) &&
         Number.isInteger(value.updatedAtMs) &&
         (!(Number.isFinite(value.updatedAtMs) || typeof value.updatedAtMs == "bigint") ||
           value.updatedAtMs >= 0) &&
@@ -3559,11 +3558,11 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
             ) &&
             typeof element.id == "string" &&
             (element.id.length >= 2 ||
-              (element.id.length >= 1 && CodePointCount2(element.id) >= 1)) &&
+              (element.id.length >= 1 && CodePointCount(element.id) >= 1)) &&
             External[1].test(element.id) &&
             typeof element.urlPath == "string" &&
             (element.urlPath.length >= 2 ||
-              (element.urlPath.length >= 1 && CodePointCount2(element.urlPath) >= 1)) &&
+              (element.urlPath.length >= 1 && CodePointCount(element.urlPath) >= 1)) &&
             Number.isInteger(element.createdAtMs) &&
             (!(Number.isFinite(element.createdAtMs) || typeof element.createdAtMs == "bigint") ||
               element.createdAtMs >= 0) &&
@@ -3584,7 +3583,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               typeof element.presentation.commandText == "string" &&
               (element.presentation.commandText.length >= 2 ||
                 (element.presentation.commandText.length >= 1 &&
-                  CodePointCount2(element.presentation.commandText) >= 1)) &&
+                  CodePointCount(element.presentation.commandText) >= 1)) &&
               (element.presentation.commandPreview === void 0 ||
                 !("commandPreview" in element.presentation) ||
                 typeof element.presentation.commandPreview == "string" ||
@@ -3602,14 +3601,14 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 (typeof element.presentation.nodeId == "string" &&
                   (element.presentation.nodeId.length >= 2 ||
                     (element.presentation.nodeId.length >= 1 &&
-                      CodePointCount2(element.presentation.nodeId) >= 1))) ||
+                      CodePointCount(element.presentation.nodeId) >= 1))) ||
                 element.presentation.nodeId === null) &&
               (element.presentation.agentId === void 0 ||
                 !("agentId" in element.presentation) ||
                 (typeof element.presentation.agentId == "string" &&
                   (element.presentation.agentId.length >= 2 ||
                     (element.presentation.agentId.length >= 1 &&
-                      CodePointCount2(element.presentation.agentId) >= 1))) ||
+                      CodePointCount(element.presentation.agentId) >= 1))) ||
                 element.presentation.agentId === null) &&
               (element.presentation.scope === void 0 ||
                 !("scope" in element.presentation) ||
@@ -3627,10 +3626,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof element.presentation.scope.target == "string" &&
                   (element.presentation.scope.target.length >= 2 ||
                     (element.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.target) >= 1)) &&
+                      CodePointCount(element.presentation.scope.target) >= 1)) &&
                   (element.presentation.scope.target.length <= 128 ||
                     (element.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(element.presentation.scope.target) <= 128)) &&
+                      CodePointCount(element.presentation.scope.target) <= 128)) &&
                   Number.isInteger(element.presentation.scope.recipientCount) &&
                   (!(
                     Number.isFinite(element.presentation.scope.recipientCount) ||
@@ -3645,9 +3644,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                         (element2, index2) =>
                           typeof element2 == "string" &&
                           (element2.length >= 2 ||
-                            (element2.length >= 1 && CodePointCount2(element2) >= 1)) &&
+                            (element2.length >= 1 && CodePointCount(element2) >= 1)) &&
                           (element2.length <= 128 ||
-                            (element2.length <= 256 && CodePointCount2(element2) <= 128)),
+                            (element2.length <= 256 && CodePointCount(element2) <= 128)),
                       ) &&
                       element.presentation.scope.recipients.length <= 5)) &&
                   (element.presentation.scope.audience === void 0 ||
@@ -3669,24 +3668,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof element.presentation.scope.amount == "string" &&
                   (element.presentation.scope.amount.length >= 2 ||
                     (element.presentation.scope.amount.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.amount) >= 1)) &&
+                      CodePointCount(element.presentation.scope.amount) >= 1)) &&
                   (element.presentation.scope.amount.length <= 40 ||
                     (element.presentation.scope.amount.length <= 80 &&
-                      CodePointCount2(element.presentation.scope.amount) <= 40)) &&
+                      CodePointCount(element.presentation.scope.amount) <= 40)) &&
                   typeof element.presentation.scope.currency == "string" &&
                   (element.presentation.scope.currency.length >= 2 ||
                     (element.presentation.scope.currency.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.currency) >= 1)) &&
+                      CodePointCount(element.presentation.scope.currency) >= 1)) &&
                   (element.presentation.scope.currency.length <= 12 ||
                     (element.presentation.scope.currency.length <= 24 &&
-                      CodePointCount2(element.presentation.scope.currency) <= 12)) &&
+                      CodePointCount(element.presentation.scope.currency) <= 12)) &&
                   typeof element.presentation.scope.target == "string" &&
                   (element.presentation.scope.target.length >= 2 ||
                     (element.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.target) >= 1)) &&
+                      CodePointCount(element.presentation.scope.target) >= 1)) &&
                   (element.presentation.scope.target.length <= 128 ||
                     (element.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(element.presentation.scope.target) <= 128))) ||
+                      CodePointCount(element.presentation.scope.target) <= 128))) ||
                 (typeof element.presentation.scope == "object" &&
                   element.presentation.scope !== null &&
                   !Array.isArray(element.presentation.scope) &&
@@ -3699,10 +3698,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof element.presentation.scope.target == "string" &&
                   (element.presentation.scope.target.length >= 2 ||
                     (element.presentation.scope.target.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.target) >= 1)) &&
+                      CodePointCount(element.presentation.scope.target) >= 1)) &&
                   (element.presentation.scope.target.length <= 128 ||
                     (element.presentation.scope.target.length <= 256 &&
-                      CodePointCount2(element.presentation.scope.target) <= 128)) &&
+                      CodePointCount(element.presentation.scope.target) <= 128)) &&
                   ((typeof element.presentation.scope.visibility == "string" &&
                     element.presentation.scope.visibility === "public") ||
                     (typeof element.presentation.scope.visibility == "string" &&
@@ -3721,17 +3720,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   typeof element.presentation.scope.automation == "string" &&
                   (element.presentation.scope.automation.length >= 2 ||
                     (element.presentation.scope.automation.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.automation) >= 1)) &&
+                      CodePointCount(element.presentation.scope.automation) >= 1)) &&
                   (element.presentation.scope.automation.length <= 128 ||
                     (element.presentation.scope.automation.length <= 256 &&
-                      CodePointCount2(element.presentation.scope.automation) <= 128)) &&
+                      CodePointCount(element.presentation.scope.automation) <= 128)) &&
                   typeof element.presentation.scope.command == "string" &&
                   (element.presentation.scope.command.length >= 2 ||
                     (element.presentation.scope.command.length >= 1 &&
-                      CodePointCount2(element.presentation.scope.command) >= 1)) &&
+                      CodePointCount(element.presentation.scope.command) >= 1)) &&
                   (element.presentation.scope.command.length <= 256 ||
                     (element.presentation.scope.command.length <= 512 &&
-                      CodePointCount2(element.presentation.scope.command) <= 256)) &&
+                      CodePointCount(element.presentation.scope.command) <= 256)) &&
                   (element.presentation.scope.expiresInDays === void 0 ||
                     !("expiresInDays" in element.presentation.scope) ||
                     (Number.isInteger(element.presentation.scope.expiresInDays) &&
@@ -3772,26 +3771,26 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof element.presentation.title == "string" &&
                 (element.presentation.title.length >= 2 ||
                   (element.presentation.title.length >= 1 &&
-                    CodePointCount2(element.presentation.title) >= 1)) &&
+                    CodePointCount(element.presentation.title) >= 1)) &&
                 (element.presentation.title.length <= 80 ||
                   (element.presentation.title.length <= 160 &&
-                    CodePointCount2(element.presentation.title) <= 80)) &&
+                    CodePointCount(element.presentation.title) <= 80)) &&
                 typeof element.presentation.description == "string" &&
                 (element.presentation.description.length >= 2 ||
                   (element.presentation.description.length >= 1 &&
-                    CodePointCount2(element.presentation.description) >= 1)) &&
+                    CodePointCount(element.presentation.description) >= 1)) &&
                 (element.presentation.description.length <= 512 ||
                   (element.presentation.description.length <= 1024 &&
-                    CodePointCount2(element.presentation.description) <= 512)) &&
+                    CodePointCount(element.presentation.description) <= 512)) &&
                 (element.presentation.detail === void 0 ||
                   !("detail" in element.presentation) ||
                   (typeof element.presentation.detail == "string" &&
                     (element.presentation.detail.length >= 2 ||
                       (element.presentation.detail.length >= 1 &&
-                        CodePointCount2(element.presentation.detail) >= 1)) &&
+                        CodePointCount(element.presentation.detail) >= 1)) &&
                     (element.presentation.detail.length <= 16384 ||
                       (element.presentation.detail.length <= 32768 &&
-                        CodePointCount2(element.presentation.detail) <= 16384)))) &&
+                        CodePointCount(element.presentation.detail) <= 16384)))) &&
                 ((typeof element.presentation.severity == "string" &&
                   element.presentation.severity === "info") ||
                   (typeof element.presentation.severity == "string" &&
@@ -3803,21 +3802,21 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof element.presentation.pluginId == "string" &&
                     (element.presentation.pluginId.length >= 2 ||
                       (element.presentation.pluginId.length >= 1 &&
-                        CodePointCount2(element.presentation.pluginId) >= 1))) ||
+                        CodePointCount(element.presentation.pluginId) >= 1))) ||
                   element.presentation.pluginId === null) &&
                 (element.presentation.toolName === void 0 ||
                   !("toolName" in element.presentation) ||
                   (typeof element.presentation.toolName == "string" &&
                     (element.presentation.toolName.length >= 2 ||
                       (element.presentation.toolName.length >= 1 &&
-                        CodePointCount2(element.presentation.toolName) >= 1))) ||
+                        CodePointCount(element.presentation.toolName) >= 1))) ||
                   element.presentation.toolName === null) &&
                 (element.presentation.agentId === void 0 ||
                   !("agentId" in element.presentation) ||
                   (typeof element.presentation.agentId == "string" &&
                     (element.presentation.agentId.length >= 2 ||
                       (element.presentation.agentId.length >= 1 &&
-                        CodePointCount2(element.presentation.agentId) >= 1))) ||
+                        CodePointCount(element.presentation.agentId) >= 1))) ||
                   element.presentation.agentId === null) &&
                 (element.presentation.scope === void 0 ||
                   !("scope" in element.presentation) ||
@@ -3835,10 +3834,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof element.presentation.scope.target == "string" &&
                     (element.presentation.scope.target.length >= 2 ||
                       (element.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.target) >= 1)) &&
+                        CodePointCount(element.presentation.scope.target) >= 1)) &&
                     (element.presentation.scope.target.length <= 128 ||
                       (element.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(element.presentation.scope.target) <= 128)) &&
+                        CodePointCount(element.presentation.scope.target) <= 128)) &&
                     Number.isInteger(element.presentation.scope.recipientCount) &&
                     (!(
                       Number.isFinite(element.presentation.scope.recipientCount) ||
@@ -3853,9 +3852,9 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                           (element2, index2) =>
                             typeof element2 == "string" &&
                             (element2.length >= 2 ||
-                              (element2.length >= 1 && CodePointCount2(element2) >= 1)) &&
+                              (element2.length >= 1 && CodePointCount(element2) >= 1)) &&
                             (element2.length <= 128 ||
-                              (element2.length <= 256 && CodePointCount2(element2) <= 128)),
+                              (element2.length <= 256 && CodePointCount(element2) <= 128)),
                         ) &&
                         element.presentation.scope.recipients.length <= 5)) &&
                     (element.presentation.scope.audience === void 0 ||
@@ -3877,24 +3876,24 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof element.presentation.scope.amount == "string" &&
                     (element.presentation.scope.amount.length >= 2 ||
                       (element.presentation.scope.amount.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.amount) >= 1)) &&
+                        CodePointCount(element.presentation.scope.amount) >= 1)) &&
                     (element.presentation.scope.amount.length <= 40 ||
                       (element.presentation.scope.amount.length <= 80 &&
-                        CodePointCount2(element.presentation.scope.amount) <= 40)) &&
+                        CodePointCount(element.presentation.scope.amount) <= 40)) &&
                     typeof element.presentation.scope.currency == "string" &&
                     (element.presentation.scope.currency.length >= 2 ||
                       (element.presentation.scope.currency.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.currency) >= 1)) &&
+                        CodePointCount(element.presentation.scope.currency) >= 1)) &&
                     (element.presentation.scope.currency.length <= 12 ||
                       (element.presentation.scope.currency.length <= 24 &&
-                        CodePointCount2(element.presentation.scope.currency) <= 12)) &&
+                        CodePointCount(element.presentation.scope.currency) <= 12)) &&
                     typeof element.presentation.scope.target == "string" &&
                     (element.presentation.scope.target.length >= 2 ||
                       (element.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.target) >= 1)) &&
+                        CodePointCount(element.presentation.scope.target) >= 1)) &&
                     (element.presentation.scope.target.length <= 128 ||
                       (element.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(element.presentation.scope.target) <= 128))) ||
+                        CodePointCount(element.presentation.scope.target) <= 128))) ||
                   (typeof element.presentation.scope == "object" &&
                     element.presentation.scope !== null &&
                     !Array.isArray(element.presentation.scope) &&
@@ -3907,10 +3906,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof element.presentation.scope.target == "string" &&
                     (element.presentation.scope.target.length >= 2 ||
                       (element.presentation.scope.target.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.target) >= 1)) &&
+                        CodePointCount(element.presentation.scope.target) >= 1)) &&
                     (element.presentation.scope.target.length <= 128 ||
                       (element.presentation.scope.target.length <= 256 &&
-                        CodePointCount2(element.presentation.scope.target) <= 128)) &&
+                        CodePointCount(element.presentation.scope.target) <= 128)) &&
                     ((typeof element.presentation.scope.visibility == "string" &&
                       element.presentation.scope.visibility === "public") ||
                       (typeof element.presentation.scope.visibility == "string" &&
@@ -3929,17 +3928,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof element.presentation.scope.automation == "string" &&
                     (element.presentation.scope.automation.length >= 2 ||
                       (element.presentation.scope.automation.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.automation) >= 1)) &&
+                        CodePointCount(element.presentation.scope.automation) >= 1)) &&
                     (element.presentation.scope.automation.length <= 128 ||
                       (element.presentation.scope.automation.length <= 256 &&
-                        CodePointCount2(element.presentation.scope.automation) <= 128)) &&
+                        CodePointCount(element.presentation.scope.automation) <= 128)) &&
                     typeof element.presentation.scope.command == "string" &&
                     (element.presentation.scope.command.length >= 2 ||
                       (element.presentation.scope.command.length >= 1 &&
-                        CodePointCount2(element.presentation.scope.command) >= 1)) &&
+                        CodePointCount(element.presentation.scope.command) >= 1)) &&
                     (element.presentation.scope.command.length <= 256 ||
                       (element.presentation.scope.command.length <= 512 &&
-                        CodePointCount2(element.presentation.scope.command) <= 256)) &&
+                        CodePointCount(element.presentation.scope.command) <= 256)) &&
                     (element.presentation.scope.expiresInDays === void 0 ||
                       !("expiresInDays" in element.presentation.scope) ||
                       (Number.isInteger(element.presentation.scope.expiresInDays) &&
@@ -3976,10 +3975,10 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                     typeof element.presentation.externalResolution.label == "string" &&
                     (element.presentation.externalResolution.label.length >= 2 ||
                       (element.presentation.externalResolution.label.length >= 1 &&
-                        CodePointCount2(element.presentation.externalResolution.label) >= 1)) &&
+                        CodePointCount(element.presentation.externalResolution.label) >= 1)) &&
                     (element.presentation.externalResolution.label.length <= 80 ||
                       (element.presentation.externalResolution.label.length <= 160 &&
-                        CodePointCount2(element.presentation.externalResolution.label) <= 80)) &&
+                        CodePointCount(element.presentation.externalResolution.label) <= 80)) &&
                     Array.isArray(element.presentation.externalResolution.decisions) &&
                     element.presentation.externalResolution.decisions.every(
                       (element2, index2) =>
@@ -4006,17 +4005,17 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                 typeof element.presentation.title == "string" &&
                 (element.presentation.title.length >= 2 ||
                   (element.presentation.title.length >= 1 &&
-                    CodePointCount2(element.presentation.title) >= 1)) &&
+                    CodePointCount(element.presentation.title) >= 1)) &&
                 (element.presentation.title.length <= 80 ||
                   (element.presentation.title.length <= 160 &&
-                    CodePointCount2(element.presentation.title) <= 80)) &&
+                    CodePointCount(element.presentation.title) <= 80)) &&
                 typeof element.presentation.description == "string" &&
                 (element.presentation.description.length >= 2 ||
                   (element.presentation.description.length >= 1 &&
-                    CodePointCount2(element.presentation.description) >= 1)) &&
+                    CodePointCount(element.presentation.description) >= 1)) &&
                 (element.presentation.description.length <= 512 ||
                   (element.presentation.description.length <= 1024 &&
-                    CodePointCount2(element.presentation.description) <= 512)) &&
+                    CodePointCount(element.presentation.description) <= 512)) &&
                 typeof element.presentation.proposalHash == "string" &&
                 External[9].test(element.presentation.proposalHash) &&
                 (element.presentation.agentId === void 0 ||
@@ -4024,7 +4023,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
                   (typeof element.presentation.agentId == "string" &&
                     (element.presentation.agentId.length >= 2 ||
                       (element.presentation.agentId.length >= 1 &&
-                        CodePointCount2(element.presentation.agentId) >= 1))) ||
+                        CodePointCount(element.presentation.agentId) >= 1))) ||
                   element.presentation.agentId === null) &&
                 Array.isArray(element.presentation.allowedDecisions) &&
                 element.presentation.allowedDecisions.every(
@@ -4044,7 +4043,7 @@ var isSessionApprovalEvent = /* @__PURE__ */ (() => {
               (typeof element.sourceSessionKey == "string" &&
                 (element.sourceSessionKey.length >= 2 ||
                   (element.sourceSessionKey.length >= 1 &&
-                    CodePointCount2(element.sourceSessionKey) >= 1)))),
+                    CodePointCount(element.sourceSessionKey) >= 1)))),
         ) &&
         typeof value.truncated == "boolean";
     return (value) => check_0(value);

@@ -46,6 +46,7 @@ type Group =
   | "activity"
   | "approvals"
   | "session-input"
+  | "chat-input"
   | "transcript"
   | "history-state"
   | "sender-identity";
@@ -124,13 +125,13 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "SessionsGoalUpdateParams",
     SessionsGoalUpdateParamsSchema,
     'import("' + schemaRoot + 'sessions-goal.js").SessionsGoalUpdateParams',
-    "session-input",
+    "chat-input",
   ],
   [
     "SessionsGoalClearParams",
     SessionsGoalClearParamsSchema,
     'import("' + schemaRoot + 'sessions-goal.js").SessionsGoalClearParams',
-    "session-input",
+    "chat-input",
   ],
   ...(["worktreeSource", "deviceFolder", "repository", "fastMode", "titleSource"] as const).map(
     (key): [string, TSchema, string, Group] => [
@@ -182,7 +183,7 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "TalkVoiceChangeEvent",
     TalkVoiceChangeEventSchema,
     'import("' + schemaRoot + 'talk-voice.js").TalkVoiceChangeEvent',
-    "session-input",
+    "chat-input",
   ],
 ];
 
@@ -249,6 +250,7 @@ async function main() {
     "approvals",
     "session-input",
     "transcript",
+    "chat-input",
     "history-state",
     "sender-identity",
   ] as const) {
@@ -258,7 +260,7 @@ async function main() {
     const source = [
       ...(compiled.includes("Guard.")
         ? [
-            `import { CodePointCount } from ${JSON.stringify(path.join(typeboxBuildRoot, "guard/guard.mjs"))};`,
+            `import { CodePointCount } from ${JSON.stringify(path.join(typeboxBuildRoot, "guard/unicode/unicode.mjs"))};`,
           ]
         : []),
       ...(compiled.includes("Hashing.")

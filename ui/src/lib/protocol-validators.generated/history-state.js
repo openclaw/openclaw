@@ -37,11 +37,6 @@ function CodePointCount(value) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/guard.mjs
-function CodePointCount2(value) {
-  return CodePointCount(value);
-}
-
 // <stdin>
 var isChatHistoryState = /* @__PURE__ */ (() => {
   let External = [
@@ -90,28 +85,28 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
         (typeof value.stateRevision.pendingInputs == "string" &&
           (value.stateRevision.pendingInputs.length >= 2 ||
             (value.stateRevision.pendingInputs.length >= 1 &&
-              CodePointCount2(value.stateRevision.pendingInputs) >= 1)) &&
+              CodePointCount(value.stateRevision.pendingInputs) >= 1)) &&
           (value.stateRevision.pendingInputs.length <= 64 ||
             (value.stateRevision.pendingInputs.length <= 128 &&
-              CodePointCount2(value.stateRevision.pendingInputs) <= 64)))) &&
+              CodePointCount(value.stateRevision.pendingInputs) <= 64)))) &&
       (value.stateRevision.sessionInfo === void 0 ||
         !("sessionInfo" in value.stateRevision) ||
         (typeof value.stateRevision.sessionInfo == "string" &&
           (value.stateRevision.sessionInfo.length >= 2 ||
             (value.stateRevision.sessionInfo.length >= 1 &&
-              CodePointCount2(value.stateRevision.sessionInfo) >= 1)) &&
+              CodePointCount(value.stateRevision.sessionInfo) >= 1)) &&
           (value.stateRevision.sessionInfo.length <= 64 ||
             (value.stateRevision.sessionInfo.length <= 128 &&
-              CodePointCount2(value.stateRevision.sessionInfo) <= 64)))) &&
+              CodePointCount(value.stateRevision.sessionInfo) <= 64)))) &&
       (value.stateRevision.commands === void 0 ||
         !("commands" in value.stateRevision) ||
         (typeof value.stateRevision.commands == "string" &&
           (value.stateRevision.commands.length >= 2 ||
             (value.stateRevision.commands.length >= 1 &&
-              CodePointCount2(value.stateRevision.commands) >= 1)) &&
+              CodePointCount(value.stateRevision.commands) >= 1)) &&
           (value.stateRevision.commands.length <= 64 ||
             (value.stateRevision.commands.length <= 128 &&
-              CodePointCount2(value.stateRevision.commands) <= 64)))) &&
+              CodePointCount(value.stateRevision.commands) <= 64)))) &&
       (value.pendingInputs === void 0 ||
         !("pendingInputs" in value) ||
         (typeof value.pendingInputs == "object" &&
@@ -137,14 +132,14 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
               ) &&
               typeof element.id == "string" &&
               (element.id.length >= 2 ||
-                (element.id.length >= 1 && CodePointCount2(element.id) >= 1)) &&
+                (element.id.length >= 1 && CodePointCount(element.id) >= 1)) &&
               (element.runId === void 0 ||
                 !("runId" in element) ||
                 (typeof element.runId == "string" &&
                   (element.runId.length >= 2 ||
-                    (element.runId.length >= 1 && CodePointCount2(element.runId) >= 1)) &&
+                    (element.runId.length >= 1 && CodePointCount(element.runId) >= 1)) &&
                   (element.runId.length <= 256 ||
-                    (element.runId.length <= 512 && CodePointCount2(element.runId) <= 256)))) &&
+                    (element.runId.length <= 512 && CodePointCount(element.runId) <= 256)))) &&
               !0 &&
               Number.isFinite(element.acceptedAt) &&
               typeof element.state == "string" &&
@@ -211,13 +206,13 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.lifecycleRevision == "string" &&
               (value.sessionInfo.lifecycleRevision.length >= 2 ||
                 (value.sessionInfo.lifecycleRevision.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.lifecycleRevision) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.lifecycleRevision) >= 1)))) &&
           (value.sessionInfo.sessionModelRevision === void 0 ||
             !("sessionModelRevision" in value.sessionInfo) ||
             (typeof value.sessionInfo.sessionModelRevision == "string" &&
               (value.sessionInfo.sessionModelRevision.length >= 2 ||
                 (value.sessionInfo.sessionModelRevision.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.sessionModelRevision) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.sessionModelRevision) >= 1)))) &&
           (value.sessionInfo.incognito === void 0 ||
             !("incognito" in value.sessionInfo) ||
             (typeof value.sessionInfo.incognito == "boolean" &&
@@ -243,7 +238,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.channelAvatarUrl == "string" &&
               (value.sessionInfo.channelAvatarUrl.length >= 2 ||
                 (value.sessionInfo.channelAvatarUrl.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.channelAvatarUrl) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.channelAvatarUrl) >= 1)))) &&
           (value.sessionInfo.boardFace === void 0 ||
             !("boardFace" in value.sessionInfo) ||
             (typeof value.sessionInfo.boardFace == "string" &&
@@ -289,25 +284,25 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.classification == "string" &&
               (value.sessionInfo.classification.length >= 2 ||
                 (value.sessionInfo.classification.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.classification) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.classification) >= 1)))) &&
           (value.sessionInfo.agentId === void 0 ||
             !("agentId" in value.sessionInfo) ||
             (typeof value.sessionInfo.agentId == "string" &&
               (value.sessionInfo.agentId.length >= 2 ||
                 (value.sessionInfo.agentId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.agentId) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.agentId) >= 1)))) &&
           (value.sessionInfo.accountId === void 0 ||
             !("accountId" in value.sessionInfo) ||
             (typeof value.sessionInfo.accountId == "string" &&
               (value.sessionInfo.accountId.length >= 2 ||
                 (value.sessionInfo.accountId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.accountId) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.accountId) >= 1)))) &&
           (value.sessionInfo.peerKind === void 0 ||
             !("peerKind" in value.sessionInfo) ||
             (typeof value.sessionInfo.peerKind == "string" &&
               (value.sessionInfo.peerKind.length >= 2 ||
                 (value.sessionInfo.peerKind.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.peerKind) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.peerKind) >= 1)))) &&
           (value.sessionInfo.isMain === void 0 ||
             !("isMain" in value.sessionInfo) ||
             typeof value.sessionInfo.isMain == "boolean") &&
@@ -342,7 +337,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                 (typeof value.sessionInfo.activitySummary.text == "string" &&
                   (value.sessionInfo.activitySummary.text.length <= 900 ||
                     (value.sessionInfo.activitySummary.text.length <= 1800 &&
-                      CodePointCount2(value.sessionInfo.activitySummary.text) <= 900)))) &&
+                      CodePointCount(value.sessionInfo.activitySummary.text) <= 900)))) &&
               (value.sessionInfo.activitySummary.updatedAt === void 0 ||
                 !("updatedAt" in value.sessionInfo.activitySummary) ||
                 (Number.isInteger(value.sessionInfo.activitySummary.updatedAt) &&
@@ -371,7 +366,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.ancestorRevision == "string" &&
               (value.sessionInfo.ancestorRevision.length >= 2 ||
                 (value.sessionInfo.ancestorRevision.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.ancestorRevision) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.ancestorRevision) >= 1)))) &&
           (value.sessionInfo.hiddenFromInvolvingMe === void 0 ||
             !("hiddenFromInvolvingMe" in value.sessionInfo) ||
             typeof value.sessionInfo.hiddenFromInvolvingMe == "boolean") &&
@@ -401,19 +396,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                 (typeof value.sessionInfo.archivedBy.id == "string" &&
                   (value.sessionInfo.archivedBy.id.length >= 2 ||
                     (value.sessionInfo.archivedBy.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.id) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.archivedBy.id) >= 1)))) &&
               (value.sessionInfo.archivedBy.label === void 0 ||
                 !("label" in value.sessionInfo.archivedBy) ||
                 (typeof value.sessionInfo.archivedBy.label == "string" &&
                   (value.sessionInfo.archivedBy.label.length >= 2 ||
                     (value.sessionInfo.archivedBy.label.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.label) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.archivedBy.label) >= 1)))) &&
               (value.sessionInfo.archivedBy.avatarUrl === void 0 ||
                 !("avatarUrl" in value.sessionInfo.archivedBy) ||
                 (typeof value.sessionInfo.archivedBy.avatarUrl == "string" &&
                   (value.sessionInfo.archivedBy.avatarUrl.length >= 2 ||
                     (value.sessionInfo.archivedBy.avatarUrl.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.avatarUrl) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.archivedBy.avatarUrl) >= 1)))) &&
               (value.sessionInfo.archivedBy.identity === void 0 ||
                 !("identity" in value.sessionInfo.archivedBy) ||
                 (typeof value.sessionInfo.archivedBy.identity == "object" &&
@@ -427,7 +422,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.archivedBy.identity.id == "string" &&
                   (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.archivedBy.identity == "object" &&
                   value.sessionInfo.archivedBy.identity !== null &&
                   !Array.isArray(value.sessionInfo.archivedBy.identity) &&
@@ -439,7 +434,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.archivedBy.identity.id == "string" &&
                   (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.archivedBy.identity == "object" &&
                   value.sessionInfo.archivedBy.identity !== null &&
                   !Array.isArray(value.sessionInfo.archivedBy.identity) &&
@@ -454,19 +449,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.archivedBy.identity.pluginId == "string" &&
                   (value.sessionInfo.archivedBy.identity.pluginId.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.pluginId) >= 1)) &&
+                      CodePointCount(value.sessionInfo.archivedBy.identity.pluginId) >= 1)) &&
                   typeof value.sessionInfo.archivedBy.identity.domain == "string" &&
                   (value.sessionInfo.archivedBy.identity.domain.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.domain.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.domain) >= 1)) &&
+                      CodePointCount(value.sessionInfo.archivedBy.identity.domain) >= 1)) &&
                   typeof value.sessionInfo.archivedBy.identity.idKind == "string" &&
                   (value.sessionInfo.archivedBy.identity.idKind.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.idKind.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.idKind) >= 1)) &&
+                      CodePointCount(value.sessionInfo.archivedBy.identity.idKind) >= 1)) &&
                   typeof value.sessionInfo.archivedBy.identity.id == "string" &&
                   (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.archivedBy.identity == "object" &&
                   value.sessionInfo.archivedBy.identity !== null &&
                   !Array.isArray(value.sessionInfo.archivedBy.identity) &&
@@ -481,12 +476,12 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   ((typeof value.sessionInfo.archivedBy.identity.pluginId == "string" &&
                     (value.sessionInfo.archivedBy.identity.pluginId.length >= 2 ||
                       (value.sessionInfo.archivedBy.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.archivedBy.identity.pluginId) >= 1))) ||
+                        CodePointCount(value.sessionInfo.archivedBy.identity.pluginId) >= 1))) ||
                     value.sessionInfo.archivedBy.identity.pluginId === null) &&
                   ((typeof value.sessionInfo.archivedBy.identity.accountId == "string" &&
                     (value.sessionInfo.archivedBy.identity.accountId.length >= 2 ||
                       (value.sessionInfo.archivedBy.identity.accountId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.archivedBy.identity.accountId) >= 1))) ||
+                        CodePointCount(value.sessionInfo.archivedBy.identity.accountId) >= 1))) ||
                     value.sessionInfo.archivedBy.identity.accountId === null) &&
                   ((typeof value.sessionInfo.archivedBy.identity.senderKind == "string" &&
                     value.sessionInfo.archivedBy.identity.senderKind === "human") ||
@@ -497,7 +492,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.archivedBy.identity.id == "string" &&
                   (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
                     (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.archivedBy.identity == "object" &&
                   value.sessionInfo.archivedBy.identity !== null &&
                   !Array.isArray(value.sessionInfo.archivedBy.identity) &&
@@ -527,6 +522,9 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
           (value.sessionInfo.pinned === void 0 ||
             !("pinned" in value.sessionInfo) ||
             typeof value.sessionInfo.pinned == "boolean") &&
+          (value.sessionInfo.maintenanceProtected === void 0 ||
+            !("maintenanceProtected" in value.sessionInfo) ||
+            typeof value.sessionInfo.maintenanceProtected == "boolean") &&
           (value.sessionInfo.sidebarRoot === void 0 ||
             !("sidebarRoot" in value.sessionInfo) ||
             typeof value.sessionInfo.sidebarRoot == "boolean") &&
@@ -589,23 +587,23 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
               typeof value.sessionInfo.providerReview.id == "string" &&
               (value.sessionInfo.providerReview.id.length >= 2 ||
                 (value.sessionInfo.providerReview.id.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.providerReview.id) >= 1)) &&
+                  CodePointCount(value.sessionInfo.providerReview.id) >= 1)) &&
               typeof value.sessionInfo.providerReview.runId == "string" &&
               (value.sessionInfo.providerReview.runId.length >= 2 ||
                 (value.sessionInfo.providerReview.runId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.providerReview.runId) >= 1)) &&
+                  CodePointCount(value.sessionInfo.providerReview.runId) >= 1)) &&
               (value.sessionInfo.providerReview.explanation === void 0 ||
                 !("explanation" in value.sessionInfo.providerReview) ||
                 (typeof value.sessionInfo.providerReview.explanation == "string" &&
                   (value.sessionInfo.providerReview.explanation.length <= 65536 ||
                     (value.sessionInfo.providerReview.explanation.length <= 131072 &&
-                      CodePointCount2(value.sessionInfo.providerReview.explanation) <= 65536)))) &&
+                      CodePointCount(value.sessionInfo.providerReview.explanation) <= 65536)))) &&
               (value.sessionInfo.providerReview.continuationMessage === void 0 ||
                 !("continuationMessage" in value.sessionInfo.providerReview) ||
                 (typeof value.sessionInfo.providerReview.continuationMessage == "string" &&
                   (value.sessionInfo.providerReview.continuationMessage.length <= 1024 ||
                     (value.sessionInfo.providerReview.continuationMessage.length <= 2048 &&
-                      CodePointCount2(value.sessionInfo.providerReview.continuationMessage) <=
+                      CodePointCount(value.sessionInfo.providerReview.continuationMessage) <=
                         1024)))) &&
               typeof value.sessionInfo.providerReview.canContinue == "boolean")) &&
           (value.sessionInfo.lastRunId === void 0 ||
@@ -613,7 +611,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.lastRunId == "string" &&
               (value.sessionInfo.lastRunId.length >= 2 ||
                 (value.sessionInfo.lastRunId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.lastRunId) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.lastRunId) >= 1)))) &&
           (value.sessionInfo.restartRecoveryStatus === void 0 ||
             !("restartRecoveryStatus" in value.sessionInfo) ||
             (typeof value.sessionInfo.restartRecoveryStatus == "string" &&
@@ -623,13 +621,13 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.restartRecoveryCycleId == "string" &&
               (value.sessionInfo.restartRecoveryCycleId.length >= 2 ||
                 (value.sessionInfo.restartRecoveryCycleId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.restartRecoveryCycleId) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.restartRecoveryCycleId) >= 1)))) &&
           (value.sessionInfo.activeLeafEntryId === void 0 ||
             !("activeLeafEntryId" in value.sessionInfo) ||
             (typeof value.sessionInfo.activeLeafEntryId == "string" &&
               (value.sessionInfo.activeLeafEntryId.length >= 2 ||
                 (value.sessionInfo.activeLeafEntryId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.activeLeafEntryId) >= 1))) ||
+                  CodePointCount(value.sessionInfo.activeLeafEntryId) >= 1))) ||
             value.sessionInfo.activeLeafEntryId === null) &&
           (value.sessionInfo.spawnedBy === void 0 ||
             !("spawnedBy" in value.sessionInfo) ||
@@ -649,7 +647,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
               value.sessionInfo.childOwnerSessionKeys.every(
                 (element, index) =>
                   typeof element == "string" &&
-                  (element.length >= 2 || (element.length >= 1 && CodePointCount2(element) >= 1)),
+                  (element.length >= 2 || (element.length >= 1 && CodePointCount(element) >= 1)),
               ) &&
               value.sessionInfo.childOwnerSessionKeys.length <= 2)) &&
           (value.sessionInfo.childSessions === void 0 ||
@@ -704,7 +702,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   ) &&
                   typeof element.groupId == "string" &&
                   (element.groupId.length >= 2 ||
-                    (element.groupId.length >= 1 && CodePointCount2(element.groupId) >= 1)) &&
+                    (element.groupId.length >= 1 && CodePointCount(element.groupId) >= 1)) &&
                   Number.isFinite(element.createdAt) &&
                   element.createdAt >= 0 &&
                   (element.children === void 0 ||
@@ -721,7 +719,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                           typeof element2.sessionKey == "string" &&
                           (element2.sessionKey.length >= 2 ||
                             (element2.sessionKey.length >= 1 &&
-                              CodePointCount2(element2.sessionKey) >= 1)) &&
+                              CodePointCount(element2.sessionKey) >= 1)) &&
                           ((typeof element2.status == "string" && element2.status === "queued") ||
                             (typeof element2.status == "string" && element2.status === "running") ||
                             (typeof element2.status == "string" && element2.status === "done") ||
@@ -759,14 +757,14 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
               typeof value.sessionInfo.deviceFolder.deviceId == "string" &&
               (value.sessionInfo.deviceFolder.deviceId.length >= 2 ||
                 (value.sessionInfo.deviceFolder.deviceId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.deviceFolder.deviceId) >= 1)) &&
+                  CodePointCount(value.sessionInfo.deviceFolder.deviceId) >= 1)) &&
               typeof value.sessionInfo.deviceFolder.path == "string" &&
               (value.sessionInfo.deviceFolder.path.length >= 2 ||
                 (value.sessionInfo.deviceFolder.path.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.deviceFolder.path) >= 1)) &&
+                  CodePointCount(value.sessionInfo.deviceFolder.path) >= 1)) &&
               (value.sessionInfo.deviceFolder.path.length <= 4096 ||
                 (value.sessionInfo.deviceFolder.path.length <= 8192 &&
-                  CodePointCount2(value.sessionInfo.deviceFolder.path) <= 4096)))) &&
+                  CodePointCount(value.sessionInfo.deviceFolder.path) <= 4096)))) &&
           (value.sessionInfo.worktree === void 0 ||
             !("worktree" in value.sessionInfo) ||
             (typeof value.sessionInfo.worktree == "object" &&
@@ -783,7 +781,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.repositoryWorkspaceId == "string" &&
               (value.sessionInfo.repositoryWorkspaceId.length >= 2 ||
                 (value.sessionInfo.repositoryWorkspaceId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.repositoryWorkspaceId) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.repositoryWorkspaceId) >= 1)))) &&
           (value.sessionInfo.repository === void 0 ||
             !("repository" in value.sessionInfo) ||
             (typeof value.sessionInfo.repository == "object" &&
@@ -797,23 +795,23 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
               typeof value.sessionInfo.repository.url == "string" &&
               (value.sessionInfo.repository.url.length >= 2 ||
                 (value.sessionInfo.repository.url.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.repository.url) >= 1)) &&
+                  CodePointCount(value.sessionInfo.repository.url) >= 1)) &&
               (value.sessionInfo.repository.url.length <= 2048 ||
                 (value.sessionInfo.repository.url.length <= 4096 &&
-                  CodePointCount2(value.sessionInfo.repository.url) <= 2048)) &&
+                  CodePointCount(value.sessionInfo.repository.url) <= 2048)) &&
               (value.sessionInfo.repository.ref === void 0 ||
                 !("ref" in value.sessionInfo.repository) ||
                 (typeof value.sessionInfo.repository.ref == "string" &&
                   (value.sessionInfo.repository.ref.length >= 2 ||
                     (value.sessionInfo.repository.ref.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.repository.ref) >= 1)) &&
+                      CodePointCount(value.sessionInfo.repository.ref) >= 1)) &&
                   (value.sessionInfo.repository.ref.length <= 1024 ||
                     (value.sessionInfo.repository.ref.length <= 2048 &&
-                      CodePointCount2(value.sessionInfo.repository.ref) <= 1024)))) &&
+                      CodePointCount(value.sessionInfo.repository.ref) <= 1024)))) &&
               typeof value.sessionInfo.repository.branch == "string" &&
               (value.sessionInfo.repository.branch.length >= 2 ||
                 (value.sessionInfo.repository.branch.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.repository.branch) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.repository.branch) >= 1)))) &&
           (value.sessionInfo.execNode === void 0 ||
             !("execNode" in value.sessionInfo) ||
             typeof value.sessionInfo.execNode == "string") &&
@@ -895,7 +893,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.nativeRuntimeConsent == "string" &&
               (value.sessionInfo.nativeRuntimeConsent.length >= 2 ||
                 (value.sessionInfo.nativeRuntimeConsent.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.nativeRuntimeConsent) >= 1)))) &&
+                  CodePointCount(value.sessionInfo.nativeRuntimeConsent) >= 1)))) &&
           (value.sessionInfo.permissionModePending === void 0 ||
             !("permissionModePending" in value.sessionInfo) ||
             typeof value.sessionInfo.permissionModePending == "boolean") &&
@@ -944,19 +942,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                 (typeof value.sessionInfo.createdActor.id == "string" &&
                   (value.sessionInfo.createdActor.id.length >= 2 ||
                     (value.sessionInfo.createdActor.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.id) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.createdActor.id) >= 1)))) &&
               (value.sessionInfo.createdActor.label === void 0 ||
                 !("label" in value.sessionInfo.createdActor) ||
                 (typeof value.sessionInfo.createdActor.label == "string" &&
                   (value.sessionInfo.createdActor.label.length >= 2 ||
                     (value.sessionInfo.createdActor.label.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.label) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.createdActor.label) >= 1)))) &&
               (value.sessionInfo.createdActor.avatarUrl === void 0 ||
                 !("avatarUrl" in value.sessionInfo.createdActor) ||
                 (typeof value.sessionInfo.createdActor.avatarUrl == "string" &&
                   (value.sessionInfo.createdActor.avatarUrl.length >= 2 ||
                     (value.sessionInfo.createdActor.avatarUrl.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.avatarUrl) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.createdActor.avatarUrl) >= 1)))) &&
               (value.sessionInfo.createdActor.identity === void 0 ||
                 !("identity" in value.sessionInfo.createdActor) ||
                 (typeof value.sessionInfo.createdActor.identity == "object" &&
@@ -971,7 +969,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.createdActor.identity.id == "string" &&
                   (value.sessionInfo.createdActor.identity.id.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.createdActor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.createdActor.identity == "object" &&
                   value.sessionInfo.createdActor.identity !== null &&
                   !Array.isArray(value.sessionInfo.createdActor.identity) &&
@@ -984,7 +982,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.createdActor.identity.id == "string" &&
                   (value.sessionInfo.createdActor.identity.id.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.createdActor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.createdActor.identity == "object" &&
                   value.sessionInfo.createdActor.identity !== null &&
                   !Array.isArray(value.sessionInfo.createdActor.identity) &&
@@ -1000,19 +998,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.createdActor.identity.pluginId == "string" &&
                   (value.sessionInfo.createdActor.identity.pluginId.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.pluginId) >= 1)) &&
+                      CodePointCount(value.sessionInfo.createdActor.identity.pluginId) >= 1)) &&
                   typeof value.sessionInfo.createdActor.identity.domain == "string" &&
                   (value.sessionInfo.createdActor.identity.domain.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.domain.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.domain) >= 1)) &&
+                      CodePointCount(value.sessionInfo.createdActor.identity.domain) >= 1)) &&
                   typeof value.sessionInfo.createdActor.identity.idKind == "string" &&
                   (value.sessionInfo.createdActor.identity.idKind.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.idKind.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.idKind) >= 1)) &&
+                      CodePointCount(value.sessionInfo.createdActor.identity.idKind) >= 1)) &&
                   typeof value.sessionInfo.createdActor.identity.id == "string" &&
                   (value.sessionInfo.createdActor.identity.id.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.createdActor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.createdActor.identity == "object" &&
                   value.sessionInfo.createdActor.identity !== null &&
                   !Array.isArray(value.sessionInfo.createdActor.identity) &&
@@ -1028,13 +1026,12 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   ((typeof value.sessionInfo.createdActor.identity.pluginId == "string" &&
                     (value.sessionInfo.createdActor.identity.pluginId.length >= 2 ||
                       (value.sessionInfo.createdActor.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.createdActor.identity.pluginId) >= 1))) ||
+                        CodePointCount(value.sessionInfo.createdActor.identity.pluginId) >= 1))) ||
                     value.sessionInfo.createdActor.identity.pluginId === null) &&
                   ((typeof value.sessionInfo.createdActor.identity.accountId == "string" &&
                     (value.sessionInfo.createdActor.identity.accountId.length >= 2 ||
                       (value.sessionInfo.createdActor.identity.accountId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.createdActor.identity.accountId) >=
-                          1))) ||
+                        CodePointCount(value.sessionInfo.createdActor.identity.accountId) >= 1))) ||
                     value.sessionInfo.createdActor.identity.accountId === null) &&
                   ((typeof value.sessionInfo.createdActor.identity.senderKind == "string" &&
                     value.sessionInfo.createdActor.identity.senderKind === "human") ||
@@ -1045,7 +1042,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.createdActor.identity.id == "string" &&
                   (value.sessionInfo.createdActor.identity.id.length >= 2 ||
                     (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.createdActor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.createdActor.identity == "object" &&
                   value.sessionInfo.createdActor.identity !== null &&
                   !Array.isArray(value.sessionInfo.createdActor.identity) &&
@@ -1088,19 +1085,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                 (typeof value.sessionInfo.owner.actor.id == "string" &&
                   (value.sessionInfo.owner.actor.id.length >= 2 ||
                     (value.sessionInfo.owner.actor.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.id) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.owner.actor.id) >= 1)))) &&
               (value.sessionInfo.owner.actor.label === void 0 ||
                 !("label" in value.sessionInfo.owner.actor) ||
                 (typeof value.sessionInfo.owner.actor.label == "string" &&
                   (value.sessionInfo.owner.actor.label.length >= 2 ||
                     (value.sessionInfo.owner.actor.label.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.label) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.owner.actor.label) >= 1)))) &&
               (value.sessionInfo.owner.actor.avatarUrl === void 0 ||
                 !("avatarUrl" in value.sessionInfo.owner.actor) ||
                 (typeof value.sessionInfo.owner.actor.avatarUrl == "string" &&
                   (value.sessionInfo.owner.actor.avatarUrl.length >= 2 ||
                     (value.sessionInfo.owner.actor.avatarUrl.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.avatarUrl) >= 1)))) &&
+                      CodePointCount(value.sessionInfo.owner.actor.avatarUrl) >= 1)))) &&
               (value.sessionInfo.owner.actor.identity === void 0 ||
                 !("identity" in value.sessionInfo.owner.actor) ||
                 (typeof value.sessionInfo.owner.actor.identity == "object" &&
@@ -1114,7 +1111,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.owner.actor.identity.id == "string" &&
                   (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.owner.actor.identity == "object" &&
                   value.sessionInfo.owner.actor.identity !== null &&
                   !Array.isArray(value.sessionInfo.owner.actor.identity) &&
@@ -1126,7 +1123,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.owner.actor.identity.id == "string" &&
                   (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.owner.actor.identity == "object" &&
                   value.sessionInfo.owner.actor.identity !== null &&
                   !Array.isArray(value.sessionInfo.owner.actor.identity) &&
@@ -1141,19 +1138,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.owner.actor.identity.pluginId == "string" &&
                   (value.sessionInfo.owner.actor.identity.pluginId.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.pluginId) >= 1)) &&
+                      CodePointCount(value.sessionInfo.owner.actor.identity.pluginId) >= 1)) &&
                   typeof value.sessionInfo.owner.actor.identity.domain == "string" &&
                   (value.sessionInfo.owner.actor.identity.domain.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.domain.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.domain) >= 1)) &&
+                      CodePointCount(value.sessionInfo.owner.actor.identity.domain) >= 1)) &&
                   typeof value.sessionInfo.owner.actor.identity.idKind == "string" &&
                   (value.sessionInfo.owner.actor.identity.idKind.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.idKind.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.idKind) >= 1)) &&
+                      CodePointCount(value.sessionInfo.owner.actor.identity.idKind) >= 1)) &&
                   typeof value.sessionInfo.owner.actor.identity.id == "string" &&
                   (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.owner.actor.identity == "object" &&
                   value.sessionInfo.owner.actor.identity !== null &&
                   !Array.isArray(value.sessionInfo.owner.actor.identity) &&
@@ -1168,12 +1165,12 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   ((typeof value.sessionInfo.owner.actor.identity.pluginId == "string" &&
                     (value.sessionInfo.owner.actor.identity.pluginId.length >= 2 ||
                       (value.sessionInfo.owner.actor.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.owner.actor.identity.pluginId) >= 1))) ||
+                        CodePointCount(value.sessionInfo.owner.actor.identity.pluginId) >= 1))) ||
                     value.sessionInfo.owner.actor.identity.pluginId === null) &&
                   ((typeof value.sessionInfo.owner.actor.identity.accountId == "string" &&
                     (value.sessionInfo.owner.actor.identity.accountId.length >= 2 ||
                       (value.sessionInfo.owner.actor.identity.accountId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.owner.actor.identity.accountId) >= 1))) ||
+                        CodePointCount(value.sessionInfo.owner.actor.identity.accountId) >= 1))) ||
                     value.sessionInfo.owner.actor.identity.accountId === null) &&
                   ((typeof value.sessionInfo.owner.actor.identity.senderKind == "string" &&
                     value.sessionInfo.owner.actor.identity.senderKind === "human") ||
@@ -1184,7 +1181,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   typeof value.sessionInfo.owner.actor.identity.id == "string" &&
                   (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
                     (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
+                      CodePointCount(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
                 (typeof value.sessionInfo.owner.actor.identity == "object" &&
                   value.sessionInfo.owner.actor.identity !== null &&
                   !Array.isArray(value.sessionInfo.owner.actor.identity) &&
@@ -1219,19 +1216,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                     (typeof value.sessionInfo.owner.assignedBy.id == "string" &&
                       (value.sessionInfo.owner.assignedBy.id.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.id) >= 1)))) &&
+                          CodePointCount(value.sessionInfo.owner.assignedBy.id) >= 1)))) &&
                   (value.sessionInfo.owner.assignedBy.label === void 0 ||
                     !("label" in value.sessionInfo.owner.assignedBy) ||
                     (typeof value.sessionInfo.owner.assignedBy.label == "string" &&
                       (value.sessionInfo.owner.assignedBy.label.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.label.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.label) >= 1)))) &&
+                          CodePointCount(value.sessionInfo.owner.assignedBy.label) >= 1)))) &&
                   (value.sessionInfo.owner.assignedBy.avatarUrl === void 0 ||
                     !("avatarUrl" in value.sessionInfo.owner.assignedBy) ||
                     (typeof value.sessionInfo.owner.assignedBy.avatarUrl == "string" &&
                       (value.sessionInfo.owner.assignedBy.avatarUrl.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.avatarUrl.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.avatarUrl) >= 1)))) &&
+                          CodePointCount(value.sessionInfo.owner.assignedBy.avatarUrl) >= 1)))) &&
                   (value.sessionInfo.owner.assignedBy.identity === void 0 ||
                     !("identity" in value.sessionInfo.owner.assignedBy) ||
                     (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
@@ -1246,7 +1243,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
                     (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
                       value.sessionInfo.owner.assignedBy.identity !== null &&
                       !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
@@ -1259,7 +1256,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
                     (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
                       value.sessionInfo.owner.assignedBy.identity !== null &&
                       !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
@@ -1275,22 +1272,22 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof value.sessionInfo.owner.assignedBy.identity.pluginId == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.pluginId) >=
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.pluginId) >=
                             1)) &&
                       typeof value.sessionInfo.owner.assignedBy.identity.domain == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.domain.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.domain.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.domain) >=
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.domain) >=
                             1)) &&
                       typeof value.sessionInfo.owner.assignedBy.identity.idKind == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.idKind.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.idKind.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.idKind) >=
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.idKind) >=
                             1)) &&
                       typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
                     (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
                       value.sessionInfo.owner.assignedBy.identity !== null &&
                       !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
@@ -1306,15 +1303,14 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       ((typeof value.sessionInfo.owner.assignedBy.identity.pluginId == "string" &&
                         (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 2 ||
                           (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 1 &&
-                            CodePointCount2(value.sessionInfo.owner.assignedBy.identity.pluginId) >=
+                            CodePointCount(value.sessionInfo.owner.assignedBy.identity.pluginId) >=
                               1))) ||
                         value.sessionInfo.owner.assignedBy.identity.pluginId === null) &&
                       ((typeof value.sessionInfo.owner.assignedBy.identity.accountId == "string" &&
                         (value.sessionInfo.owner.assignedBy.identity.accountId.length >= 2 ||
                           (value.sessionInfo.owner.assignedBy.identity.accountId.length >= 1 &&
-                            CodePointCount2(
-                              value.sessionInfo.owner.assignedBy.identity.accountId,
-                            ) >= 1))) ||
+                            CodePointCount(value.sessionInfo.owner.assignedBy.identity.accountId) >=
+                              1))) ||
                         value.sessionInfo.owner.assignedBy.identity.accountId === null) &&
                       ((typeof value.sessionInfo.owner.assignedBy.identity.senderKind == "string" &&
                         value.sessionInfo.owner.assignedBy.identity.senderKind === "human") ||
@@ -1327,7 +1323,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
                       (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
                         (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
+                          CodePointCount(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
                     (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
                       value.sessionInfo.owner.assignedBy.identity !== null &&
                       !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
@@ -1370,7 +1366,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1382,7 +1378,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof element.identity.id == "string" &&
                       (element.identity.id.length >= 2 ||
                         (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
+                          CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1397,19 +1393,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof element.identity.pluginId == "string" &&
                       (element.identity.pluginId.length >= 2 ||
                         (element.identity.pluginId.length >= 1 &&
-                          CodePointCount2(element.identity.pluginId) >= 1)) &&
+                          CodePointCount(element.identity.pluginId) >= 1)) &&
                       typeof element.identity.domain == "string" &&
                       (element.identity.domain.length >= 2 ||
                         (element.identity.domain.length >= 1 &&
-                          CodePointCount2(element.identity.domain) >= 1)) &&
+                          CodePointCount(element.identity.domain) >= 1)) &&
                       typeof element.identity.idKind == "string" &&
                       (element.identity.idKind.length >= 2 ||
                         (element.identity.idKind.length >= 1 &&
-                          CodePointCount2(element.identity.idKind) >= 1)) &&
+                          CodePointCount(element.identity.idKind) >= 1)) &&
                       typeof element.identity.id == "string" &&
                       (element.identity.id.length >= 2 ||
                         (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
+                          CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1424,12 +1420,12 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       ((typeof element.identity.pluginId == "string" &&
                         (element.identity.pluginId.length >= 2 ||
                           (element.identity.pluginId.length >= 1 &&
-                            CodePointCount2(element.identity.pluginId) >= 1))) ||
+                            CodePointCount(element.identity.pluginId) >= 1))) ||
                         element.identity.pluginId === null) &&
                       ((typeof element.identity.accountId == "string" &&
                         (element.identity.accountId.length >= 2 ||
                           (element.identity.accountId.length >= 1 &&
-                            CodePointCount2(element.identity.accountId) >= 1))) ||
+                            CodePointCount(element.identity.accountId) >= 1))) ||
                         element.identity.accountId === null) &&
                       ((typeof element.identity.senderKind == "string" &&
                         element.identity.senderKind === "human") ||
@@ -1440,7 +1436,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof element.identity.id == "string" &&
                       (element.identity.id.length >= 2 ||
                         (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
+                          CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1459,13 +1455,13 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                     !("label" in element) ||
                     (typeof element.label == "string" &&
                       (element.label.length >= 2 ||
-                        (element.label.length >= 1 && CodePointCount2(element.label) >= 1)))) &&
+                        (element.label.length >= 1 && CodePointCount(element.label) >= 1)))) &&
                   (element.avatarUrl === void 0 ||
                     !("avatarUrl" in element) ||
                     (typeof element.avatarUrl == "string" &&
                       (element.avatarUrl.length >= 2 ||
                         (element.avatarUrl.length >= 1 &&
-                          CodePointCount2(element.avatarUrl) >= 1)))),
+                          CodePointCount(element.avatarUrl) >= 1)))),
               ) &&
               value.sessionInfo.participants.length <= 4)) &&
           (value.sessionInfo.expandedParticipants === void 0 ||
@@ -1491,7 +1487,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1503,7 +1499,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof element.identity.id == "string" &&
                       (element.identity.id.length >= 2 ||
                         (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
+                          CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1518,19 +1514,19 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof element.identity.pluginId == "string" &&
                       (element.identity.pluginId.length >= 2 ||
                         (element.identity.pluginId.length >= 1 &&
-                          CodePointCount2(element.identity.pluginId) >= 1)) &&
+                          CodePointCount(element.identity.pluginId) >= 1)) &&
                       typeof element.identity.domain == "string" &&
                       (element.identity.domain.length >= 2 ||
                         (element.identity.domain.length >= 1 &&
-                          CodePointCount2(element.identity.domain) >= 1)) &&
+                          CodePointCount(element.identity.domain) >= 1)) &&
                       typeof element.identity.idKind == "string" &&
                       (element.identity.idKind.length >= 2 ||
                         (element.identity.idKind.length >= 1 &&
-                          CodePointCount2(element.identity.idKind) >= 1)) &&
+                          CodePointCount(element.identity.idKind) >= 1)) &&
                       typeof element.identity.id == "string" &&
                       (element.identity.id.length >= 2 ||
                         (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
+                          CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1545,12 +1541,12 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       ((typeof element.identity.pluginId == "string" &&
                         (element.identity.pluginId.length >= 2 ||
                           (element.identity.pluginId.length >= 1 &&
-                            CodePointCount2(element.identity.pluginId) >= 1))) ||
+                            CodePointCount(element.identity.pluginId) >= 1))) ||
                         element.identity.pluginId === null) &&
                       ((typeof element.identity.accountId == "string" &&
                         (element.identity.accountId.length >= 2 ||
                           (element.identity.accountId.length >= 1 &&
-                            CodePointCount2(element.identity.accountId) >= 1))) ||
+                            CodePointCount(element.identity.accountId) >= 1))) ||
                         element.identity.accountId === null) &&
                       ((typeof element.identity.senderKind == "string" &&
                         element.identity.senderKind === "human") ||
@@ -1561,7 +1557,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       typeof element.identity.id == "string" &&
                       (element.identity.id.length >= 2 ||
                         (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
+                          CodePointCount(element.identity.id) >= 1))) ||
                     (typeof element.identity == "object" &&
                       element.identity !== null &&
                       !Array.isArray(element.identity) &&
@@ -1580,13 +1576,13 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                     !("label" in element) ||
                     (typeof element.label == "string" &&
                       (element.label.length >= 2 ||
-                        (element.label.length >= 1 && CodePointCount2(element.label) >= 1)))) &&
+                        (element.label.length >= 1 && CodePointCount(element.label) >= 1)))) &&
                   (element.avatarUrl === void 0 ||
                     !("avatarUrl" in element) ||
                     (typeof element.avatarUrl == "string" &&
                       (element.avatarUrl.length >= 2 ||
                         (element.avatarUrl.length >= 1 &&
-                          CodePointCount2(element.avatarUrl) >= 1)))),
+                          CodePointCount(element.avatarUrl) >= 1)))),
               ) &&
               value.sessionInfo.expandedParticipants.length <= 32)) &&
           (value.sessionInfo.participantCount === void 0 ||
@@ -1622,7 +1618,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
             (typeof value.sessionInfo.sendDisabledReason == "string" &&
               (value.sessionInfo.sendDisabledReason.length >= 2 ||
                 (value.sessionInfo.sendDisabledReason.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.sendDisabledReason) >= 1))) ||
+                  CodePointCount(value.sessionInfo.sendDisabledReason) >= 1))) ||
             value.sessionInfo.sendDisabledReason === null) &&
           (value.sessionInfo.createdAt === void 0 ||
             !("createdAt" in value.sessionInfo) ||
@@ -1721,7 +1717,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                           (element, index) =>
                             typeof element == "string" &&
                             (element.length >= 2 ||
-                              (element.length >= 1 && CodePointCount2(element) >= 1)),
+                              (element.length >= 1 && CodePointCount(element) >= 1)),
                         )),
                   ))) &&
               (value.sessionInfo.toolOverrides.skills === void 0 ||
@@ -1754,17 +1750,17 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
               ) &&
               typeof element.name == "string" &&
               (element.name.length >= 2 ||
-                (element.name.length >= 1 && CodePointCount2(element.name) >= 1)) &&
+                (element.name.length >= 1 && CodePointCount(element.name) >= 1)) &&
               (element.name.length <= 200 ||
-                (element.name.length <= 400 && CodePointCount2(element.name) <= 200)) &&
+                (element.name.length <= 400 && CodePointCount(element.name) <= 200)) &&
               (element.nativeName === void 0 ||
                 !("nativeName" in element) ||
                 (typeof element.nativeName == "string" &&
                   (element.nativeName.length >= 2 ||
-                    (element.nativeName.length >= 1 && CodePointCount2(element.nativeName) >= 1)) &&
+                    (element.nativeName.length >= 1 && CodePointCount(element.nativeName) >= 1)) &&
                   (element.nativeName.length <= 200 ||
                     (element.nativeName.length <= 400 &&
-                      CodePointCount2(element.nativeName) <= 200)))) &&
+                      CodePointCount(element.nativeName) <= 200)))) &&
               (element.textAliases === void 0 ||
                 !("textAliases" in element) ||
                 (Array.isArray(element.textAliases) &&
@@ -1772,15 +1768,15 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                     (element2, index2) =>
                       typeof element2 == "string" &&
                       (element2.length >= 2 ||
-                        (element2.length >= 1 && CodePointCount2(element2) >= 1)) &&
+                        (element2.length >= 1 && CodePointCount(element2) >= 1)) &&
                       (element2.length <= 200 ||
-                        (element2.length <= 400 && CodePointCount2(element2) <= 200)),
+                        (element2.length <= 400 && CodePointCount(element2) <= 200)),
                   ) &&
                   element.textAliases.length <= 20)) &&
               typeof element.description == "string" &&
               (element.description.length <= 2e3 ||
                 (element.description.length <= 4e3 &&
-                  CodePointCount2(element.description) <= 2e3)) &&
+                  CodePointCount(element.description) <= 2e3)) &&
               (element.category === void 0 ||
                 !("category" in element) ||
                 (typeof element.category == "string" && element.category === "session") ||
@@ -1797,10 +1793,10 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                 (typeof element.skillDisplayName == "string" &&
                   (element.skillDisplayName.length >= 2 ||
                     (element.skillDisplayName.length >= 1 &&
-                      CodePointCount2(element.skillDisplayName) >= 1)) &&
+                      CodePointCount(element.skillDisplayName) >= 1)) &&
                   (element.skillDisplayName.length <= 200 ||
                     (element.skillDisplayName.length <= 400 &&
-                      CodePointCount2(element.skillDisplayName) <= 200)))) &&
+                      CodePointCount(element.skillDisplayName) <= 200)))) &&
               (element.skillModelVisible === void 0 ||
                 !("skillModelVisible" in element) ||
                 typeof element.skillModelVisible == "boolean") &&
@@ -1824,13 +1820,13 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                       ) &&
                       typeof element2.name == "string" &&
                       (element2.name.length >= 2 ||
-                        (element2.name.length >= 1 && CodePointCount2(element2.name) >= 1)) &&
+                        (element2.name.length >= 1 && CodePointCount(element2.name) >= 1)) &&
                       (element2.name.length <= 200 ||
-                        (element2.name.length <= 400 && CodePointCount2(element2.name) <= 200)) &&
+                        (element2.name.length <= 400 && CodePointCount(element2.name) <= 200)) &&
                       typeof element2.description == "string" &&
                       (element2.description.length <= 500 ||
                         (element2.description.length <= 1e3 &&
-                          CodePointCount2(element2.description) <= 500)) &&
+                          CodePointCount(element2.description) <= 500)) &&
                       ((typeof element2.type == "string" && element2.type === "string") ||
                         (typeof element2.type == "string" && element2.type === "number") ||
                         (typeof element2.type == "string" && element2.type === "boolean")) &&
@@ -1851,11 +1847,11 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                               typeof element3.value == "string" &&
                               (element3.value.length <= 200 ||
                                 (element3.value.length <= 400 &&
-                                  CodePointCount2(element3.value) <= 200)) &&
+                                  CodePointCount(element3.value) <= 200)) &&
                               typeof element3.label == "string" &&
                               (element3.label.length <= 200 ||
                                 (element3.label.length <= 400 &&
-                                  CodePointCount2(element3.label) <= 200)),
+                                  CodePointCount(element3.label) <= 200)),
                           ) &&
                           element2.choices.length <= 50)) &&
                       (element2.dynamic === void 0 ||

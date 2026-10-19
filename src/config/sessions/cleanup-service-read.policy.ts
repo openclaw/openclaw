@@ -9,7 +9,9 @@ export function shouldPreserveSessionCleanupEntry(
   entry: SessionEntry,
 ): boolean {
   if (
-    (entry.modelSelectionLocked === true || entry.archivedAt !== undefined) &&
+    (entry.maintenanceProtected === true ||
+      entry.modelSelectionLocked === true ||
+      entry.archivedAt !== undefined) &&
     shouldPreserveMaintenanceEntry({ key: sessionKey, entry })
   ) {
     return true;

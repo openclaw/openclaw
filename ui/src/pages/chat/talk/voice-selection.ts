@@ -2,7 +2,7 @@ import type { TalkVoiceChangeEvent, TalkVoiceCompleteParams } from "@openclaw/ga
 import { TALK_VOICE_CHANGE_TIMEOUT_MS } from "../../../../../packages/gateway-protocol/src/talk-voice-limits.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
-import { isTalkVoiceChangeEvent } from "../../../lib/protocol-validators.generated/session-input.js";
+import { isTalkVoiceChangeEvent } from "../../../lib/protocol-validators.generated/chat-input.js";
 
 export type RealtimeVoiceCall = { getVoiceSessionId(): string | undefined };
 type VoiceChange = {

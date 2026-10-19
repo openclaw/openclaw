@@ -12,6 +12,7 @@ export function preserveResetSessionPresentation(entry: SessionEntry | undefined
     visibility: entry?.visibility,
     displayName: entry?.displayName,
     pinnedAt: entry?.pinnedAt,
+    maintenanceProtected: entry?.maintenanceProtected,
     sidebarRoot: entry?.sidebarRoot,
   };
 }

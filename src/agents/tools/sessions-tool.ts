@@ -475,6 +475,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         gatewayRequest,
       );
       const archived = values.archived;
+      const lifecyclePatch =
+        typeof archived === "boolean" || typeof values.maintenanceProtected === "boolean";
       const requestedSessionId = readToolStringParam(params, "expectedSessionId");
       const renameSessionId = isRequesterSession
         ? normalizeOptionalString(opts.agentSessionId)
@@ -488,10 +490,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       const expectedSessionId = restrictedRename
         ? renameSessionId
         : (requestedSessionId ??
-          (typeof archived === "boolean" && isRequesterSession
+          (lifecyclePatch && isRequesterSession
             ? normalizeOptionalString(opts.agentSessionId)
             : undefined));
-      if (typeof archived === "boolean" && !expectedSessionId) {
+      if (lifecyclePatch && !expectedSessionId) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
       const lifecycleIdentity = expectedSessionId ? { expectedSessionId } : undefined;

@@ -40,7 +40,12 @@ export function validateSessionPatchAdmission(params: {
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
-  if (typeof patch.archived === "boolean" || "snoozedUntil" in patch || "sidebarRoot" in patch) {
+  if (
+    typeof patch.archived === "boolean" ||
+    "maintenanceProtected" in patch ||
+    "snoozedUntil" in patch ||
+    "sidebarRoot" in patch
+  ) {
     if (!params.existingEntry?.sessionId) {
       return invalid(`session not found: ${storeKey}`);
     }

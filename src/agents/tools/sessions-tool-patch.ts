@@ -67,7 +67,7 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
     }
     patch.ttlMinutes = params.ttlMinutes;
   }
-  for (const field of ["pinned", "archived"] as const) {
+  for (const field of ["pinned", "archived", "maintenanceProtected"] as const) {
     const value = params[field];
     if (value !== undefined) {
       if (typeof value !== "boolean") {
@@ -124,7 +124,11 @@ export async function runSessionsToolPatchMany(params: {
         );
       }
       const expectedSessionId = readToolStringParam(input, "expectedSessionId");
-      if (typeof params.patch.archived === "boolean" && !expectedSessionId) {
+      if (
+        (typeof params.patch.archived === "boolean" ||
+          typeof params.patch.maintenanceProtected === "boolean") &&
+        !expectedSessionId
+      ) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
       targets.push({

@@ -59,6 +59,30 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
+test("sessions.patch persists nested-session maintenance protection without changing hierarchy", async () => {
+  const sessionKey = "agent:main:dashboard:retained-course";
+  const parentSessionKey = "agent:main:dashboard:coordinator";
+  const { read, patch } = await seedSession(sessionKey, {
+    parentSessionKey,
+    spawnedBy: parentSessionKey,
+  });
+  const expectedSessionId = read()!.sessionId;
+  expect(await patch({ maintenanceProtected: true })).toMatchObject({ ok: false });
+  expect(await patch({ maintenanceProtected: true, expectedSessionId })).toMatchObject({
+    ok: true,
+  });
+  expect(read()).toMatchObject({
+    sessionId: expectedSessionId,
+    parentSessionKey,
+    maintenanceProtected: true,
+  });
+  expect(read()?.pinnedAt).toBeUndefined();
+  expect(await patch({ maintenanceProtected: false, expectedSessionId })).toMatchObject({
+    ok: true,
+  });
+  expect(read()).not.toHaveProperty("maintenanceProtected");
+});
+
 test.each([undefined, "session-a"])(
   "sessions.patch rejects missing archive targets (expected identity: %s)",
   async (expectedSessionId) => {

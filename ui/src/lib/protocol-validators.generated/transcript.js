@@ -37,11 +37,6 @@ function CodePointCount(value) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/guard.mjs
-function CodePointCount2(value) {
-  return CodePointCount(value);
-}
-
 // <stdin>
 var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
     let External = [
@@ -73,7 +68,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
           !("classification" in value) ||
           (typeof value.classification == "string" &&
             (value.classification.length >= 2 ||
-              (value.classification.length >= 1 && CodePointCount2(value.classification) >= 1)))) &&
+              (value.classification.length >= 1 && CodePointCount(value.classification) >= 1)))) &&
         (value.status === void 0 ||
           !("status" in value) ||
           (typeof value.status == "string" && value.status === "queued") ||
@@ -87,7 +82,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
           !("lastRunId" in value) ||
           (typeof value.lastRunId == "string" &&
             (value.lastRunId.length >= 2 ||
-              (value.lastRunId.length >= 1 && CodePointCount2(value.lastRunId) >= 1)))) &&
+              (value.lastRunId.length >= 1 && CodePointCount(value.lastRunId) >= 1)))) &&
         (value.owner === void 0 ||
           !("owner" in value) ||
           (typeof value.owner == "object" &&
@@ -95,14 +90,14 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
             !Array.isArray(value.owner) &&
             "actor" in value.owner &&
             Object.getOwnPropertyNames(value.owner).every(
-              (var_170, var_171) => External[0].test(var_170) || !1,
+              (var_164, var_165) => External[0].test(var_164) || !1,
             ) &&
             typeof value.owner.actor == "object" &&
             value.owner.actor !== null &&
             !Array.isArray(value.owner.actor) &&
             "type" in value.owner.actor &&
             Object.getOwnPropertyNames(value.owner.actor).every(
-              (var_172, var_173) => External[1].test(var_172) || !1,
+              (var_166, var_167) => External[1].test(var_166) || !1,
             ) &&
             ((typeof value.owner.actor.type == "string" && value.owner.actor.type === "human") ||
               (typeof value.owner.actor.type == "string" && value.owner.actor.type === "agent") ||
@@ -112,19 +107,19 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
               (typeof value.owner.actor.id == "string" &&
                 (value.owner.actor.id.length >= 2 ||
                   (value.owner.actor.id.length >= 1 &&
-                    CodePointCount2(value.owner.actor.id) >= 1)))) &&
+                    CodePointCount(value.owner.actor.id) >= 1)))) &&
             (value.owner.actor.label === void 0 ||
               !("label" in value.owner.actor) ||
               (typeof value.owner.actor.label == "string" &&
                 (value.owner.actor.label.length >= 2 ||
                   (value.owner.actor.label.length >= 1 &&
-                    CodePointCount2(value.owner.actor.label) >= 1)))) &&
+                    CodePointCount(value.owner.actor.label) >= 1)))) &&
             (value.owner.actor.avatarUrl === void 0 ||
               !("avatarUrl" in value.owner.actor) ||
               (typeof value.owner.actor.avatarUrl == "string" &&
                 (value.owner.actor.avatarUrl.length >= 2 ||
                   (value.owner.actor.avatarUrl.length >= 1 &&
-                    CodePointCount2(value.owner.actor.avatarUrl) >= 1)))) &&
+                    CodePointCount(value.owner.actor.avatarUrl) >= 1)))) &&
             (value.owner.actor.identity === void 0 ||
               !("identity" in value.owner.actor) ||
               (typeof value.owner.actor.identity == "object" &&
@@ -138,7 +133,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 typeof value.owner.actor.identity.id == "string" &&
                 (value.owner.actor.identity.id.length >= 2 ||
                   (value.owner.actor.identity.id.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.id) >= 1))) ||
+                    CodePointCount(value.owner.actor.identity.id) >= 1))) ||
               (typeof value.owner.actor.identity == "object" &&
                 value.owner.actor.identity !== null &&
                 !Array.isArray(value.owner.actor.identity) &&
@@ -150,7 +145,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 typeof value.owner.actor.identity.id == "string" &&
                 (value.owner.actor.identity.id.length >= 2 ||
                   (value.owner.actor.identity.id.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.id) >= 1))) ||
+                    CodePointCount(value.owner.actor.identity.id) >= 1))) ||
               (typeof value.owner.actor.identity == "object" &&
                 value.owner.actor.identity !== null &&
                 !Array.isArray(value.owner.actor.identity) &&
@@ -165,19 +160,19 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 typeof value.owner.actor.identity.pluginId == "string" &&
                 (value.owner.actor.identity.pluginId.length >= 2 ||
                   (value.owner.actor.identity.pluginId.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.pluginId) >= 1)) &&
+                    CodePointCount(value.owner.actor.identity.pluginId) >= 1)) &&
                 typeof value.owner.actor.identity.domain == "string" &&
                 (value.owner.actor.identity.domain.length >= 2 ||
                   (value.owner.actor.identity.domain.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.domain) >= 1)) &&
+                    CodePointCount(value.owner.actor.identity.domain) >= 1)) &&
                 typeof value.owner.actor.identity.idKind == "string" &&
                 (value.owner.actor.identity.idKind.length >= 2 ||
                   (value.owner.actor.identity.idKind.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.idKind) >= 1)) &&
+                    CodePointCount(value.owner.actor.identity.idKind) >= 1)) &&
                 typeof value.owner.actor.identity.id == "string" &&
                 (value.owner.actor.identity.id.length >= 2 ||
                   (value.owner.actor.identity.id.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.id) >= 1))) ||
+                    CodePointCount(value.owner.actor.identity.id) >= 1))) ||
               (typeof value.owner.actor.identity == "object" &&
                 value.owner.actor.identity !== null &&
                 !Array.isArray(value.owner.actor.identity) &&
@@ -192,12 +187,12 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 ((typeof value.owner.actor.identity.pluginId == "string" &&
                   (value.owner.actor.identity.pluginId.length >= 2 ||
                     (value.owner.actor.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.owner.actor.identity.pluginId) >= 1))) ||
+                      CodePointCount(value.owner.actor.identity.pluginId) >= 1))) ||
                   value.owner.actor.identity.pluginId === null) &&
                 ((typeof value.owner.actor.identity.accountId == "string" &&
                   (value.owner.actor.identity.accountId.length >= 2 ||
                     (value.owner.actor.identity.accountId.length >= 1 &&
-                      CodePointCount2(value.owner.actor.identity.accountId) >= 1))) ||
+                      CodePointCount(value.owner.actor.identity.accountId) >= 1))) ||
                   value.owner.actor.identity.accountId === null) &&
                 ((typeof value.owner.actor.identity.senderKind == "string" &&
                   value.owner.actor.identity.senderKind === "human") ||
@@ -208,7 +203,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 typeof value.owner.actor.identity.id == "string" &&
                 (value.owner.actor.identity.id.length >= 2 ||
                   (value.owner.actor.identity.id.length >= 1 &&
-                    CodePointCount2(value.owner.actor.identity.id) >= 1))) ||
+                    CodePointCount(value.owner.actor.identity.id) >= 1))) ||
               (typeof value.owner.actor.identity == "object" &&
                 value.owner.actor.identity !== null &&
                 !Array.isArray(value.owner.actor.identity) &&
@@ -230,7 +225,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 !Array.isArray(value.owner.assignedBy) &&
                 "type" in value.owner.assignedBy &&
                 Object.getOwnPropertyNames(value.owner.assignedBy).every(
-                  (var_174, var_175) => External[2].test(var_174) || !1,
+                  (var_168, var_169) => External[2].test(var_168) || !1,
                 ) &&
                 ((typeof value.owner.assignedBy.type == "string" &&
                   value.owner.assignedBy.type === "human") ||
@@ -243,19 +238,19 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                   (typeof value.owner.assignedBy.id == "string" &&
                     (value.owner.assignedBy.id.length >= 2 ||
                       (value.owner.assignedBy.id.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.id) >= 1)))) &&
+                        CodePointCount(value.owner.assignedBy.id) >= 1)))) &&
                 (value.owner.assignedBy.label === void 0 ||
                   !("label" in value.owner.assignedBy) ||
                   (typeof value.owner.assignedBy.label == "string" &&
                     (value.owner.assignedBy.label.length >= 2 ||
                       (value.owner.assignedBy.label.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.label) >= 1)))) &&
+                        CodePointCount(value.owner.assignedBy.label) >= 1)))) &&
                 (value.owner.assignedBy.avatarUrl === void 0 ||
                   !("avatarUrl" in value.owner.assignedBy) ||
                   (typeof value.owner.assignedBy.avatarUrl == "string" &&
                     (value.owner.assignedBy.avatarUrl.length >= 2 ||
                       (value.owner.assignedBy.avatarUrl.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.avatarUrl) >= 1)))) &&
+                        CodePointCount(value.owner.assignedBy.avatarUrl) >= 1)))) &&
                 (value.owner.assignedBy.identity === void 0 ||
                   !("identity" in value.owner.assignedBy) ||
                   (typeof value.owner.assignedBy.identity == "object" &&
@@ -269,7 +264,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof value.owner.assignedBy.identity.id == "string" &&
                     (value.owner.assignedBy.identity.id.length >= 2 ||
                       (value.owner.assignedBy.identity.id.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.id) >= 1))) ||
+                        CodePointCount(value.owner.assignedBy.identity.id) >= 1))) ||
                   (typeof value.owner.assignedBy.identity == "object" &&
                     value.owner.assignedBy.identity !== null &&
                     !Array.isArray(value.owner.assignedBy.identity) &&
@@ -281,7 +276,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof value.owner.assignedBy.identity.id == "string" &&
                     (value.owner.assignedBy.identity.id.length >= 2 ||
                       (value.owner.assignedBy.identity.id.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.id) >= 1))) ||
+                        CodePointCount(value.owner.assignedBy.identity.id) >= 1))) ||
                   (typeof value.owner.assignedBy.identity == "object" &&
                     value.owner.assignedBy.identity !== null &&
                     !Array.isArray(value.owner.assignedBy.identity) &&
@@ -296,19 +291,19 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof value.owner.assignedBy.identity.pluginId == "string" &&
                     (value.owner.assignedBy.identity.pluginId.length >= 2 ||
                       (value.owner.assignedBy.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.pluginId) >= 1)) &&
+                        CodePointCount(value.owner.assignedBy.identity.pluginId) >= 1)) &&
                     typeof value.owner.assignedBy.identity.domain == "string" &&
                     (value.owner.assignedBy.identity.domain.length >= 2 ||
                       (value.owner.assignedBy.identity.domain.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.domain) >= 1)) &&
+                        CodePointCount(value.owner.assignedBy.identity.domain) >= 1)) &&
                     typeof value.owner.assignedBy.identity.idKind == "string" &&
                     (value.owner.assignedBy.identity.idKind.length >= 2 ||
                       (value.owner.assignedBy.identity.idKind.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.idKind) >= 1)) &&
+                        CodePointCount(value.owner.assignedBy.identity.idKind) >= 1)) &&
                     typeof value.owner.assignedBy.identity.id == "string" &&
                     (value.owner.assignedBy.identity.id.length >= 2 ||
                       (value.owner.assignedBy.identity.id.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.id) >= 1))) ||
+                        CodePointCount(value.owner.assignedBy.identity.id) >= 1))) ||
                   (typeof value.owner.assignedBy.identity == "object" &&
                     value.owner.assignedBy.identity !== null &&
                     !Array.isArray(value.owner.assignedBy.identity) &&
@@ -323,12 +318,12 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     ((typeof value.owner.assignedBy.identity.pluginId == "string" &&
                       (value.owner.assignedBy.identity.pluginId.length >= 2 ||
                         (value.owner.assignedBy.identity.pluginId.length >= 1 &&
-                          CodePointCount2(value.owner.assignedBy.identity.pluginId) >= 1))) ||
+                          CodePointCount(value.owner.assignedBy.identity.pluginId) >= 1))) ||
                       value.owner.assignedBy.identity.pluginId === null) &&
                     ((typeof value.owner.assignedBy.identity.accountId == "string" &&
                       (value.owner.assignedBy.identity.accountId.length >= 2 ||
                         (value.owner.assignedBy.identity.accountId.length >= 1 &&
-                          CodePointCount2(value.owner.assignedBy.identity.accountId) >= 1))) ||
+                          CodePointCount(value.owner.assignedBy.identity.accountId) >= 1))) ||
                       value.owner.assignedBy.identity.accountId === null) &&
                     ((typeof value.owner.assignedBy.identity.senderKind == "string" &&
                       value.owner.assignedBy.identity.senderKind === "human") ||
@@ -339,7 +334,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof value.owner.assignedBy.identity.id == "string" &&
                     (value.owner.assignedBy.identity.id.length >= 2 ||
                       (value.owner.assignedBy.identity.id.length >= 1 &&
-                        CodePointCount2(value.owner.assignedBy.identity.id) >= 1))) ||
+                        CodePointCount(value.owner.assignedBy.identity.id) >= 1))) ||
                   (typeof value.owner.assignedBy.identity == "object" &&
                     value.owner.assignedBy.identity !== null &&
                     !Array.isArray(value.owner.assignedBy.identity) &&
@@ -367,7 +362,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 !Array.isArray(element) &&
                 "identity" in element &&
                 Object.getOwnPropertyNames(element).every(
-                  (var_176, var_177) => External[3].test(var_176) || !1,
+                  (var_170, var_171) => External[3].test(var_170) || !1,
                 ) &&
                 ((typeof element.identity == "object" &&
                   element.identity !== null &&
@@ -380,7 +375,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                   typeof element.identity.id == "string" &&
                   (element.identity.id.length >= 2 ||
                     (element.identity.id.length >= 1 &&
-                      CodePointCount2(element.identity.id) >= 1))) ||
+                      CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -392,7 +387,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -407,19 +402,19 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof element.identity.pluginId == "string" &&
                     (element.identity.pluginId.length >= 2 ||
                       (element.identity.pluginId.length >= 1 &&
-                        CodePointCount2(element.identity.pluginId) >= 1)) &&
+                        CodePointCount(element.identity.pluginId) >= 1)) &&
                     typeof element.identity.domain == "string" &&
                     (element.identity.domain.length >= 2 ||
                       (element.identity.domain.length >= 1 &&
-                        CodePointCount2(element.identity.domain) >= 1)) &&
+                        CodePointCount(element.identity.domain) >= 1)) &&
                     typeof element.identity.idKind == "string" &&
                     (element.identity.idKind.length >= 2 ||
                       (element.identity.idKind.length >= 1 &&
-                        CodePointCount2(element.identity.idKind) >= 1)) &&
+                        CodePointCount(element.identity.idKind) >= 1)) &&
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -434,12 +429,12 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     ((typeof element.identity.pluginId == "string" &&
                       (element.identity.pluginId.length >= 2 ||
                         (element.identity.pluginId.length >= 1 &&
-                          CodePointCount2(element.identity.pluginId) >= 1))) ||
+                          CodePointCount(element.identity.pluginId) >= 1))) ||
                       element.identity.pluginId === null) &&
                     ((typeof element.identity.accountId == "string" &&
                       (element.identity.accountId.length >= 2 ||
                         (element.identity.accountId.length >= 1 &&
-                          CodePointCount2(element.identity.accountId) >= 1))) ||
+                          CodePointCount(element.identity.accountId) >= 1))) ||
                       element.identity.accountId === null) &&
                     ((typeof element.identity.senderKind == "string" &&
                       element.identity.senderKind === "human") ||
@@ -450,7 +445,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -469,12 +464,12 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                   !("label" in element) ||
                   (typeof element.label == "string" &&
                     (element.label.length >= 2 ||
-                      (element.label.length >= 1 && CodePointCount2(element.label) >= 1)))) &&
+                      (element.label.length >= 1 && CodePointCount(element.label) >= 1)))) &&
                 (element.avatarUrl === void 0 ||
                   !("avatarUrl" in element) ||
                   (typeof element.avatarUrl == "string" &&
                     (element.avatarUrl.length >= 2 ||
-                      (element.avatarUrl.length >= 1 && CodePointCount2(element.avatarUrl) >= 1)))),
+                      (element.avatarUrl.length >= 1 && CodePointCount(element.avatarUrl) >= 1)))),
             ) &&
             value.participants.length <= 4)) &&
         (value.expandedParticipants === void 0 ||
@@ -487,7 +482,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 !Array.isArray(element) &&
                 "identity" in element &&
                 Object.getOwnPropertyNames(element).every(
-                  (var_178, var_179) => External[4].test(var_178) || !1,
+                  (var_172, var_173) => External[4].test(var_172) || !1,
                 ) &&
                 ((typeof element.identity == "object" &&
                   element.identity !== null &&
@@ -500,7 +495,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                   typeof element.identity.id == "string" &&
                   (element.identity.id.length >= 2 ||
                     (element.identity.id.length >= 1 &&
-                      CodePointCount2(element.identity.id) >= 1))) ||
+                      CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -512,7 +507,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -527,19 +522,19 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof element.identity.pluginId == "string" &&
                     (element.identity.pluginId.length >= 2 ||
                       (element.identity.pluginId.length >= 1 &&
-                        CodePointCount2(element.identity.pluginId) >= 1)) &&
+                        CodePointCount(element.identity.pluginId) >= 1)) &&
                     typeof element.identity.domain == "string" &&
                     (element.identity.domain.length >= 2 ||
                       (element.identity.domain.length >= 1 &&
-                        CodePointCount2(element.identity.domain) >= 1)) &&
+                        CodePointCount(element.identity.domain) >= 1)) &&
                     typeof element.identity.idKind == "string" &&
                     (element.identity.idKind.length >= 2 ||
                       (element.identity.idKind.length >= 1 &&
-                        CodePointCount2(element.identity.idKind) >= 1)) &&
+                        CodePointCount(element.identity.idKind) >= 1)) &&
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -554,12 +549,12 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     ((typeof element.identity.pluginId == "string" &&
                       (element.identity.pluginId.length >= 2 ||
                         (element.identity.pluginId.length >= 1 &&
-                          CodePointCount2(element.identity.pluginId) >= 1))) ||
+                          CodePointCount(element.identity.pluginId) >= 1))) ||
                       element.identity.pluginId === null) &&
                     ((typeof element.identity.accountId == "string" &&
                       (element.identity.accountId.length >= 2 ||
                         (element.identity.accountId.length >= 1 &&
-                          CodePointCount2(element.identity.accountId) >= 1))) ||
+                          CodePointCount(element.identity.accountId) >= 1))) ||
                       element.identity.accountId === null) &&
                     ((typeof element.identity.senderKind == "string" &&
                       element.identity.senderKind === "human") ||
@@ -570,7 +565,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                     typeof element.identity.id == "string" &&
                     (element.identity.id.length >= 2 ||
                       (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
+                        CodePointCount(element.identity.id) >= 1))) ||
                   (typeof element.identity == "object" &&
                     element.identity !== null &&
                     !Array.isArray(element.identity) &&
@@ -589,12 +584,12 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                   !("label" in element) ||
                   (typeof element.label == "string" &&
                     (element.label.length >= 2 ||
-                      (element.label.length >= 1 && CodePointCount2(element.label) >= 1)))) &&
+                      (element.label.length >= 1 && CodePointCount(element.label) >= 1)))) &&
                 (element.avatarUrl === void 0 ||
                   !("avatarUrl" in element) ||
                   (typeof element.avatarUrl == "string" &&
                     (element.avatarUrl.length >= 2 ||
-                      (element.avatarUrl.length >= 1 && CodePointCount2(element.avatarUrl) >= 1)))),
+                      (element.avatarUrl.length >= 1 && CodePointCount(element.avatarUrl) >= 1)))),
             ) &&
             value.expandedParticipants.length <= 32));
     return (value) => check_0(value);
@@ -609,11 +604,11 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
         "revision" in value &&
         "updatedAt" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_180, var_181) => External[0].test(var_180) || !1,
+          (var_174, var_175) => External[0].test(var_174) || !1,
         ) &&
         typeof value.sessionKey == "string" &&
         (value.sessionKey.length >= 2 ||
-          (value.sessionKey.length >= 1 && CodePointCount2(value.sessionKey) >= 1)) &&
+          (value.sessionKey.length >= 1 && CodePointCount(value.sessionKey) >= 1)) &&
         Number.isInteger(value.revision) &&
         (!(Number.isFinite(value.revision) || typeof value.revision == "bigint") ||
           value.revision >= 1) &&
@@ -634,7 +629,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 Object.getOwnPropertyNames(element).length === 2 &&
                 typeof element.step == "string" &&
                 (element.step.length >= 2 ||
-                  (element.step.length >= 1 && CodePointCount2(element.step) >= 1)) &&
+                  (element.step.length >= 1 && CodePointCount(element.step) >= 1)) &&
                 ((typeof element.status == "string" && element.status === "pending") ||
                   (typeof element.status == "string" && element.status === "in_progress") ||
                   (typeof element.status == "string" && element.status === "completed")),

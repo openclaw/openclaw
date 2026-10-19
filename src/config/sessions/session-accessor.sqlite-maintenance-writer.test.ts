@@ -179,6 +179,62 @@ function expectArchived(entry: SessionEntry | undefined, archiveReason: string) 
   expect(entry).toMatchObject({ archivedAt: expect.any(Number), archiveReason });
 }
 
+it.each(["dashboard", "age", "cap"] as const)(
+  "retains protected nested sessions and history during %s maintenance until protection is cleared",
+  async (phase) => {
+    const now = freezeTime();
+    const { set, scope, load, prepare, transcript } = createPlannerStore(
+      0,
+      undefined,
+      "dashboard:retention",
+    );
+    const old = now - 40 * day;
+    set(0, { updatedAt: old, maintenanceProtected: true, parentSessionKey: "agent:main:main" });
+    set(1, { updatedAt: old });
+    const { target, events } = transcript(0);
+    const options = {
+      forceMaintenance: true,
+      maintenanceConfig: {
+        archiveDashboardAfterMs: phase === "dashboard" ? 7 * day : null,
+        pruneAfterMs: phase === "age" ? 30 * day : 0,
+        maxEntries: phase === "cap" ? 1 : 100,
+      },
+    };
+    const maintain = await prepare();
+    maintain(options);
+    expectUnarchived(load(0), { maintenanceProtected: true });
+    expectArchived(
+      load(1),
+      phase === "cap"
+        ? "active-session-cap"
+        : phase === "age"
+          ? "age-retention"
+          : "stale-dashboard",
+    );
+    expect(loadTranscriptEventsSync(target)).toEqual(events);
+
+    await patchSessionEntryCore(
+      scope(0),
+      () => ({ maintenanceProtected: undefined, updatedAt: old }),
+      { skipMaintenance: true },
+    );
+    vi.mocked(Date.now).mockReturnValue(now + 40 * day);
+    maintain({
+      ...options,
+      maintenanceConfig: { ...options.maintenanceConfig, maxEntries: phase === "cap" ? 0 : 100 },
+    });
+    expectArchived(
+      load(0),
+      phase === "cap"
+        ? "active-session-cap"
+        : phase === "age"
+          ? "age-retention"
+          : "stale-dashboard",
+    );
+    expect(loadTranscriptEventsSync(target)).toEqual(events);
+  },
+);
+
 it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
   const { database, storePath, key, scope, set, load } = createPlannerStore();
   const options = { agentId: "main", path: database.path, env: process.env };
@@ -388,6 +444,7 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
       },
     ],
     ["locked", { modelSelectionLocked: true }],
+    ["retained-child", { maintenanceProtected: true, parentSessionKey: key("parent") }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],
     ["live", {}],

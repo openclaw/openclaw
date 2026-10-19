@@ -436,6 +436,9 @@ type SessionMaintenanceEntryParams = {
 };
 
 function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEntryParams): boolean {
+  if (params.entry?.maintenanceProtected === true) {
+    return true;
+  }
   if (params.entry?.pinnedAt !== undefined && isPinnableSessionEntry(params.key, params.entry)) {
     return true;
   }

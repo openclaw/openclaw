@@ -488,8 +488,20 @@ model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible
 for bounded cleanup. Protection can temporarily keep the store above its entry
 or disk target; it expires after the configured inactivity window.
 
-Recent-session protection does not change managed-worktree garbage collection;
-durable dashboard sessions auto-archive after 7 days of inactivity by default,
+Set `maintenanceProtected: true` with `sessions.patch` (or the `sessions` tool's
+`patch` action) and the current `expectedSessionId` to keep a selected session
+outside automatic dashboard archiving, age pruning, entry caps, and disk-budget
+eviction. Unlike pinning, this also works for nested persistent sessions without
+changing their sidebar hierarchy. The flag is opt-in, persists across restarts,
+and is returned by session discovery. Set it to `false` to resume normal
+maintenance. Manual archive and delete remain available; protection does not
+restore an already archived session. Protect any ancestor that must also remain
+visible. No database schema migration is needed. Older releases ignore the new
+flag, so rolling back also removes its protection.
+
+Neither protection changes transcript compaction, cold storage, or managed-worktree
+garbage collection. Without protection, durable dashboard sessions auto-archive
+after 7 days of inactivity by default,
 and `pruneAfter` archives other eligible durable sessions in place after 30 days
 by default, preserving their session ids and transcript generations. Disposable
 automation rows still delete at their age cutoff.

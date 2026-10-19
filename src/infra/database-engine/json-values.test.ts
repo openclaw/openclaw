@@ -5,6 +5,7 @@ import { requireNodeSqlite } from "../node-sqlite.js";
 import {
   jsonArrayFrom,
   jsonArrayValue,
+  jsonBooleanIsTrue,
   jsonObjectFrom,
   jsonOrderedArray,
   jsonPathValue,
@@ -93,4 +94,27 @@ it("aggregates typed tuples in key order without quoting nested arrays", () => {
   expect(executeSqliteQuerySync(db, aggregate.where("id", "=", "missing")).rows).toEqual([
     { value: "[]" },
   ]);
+});
+
+it("matches only literal JSON true without rejecting opaque unrelated values", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+  using db = new DatabaseSync(":memory:");
+  const query = getNodeSqliteKysely<Record<string, never>>(db);
+  for (const [json, expected] of [
+    ['{"flag":true}', true],
+    ['{"flag":false}', false],
+    ['{"flag":1}', false],
+    ['{"flag":"true"}', false],
+    ['{"flag":null}', false],
+    ["{}", false],
+    ["malformed", false],
+    [null, false],
+    ['{"flag":true,"opaque":"\\u0000\\ud800"}', true],
+  ] as const) {
+    const result = executeSqliteQuerySync(
+      db,
+      query.selectNoFrom(jsonBooleanIsTrue(db, sql.val(json), "flag").as("matches")),
+    ).rows[0]!;
+    expect(result.matches, json ?? "SQL NULL").toBeOneOf(expected ? [1] : [0, null]);
+  }
 });

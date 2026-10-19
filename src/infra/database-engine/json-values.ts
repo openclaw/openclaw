@@ -172,6 +172,17 @@ export function jsonValid(db: DatabaseSync | PostgresSqlConnection, value: Expre
     : /* kysely-allow-raw: Keep SQLite validation unchanged. */ sql`json_valid(${value})`;
 }
 
+/** Match only a JSON boolean true; malformed objects and other scalar types do not match. */
+export function jsonBooleanIsTrue(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string | null>,
+  key: string,
+): RawBuilder<boolean> {
+  return isPostgresSqlConnection(db)
+    ? /* kysely-allow-raw: JSON rather than jsonb preserves opaque Unicode escapes in unrelated members. */ sql<boolean>`CASE WHEN ${jsonValid(db, value)} THEN json_extract_path(${value}::json, ${key})::text = 'true' ELSE false END`
+    : /* kysely-allow-raw: JSON type distinguishes true from numbers and strings without decoding the object. */ sql<boolean>`CASE WHEN ${jsonValid(db, value)} THEN ${expressionBuilder().fn<string>("json_type", [value, sql.val(jsonKeyPath(key))])} = 'true' ELSE 0 END`;
+}
+
 export function jsonType(db: DatabaseSync | PostgresSqlConnection, value: Expression<unknown>) {
   return isPostgresSqlConnection(db)
     ? /* kysely-allow-raw: Engine-owned JSON value classification. */ sql<string>`jsonb_typeof(${value}::jsonb)`

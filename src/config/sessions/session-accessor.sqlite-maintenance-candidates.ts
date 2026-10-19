@@ -20,6 +20,7 @@ const maintenanceFields = [
   "lastInteractionAt",
   "sessionStartedAt",
   "pinnedAt",
+  "maintenanceProtected",
   "sidebarRoot",
   "spawnedBy",
   "parentSessionKey",
