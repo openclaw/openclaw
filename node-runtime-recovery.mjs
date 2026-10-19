@@ -330,11 +330,17 @@ export function resolveRecoveryPath(
   const paths = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(expanded) ? path.win32 : path;
   const absolute = paths.resolve(expanded);
   const cwd = realNodePath(process.cwd()) ?? process.cwd();
+  // POSIX `/` is the default working directory for launchd jobs and system services, contains
+  // every absolute path, and cannot be an attacker-supplied checkout; skip the cwd exclusion.
+  const isPosixRoot = cwd === path.posix.sep;
   // Trust only the private recovery root when launching from HOME; reject other cwd symlinks.
   const trusted =
     trustedRoot && path.isAbsolute(trustedRoot) && isPathWithin(absolute, trustedRoot);
   const excluded = (filename) =>
-    !allowCwd && isPathWithin(filename, cwd) && !(trusted && isPathWithin(filename, trustedRoot));
+    !allowCwd &&
+    !isPosixRoot &&
+    isPathWithin(filename, cwd) &&
+    !(trusted && isPathWithin(filename, trustedRoot));
   if (excluded(absolute)) {
     return null;
   }

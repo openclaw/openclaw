@@ -733,6 +733,56 @@ describe("runtime recovery discovery", () => {
     });
   });
 
+  it.skipIf(hostPlatform === "win32").each([
+    ["managed Gateway service", 1],
+    ["Homebrew node@24", 7],
+  ] as const)("recovers the %s runtime when cwd is the filesystem root", async (_label, index) => {
+    await withRecoveryHome(async (home) => {
+      const candidates = await Promise.all(
+        [
+          ".openclaw/tools/cli-node/tools/node/bin/node",
+          "service/bin/node",
+          "bin/node",
+          ".nvm/versions/node/v24.19.0/bin/node",
+          ".fnm/aliases/default/bin/node",
+          ".volta/tools/image/node/24.19.0/bin/node",
+          "brew26/bin/node",
+          "brew24/bin/node",
+        ].map((relative) => writeFixture(path.join(home, relative))),
+      );
+      await writeFixture(
+        path.join(home, ".config/systemd/user/openclaw-gateway.service"),
+        `[Service]\nExecStart="${expectDefined(candidates[1], "service candidate").replaceAll("\\", "\\\\")}" /fixture/dist/index.js gateway run\n`,
+      );
+      await writeFixture(path.join(home, ".nvm/alias/default"), "lts/test\n");
+      await writeFixture(path.join(home, ".nvm/alias/lts/test"), "24\n");
+      await writeFixture(
+        path.join(home, ".volta/tools/user/platform.json"),
+        JSON.stringify({ node: { runtime: "24.19.0" } }),
+      );
+      for (const prefix of ["/opt/homebrew", "/usr/local"]) {
+        mocks.virtualPaths.set(
+          path.join(prefix, "opt", "node@26", "bin", "node"),
+          expectDefined(candidates[6], "Node 26 candidate"),
+        );
+        mocks.virtualPaths.set(
+          path.join(prefix, "opt", "node@24", "bin", "node"),
+          expectDefined(candidates[7], "Node 24 candidate"),
+        );
+      }
+      for (const candidate of candidates.slice(index)) {
+        mocks.admissible.add(candidate);
+      }
+      // launchd jobs and system services start with cwd `/`, which contains every
+      // absolute POSIX path and must not trigger the workspace-owned exclusion.
+      vi.spyOn(process, "cwd").mockReturnValue(path.posix.sep);
+
+      await expectRecoveryStarted({ homeDir: home });
+
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidates[index]);
+    });
+  });
+
   it.each(["direct", "shell wrapper", "executable wrapper"])(
     "finds the profiled launchd runtime through a %s command",
     async (form) => {
