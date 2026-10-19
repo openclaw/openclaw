@@ -16,15 +16,11 @@ import { buildEmbeddedRunPayloads } from "../../../agents/embedded-agent-runner/
 import { resolveEmbeddedRunAttemptTerminalState } from "../../../agents/embedded-agent-runner/run/terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "../../../agents/embedded-agent-runner/run/terminal-preparation.js";
 import { mergeAttemptToolMediaPayloads } from "../../../agents/embedded-agent-runner/run/tool-media-payloads.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../../../agents/embedded-agent-runner/run/types.js";
+import type { EmbeddedRunAttemptResult } from "../../../agents/embedded-agent-runner/run/types.js";
 import { createUsageAccumulator } from "../../../agents/embedded-agent-runner/usage-accumulator.js";
 import { createAdmittedHostCapabilityTestFixture } from "../../../agents/harness/host-capability.test-support.js";
 import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import type { ToolErrorSummary } from "../../../agents/tool-error-summary.js";
-import { createToolTerminalObserver } from "../../../agents/tool-terminal-outcome.js";
 import { setToolTerminalPresentation } from "../../../agents/tool-terminal-presentation.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../../agents/tools/tts-tool-result-provenance.js";
@@ -50,6 +46,8 @@ import { getProcessSupervisor } from "../../../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../../../process/supervisor/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as ttsRuntime from "../../../tts/tts.js";
+
+export { createToolTerminalObserver as createContractToolTerminalObserver } from "../../../agents/tool-terminal-outcome.js";
 
 /** Real process poll producer and notification queue, with a synthetic completed process. */
 export function createProcessPollDeliveryContract(sessionId: string) {
@@ -143,39 +141,40 @@ export function textToolResult(
   return { content: [{ type: "text", text }], details };
 }
 
-export function createTerminalPresentationContractTool(params: {
+type ContractToolParams = {
   name: string;
   result: AgentToolResult<unknown>;
-  format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
-}): AnyAgentTool {
-  return setToolTerminalPresentation(
-    {
-      name: params.name,
-      label: `${params.name} contract tool`,
-      description: `${params.name} contract tool`,
-      parameters: {},
-      execute: vi.fn(async () => params.result),
-    } as AnyAgentTool,
-    (toolParams, result) => {
-      const text = params.format(toolParams, result);
-      return text ? { text } : undefined;
-    },
-  );
-}
+};
 
-export function createOwnerBackedContractTool(params: {
-  pluginId: string;
-  name: string;
-  result: AgentToolResult<unknown>;
-  trustedLocalMedia?: boolean;
-}): AnyAgentTool {
-  const tool = {
+function createContractTool(
+  params: ContractToolParams,
+  label = `${params.name} contract tool`,
+): AnyAgentTool {
+  return {
     name: params.name,
-    label: `${params.name} owner contract tool`,
-    description: `${params.name} owner contract tool`,
-    parameters: { type: "object", properties: {}, additionalProperties: true },
+    label,
+    description: label,
+    parameters: {},
     execute: vi.fn(async () => params.result),
   } as AnyAgentTool;
+}
+
+export function createTerminalPresentationContractTool(
+  params: ContractToolParams & {
+    format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
+  },
+): AnyAgentTool {
+  return setToolTerminalPresentation(createContractTool(params), (toolParams, result) => {
+    const text = params.format(toolParams, result);
+    return text ? { text } : undefined;
+  });
+}
+
+export function createOwnerBackedContractTool(
+  params: ContractToolParams & { pluginId: string; trustedLocalMedia?: boolean },
+): AnyAgentTool {
+  const tool = createContractTool(params, `${params.name} owner contract tool`);
+  tool.parameters = { type: "object", properties: {}, additionalProperties: true };
   setPluginToolMeta(tool, {
     pluginId: params.pluginId,
     optional: false,
@@ -183,12 +182,6 @@ export function createOwnerBackedContractTool(params: {
     ...(params.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
   });
   return tool;
-}
-
-export function createContractToolTerminalObserver(
-  runId: string,
-): NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]> {
-  return createToolTerminalObserver(runId);
 }
 
 export function buildContractReplyPayloads(
