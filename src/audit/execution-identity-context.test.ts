@@ -15,28 +15,30 @@ import {
   type ExecutionIdentityAdmissionFacts,
 } from "./execution-identity-admission.js";
 import {
-  inspectExecutionIdentityRun,
-  processExecutionIdentityAdmissionWorkInDatabase,
-  pruneExpiredExecutionIdentityContextsInDatabase,
+  inspectExecutionIdentityRun as inspectRun,
+  processExecutionIdentityAdmissionWorkInDatabase as processAdmission,
+  pruneExpiredExecutionIdentityContextsInDatabase as pruneContexts,
 } from "./execution-identity-context.js";
 import {
-  captureExecutionIdentityAdmissionEnvelope,
-  persistExecutionIdentityAdmissionEnvelope,
-  prepareExecutionIdentityContextAtAdmission,
+  captureExecutionIdentityAdmissionEnvelope as captureEnvelope,
+  persistExecutionIdentityAdmissionEnvelope as persistEnvelope,
+  prepareExecutionIdentityContextAtAdmission as prepareContext,
   recordDeniedApprovalForRun,
 } from "./execution-identity.test-support.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
-afterEach(async () => {
+afterEach(restartDatabase);
+
+async function restartDatabase() {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-});
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function databaseOptions() {
-  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-identity-") } };
+function identity(id: string, now: number, runtimeInstanceId = "runtime-1") {
+  return { contextId: `context-${id}`, executionId: `execution-${id}`, now, runtimeInstanceId };
 }
 
 function openIndependentStateDatabase(path: string): OpenClawStateDatabase {
@@ -65,21 +67,53 @@ function facts(
   };
 }
 
+function createStore() {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-identity-") } };
+  const open = () => openOpenClawStateDatabase(options);
+  return {
+    options,
+    open,
+    prepare(
+      runId: string,
+      admission: Parameters<typeof prepareContext>[1] = {},
+      overrides: Partial<ExecutionIdentityAdmissionFacts> = {},
+    ) {
+      return prepareContext(facts(runId, overrides), {
+        ...options,
+        ...admission,
+      });
+    },
+    inspect(selector: Parameters<typeof inspectRun>[0], now?: number) {
+      return inspectRun(selector, { ...options, now });
+    },
+    process(work: Parameters<typeof processAdmission>[0], now?: number) {
+      return processAdmission(work, {
+        ...options,
+        database: open(),
+        now,
+      });
+    },
+    prune(now?: number) {
+      return pruneContexts({
+        database: { ...options, database: open() },
+        now,
+      });
+    },
+  };
+}
+
 describe("execution identity context storage", () => {
   it("replays one byte-identical canonical context idempotently across restart", async () => {
-    const database = databaseOptions();
-    const envelope = captureExecutionIdentityAdmissionEnvelope(facts("run-1"), {
+    const database = createStore();
+    const envelope = captureEnvelope(facts("run-1"), identity("1", 100, "runtime-secret-1"));
+    const first = persistEnvelope(envelope, {
+      ...database.options,
       now: 100,
-      contextId: "context-1",
-      executionId: "execution-1",
-      runtimeInstanceId: "runtime-secret-1",
     });
-    const first = persistExecutionIdentityAdmissionEnvelope(envelope, { ...database, now: 100 });
 
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const second = persistExecutionIdentityAdmissionEnvelope(structuredClone(envelope), {
-      ...database,
+    await restartDatabase();
+    const second = persistEnvelope(structuredClone(envelope), {
+      ...database.options,
       now: 999,
     });
 
@@ -90,37 +124,17 @@ describe("execution identity context storage", () => {
     expect(Object.isFrozen(first.runtimeInstance)).toBe(true);
     expect(JSON.stringify(first)).not.toContain("runtime-secret-1");
 
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const afterRestart = await inspectExecutionIdentityRun(
-      { executionId: "execution-1" },
-      {
-        ...database,
-        now: 999,
-      },
-    );
+    await restartDatabase();
+    const afterRestart = await database.inspect({ executionId: "execution-1" }, 999);
     expect(afterRestart.identity).toEqual({ state: "present", context: first });
   });
 
   it("keeps explicit unknown invoker evidence distinct from omission across restart", async () => {
-    const database = databaseOptions();
-    const unknown = prepareExecutionIdentityContextAtAdmission(
-      facts("run-unknown", { invoker: { state: "unknown" } }),
-      {
-        ...database,
-        now: 100,
-        contextId: "context-unknown",
-        executionId: "execution-unknown",
-        runtimeInstanceId: "runtime-unknown",
-      },
-    );
-    const absent = prepareExecutionIdentityContextAtAdmission(facts("run-absent"), {
-      ...database,
-      now: 101,
-      contextId: "context-absent",
-      executionId: "execution-absent",
-      runtimeInstanceId: "runtime-absent",
+    const database = createStore();
+    const unknown = database.prepare("run-unknown", identity("unknown", 100, "runtime-unknown"), {
+      invoker: { state: "unknown" },
     });
+    const absent = database.prepare("run-absent", identity("absent", 101, "runtime-absent"));
 
     expect(unknown).toMatchObject({
       invoker: { state: "unknown" },
@@ -134,12 +148,8 @@ describe("execution identity context storage", () => {
       missingEvidence: ["invoker.principal"],
     });
 
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const unknownAfterRestart = await inspectExecutionIdentityRun(
-      { executionId: "execution-unknown" },
-      { ...database, now: 101 },
-    );
+    await restartDatabase();
+    const unknownAfterRestart = await database.inspect({ executionId: "execution-unknown" }, 101);
     expect(unknownAfterRestart.identity).toEqual({ state: "present", context: unknown });
     expect(unknownAfterRestart.coverage).toEqual({
       state: "unknown",
@@ -151,41 +161,22 @@ describe("execution identity context storage", () => {
         missingEvidence: ["invoker.principal"],
       }),
     ]);
-    expect(
-      (
-        await inspectExecutionIdentityRun(
-          { executionId: "execution-absent" },
-          { ...database, now: 101 },
-        )
-      ).identity,
-    ).toEqual({ state: "present", context: absent });
+    expect((await database.inspect({ executionId: "execution-absent" }, 101)).identity).toEqual({
+      state: "present",
+      context: absent,
+    });
   });
 
   it("keeps distinct turns sharing one run correlation exactly inspectable", async () => {
-    const database = databaseOptions();
-    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
-      ...database,
-      now: 100,
-      contextId: "context-first",
-      executionId: "execution-first",
-      runtimeInstanceId: "runtime-1",
-    });
-    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
-      ...database,
-      now: 101,
-      contextId: "context-second",
-      executionId: "execution-second",
-      runtimeInstanceId: "runtime-1",
-    });
-    await recordDeniedApprovalForRun("session-run", database, "shared-run-approval", {
+    const database = createStore();
+    database.prepare("session-run", identity("first", 100));
+    database.prepare("session-run", identity("second", 101));
+    await recordDeniedApprovalForRun("session-run", database.options, "shared-run-approval", {
       contextId: "context-first",
       executionId: "execution-first",
     });
 
-    const discovery = await inspectExecutionIdentityRun(
-      { runId: "session-run" },
-      { ...database, now: 300 },
-    );
+    const discovery = await database.inspect({ runId: "session-run" }, 300);
     expect(discovery).toMatchObject({
       run: { runId: "session-run", status: "known" },
       identity: {
@@ -203,23 +194,14 @@ describe("execution identity context storage", () => {
       [1, "execution-second", undefined],
     ] as const) {
       expect(
-        await inspectExecutionIdentityRun(
-          { runId: "session-run", executionOffset, executionLimit: 1 },
-          { ...database, now: 300 },
-        ),
+        await database.inspect({ runId: "session-run", executionOffset, executionLimit: 1 }, 300),
       ).toMatchObject({
         identity: { state: "ambiguous", candidates: [{ executionId }] },
         ...(nextExecutionCursor ? { nextExecutionCursor } : {}),
       });
     }
-    const firstInspection = await inspectExecutionIdentityRun(
-      { executionId: "execution-first" },
-      { ...database, now: 300 },
-    );
-    const secondInspection = await inspectExecutionIdentityRun(
-      { executionId: "execution-second" },
-      { ...database, now: 300 },
-    );
+    const firstInspection = await database.inspect({ executionId: "execution-first" }, 300);
+    const secondInspection = await database.inspect({ executionId: "execution-second" }, 300);
     expect(firstInspection).toMatchObject({
       identity: { state: "present", context: { contextId: "context-first" } },
       coverage: { state: "enforced" },
@@ -241,16 +223,10 @@ describe("execution identity context storage", () => {
         },
       ],
     });
-    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
-      ...database,
-      now: 102,
-      contextId: "context-third",
-      executionId: "execution-third",
-      runtimeInstanceId: "runtime-1",
-    });
-    const nextPage = await inspectExecutionIdentityRun(
+    database.prepare("session-run", identity("third", 102));
+    const nextPage = await database.inspect(
       { runId: "session-run", executionOffset: 2, executionLimit: 1 },
-      { ...database, now: 300 },
+      300,
     );
     expect(nextPage.identity).toMatchObject({
       state: "ambiguous",
@@ -260,42 +236,26 @@ describe("execution identity context storage", () => {
   });
 
   it("confirms durable retries without manufacturing lost evidence", async () => {
-    const database = databaseOptions();
-    const envelope = captureExecutionIdentityAdmissionEnvelope(facts("run-recovery"), {
-      now: 100,
-      contextId: "context-recovery",
-      executionId: "execution-recovery",
-      runtimeInstanceId: "runtime-original",
-    });
-    const original = processExecutionIdentityAdmissionWorkInDatabase(
-      { kind: "capture", envelope },
-      { ...database, database: openOpenClawStateDatabase(database), now: 100 },
+    const database = createStore();
+    const envelope = captureEnvelope(
+      facts("run-recovery"),
+      identity("recovery", 100, "runtime-original"),
     );
+    const original = database.process({ kind: "capture", envelope }, 100);
     const token = createExecutionIdentityAdmissionToken("run-recovery", {
       now: 100,
       contextId: "context-recovery",
       executionId: "execution-recovery",
     });
 
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    expect(
-      processExecutionIdentityAdmissionWorkInDatabase(
-        { kind: "retry-reference", token },
-        { ...database, database: openOpenClawStateDatabase(database) },
-      ),
-    ).toEqual(original);
+    await restartDatabase();
+    expect(database.process({ kind: "retry-reference", token })).toEqual(original);
 
-    const missingDatabase = databaseOptions();
-    expect(() =>
-      processExecutionIdentityAdmissionWorkInDatabase(
-        { kind: "retry-reference", token },
-        { ...missingDatabase, database: openOpenClawStateDatabase(missingDatabase) },
-      ),
-    ).toThrow("execution identity recovery evidence unavailable");
-    expect(
-      await inspectExecutionIdentityRun({ executionId: "execution-recovery" }, missingDatabase),
-    ).toMatchObject({
+    const missingDatabase = createStore();
+    expect(() => missingDatabase.process({ kind: "retry-reference", token })).toThrow(
+      "execution identity recovery evidence unavailable",
+    );
+    expect(await missingDatabase.inspect({ executionId: "execution-recovery" })).toMatchObject({
       run: { executionId: "execution-recovery", status: "unknown" },
       identity: { state: "unknown", reasonCode: "execution_not_found" },
       decisions: [],
@@ -303,26 +263,23 @@ describe("execution identity context storage", () => {
   });
 
   it("projects authoritative local CLI and system ingress without conflating them", async () => {
-    const database = databaseOptions();
-    prepareExecutionIdentityContextAtAdmission(facts("run-local"), database);
-    prepareExecutionIdentityContextAtAdmission(
-      facts("run-system", {
+    const database = createStore();
+    database.prepare("run-local");
+    database.prepare(
+      "run-system",
+      {},
+      {
         ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-      }),
-      database,
+      },
     );
 
-    expect(
-      (await inspectExecutionIdentityRun({ runId: "run-local" }, database)).identity,
-    ).toMatchObject({
+    expect((await database.inspect({ runId: "run-local" })).identity).toMatchObject({
       state: "present",
       context: {
         ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
       },
     });
-    expect(
-      (await inspectExecutionIdentityRun({ runId: "run-system" }, database)).identity,
-    ).toMatchObject({
+    expect((await database.inspect({ runId: "run-system" })).identity).toMatchObject({
       state: "present",
       context: {
         ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
@@ -331,19 +288,15 @@ describe("execution identity context storage", () => {
   });
 
   it("keeps maintenance read-only until the first identity capture", () => {
-    const database = databaseOptions();
-    const opened = openOpenClawStateDatabase(database);
+    const database = createStore();
+    const opened = database.open();
     expect(
       opened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
 
-    expect(
-      pruneExpiredExecutionIdentityContextsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-      }),
-    ).toBe(0);
+    expect(database.prune()).toBe(0);
     expect(
       opened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -352,9 +305,11 @@ describe("execution identity context storage", () => {
   });
 
   it("records attribution only when an invoker fact is actually present", () => {
-    const database = databaseOptions();
-    const context = prepareExecutionIdentityContextAtAdmission(
-      facts("run-attributed", {
+    const database = createStore();
+    const context = database.prepare(
+      "run-attributed",
+      { runtimeInstanceId: "private-runtime" },
+      {
         invoker: {
           state: "present",
           kind: "local-account",
@@ -372,8 +327,7 @@ describe("execution identity context storage", () => {
             strength: "boundary-verified",
           },
         ],
-      }),
-      { ...database, runtimeInstanceId: "private-runtime" },
+      },
     );
     const encoded = JSON.stringify(context);
 
@@ -397,37 +351,22 @@ describe("execution identity context storage", () => {
   });
 
   it("keeps bounded retention maintenance available while collection is disabled", () => {
-    const database = databaseOptions();
-    prepareExecutionIdentityContextAtAdmission(facts("run-before-disable"), {
-      ...database,
-      now: 0,
-      runtimeInstanceId: "runtime-1",
-    });
+    const database = createStore();
+    database.prepare("run-before-disable", { now: 0, runtimeInstanceId: "runtime-1" });
     expect(
       enqueueExecutionIdentityContextAtAdmission(facts("run-disabled"), { enabled: false }),
     ).toBeUndefined();
 
+    expect(database.prune(RETENTION_MS + 1)).toBe(1);
     expect(
-      pruneExpiredExecutionIdentityContextsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: RETENTION_MS + 1,
-      }),
-    ).toBe(1);
-    expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts")
-        .get(),
+      database.open().db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get(),
     ).toEqual({ count: 0 });
   });
 
   it("rolls back the worker write when insert-time retention cleanup fails", () => {
-    const database = databaseOptions();
-    prepareExecutionIdentityContextAtAdmission(facts("run-expired"), {
-      ...database,
-      now: 0,
-      runtimeInstanceId: "runtime-1",
-    });
-    openOpenClawStateDatabase(database).db.exec(`
+    const database = createStore();
+    database.prepare("run-expired", { now: 0, runtimeInstanceId: "runtime-1" });
+    database.open().db.exec(`
       CREATE TRIGGER reject_identity_cleanup
       BEFORE DELETE ON execution_identity_contexts
       BEGIN
@@ -436,8 +375,7 @@ describe("execution identity context storage", () => {
     `);
 
     expect(() =>
-      prepareExecutionIdentityContextAtAdmission(facts("run-still-admitted"), {
-        ...database,
+      database.prepare("run-still-admitted", {
         now: RETENTION_MS + 1,
         runtimeInstanceId: "runtime-1",
       }),
@@ -445,15 +383,15 @@ describe("execution identity context storage", () => {
   });
 
   it("enforces the row cap across independent database connections", () => {
-    const database = databaseOptions();
-    const path = openOpenClawStateDatabase(database).path;
+    const database = createStore();
+    const path = database.open().path;
     closeOpenClawStateDatabaseForTest();
     const first = openIndependentStateDatabase(path);
     const second = openIndependentStateDatabase(path);
     try {
       for (const [index, connection] of [first, second, first, second].entries()) {
         const runId = `shared-cap-${index + 1}`;
-        prepareExecutionIdentityContextAtAdmission(facts(runId), {
+        prepareContext(facts(runId), {
           database: connection,
           now: 100 + index,
           contextId: `context-${runId}`,
@@ -473,10 +411,9 @@ describe("execution identity context storage", () => {
   });
 
   it("prunes oldest overflow across timestamp ties within the remaining expiry budget", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const add = (id: string, now: number, limits?: { maxRows: number; pruneBatchRows: number }) =>
-      prepareExecutionIdentityContextAtAdmission(facts(`run-${id}`), {
-        ...database,
+      database.prepare(`run-${id}`, {
         now,
         contextId: id,
         runtimeInstanceId: "runtime-1",
@@ -488,7 +425,8 @@ describe("execution identity context storage", () => {
       add(id, RETENTION_MS - 100);
     }
     const retained = () =>
-      openOpenClawStateDatabase(database)
+      database
+        .open()
         .db.prepare(
           "SELECT context_id FROM execution_identity_contexts ORDER BY created_at, context_id",
         )
@@ -503,25 +441,15 @@ describe("execution identity context storage", () => {
   });
 
   it("inspects through a read-only connection while another writer holds the database", async () => {
-    const database = databaseOptions();
-    prepareExecutionIdentityContextAtAdmission(facts("held-lock-inspection"), {
-      ...database,
-      now: 100,
-      contextId: "context-held-lock-inspection",
-      executionId: "execution-held-lock-inspection",
-      runtimeInstanceId: "runtime-1",
-    });
-    const path = openOpenClawStateDatabase(database).path;
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    const database = createStore();
+    database.prepare("held-lock-inspection", identity("held-lock-inspection", 100));
+    const path = database.open().path;
+    await restartDatabase();
     const lockDatabase = openNodeSqliteDatabase(path);
     lockDatabase.exec("BEGIN IMMEDIATE");
     try {
       expect(
-        await inspectExecutionIdentityRun(
-          { executionId: "execution-held-lock-inspection" },
-          { ...database, now: 100 },
-        ),
+        await database.inspect({ executionId: "execution-held-lock-inspection" }, 100),
       ).toMatchObject({
         identity: {
           state: "present",
@@ -539,26 +467,23 @@ describe("execution identity context storage", () => {
   });
 
   it("returns typed corrupt, unknown, and unsupported projections", async () => {
-    const corruptDatabase = databaseOptions();
-    prepareExecutionIdentityContextAtAdmission(facts("run-corrupt"), {
-      ...corruptDatabase,
+    const corruptDatabase = createStore();
+    prepareContext(facts("run-corrupt"), {
+      ...corruptDatabase.options,
       runtimeInstanceId: "runtime-1",
     });
-    openOpenClawStateDatabase(corruptDatabase)
+    corruptDatabase
+      .open()
       .db.prepare("UPDATE execution_identity_contexts SET context_json = ? WHERE run_id = ?")
       .run("{", "run-corrupt");
-    expect(
-      await inspectExecutionIdentityRun({ runId: "run-corrupt" }, corruptDatabase),
-    ).toMatchObject({
+    expect(await corruptDatabase.inspect({ runId: "run-corrupt" })).toMatchObject({
       run: { status: "known" },
       identity: { state: "unknown", reasonCode: "identity_context_corrupt" },
       coverage: { state: "unknown" },
     });
 
-    const unknownDatabase = databaseOptions();
-    expect(
-      await inspectExecutionIdentityRun({ runId: "never-seen" }, unknownDatabase),
-    ).toMatchObject({
+    const unknownDatabase = createStore();
+    expect(await unknownDatabase.inspect({ runId: "never-seen" })).toMatchObject({
       run: { status: "unknown" },
       identity: {
         state: "unknown",
@@ -580,11 +505,9 @@ describe("execution identity context storage", () => {
         agentId: "main",
         runId: "legacy-run",
       },
-      { ...unknownDatabase, database: openOpenClawStateDatabase(unknownDatabase) },
+      { ...unknownDatabase.options, database: unknownDatabase.open() },
     );
-    expect(
-      await inspectExecutionIdentityRun({ runId: "legacy-run" }, unknownDatabase),
-    ).toMatchObject({
+    expect(await unknownDatabase.inspect({ runId: "legacy-run" })).toMatchObject({
       run: { status: "known" },
       identity: {
         state: "unsupported",
