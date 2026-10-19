@@ -136,7 +136,6 @@ async function receive(overrides: {
   const client: IrcClient = {
     nick: account.nick,
     isReady: () => true,
-    sendRaw: vi.fn(),
     join: vi.fn(),
     sendPrivmsg: async (target, text) => await overrides.sendReply?.(target, text, undefined),
     quit: vi.fn(),
