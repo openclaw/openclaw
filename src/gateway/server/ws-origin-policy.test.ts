@@ -125,7 +125,7 @@ type Transition = {
   initial: OpenClawConfig;
   next: OpenClawConfig;
   principal: Parameters<typeof capture>[1];
-  revoked: boolean;
+  revoked?: boolean;
 };
 
 const identity = "retained@example.test";
@@ -152,7 +152,6 @@ const trustedProxy = {
   requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
   allowUsers: ["reader@example.test", "writer@example.test"],
 };
-const unorderedFields = ["requiredHeaders", "allowUsers"] as const;
 
 it.each<Transition>([
   ...[false, true].map<Transition>((override) => ({
@@ -174,7 +173,6 @@ it.each<Transition>([
     initial: {},
     next: authConfig({ identityScopes: { "other@example.test": ["operator.admin"] } }),
     principal,
-    revoked: false,
   })),
   ...identityChanges.map<Transition>(([name, scopes, revoked]) => ({
     name,
@@ -183,14 +181,13 @@ it.each<Transition>([
     principal: { role: "operator", verifiedIdentity: identity },
     revoked,
   })),
-  ...unorderedFields.map<Transition>((field) => ({
+  ...(["requiredHeaders", "allowUsers"] as const).map<Transition>((field) => ({
     name: `trusted-proxy ${field} reordered`,
     initial: authConfig({ trustedProxy }),
     next: authConfig({
       trustedProxy: { ...trustedProxy, [field]: trustedProxy[field].toReversed() },
     }),
     principal: null,
-    revoked: false,
   })),
   ...[
     "allowUsers",
@@ -234,20 +231,17 @@ it.each<Transition>([
       revoked: true,
     };
   }),
-])("reconciles the admitted grant after $name", ({ initial, next, principal, revoked }) => {
+])("reconciles the admitted grant after $name", ({ initial, next, principal, revoked = false }) => {
   const client = policyClient(initial, principal);
   const onRevoked = watchRevocation(client);
   reconcile([client], next);
   expect(client).toMatchObject({ invalidated: revoked, sourceInvalidated: revoked });
   expect(onRevoked).toHaveBeenCalledTimes(revoked ? 1 : 0);
-  expect(client.socket.close).toHaveBeenCalledTimes(revoked ? 1 : 0);
-  if (revoked) {
-    expect(client.socket.close).toHaveBeenCalledWith(4001, "gateway policy changed");
-  }
+  expect(client.socket.close.mock.calls).toEqual(revoked ? [[4001, "gateway policy changed"]] : []);
 });
 
 it.each(["retained@example.test", "other@example.test"])(
-  "latches an added then removed grant only for its source: %s",
+  "latches only the changed identity: %s",
   (changedIdentity) => {
     const client = policyClient({}, { role: "operator", verifiedIdentity: identity });
     reconcile([client], {
@@ -259,7 +253,7 @@ it.each(["retained@example.test", "other@example.test"])(
 );
 
 it.each(["proxy addresses", "allowed users"])(
-  "fences transport without revoking accepted work and drains its config response for %s",
+  "drains policy responses while fencing %s",
   (change) => {
     const initial = authConfig({
       mode: "trusted-proxy",
