@@ -30,7 +30,7 @@ function withUiServer(
     resolvedAuth,
     overrides: { controlUiEnabled: true, controlUiBasePath: "", ...overrides },
     run: async (server) =>
-      run(async (path, status, { body, ...options } = {}) => {
+      run(async (path: string, status: number, { body, ...options }: Parameters<Check>[2] = {}) => {
         const response = await sendRequest(server, { path, ...options });
         expect(response.res.statusCode, `${options.method ?? "GET"} ${path}`).toBe(status);
         if (body !== undefined) {

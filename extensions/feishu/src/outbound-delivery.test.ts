@@ -36,6 +36,7 @@ vi.mock("./send.js", async (importOriginal) => ({
 import { feishuPlugin } from "./channel.js";
 import { feishuChannelRuntime } from "./channel.runtime.js";
 import { feishuOutbound } from "./outbound.js";
+import { toFeishuSendResult } from "./send-result.js";
 
 type DeliveryQueueRow = {
   status: string;
@@ -63,11 +64,20 @@ function readDeliveryQueueRow(stateDir: string, id: string): DeliveryQueueRow | 
 describe("Feishu outbound shared delivery", () => {
   beforeEach(() => {
     let textMessageIndex = 0;
-    sendMediaFeishuMock.mockReset().mockResolvedValue({ messageId: "media-1", chatId: "chat_1" });
-    sendMessageFeishuMock.mockReset().mockImplementation(async () => ({
-      messageId: `text-${String(++textMessageIndex)}`,
-      chatId: "chat_1",
-    }));
+    sendMediaFeishuMock
+      .mockReset()
+      .mockResolvedValue(
+        toFeishuSendResult({ data: { message_id: "media-1" } }, "chat_1", "media"),
+      );
+    sendMessageFeishuMock
+      .mockReset()
+      .mockImplementation(async () =>
+        toFeishuSendResult(
+          { data: { message_id: `text-${String(++textMessageIndex)}` } },
+          "chat_1",
+          "text",
+        ),
+      );
     sendCardFeishuMock.mockReset().mockResolvedValue({ messageId: "card-1", chatId: "chat_1" });
     const plugin = createOutboundTestPlugin({ id: "feishu", outbound: feishuOutbound });
     setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));

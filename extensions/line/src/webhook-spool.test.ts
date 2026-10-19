@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { IncomingMessage } from "node:http";
 import type { webhook } from "@line/bot-sdk";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -8,7 +7,7 @@ import {
 import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import {
@@ -89,7 +88,7 @@ describe("LINE webhook spool", () => {
         const response = createMockServerResponse();
         response.statusCode = 0;
         await handler(
-          {
+          Object.assign(createMockIncomingRequest([body]), {
             method: "POST",
             headers: {
               "x-line-signature": crypto
@@ -97,7 +96,7 @@ describe("LINE webhook spool", () => {
                 .update(body)
                 .digest("base64"),
             },
-          } as IncomingMessage,
+          }),
           response,
         );
         expect(response.statusCode).toBe(500);

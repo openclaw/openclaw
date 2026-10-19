@@ -26,6 +26,7 @@ vi.mock("../../../wizard/setup.shared.js", () => ({ writeWizardConfigFile }));
 const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
   vi.fn(() => "custom-api-key|skip|demo-provider-api-key"),
 );
+// mock-isolation: The fixed choice list avoids installed-provider discovery in dispatch tests.
 vi.mock("../../auth-choice-options.js", () => ({ formatAuthChoiceChoicesForCli }));
 
 const applyNonInteractivePluginProviderChoice = vi.hoisted(() =>
@@ -33,9 +34,11 @@ const applyNonInteractivePluginProviderChoice = vi.hoisted(() =>
     async () => undefined,
   ),
 );
+// mock-isolation: Capture provider dispatch without loading or installing real providers.
 vi.mock("./auth-choice.plugin-providers.js", () => ({ applyNonInteractivePluginProviderChoice }));
 
 const resolveNonInteractiveApiKey = vi.hoisted(() => vi.fn());
+// mock-isolation: Tests provide synthetic credential resolution without reading host secrets.
 vi.mock("../api-keys.js", () => ({ resolveNonInteractiveApiKey }));
 
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() =>

@@ -67,7 +67,9 @@ function startNestedTool(
     }
     finished.resolve(
       await Promise.all(
-        responses.map((response) => (captureError ? response.catch((error) => error) : response)),
+        responses.map((response) =>
+          captureError ? response.catch((error: unknown) => error) : response,
+        ),
       ),
     );
     await finish.promise;

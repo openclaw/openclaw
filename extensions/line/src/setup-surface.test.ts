@@ -128,6 +128,11 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
   monitorLineProviderMock.mockImplementation(async (opts) => {
     providerStarted.resolve();
     await waitForAbortSignal(opts.abortSignal);
+    return {
+      account: params.account,
+      handleWebhook: async () => "ignored" as const,
+      stop: async () => {},
+    };
   });
   setLineRuntime({ logging: { shouldLogVerbose: () => false } } as unknown as PluginRuntime);
   const statusEvents: unknown[] = [];

@@ -112,7 +112,7 @@ describe("ChannelWizard", () => {
       { channelLabel: () => "Slack" },
     );
     const subtitle = container.querySelector(".channels-wizard__subtitle");
-    expect(subtitle?.textContent?.replace(/\\s+/gu, " ").trim()).toBe(
+    expect(subtitle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
       "Guided channel setup View docs",
     );
     expect(subtitle?.querySelector<HTMLAnchorElement>(".channels-wizard__link")?.href).toBe(

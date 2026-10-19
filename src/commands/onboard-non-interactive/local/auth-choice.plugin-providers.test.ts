@@ -24,12 +24,14 @@ vi.mock("../../runtime-plugin-install.js", () => ({
   ensureModelSelectionRuntimePlugins,
 }));
 const offerPostInstallMigrations = vi.hoisted(() => vi.fn(async () => {}));
+// mock-isolation: Provider selection must not run post-install state migrations.
 vi.mock("../../../wizard/setup.post-install-migration.js", () => ({ offerPostInstallMigrations }));
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
 const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+// mock-isolation: Synthetic manifests keep provider discovery independent of installed plugins.
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({ resolveManifestProviderAuthChoice }));
 const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
   vi.fn<
@@ -40,6 +42,7 @@ vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries,
 }));
 const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn());
+// mock-isolation: Record installation requests without installing packages.
 vi.mock("../../onboarding-plugin-install.js", () => ({ ensureOnboardingPluginInstalled }));
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined));
@@ -139,7 +142,11 @@ function expectRuntimeErrorIncludes(text: string) {
   expect(errorOutput).toContain(text);
 }
 
-function expectJsonError(message: unknown) {
+function expectJsonError(message: unknown, json = true) {
+  if (!json) {
+    expect(runtime.log).not.toHaveBeenCalled();
+    return;
+  }
   expect(runtime.log).toHaveBeenCalledOnce();
   expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
     ok: false,
@@ -581,7 +588,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
-      expectJsonError(expect.stringContaining("was not matched to a trusted provider plugin"));
+      expectJsonError(
+        expect.stringContaining("was not matched to a trusted provider plugin"),
+        json,
+      );
     },
   );
 
@@ -601,7 +611,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
       expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
       expect(resolveProviderInstallCatalogEntries).not.toHaveBeenCalled();
-      expectJsonError(expect.stringContaining("is missing a provider id"));
+      expectJsonError(expect.stringContaining("is missing a provider id"), json);
     },
   );
 

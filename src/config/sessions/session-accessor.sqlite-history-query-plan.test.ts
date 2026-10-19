@@ -26,7 +26,6 @@ import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   waitForSessionTranscriptProjection,
-  type SessionTranscriptReadScope,
 } from "./session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
@@ -62,7 +61,7 @@ async function seedHistory(sessionId: string) {
   return { scope, database };
 }
 
-async function seedTranscript(scope: SessionTranscriptReadScope) {
+async function seedTranscript(scope: Parameters<typeof persistSessionTranscriptTurn>[0]) {
   await persistSessionTranscriptTurn(scope, {
     messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
     touchSessionEntry: false,

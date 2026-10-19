@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolveBinary: vi.fn(() => "mxc-test-binary"),
   probe: vi.fn(),
 }));
+// mock-isolation: Registration probes a synthetic binary, never the host installation.
 vi.mock("../src/binary-resolver.js", () => ({ resolveMxcBinaryPath: mocks.resolveBinary }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),

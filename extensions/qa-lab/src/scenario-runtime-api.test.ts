@@ -40,8 +40,9 @@ describe("createQaScenarioRuntimeApi", () => {
       lab: { baseUrl: "http://127.0.0.1:1234" },
       transport: {
         ...methods,
-        sendNativeCommand: (input: Parameters<QaTransportAdapter["sendNativeCommand"]>[0]) =>
-          sendQaTransportNativeCommand(methods, input),
+        sendNativeCommand: (
+          input: Parameters<NonNullable<QaTransportAdapter["sendNativeCommand"]>>[0],
+        ) => sendQaTransportNativeCommand(methods, input),
       },
     };
     const deps = {

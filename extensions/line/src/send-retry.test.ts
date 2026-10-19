@@ -10,11 +10,15 @@ const { requireConfig, resolveAccount, resolveToken, activity, verbose } = vi.ho
   activity: vi.fn(),
   verbose: vi.fn(),
 }));
+// mock-isolation: Retry tests supply config without reading the active Gateway config.
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   requireRuntimeConfig: requireConfig,
 }));
+// mock-isolation: Use one synthetic account without resolving installed account state.
 vi.mock("./accounts.js", () => ({ resolveLineAccount: resolveAccount }));
+// mock-isolation: Credential lookup is fixed to a synthetic token for HTTP retry proof.
 vi.mock("./channel-access-token.js", () => ({ resolveLineChannelAccessToken: resolveToken }));
+// mock-isolation: Capture activity without publishing to the live channel runtime.
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", () => ({
   recordChannelActivity: activity,
 }));

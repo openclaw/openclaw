@@ -65,6 +65,7 @@ let createResolverContext: typeof import("./runtime-shared.js").createResolverCo
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 let restoreResolveSecretRefValuesSpy: (() => void) | undefined;
 
+// mock-isolation: Fixed providers avoid loading the installed plugin runtime.
 vi.mock("./runtime-web-tools-fallback.runtime.js", () => ({
   runtimeWebToolsFallbackProviders: {
     resolvePluginWebSearchProviders: fallbackSearch,
@@ -72,6 +73,7 @@ vi.mock("./runtime-web-tools-fallback.runtime.js", () => ({
   },
 }));
 
+// mock-isolation: Explicit artifact discovery uses synthetic provider metadata only.
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: explicitSearch,
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: explicitFetch,
@@ -89,6 +91,7 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
   resolveManifestContractOwnerPluginId: manifestOwner,
 }));
 
+// mock-isolation: Installed-plugin records come from the fixture, not host state.
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: installedPlugins,
 }));
@@ -855,4 +858,3 @@ describe("runtime web tools resolution", () => {
     expect(fallbackFetch).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

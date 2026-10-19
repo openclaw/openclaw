@@ -43,8 +43,24 @@ const scripted = (...steps: Array<[string, unknown]>) => createController(replie
 afterEach(() => vi.useRealTimers());
 
 it("does not treat a colliding owner selection as the channel presentation", async () => {
-  const owner = running({ id: "step-owner", type: "select" }, "s-owner-collision");
-  const channel = running({ id: "step-channel", type: "select" });
+  const owner = running(
+    {
+      id: "step-owner",
+      type: "select",
+      message: "Set up channels for agent",
+      options: [
+        { value: { agentId: "telegram" }, label: "telegram" },
+        { value: { agentId: "helper" }, label: "helper" },
+      ],
+    },
+    "s-owner-collision",
+  );
+  const channel = running({
+    id: "step-channel",
+    type: "select",
+    message: "Select channels",
+    options: [{ value: "discord", label: "Discord" }],
+  });
   const request = vi.fn(
     replies(
       ["wizard.start", owner],

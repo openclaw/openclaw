@@ -52,10 +52,15 @@ export function configAuditRecord(
 }
 
 export class AuditMigrationFixture {
-  constructor(readonly stateDir: string) {}
-  readonly env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_STATE_DIR: this.stateDir };
-  readonly config = auditPaths(this.stateDir, path.join("logs", "config-audit.jsonl"));
-  readonly system = auditPaths(this.stateDir, path.join("audit", "system-agent.jsonl"));
+  readonly env: NodeJS.ProcessEnv;
+  readonly config: ReturnType<typeof auditPaths>;
+  readonly system: ReturnType<typeof auditPaths>;
+
+  constructor(readonly stateDir: string) {
+    this.env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    this.config = auditPaths(stateDir, path.join("logs", "config-audit.jsonl"));
+    this.system = auditPaths(stateDir, path.join("audit", "system-agent.jsonl"));
+  }
 
   detect(doctorOnlyStateMigrations = true) {
     return detectLegacyAuditLogs({

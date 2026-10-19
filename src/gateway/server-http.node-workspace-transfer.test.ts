@@ -27,7 +27,7 @@ async function withTransferServer<T>({
   run,
   ...options
 }: Partial<Parameters<typeof createGatewayHttpServer>[0]> & {
-  run(origin: string): Promise<T>;
+  run: (origin: string) => Promise<T>;
 }): Promise<T> {
   const server = createGatewayHttpServer({
     clients: new Set(),

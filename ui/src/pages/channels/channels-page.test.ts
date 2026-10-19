@@ -395,7 +395,7 @@ describe("ChannelsPage lifecycle", () => {
       ["operator.admin", "operator.read"],
     );
     const fetchMock = mockIcon("blob:duplicate-plugin-icon");
-    vi.mocked(URL.createObjectURL).mockReturnValueOnce("blob:agent-system-plugin-icon");
+    vi.spyOn(URL, "createObjectURL").mockReturnValueOnce("blob:agent-system-plugin-icon");
     const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const page = mountPage(source.context);
 
@@ -902,9 +902,13 @@ it("keeps a caller deadline across credential retry and response-body consumptio
           status: 200,
           json: () =>
             new Promise((_resolve, reject) => {
-              init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), {
-                once: true,
-              });
+              init!.signal!.addEventListener(
+                "abort",
+                () => reject(new DOMException("Deadline", "TimeoutError")),
+                {
+                  once: true,
+                },
+              );
             }),
         }) as Response,
     );

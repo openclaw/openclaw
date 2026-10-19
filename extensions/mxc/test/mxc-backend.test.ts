@@ -37,7 +37,10 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
-vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFileSync: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandBuffered: spawnCommandMock,
@@ -1019,4 +1022,3 @@ describeOnWindows("mxcSandboxBackendManager (Windows-only MXC backend tests)", (
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
