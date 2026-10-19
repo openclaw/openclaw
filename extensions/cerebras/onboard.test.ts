@@ -20,7 +20,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...ssrfRuntimeMocks,
 }));
 
-const CEREBRAS_PUBLIC_MODELS_URL = "https://api.cerebras.ai/public/v1/models";
 const NATIVE_TEXT_MODEL = {
   id: "text",
   object: "model",
@@ -76,9 +75,8 @@ it("selects the default and alias when seeding a replace-mode catalog", () => {
 
   expect(config.models?.mode).toBe("replace");
   expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
-  expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-    "cerebras/gpt-oss-120b",
-  );
+  const primary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  expect(primary).toBe("cerebras/gpt-oss-120b");
   expect(config.agents?.defaults?.models).toEqual({
     [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras GPT OSS 120B" },
   });
@@ -107,25 +105,16 @@ it.each([
 
   expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
   const request = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls[0]?.[0];
-  expect(request?.url).toBe(CEREBRAS_PUBLIC_MODELS_URL);
-  expect(Object.fromEntries(new Headers(request?.init?.headers))).toEqual({
-    accept: "application/json",
-  });
+  expect(request?.url).toBe("https://api.cerebras.ai/public/v1/models");
+  const headers = new Headers(request?.init?.headers);
+  expect([...headers]).toEqual([["accept", "application/json"]]);
   expect(catalog).toMatchObject({
     apiKey: "fixture-cerebras-key",
     api: "openai-completions",
     baseUrl: "https://api.cerebras.ai/v1",
   });
-  expect(
-    catalog.models.map(({ id, name, reasoning, input, contextWindow, maxTokens }) => [
-      id,
-      name,
-      reasoning,
-      input,
-      contextWindow,
-      maxTokens,
-    ]),
-  ).toEqual([
+  const fields = ["id", "name", "reasoning", "input", "contextWindow", "maxTokens"] as const;
+  expect(catalog.models.map((model) => fields.map((field) => model[field]))).toEqual([
     ["text", "Text", true, ["text"], 131072, 40960],
     ["vision", "Vision", false, ["text", "image"], 262144, 65536],
   ]);
@@ -143,11 +132,8 @@ it("reports unavailable discovery and recovers on the next request", async () =>
   mockCatalogResponse({ data: [NATIVE_TEXT_MODEL] });
   const recovered = await runCerebrasCatalog();
 
-  expect(recovered.models).toEqual([
-    expect.objectContaining({
-      id: NATIVE_TEXT_MODEL.id,
-      cost: { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 },
-    }),
+  expect(recovered.models.map(({ id, cost }) => [id, cost])).toEqual([
+    ["text", { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 }],
   ]);
   expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
 });
