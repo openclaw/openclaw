@@ -54,13 +54,13 @@ export function FolderDisclosure(props: {
     () => ({ open: props.open, active: props.active, instant: props.instant }),
     (next) => {
       if (!next) {
-        return;
+        return undefined;
       }
       if (
         next === applied &&
         (!animation || !current.open || content.getBoundingClientRect().height === targetHeight)
       ) {
-        return;
+        return undefined;
       }
       const closed = !current.open && !animation;
       const from = closed || shell.hidden ? 0 : shell.getBoundingClientRect().height;

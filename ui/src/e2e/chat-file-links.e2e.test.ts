@@ -300,7 +300,31 @@ suite.define(() => {
               },
             })),
           },
-          "sessions.files.list": listing,
+          "sessions.files.list": {
+            cases: [
+              {
+                match: { path: "", search: "" },
+                response: {
+                  ...listing,
+                  browser: {
+                    path: "",
+                    entries: [{ kind: "directory", name: "packages", path: "packages" }],
+                  },
+                },
+              },
+              {
+                match: { path: "packages/app", search: "" },
+                response: {
+                  ...listing,
+                  browser: { ...listing.browser, path: "packages/app", parentPath: "packages" },
+                },
+              },
+              {
+                match: { path: "", search: "README" },
+                response: { ...listing, browser: { ...listing.browser, search: "README" } },
+              },
+            ],
+          },
           "sessions.files.set": {
             sessionKey,
             file: { hash: "after-hash", size: savedSize },
@@ -335,10 +359,19 @@ suite.define(() => {
         path: "README.md",
       });
 
+      const revealRequest = {
+        sessionKey,
+        agentId: "main",
+        path: "packages/app",
+        search: "",
+      };
+      const beforeReveal = (await gateway.getRequests("sessions.files.list", revealRequest)).length;
       await fileView.getByRole("button", { name: "Show in Files" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).at(-1)?.params)
-        .toMatchObject({ path: "packages/app" });
+      const revealed = await gateway.waitForRequest("sessions.files.list", {
+        after: beforeReveal,
+        match: revealRequest,
+      });
+      expect(revealed.params).toMatchObject(revealRequest);
       await expect
         .poll(() =>
           page
