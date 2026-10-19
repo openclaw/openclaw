@@ -3361,6 +3361,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
     const targets = [
+      "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
+      "src/gateway/mcp-app-extension-runtime.test.ts",
+      "src/agents/cli-runner.helpers.test.ts",
       "src/gateway/openai-http.test.ts",
       "src/agents/embedded-agent-runner/compact.small-context.test.ts",
       "src/agents/embedded-agent-runner/stream-resolution.test.ts",
@@ -3379,6 +3382,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // groups into serial Gateway templates; fixed-inventory coverage below proves
     // parallel capacity is retained when the canonical templates permit it.
     for (const job of plan) {
+      expect(job.requiresDist).toBe(false);
       expect([1, 2]).toContain(job.planConcurrency);
       expect(job.runner).toBe(
         job.planConcurrency === 2
