@@ -1,6 +1,5 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -70,7 +69,13 @@ suite.define(() => {
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const draft = pane.locator(".agent-chat__composer-combobox textarea");
         await draft.fill("Keep my next instruction");
-        await selectChatLayoutAction(pane, "Side panel");
+        const panels = pane.locator(".sidebar-region__panels-toggle").getByRole("button", {
+          name: "Panels",
+          exact: true,
+        });
+        if ((await panels.getAttribute("aria-expanded")) !== "true") {
+          await panels.click();
+        }
         const choices = pane.locator(".side-panel-launcher").getByRole("button");
         await choices.first().waitFor();
         if (capture) {

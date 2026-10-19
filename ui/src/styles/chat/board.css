@@ -99,6 +99,10 @@
   opacity: 1;
 }
 
+.sidebar-region--mobile-host .chat-dashboard-menu__trigger {
+  opacity: 1;
+}
+
 .chat-dashboard-menu__trigger > .oc-menu-item__label {
   display: inline-flex;
   align-items: center;

@@ -18,15 +18,17 @@ export type ControlUiSessionFixture = {
   pinnedAt?: number;
   archived?: boolean;
   archivedAt?: number;
+  spawnedCwd?: string;
+  lastMessagePreview?: string;
   [field: string]: unknown;
 };
 
 // Also serialized into the page realm; keep these builders free of module captures.
-export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixture>>(
+export function createControlUiSessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options?: T,
+  options?: Partial<ControlUiSessionFixture>,
 ) {
   const archivedAt = options?.archivedAt ?? (options?.archived ? updatedAt : undefined);
   const pinnedAt =
@@ -58,9 +60,12 @@ export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixt
   );
 }
 
-export function createControlUiMockSessionRow<
-  T extends { model?: string; modelProvider?: string } & Record<string, unknown>,
->(key: string, label: string, updatedAt: number, options?: T) {
+export function createControlUiMockSessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  options?: { model?: string; modelProvider?: string } & Record<string, unknown>,
+) {
   return createControlUiSessionRow(
     key,
     label,

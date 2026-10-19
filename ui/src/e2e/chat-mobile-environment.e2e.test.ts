@@ -126,4 +126,121 @@ suite.define(() => {
       },
     );
   });
+
+  it("expands and restores the mobile Machine move picker without losing its selected target", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: remoteSession.key,
+          sessionInfo: remoteSession,
+          operatorScopes: ["operator.read", "operator.write"],
+          featureMethods: ["environments.list", "sessions.move"],
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([remoteSession]),
+            "environments.list": {
+              profiles: [],
+              environments: [
+                {
+                  id: "node:studio",
+                  type: "node",
+                  label: machineName,
+                  status: "available",
+                  sessionHost: true,
+                  workerSlots: { total: 1, available: 0 },
+                },
+                {
+                  id: "node:spare",
+                  type: "node",
+                  label: "Spare Mac",
+                  status: "available",
+                  sessionHost: true,
+                  workerSlots: { total: 1, available: 1 },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, remoteSession.key));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await pane
+          .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
+          .click();
+        const host = pane.locator(".chat-mobile-host");
+        await host
+          .locator(".chat-environment-mobile")
+          .getByRole("button", { name: machineName, exact: true })
+          .click();
+        await host.getByRole("button", { name: "Move session", exact: true }).click();
+        const picker = host.locator(".session-move--inline");
+        const destination = picker.getByRole("radio", { name: /^Spare Mac/ });
+        await destination.click();
+        expect(await destination.getAttribute("aria-checked")).toBe("true");
+        expect(await page.locator("openclaw-modal-dialog[open]").count()).toBe(0);
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(suite.artifactDir, "mobile-machine-move-docked.png"),
+            await takeControlUiViewportScreenshot(page, host, [picker]),
+          );
+        }
+        const header = host.locator(".chat-mobile-host__header");
+        const expand = header.getByRole("button", { name: "Expand Side panel", exact: true });
+        expect(await expand.count()).toBe(1);
+        const dockedHeight = await host.evaluate(
+          (element) => element.getBoundingClientRect().height,
+        );
+        await expand.click();
+        await pane.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+        await host.evaluate(async (element) => {
+          await Promise.all(
+            element
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+              .map((animation) => animation.finished.catch(() => {})),
+          );
+        });
+        expect(
+          await host.evaluate((element) => element.getBoundingClientRect().height),
+        ).toBeGreaterThan(dockedHeight + 100);
+        expect(await destination.getAttribute("aria-checked")).toBe("true");
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(suite.artifactDir, "mobile-machine-move-expanded.png"),
+            await takeControlUiViewportScreenshot(page, host, [picker]),
+          );
+        }
+        await header.getByRole("button", { name: "Restore", exact: true }).click();
+        await pane.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await host.evaluate(async (element) => {
+          await Promise.all(
+            element
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+              .map((animation) => animation.finished.catch(() => {})),
+          );
+        });
+        expect(
+          Math.abs(
+            (await host.evaluate((element) => element.getBoundingClientRect().height)) -
+              dockedHeight,
+          ),
+        ).toBeLessThan(1);
+        expect(await destination.getAttribute("aria-checked")).toBe("true");
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(suite.artifactDir, "mobile-machine-move-restored.png"),
+            await takeControlUiViewportScreenshot(page, host, [picker]),
+          );
+        }
+        await header.getByRole("button", { name: "Back", exact: true }).click();
+        await host
+          .locator(".chat-machine__identity")
+          .getByText(machineName, { exact: true })
+          .waitFor();
+        expect(await gateway.getRequests("sessions.move")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
+      },
+    );
+  });
 });

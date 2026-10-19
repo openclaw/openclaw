@@ -1,70 +1,6 @@
-import type { ElementHandle, Locator, Page } from "playwright";
-import { expect } from "vitest";
+import type { Locator, Page } from "playwright";
 
-type DomChatLayoutScope = {
-  container: ParentNode;
-  click: (element: HTMLElement) => Promise<void>;
-};
-
-function domMenu(scope: DomChatLayoutScope) {
-  const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-  const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
-  if (!menu || !trigger) {
-    throw new Error("Expected a chat Layout menu");
-  }
-  return { menu, trigger };
-}
-
-function isChatLayoutMenuOpen(element: Element): boolean {
-  const surface = element.querySelector<HTMLElement>(".oc-menu");
-  return (
-    element.isConnected &&
-    (surface?.dataset.phase === "opening" || surface?.dataset.phase === "open")
-  );
-}
-
-function waitForMenuShow(menu: Element): Promise<void> {
-  const surface = menu.querySelector<HTMLElement>(".oc-menu");
-  if (!surface) {
-    throw new Error("Expected a native Layout menu surface");
-  }
-  if (surface.dataset.phase === "open") {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    surface.addEventListener("overlay-after-show", () => resolve(), { once: true });
-  });
-}
-
-function isChatLayoutMenuClosed(element: Element): boolean {
-  const surface = element.querySelector<HTMLElement>(".oc-menu");
-  return !element.isConnected || !surface || surface.dataset.phase === "hidden";
-}
-
-async function waitForMenuClose(menu: ElementHandle<Element> | HTMLElement): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        "evaluate" in menu ? menu.evaluate(isChatLayoutMenuClosed) : isChatLayoutMenuClosed(menu),
-      { timeout: 10_000, message: "Layout menu did not finish closing" },
-    )
-    .toBe(true);
-}
-
-export function openChatLayoutMenu(scope: DomChatLayoutScope): Promise<HTMLElement>;
-export function openChatLayoutMenu(scope: Page | Locator): Promise<Locator>;
-export async function openChatLayoutMenu(
-  scope: Page | Locator | DomChatLayoutScope,
-): Promise<Locator | HTMLElement> {
-  if ("container" in scope) {
-    const { menu, trigger } = domMenu(scope);
-    const shown = waitForMenuShow(menu);
-    if (!isChatLayoutMenuOpen(menu)) {
-      await scope.click(trigger);
-    }
-    await shown;
-    return menu;
-  }
+export async function openChatLayoutMenu(scope: Page | Locator): Promise<Locator> {
   const pane = nativePane(scope);
   const mobile = pane.locator(".agent-chat__header--mobile");
   if (await mobile.isVisible()) {
@@ -81,17 +17,7 @@ export async function openChatLayoutMenu(
   return menu;
 }
 
-export async function closeChatLayoutMenu(
-  scope: Page | Locator | DomChatLayoutScope,
-): Promise<void> {
-  if ("container" in scope) {
-    const { menu, trigger } = domMenu(scope);
-    if (isChatLayoutMenuOpen(menu)) {
-      await scope.click(trigger);
-    }
-    await waitForMenuClose(menu);
-    return;
-  }
+export async function closeChatLayoutMenu(scope: Page | Locator): Promise<void> {
   const pane = nativePane(scope);
   const mobile = pane.locator(".agent-chat__header--mobile");
   const trigger = (await mobile.isVisible())
@@ -102,26 +28,13 @@ export async function closeChatLayoutMenu(
 }
 
 export async function selectChatLayoutAction(
-  scope: Page | Locator | DomChatLayoutScope,
+  scope: Page | Locator,
   name: string | RegExp,
 ): Promise<void> {
-  if ("container" in scope) {
-    const menu = await openChatLayoutMenu(scope);
-    const action = [...menu.querySelectorAll<HTMLElement>("[role^=menuitem]")].find((item) => {
-      const label = item.getAttribute("aria-label") ?? item.textContent?.trim() ?? "";
-      return typeof name === "string" ? label === name : name.test(label);
-    });
-    if (!action) {
-      throw new Error(`Expected chat Layout action: ${String(name)}`);
-    }
-    await scope.click(action);
-    await waitForMenuClose(menu);
-    return;
-  }
   await selectNativeLayoutAction(nativePane(scope), name);
 }
 
-export function nativePane(scope: Page | Locator): Locator {
+function nativePane(scope: Page | Locator): Locator {
   if ("mainFrame" in scope) {
     return scope
       .locator(

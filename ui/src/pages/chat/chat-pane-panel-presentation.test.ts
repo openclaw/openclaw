@@ -40,9 +40,9 @@ it("keeps the native Desktop window action when desktop headers delegate actions
       desktopFocusHref: href,
     }),
   );
-  expect(mobile.find((definition) => definition.slot === "desktop")?.headerLink?.href).toBe(href);
+  expect(mobile.find((definition) => definition.slot === "desktop")?.headerLink).toBeUndefined();
   await renderPanelFixture(mount, state.sidebarLayout, mobile);
   expect(mount.querySelector("openclaw-desktop-panel")).toBe(desktop);
   expect(desktop.presentation).toMatchObject({ platform: "mobile" });
-  expect(desktop.presentation?.openWindowHref).toBeUndefined();
+  expect(desktop.presentation?.openWindowHref).toBe(href);
 });

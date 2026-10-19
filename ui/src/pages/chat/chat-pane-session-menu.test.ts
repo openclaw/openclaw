@@ -8,7 +8,6 @@ import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
-import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -36,7 +35,6 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
@@ -227,20 +225,8 @@ describe("chat pane session menu boundary", () => {
     draw();
     await menu.updateComplete;
     expectRetainedMenu();
-    const layout = await openChatLayoutMenu({
-      container,
-      click: async (element) => {
-        element.click();
-        await Promise.resolve();
-        flush();
-      },
-    });
-    layout.querySelector<HTMLButtonElement>('[data-value="session-files"]')!.click();
-    await Promise.resolve();
-    flush();
-
-    expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();
-
+    menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
+    await menu.updateComplete;
     state.settings = { ...state.settings };
     session = { ...session };
     draw();
@@ -281,41 +267,6 @@ describe("chat pane session menu boundary", () => {
       chatShowToolCalls: !state.settings.chatShowToolCalls,
     });
   });
-
-  it.each(["subagents", "processes"] as const)(
-    "keeps the selected %s opening intent after Layout closes",
-    async (slot) => {
-      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
-      const container = document.body.appendChild(document.createElement("div"));
-      const draw = () =>
-        renderPaneHeaderInto(
-          pane.renderPaneHeader(
-            createPaneHeaderWorkspaceFixture(state),
-            undefined,
-            false,
-            undefined,
-            false,
-            null,
-          ),
-          container,
-        );
-      draw();
-      await Promise.resolve();
-      flush();
-      const menu = await openChatLayoutMenu({
-        container,
-        click: async (element) => {
-          element.click();
-          await Promise.resolve();
-          flush();
-        },
-      });
-      menu.querySelector<HTMLButtonElement>(`[value="session-${slot}"]`)!.click();
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
-      draw();
-      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
-    },
-  );
 
   it("keeps observed pane titles and renames with their conversations when agent selection changes", async () => {
     const primary: GatewaySessionRow = {

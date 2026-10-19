@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { closeChatLayoutMenu, openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -140,9 +140,7 @@ async function companionSurface(page: Page, artifactDir: string | undefined) {
       await clearButton.click();
     } else {
       const reopen = await hideMobile();
-      await openChatLayoutMenu(page);
-      await clearButton.click();
-      await closeChatLayoutMenu(page);
+      await selectChatLayoutAction(page, "Clear side chat");
       if (reopen) {
         await openChatSidePanelType(page, "Side chat");
       }

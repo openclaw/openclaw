@@ -124,7 +124,7 @@ function DesktopPanel(props: Props) {
               platform: props.presentation,
               expanded: props.desktopExpanded,
               onToggleExpanded: props.onToggleDesktopExpanded,
-              openWindowHref: props.presentation === "desktop" ? props.desktopFocusHref : undefined,
+              openWindowHref: props.desktopFocusHref,
             }
           : undefined
       }

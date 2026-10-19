@@ -11,13 +11,21 @@ import {
   takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { openDesktopPanel, openPalette, sessionsList } from "./desktop-panel.test-support.ts";
+import {
+  credentialsRequired,
+  desktopGateway,
+  observationCases,
+  observe,
+  openDesktopPanel,
+  openPalette,
+  sessionsList,
+  unavailable,
+  workerDesktopEnvironment,
+  workerEnvironment,
+} from "./desktop-panel.test-support.ts";
 import {
   createRfbClipboardProvide,
   createRfbRawFrame,
@@ -35,64 +43,6 @@ const suite = createControlUiE2eSuite({
 const button = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 const text = (root: Page | Locator, name: string) => root.getByText(name, { exact: true });
-const observe = (token: string, control = false, extra: object = {}) => ({
-  transport: "rfb",
-  wsPath: `/desktop/observe?token=${token}`,
-  expiresAtMs: 60_000,
-  control,
-  ...extra,
-});
-const observationCases = () => ({
-  cases: [false, true].map((control) => ({
-    match: { source: { kind: "environment", environmentId: "worker-desktop-1" }, control },
-    response: observe(control ? "control" : "view", control),
-  })),
-});
-const credentialsRequired = (target: string) => ({
-  __mockError: {
-    code: "INVALID_REQUEST",
-    message: `VNC password is required to observe this ${target}`,
-    details: { code: "DESKTOP_CREDENTIALS_REQUIRED", auth: "vnc-password" },
-  },
-});
-const unavailable = (message: string) => ({ __mockError: { code: "UNAVAILABLE", message } });
-
-const workerDesktopEnvironment = {
-  id: "worker-desktop-1",
-  type: "worker",
-  status: "available",
-  desktop: true,
-  worker: {
-    providerId: "crabbox",
-    state: "attached",
-    ageMs: 1_000,
-    attachedSessionIds: ["main"],
-    tunnelStatus: "connected",
-    desktopApps: ["browser", "terminal"],
-  },
-} as const;
-
-const workerEnvironment = (worker: object = {}, id = "worker-desktop-1") => ({
-  ...workerDesktopEnvironment,
-  id,
-  worker: { ...workerDesktopEnvironment.worker, ...worker },
-});
-const desktopGateway = (
-  page: Page,
-  environments: readonly unknown[] | null = [],
-  observation?: object,
-  scenario: ControlUiMockGatewayScenario = {},
-) =>
-  installMockGateway(page, {
-    featureMethods: ["desktop.observe", "environments.list"],
-    ...scenario,
-    methodResponses: {
-      "sessions.list": sessionsList("local"),
-      ...(environments && { "environments.list": { environments } }),
-      ...(observation && { "desktop.observe": observation }),
-      ...scenario.methodResponses,
-    },
-  });
 const withDesktopPage = (run: (page: Page) => Promise<void>) =>
   suite.withPage({ serviceWorkers: "block" }, ({ page }) => run(page));
 const environmentSource = { kind: "environment", environmentId: "worker-desktop-1" };
@@ -482,7 +432,7 @@ suite.define(() => {
         expect(await password.inputValue()).toBe("synthetic-unsent-password");
         expect(await gateway.getRequests("environments.status")).toEqual(inventoryReads);
 
-        await activateChatHeaderPanelAction(page, "Desktop");
+        await button(page, "Close Desktop").click();
         await panel.waitFor({ state: "detached" });
         await openPalette(page);
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
@@ -494,7 +444,8 @@ suite.define(() => {
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
         expect(await text(panel, "Desktop sources").count()).toBe(0);
 
-        await activateChatHeaderPanelAction(page, "Desktop");
+        await button(page, "Close Desktop").click();
+        await panel.waitFor({ state: "detached" });
         await activateChatHeaderPanelAction(page, "Desktop");
         await panel.getByLabel("VNC password", { exact: true }).waitFor();
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(3);
@@ -603,11 +554,8 @@ suite.define(() => {
         .filter({ hasText: "Connecting to desktop…" })
         .waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-      await page.evaluate(() => {
-        window.dispatchEvent(
-          new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
-        );
-      });
+      await button(page, "Close Desktop").click();
+      await page.locator("openclaw-desktop-panel").waitFor({ state: "detached" });
       await gateway.resolveDeferred("environments.status", workerDesktopEnvironment);
       await page.evaluate(
         () =>
@@ -620,6 +568,80 @@ suite.define(() => {
         await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
       ).toBe(0);
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+    }));
+
+  it("keeps the current desktop target and control mode in the mobile overflow link", () =>
+    withDesktopPage(async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const gateway = await desktopGateway(page, [workerDesktopEnvironment], observationCases(), {
+        deferredMethods: ["desktop.observe"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "sessions.describe": { session: sessionsList("active").sessions[0] },
+          "environments.status": workerDesktopEnvironment,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      await activateChatHeaderPanelAction(page, "Desktop");
+      const panel = page.locator("openclaw-desktop-panel").filter({ visible: true });
+      await gateway.waitForRequest("desktop.observe");
+      const rfb = await installScriptedRfbServer(page);
+      await gateway.resolveDeferred("desktop.observe");
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      await button(panel, "Desktop actions").click();
+      const menu = panel.locator(".desktop-rail__menu:visible");
+      await menu.waitFor();
+      const link = menu.locator("a").filter({ hasText: "Open desktop in new window" });
+      expect(await link.count()).toBe(1);
+      expect(await link.getAttribute("href")).toBe("/focus/desktop/session/agent%3Amain%3Amain");
+      expect(await link.getAttribute("target")).toBe("_blank");
+      expect(await link.getAttribute("rel")).toContain("noopener");
+      const icon = link.locator(".oc-menu-item__icon > svg");
+      expect(
+        await icon.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return [style.width, style.height];
+        }),
+      ).toEqual(["18px", "18px"]);
+      expect(await icon.isVisible()).toBe(true);
+      for (const item of [link, menu.getByRole("menuitem", { name: "Disconnect", exact: true })]) {
+        const alignment = await item.evaluate((element) => {
+          const reference = element
+            .closest(".desktop-rail__menu")!
+            .querySelector(".desktop-toolbar-action")!;
+          const iconLeft = (row: Element) => row.querySelector("svg")!.getBoundingClientRect().left;
+          const labelLeft = (row: Element) =>
+            row.querySelector(".oc-menu-item__label,.desktop-audio-label")!.getBoundingClientRect()
+              .left;
+          return [
+            Math.abs(iconLeft(element) - iconLeft(reference)),
+            Math.abs(labelLeft(element) - labelLeft(reference)),
+          ];
+        });
+        expect(alignment[0]).toBeLessThan(0.5);
+        expect(alignment[1]).toBeLessThan(0.5);
+      }
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await writeFile(
+          path.join(suite.artifactDir, "desktop-mobile-window.png"),
+          await takeControlUiViewportScreenshot(page, menu, [link]),
+        );
+      }
+      expectObservation((await gateway.getRequests("desktop.observe"))[0]?.params, false);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      await page.keyboard.press("Escape");
+      await panel.locator(".desktop-rail__control").click();
+      await expect.poll(() => requestCount(gateway, "desktop.observe")).toBe(2);
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+      expectObservation((await gateway.getRequests("desktop.observe"))[1]?.params, true);
+      await button(panel, "View only").waitFor();
+      await button(panel, "Desktop actions").click();
+      await menu.waitFor();
+      expect(await link.getAttribute("href")).toBe(
+        "/focus/desktop/control/session/agent%3Amain%3Amain",
+      );
+      expect(await link.getAttribute("target")).toBe("_blank");
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
     }));
 
   it("opens the standalone desktop picker in a focused window", () =>

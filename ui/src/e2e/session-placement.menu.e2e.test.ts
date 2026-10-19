@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -330,7 +331,8 @@ suite.define(() => {
           .getByText("Workspace still cannot be reconciled.", { exact: false })
           .waitFor();
         await page.reload();
-        await page.getByRole("button", { name: "Move failed", exact: true }).click();
+        const details = await openChatDetails(page);
+        await details.getByRole("button", { name: /Move failed/ }).click();
         await gateway.deferNext("sessions.move");
         const retryAction = page.getByRole("menuitem", { name: "Retry move", exact: true });
         await page.getByText("Workspace reconciliation failed.", { exact: true }).waitFor();

@@ -254,7 +254,6 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return moveRequest()?.title ?? t("sessionsView.moveSessionTitle");
       },
-      expandable: false,
       content: (
         <Show when={moveRequest()} keyed>
           {(request) => request.render()}

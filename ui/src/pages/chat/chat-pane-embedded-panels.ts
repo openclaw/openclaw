@@ -126,10 +126,9 @@ export function sidebarPanelDefinitions(
           : params,
     }),
     definePanel("desktop", "monitor", Boolean(params?.desktopAvailable), {
-      headerLink:
-        params?.presentation === "desktop"
-          ? undefined
-          : panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
+      headerLink: params?.presentation
+        ? undefined
+        : panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
     }),
     definePanel("discussion", "messageSquare", Boolean(params?.discussion), {
       headerLink: panelExternalLink(

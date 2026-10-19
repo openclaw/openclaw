@@ -604,7 +604,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - A new Browser side panel uses the chat pane's available width and the rendered chat column to reclaim unused chat margins. This default applies on web, macOS, and Tauri; saved widths and manual divider adjustments take precedence.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. A confirmed model selection stays visible if the following session refresh fails; later Gateway updates can still change it. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.
     - Diff syntax highlighting uses each file's language and the current theme; unknown file types and oversized previews remain plain text. Inline and session diffs do not require the optional [Diffs plugin](/tools/diffs), which creates standalone viewer links and PNG/PDF attachments.
-    - **Split view:** open **Actions** in the chat header, then split the active pane right or down for as many panes as fit. Each pane has its own session title, thread, transcript, composer, and tool stream. Titles stay with their conversations when you focus a pane belonging to another agent.
+    - **Split view:** open the session actions menu (**⋯**) and select **Open split view**. For an existing pane, use the menu's **View** group to split it right or down for as many panes as fit. Each pane has its own session title, thread, transcript, composer, and tool stream. Titles stay with their conversations when you focus a pane belonging to another agent.
     - Agents with the `screen` tool can request pane, sidebar, terminal, browser, desktop, portal, focus, and navigation changes in the capable Control UI browser that requested the turn. Other connected browsers keep their own layout; see [Screen](/tools/screen).
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
     - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
@@ -969,17 +969,21 @@ refresh is already running, later changes share one follow-up refresh.
 Compact activity controls can open related details without duplicating the full
 lists above the composer.
 
-The progress header shows the current step, not a completed-step total. Its
-options menu stays available when the card is expanded or collapsed and contains
+The progress header shows the current step, not a completed-step total. On desktop,
+its options menu stays available when the card is expanded or collapsed and contains
 **Refresh task progress** and **Hide this card**. Hiding the card does not stop
 the task. Clearing saved progress for everyone is a separate menu action.
 
-The options also include **Don’t show task progress again**.
+The desktop options also include **Don’t show task progress again**.
 This turns off the existing browser-local **Show task progress cards** preference
 and offers **Undo**. It hides the chat card without stopping work or deleting saved
 progress. The saved progress remains available in Details, dashboard progress
 widgets, and session hover previews.
-Re-enable cards from **Settings → Appearance → Chat**.
+On mobile, open **Details → Task progress**, then use **Show in chat** in the
+bottom-right **⋯** menu beside Refresh to hide or restore progress in chat. This
+controls the same preference as **Settings → Appearance → Chat → Show task progress
+cards**. Hiding it keeps the saved progress available in Details; new activity,
+refreshing, and navigation do not turn it back on.
 
 ## Chat transcript layout
 

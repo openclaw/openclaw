@@ -633,10 +633,19 @@ suite.define(() => {
             ".agent-chat__composer-combobox textarea",
             "openclaw-chat-outbox-recovery",
           ]);
-          await pane.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
-          expect(
-            await notice.getByRole("button", { name: "Stop generating", exact: true }).count(),
-          ).toBe(0);
+          if (width < 900) {
+            await pane.getByRole("button", { name: "Actions for " + child.label }).click();
+            await pane.getByRole("menuitem", { name: "Stop generating", exact: true }).waitFor();
+            await page.keyboard.press("Escape");
+            expect(
+              await notice.getByRole("button", { name: "Stop generating", exact: true }).count(),
+            ).toBe(0);
+          } else {
+            await notice.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+            expect(
+              await pane.getByRole("button", { name: "Stop generating", exact: true }).count(),
+            ).toBe(1);
+          }
           expect(
             await notice.evaluate((element) => {
               const rect = element.getBoundingClientRect();
