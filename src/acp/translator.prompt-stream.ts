@@ -21,11 +21,13 @@ import { shortenHomePath } from "../utils.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 import { parseSessionMeta } from "./session-mapper.js";
 import { AcpTranslatorAgentEvents } from "./translator.agent-events.js";
+import { AcpBackgroundRunRegistry } from "./translator.background-runs.js";
 import { AcpTranslatorDisconnects } from "./translator.disconnects.js";
 import type {
   AcpAgentWaitResult,
   AcpPendingApprovalRelay,
   AcpPendingPrompt,
+  AcpStreamContext,
 } from "./translator.prompt-state.js";
 import type { GatewayChatContentBlock } from "./translator.replay.js";
 import type { AcpTranslatorSessionState } from "./translator.session-state.js";
@@ -69,6 +71,7 @@ export class AcpTranslatorPromptStream {
   private readonly pendingPrompts = new Map<string, AcpPendingPrompt>();
   private readonly pendingPromptAdmissions = new Map<string, AcpPendingPromptAdmission>();
   private readonly settlingPromptKeys = new Set<string>();
+  private readonly backgroundRuns: AcpBackgroundRunRegistry;
   private readonly agentEvents: AcpTranslatorAgentEvents;
   private readonly disconnects: AcpTranslatorDisconnects;
   private stopped = false;
@@ -83,6 +86,7 @@ export class AcpTranslatorPromptStream {
     readonly approvalRelays: Map<string, AcpPendingApprovalRelay>,
     private readonly log: (msg: string) => void,
   ) {
+    this.backgroundRuns = new AcpBackgroundRunRegistry(sessionStore, this.pendingPrompts, log);
     this.agentEvents = new AcpTranslatorAgentEvents(
       connection,
       gateway,
@@ -90,6 +94,7 @@ export class AcpTranslatorPromptStream {
       this.pendingPrompts,
       this.approvalRelays,
       (sessionKey, runId) => this.findPendingBySessionKey(sessionKey, runId),
+      (sessionKey, runId) => this.resolveStreamContext(sessionKey, runId),
       log,
     );
     this.disconnects = new AcpTranslatorDisconnects(
@@ -244,6 +249,7 @@ export class AcpTranslatorPromptStream {
 
     const abortController = new AbortController();
     const runId = randomUUID();
+    this.backgroundRuns.rememberPromptRun(runId);
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
     const requestParams = {
       sessionKey: session.sessionKey,
@@ -457,52 +463,57 @@ export class AcpTranslatorPromptStream {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey, runId);
-    if (!pending) {
+    const stream = this.resolveStreamContext(sessionKey, runId);
+    if (!stream) {
       return;
     }
 
     const messageData =
-      state === "delta" ? mergeChatStreamMessage(pending.streamMessage, payload) : payload.message;
+      state === "delta" ? mergeChatStreamMessage(stream.streamMessage, payload) : payload.message;
     if (isRecord(messageData) && (state === "delta" || state === "final")) {
-      pending.streamMessage = messageData;
+      stream.streamMessage = messageData;
       // Consume the terminal snapshot before settling the append-only ACP stream.
-      const ownsSnapshot = await this.handleDeltaEvent(pending, messageData);
-      if (
-        !ownsSnapshot ||
-        this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending ||
-        state === "delta"
-      ) {
+      const ownsSnapshot = await this.handleDeltaEvent(stream, messageData);
+      if (!ownsSnapshot || !this.ownsStreamContext(stream) || state === "delta") {
         return;
       }
     }
 
     if (state === "final") {
+      if (!this.isPendingPrompt(stream)) {
+        // Prompt-less runs keep their retained context so late deltas stay deduped.
+        return;
+      }
       const rawStopReason = payload.stopReason as string | undefined;
       const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
-      await this.finishPrompt(pending.sessionId, pending, stopReason);
+      await this.finishPrompt(stream.sessionId, stream, stopReason);
       return;
     }
     if (state === "aborted") {
+      if (!this.isPendingPrompt(stream)) {
+        return;
+      }
       const interruption =
         typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
-      await this.finishPrompt(pending.sessionId, pending, "cancelled", { interruption });
+      await this.finishPrompt(stream.sessionId, stream, "cancelled", { interruption });
       return;
     }
     if (state === "error") {
+      if (!this.isPendingPrompt(stream)) {
+        return;
+      }
       const errorKind = payload.errorKind as string | undefined;
       const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
-      void this.finishPrompt(pending.sessionId, pending, stopReason);
+      void this.finishPrompt(stream.sessionId, stream, stopReason);
     }
   }
 
   private async handleDeltaEvent(
-    pending: AcpPendingPrompt,
+    stream: AcpStreamContext,
     messageData: Record<string, unknown>,
   ): Promise<boolean> {
     const content = messageData.content as GatewayChatContentBlock[] | undefined;
-    const sessionId = pending.sessionId;
-    if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
+    if (!this.ownsStreamContext(stream)) {
       return false;
     }
 
@@ -515,13 +526,13 @@ export class AcpTranslatorPromptStream {
         .map((block) => block[field] ?? "")
         .join("\n")
         .trimEnd();
-      const sent = pending[sentField] ?? "";
+      const sent = stream[sentField] ?? "";
       if (!fullText || fullText.length <= sent.length || !fullText.startsWith(sent)) {
         continue;
       }
-      pending[sentField] = fullText;
-      await this.emitPromptChunk(pending, kind, fullText.slice(sent.length));
-      if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
+      stream[sentField] = fullText;
+      await this.emitPromptChunk(stream, kind, fullText.slice(sent.length));
+      if (!this.ownsStreamContext(stream)) {
         return false;
       }
     }
@@ -574,16 +585,16 @@ export class AcpTranslatorPromptStream {
   }
 
   private async emitPromptChunk(
-    pending: AcpPendingPrompt,
+    stream: AcpStreamContext,
     kind: "agent_message_chunk" | "agent_thought_chunk",
     text: string,
     waitForDelivery = true,
   ): Promise<void> {
     await this.sessionUpdates.emit({
-      sessionId: pending.sessionId,
-      sessionKey: pending.sessionKey,
-      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-      runId: pending.idempotencyKey,
+      sessionId: stream.sessionId,
+      sessionKey: stream.sessionKey,
+      ...(stream.ledgerSessionId ? { ledgerSessionId: stream.ledgerSessionId } : {}),
+      runId: stream.idempotencyKey,
       record: true,
       ...(waitForDelivery ? {} : { waitForDelivery: false }),
       update: {
@@ -672,6 +683,29 @@ export class AcpTranslatorPromptStream {
     return undefined;
   }
 
+  /**
+   * Resolves the streaming context for a gateway event: the pending prompt it
+   * belongs to, or a prompt-less background run bound to an open session.
+   */
+  private resolveStreamContext(sessionKey: string, runId?: string): AcpStreamContext | undefined {
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
+    if (pending) {
+      return pending;
+    }
+    return this.backgroundRuns.resolve(sessionKey, runId);
+  }
+
+  private isPendingPrompt(stream: AcpStreamContext): stream is AcpPendingPrompt {
+    return this.pendingPrompts.get(stream.sessionId) === stream;
+  }
+
+  private ownsStreamContext(stream: AcpStreamContext): boolean {
+    if (this.isPendingPrompt(stream)) {
+      return this.getPendingPrompt(stream.sessionId, stream.idempotencyKey) === stream;
+    }
+    return this.backgroundRuns.owns(stream);
+  }
+
   private reconcilePendingSessionKey(pending: AcpPendingPrompt, sessionKey: string): void {
     if (pending.sessionKey === sessionKey) {
       return;
@@ -680,7 +714,9 @@ export class AcpTranslatorPromptStream {
     pending.sessionKey = sessionKey;
     const session = this.sessionStore.getSession(pending.sessionId);
     if (session?.activeRunId === pending.idempotencyKey) {
-      session.sessionKey = sessionKey;
+      // Rebind through the store so key-indexed lookups (background run
+      // routing) stay consistent with the authoritative session record.
+      this.sessionStore.rebindSessionKey?.(pending.sessionId, sessionKey);
     }
   }
 
