@@ -12,6 +12,7 @@ import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-con
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
@@ -61,7 +62,7 @@ function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
   mounted.update(mounted.props);
 }
 
-function updatePreview(element: HTMLElement, patch: Partial<NonNullable<CardProps["preview"]>>) {
+function updatePreview(element: HTMLElement, patch: { url?: string; title?: string }) {
   updateCard(element, { preview: { ...cards.get(element)!.props.preview!, ...patch } });
 }
 
@@ -108,12 +109,13 @@ function gatewayContext(
   const request = vi.fn().mockResolvedValue({ path: "/tmp/tab.png" });
   const listeners = new Set<() => void>();
   const themeListeners = new Set<() => void>();
-  const snapshot = {
+  const base = createInitializationContext();
+  const snapshot: ApplicationGatewaySnapshot = {
+    ...base.gateway.snapshot,
     client: { request, connected: true } as unknown as GatewayBrowserClient,
     phase: "connected",
-    hello: { features: { methods }, auth: { role: "operator", scopes } },
-  } as ApplicationGatewaySnapshot;
-  const base = createInitializationContext();
+    hello: gatewayHelloForMethods(methods, scopes),
+  };
   const context: ApplicationContext = {
     ...base,
     resourceBasePath: "/gateway",
@@ -128,18 +130,20 @@ function gatewayContext(
     config: {
       ...base.config,
       current: { ...base.config.current, automaticallyFetchFavicons },
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+      subscribe: (listener) => {
+        const changed = () => listener(context.config.current);
+        listeners.add(changed);
+        return () => listeners.delete(changed);
       },
     },
     gateway: {
       ...base.gateway,
       snapshot,
       connection: { ...base.gateway.connection, token: "", password: "" },
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+      subscribe: (listener) => {
+        const changed = () => listener(snapshot);
+        listeners.add(changed);
+        return () => listeners.delete(changed);
       },
     },
   };

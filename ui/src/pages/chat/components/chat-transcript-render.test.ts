@@ -7,6 +7,7 @@ import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/them
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   interruptedChatHistory,
   interruptedChatCommentary,
@@ -488,10 +489,7 @@ describe("chat transcript rendering", () => {
       const context = createInitializationContext();
       context.gateway.snapshot.client = createTestGatewayClient(capture);
       context.gateway.snapshot.phase = "connected";
-      context.gateway.snapshot.hello = {
-        features: { methods: ["browser.request"] },
-        auth: { role: "operator", scopes: ["operator.admin"] },
-      };
+      context.gateway.snapshot.hello = gatewayHelloForMethods(["browser.request"]);
       props.applicationContext = context;
       const thread = createChatThreadHarness(container, transcript);
       onTestFinished(() => thread.unmount());
