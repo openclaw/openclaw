@@ -15,6 +15,7 @@ import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
+  controlUiSessionPath,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
   prepareControlUiMockGatewayScenario,
@@ -235,8 +236,13 @@ const { values } = parseArgs({
     "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
+    "compare-bundle-dir": { type: "string" },
     runs: { type: "string", default: "3" },
     "latency-ms": { type: "string", default: "35" },
+    "method-latency-ms": { type: "string", multiple: true, default: [] },
+    face: { type: "string", default: "dashboard" },
+    "short-route": { type: "boolean", default: false },
+    "full-uuid-route": { type: "boolean", default: false },
     "frame-gap-ms": { type: "string", default: "4" },
     "sidebar-view": { type: "string", default: "sessions" },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
@@ -279,12 +285,31 @@ const baselineCpu = values["cpu-profile-compare"]
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
+const methodLatencyMs: Record<string, number> = {};
+for (const value of values["method-latency-ms"]) {
+  const [method, delay, ...extra] = value.split("=");
+  const milliseconds = Number(delay);
+  if (
+    !method ||
+    delay === undefined ||
+    extra.length ||
+    !Number.isFinite(milliseconds) ||
+    milliseconds < 0
+  ) {
+    throw new Error("Expected method-latency-ms method=nonnegative-milliseconds");
+  }
+  methodLatencyMs[method] = milliseconds;
+}
+const face = values.face;
+if (face !== "chat" && face !== "dashboard") {
+  throw new Error("Expected face chat or dashboard");
+}
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
 if (
   !Number.isInteger(runs) ||
   runs < 1 ||
-  runs > 20 ||
+  runs > (values["compare-bundle-dir"] ? 40 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(frameGapMs) ||
@@ -292,7 +317,15 @@ if (
   !Number.isFinite(captureMs) ||
   captureMs < 0
 ) {
-  throw new Error("Expected 1–20 runs and nonnegative finite wire delays and capture duration");
+  throw new Error(
+    "Expected a bounded run count and nonnegative finite wire delays and capture duration",
+  );
+}
+if (
+  values["compare-bundle-dir"] &&
+  (!values["bundle-dir"] || !values["warm-reload"] || !values.untraced || cpuProfile || runs % 2)
+) {
+  throw new Error("Bundle comparison requires unprofiled warm reloads and paired prebuilt bundles");
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
   throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
@@ -307,6 +340,21 @@ const bundleDir = values["bundle-dir"]
 const server = values["bundle-dir"]
   ? await startBuiltControlUiE2eServer(bundleDir)
   : await startProductionControlUiE2eServer(bundleDir, head);
+const comparisonBundleDir = values["compare-bundle-dir"]
+  ? path.resolve(values["compare-bundle-dir"])
+  : undefined;
+const parkedBaselineDir = path.join(artifactDir, "baseline-bundle");
+let comparisonActive = false;
+async function selectComparisonBundle(active: boolean) {
+  if (!comparisonBundleDir || comparisonActive === active) {
+    return;
+  }
+  await server.replaceBuild(
+    active ? comparisonBundleDir : parkedBaselineDir,
+    active ? parkedBaselineDir : comparisonBundleDir,
+  );
+  comparisonActive = active;
+}
 const sandbox = createSandboxHostHttpServer();
 await new Promise<void>((resolve, reject) => {
   sandbox.once("error", reject);
@@ -465,9 +513,16 @@ try {
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
-  const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
+  const url = values["full-uuid-route"]
+    ? new URL(
+        `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+        server.baseUrl,
+      ).href
+    : values["short-route"]
+      ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), server.baseUrl).href
+      : controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, face);
   async function settle() {
     try {
       await page.locator(".chat-pane__header").first().waitFor();
@@ -479,21 +534,25 @@ try {
       if (sidebarView === "online") {
         await page.locator('[data-online-user-id="team-person-120"]').waitFor();
       }
-      await page
-        .frameLocator(".board-widget__frame")
-        .frameLocator("iframe")
-        .getByText("Team metric 1", { exact: true })
-        .waitFor();
+      if (face === "dashboard") {
+        await page
+          .frameLocator(".board-widget__frame")
+          .frameLocator("iframe")
+          .getByText("Team metric 1", { exact: true })
+          .waitFor();
+      }
       await page
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
-      await page.waitForFunction(() => {
-        const ready = Reflect.get(window, "__readWidgetReadiness")();
-        return ready.firstBoardReadyMs !== null;
-      });
+      if (face === "dashboard") {
+        await page.waitForFunction(() => {
+          const ready = Reflect.get(window, "__readWidgetReadiness")();
+          return ready.firstBoardReadyMs !== null;
+        });
+      }
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -551,6 +610,13 @@ try {
     persistColdLoadWarmState,
     warmInput,
   );
+  if (comparisonBundleDir) {
+    await restoreColdLoadWarmState(page, warmStorage);
+    await selectComparisonBundle(true);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await settle();
+    await selectComparisonBundle(false);
+  }
   for (let run = 0; run < runs; run++) {
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -579,6 +645,7 @@ try {
       return { ...mapped, summary };
     }
     await restoreColdLoadWarmState(page, warmStorage);
+    await selectComparisonBundle(run % 2 === 1);
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -1014,6 +1081,7 @@ try {
     await cdp.detach();
     const result = {
       run: run + 1,
+      ...(comparisonBundleDir ? { variant: comparisonActive ? "candidate" : "base" } : {}),
       head,
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
@@ -1070,6 +1138,7 @@ try {
   await context.close();
 } finally {
   await browser?.close();
+  await selectComparisonBundle(false);
   await server.close();
   sandbox.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
@@ -1082,6 +1151,7 @@ try {
         head,
         dirty,
         bundleDir,
+        comparisonBundleDir,
         fixture: fixture.counts,
         sidebarView,
         streamingReply: values["streaming-reply"],
@@ -1096,6 +1166,10 @@ try {
           ? "Same final client bundle; full/delta wire response A/B using the production presenter and one synthetic query/history owner. This does not measure real Gateway selection, history reset/fallback lifecycle, or server projection CPU. Node IPC is outside the measured application response task."
           : undefined,
         latencyMs,
+        methodLatencyMs,
+        face,
+        shortRoute: values["short-route"],
+        fullUuidRoute: values["full-uuid-route"],
         frameGapMs,
         captureMs,
         results,
