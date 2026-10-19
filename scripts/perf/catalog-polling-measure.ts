@@ -387,7 +387,12 @@ async function measureLoads(runs: number) {
               throw new Error(`Synthetic turn did not complete: ${JSON.stringify(terminal)}`);
             }
           }
-          activity.push({ method, atMs, elapsedMs: Date.now() - started, result: terminal });
+          activity.push({
+            method,
+            atMs,
+            elapsedMs: Date.now() - started,
+            result: terminal ? { runId: result?.runId, status: terminal.status } : undefined,
+          });
         }
         await page.waitForTimeout(Math.max(0, startedAt + durationMs - Date.now()));
         activityEndedAtMs = await page.evaluate(() => performance.now());
