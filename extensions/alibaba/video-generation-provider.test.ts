@@ -19,14 +19,13 @@ import {
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
   getProviderHttpMocks();
 
-let alibabaVideoGenerationProvider: VideoGenerationProvider;
+let videoProvider: VideoGenerationProvider;
 
 beforeAll(async () => {
   const { default: plugin } = await import("./index.js");
@@ -34,7 +33,7 @@ beforeAll(async () => {
   if (!provider) {
     throw new Error("expected Alibaba video generation provider");
   }
-  alibabaVideoGenerationProvider = provider;
+  videoProvider = provider;
 });
 
 installProviderHttpMockCleanup();
@@ -50,7 +49,18 @@ function clearAlibabaAuthEnvironment(): void {
   }
 }
 
-const requireRecord = createRequireRecord("record", "expected-label-record");
+function alibabaConfig(
+  apiKey: string | { source: "env"; provider: string; id: string },
+  auth?: "api-key",
+) {
+  return {
+    models: {
+      providers: {
+        alibaba: { apiKey, auth, baseUrl: "https://dashscope-intl.aliyuncs.com", models: [] },
+      },
+    },
+  };
+}
 
 describe("alibaba video generation provider", () => {
   it("registers media-only API-key onboarding alongside video generation", async () => {
@@ -101,19 +111,11 @@ describe("alibaba video generation provider", () => {
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "resolved-alibaba-config-key");
 
     const cfg = {
-      models: {
-        providers: {
-          alibaba: {
-            apiKey: {
-              source: "env" as const,
-              provider: "alibaba-test-env",
-              id: "ALIBABA_QA_CONFIG_KEY",
-            },
-            baseUrl: "https://dashscope-intl.aliyuncs.com",
-            models: [],
-          },
-        },
-      },
+      ...alibabaConfig({
+        source: "env",
+        provider: "alibaba-test-env",
+        id: "ALIBABA_QA_CONFIG_KEY",
+      }),
       secrets: {
         defaults: { env: "alibaba-test-env" },
         providers: {
@@ -125,31 +127,17 @@ describe("alibaba video generation provider", () => {
       },
     };
 
-    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(true);
+    expect(await videoProvider.isConfiguredAsync?.({ cfg })).toBe(true);
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "");
-    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(false);
+    expect(await videoProvider.isConfiguredAsync?.({ cfg })).toBe(false);
   });
 
   it("keeps explicit Standard config above an inherited Coding Plan environment key", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
 
-    expect(
-      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
-        cfg: {
-          models: {
-            providers: {
-              alibaba: {
-                auth: "api-key",
-                apiKey: "sk-ws-alibaba-standard-key",
-                baseUrl: "https://dashscope-intl.aliyuncs.com",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-    ).toBe(true);
+    const cfg = alibabaConfig("sk-ws-alibaba-standard-key", "api-key");
+    expect(await videoProvider.isConfiguredAsync?.({ cfg })).toBe(true);
   });
 
   it.each([
@@ -167,20 +155,14 @@ describe("alibaba video generation provider", () => {
           saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
           updater(store) {
             store.profiles = {
-              "alibaba:standard": {
-                type: "api_key",
-                provider: "alibaba",
-                key: profileKey,
-              },
+              "alibaba:standard": { type: "api_key", provider: "alibaba", key: profileKey },
             };
             return true;
           },
         }),
       ).resolves.not.toBeNull();
 
-      expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {}, agentDir })).toBe(
-        expected,
-      );
+      expect(await videoProvider.isConfiguredAsync?.({ cfg: {}, agentDir })).toBe(expected);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       // Release the worker's database handles before Windows removes the temporary directory.
@@ -193,7 +175,7 @@ describe("alibaba video generation provider", () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "sk-sp-qwen-coding-plan-key" });
 
     await expect(
-      alibabaVideoGenerationProvider.generateVideo({
+      videoProvider.generateVideo({
         provider: "alibaba",
         model: "wan2.6-t2v",
         prompt: "animate this shot",
@@ -207,7 +189,7 @@ describe("alibaba video generation provider", () => {
   it("animates a local image with Wan, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const result = await alibabaVideoGenerationProvider.generateVideo({
+    const result = await videoProvider.generateVideo({
       provider: "alibaba",
       model: "wan2.6-i2v",
       prompt: "animate this shot",
@@ -220,18 +202,14 @@ describe("alibaba video generation provider", () => {
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const request = requireFirstPostJsonRequest(postJsonRequestMock, "DashScope request");
-    expect(request.url).toBe(
-      "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-    );
-    const body = requireRecord(request.body, "DashScope request body");
-    expect(body.model).toBe("wan2.6-i2v");
-    const input = requireRecord(body.input, "DashScope request input");
-    expect(input.prompt).toBe("animate this shot");
-    expect(input.img_url).toBe("data:image/jpeg;base64,anBlZy1ieXRlcw==");
-    const parameters = requireRecord(body.parameters, "DashScope request parameters");
-    expect(parameters.duration).toBe(6);
-    expect(parameters.audio).toBe(true);
-    expect(parameters.watermark).toBe(false);
+    expect(request).toMatchObject({
+      url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+      body: {
+        model: "wan2.6-i2v",
+        input: { prompt: "animate this shot", img_url: "data:image/jpeg;base64,anBlZy1ieXRlcw==" },
+        parameters: { duration: 6, audio: true, watermark: false },
+      },
+    });
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
   });
