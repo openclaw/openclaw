@@ -50,6 +50,7 @@ type NodeWorkerWorkspaceDrainRequest = {
   ownerEpoch: number;
   deviceFolder?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   findNode: (signal: AbortSignal) => Promise<{
     transport: NodeWorkerSupervisorTransport;
     node: NodeWorkerSupervisorNodeProof;
@@ -120,23 +121,29 @@ export async function stopNodeWorkerWorkspaceOwner(
 export async function drainNodeWorkerWorkspace(
   params: NodeWorkerWorkspaceDrainRequest,
 ): Promise<void> {
-  const signal = AbortSignal.timeout(params.timeoutMs);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(params.timeoutMs),
+    ...(params.signal ? [params.signal] : []),
+  ]);
   const { transport, node } = await params.findNode(signal);
-  const result = await transport.invoke({
-    node,
-    command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-    params: {
-      gatewayNamespace: params.gatewayNamespace,
-      environmentId: params.environmentId,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
-      ...(params.deviceFolder === undefined ? {} : { deviceFolder: params.deviceFolder }),
-      argv: [NODE_WORKSPACE_DRAIN_COMMAND],
-    },
-    timeoutMs: params.timeoutMs,
+  const result = await raceNodeWorkerOperation(
+    transport.invoke({
+      node,
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      params: {
+        gatewayNamespace: params.gatewayNamespace,
+        environmentId: params.environmentId,
+        sessionId: params.sessionId,
+        generation: params.ownerEpoch,
+        ...(params.deviceFolder === undefined ? {} : { deviceFolder: params.deviceFolder }),
+        argv: [NODE_WORKSPACE_DRAIN_COMMAND],
+      },
+      timeoutMs: params.timeoutMs,
+      signal,
+      isDispatchAuthorized: params.isAuthorized,
+    }),
     signal,
-    isDispatchAuthorized: params.isAuthorized,
-  });
+  );
   if (!result.ok) {
     throw new WorkerTunnelOwnerDisconnectedError(
       `Node workspace operations have not drained (${result.error?.code ?? "UNAVAILABLE"}); reconnect the session runner before retrying`,
@@ -155,7 +162,10 @@ export async function drainNodeWorkerWorkspace(
 async function stopNodeWorkerWorkspaceEnvironment(
   params: NodeWorkerWorkspaceDrainRequest,
 ): Promise<void> {
-  const signal = AbortSignal.timeout(params.timeoutMs);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(params.timeoutMs),
+    ...(params.signal ? [params.signal] : []),
+  ]);
   const { transport, node } = await params.findNode(signal);
   if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
     throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);

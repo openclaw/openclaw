@@ -422,6 +422,12 @@ worker keeps its durable attachment for cleanup on reconnect; it is not reported
 as physically stopped. Local writes and transfer cleanup still settle before
 database retirement.
 
+When worker-environment shutdown begins, pending node stop and drain acknowledgments
+get at most five more seconds, including stops already started by reconciliation.
+This deadline also respects the remaining process cleanup budget. A missing remote
+acknowledgment leaves the attachment available for recovery on the next boot;
+shutdown still joins accepted local writes and transfer cleanup.
+
 The core `shutdown completed` message precedes final process cleanup. Slow-step
 diagnostics continue through managed local services, snapshot cleanup, log
 flushing, watchdog retirement, and shared-state closure, so a delay after that
