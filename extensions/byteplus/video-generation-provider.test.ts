@@ -93,9 +93,7 @@ describe("byteplus video generation provider", () => {
     mockSuccessfulBytePlusTask(
       videoResponse(
         new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
-          },
+          start: (controller) => controller.enqueue(new Uint8Array([1])),
           cancel: canceled,
         }),
         "application/json",
@@ -176,18 +174,13 @@ describe("byteplus video generation provider", () => {
     });
   });
 
-  it("drops malformed seed values before creating videos", async () => {
+  it.each([
+    ["seed", { providerOptions: { seed: 1.5 } }],
+    ["duration", { durationSeconds: 99 }],
+  ] as const)("drops invalid %s values before creating videos", async (field, request) => {
     mockSuccessfulBytePlusTask();
-    await generateVideo({ providerOptions: { seed: 1.5 } });
-
-    expect(requireBytePlusPostRequest().body).not.toHaveProperty("seed");
-  });
-
-  it("drops out-of-range duration values before creating videos", async () => {
-    mockSuccessfulBytePlusTask();
-    await generateVideo({ durationSeconds: 99 });
-
-    expect(requireBytePlusPostRequest().body).not.toHaveProperty("duration");
+    await generateVideo(request);
+    expect(requireBytePlusPostRequest().body).not.toHaveProperty(field);
   });
 
   it("drops malformed response duration metadata", async () => {
@@ -200,24 +193,15 @@ describe("byteplus video generation provider", () => {
     expect(result.metadata).toMatchObject({ duration: undefined });
   });
 
-  it("rejects status responses missing a task status", async () => {
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      taskResponse({ status: undefined, model: undefined }),
-    );
-
-    await expect(generateVideo()).rejects.toThrow(
-      "BytePlus video status response missing task status",
-    );
-  });
-
-  it("rejects malformed completed content", async () => {
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      taskResponse({ content: ["https://example.com/byteplus.mp4"], model: undefined }),
-    );
-
-    await expect(generateVideo()).rejects.toThrow(
+  it.each([
+    ["BytePlus video status response missing task status", { status: undefined }],
+    [
       "BytePlus video generation completed with malformed content",
-    );
+      { content: ["https://example.com/byteplus.mp4"] },
+    ],
+  ] as const)("rejects invalid task responses: %s", async (message, task) => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(taskResponse({ ...task, model: undefined }));
+    await expect(generateVideo()).rejects.toThrow(message);
   });
 
   it("bounds the submit task JSON body and cancels an oversized stream", async () => {
