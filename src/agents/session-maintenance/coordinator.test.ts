@@ -14,9 +14,22 @@ import {
 } from "../tools/gateway-caller-context.js";
 import {
   beginForegroundSessionMaintenance,
-  createSessionMaintenanceOwner,
+  createSessionMaintenanceOwner as createOwner,
   waitForSessionMaintenance,
 } from "./coordinator.js";
+
+function createTrackedOwner(...args: Parameters<typeof createOwner>) {
+  const owner = createOwner(...args);
+  return {
+    ...owner,
+    run: <T>(...work: Parameters<typeof owner.run<T>>) => owner.track(owner.run<T>(...work)),
+  };
+}
+
+const drainContinuations = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState("close");
@@ -42,21 +55,19 @@ describe("session maintenance ownership", () => {
           async () => {
             const caller = getGatewayToolCallerIdentity();
             expect(caller?.receiptAuthority?.()).toBe(true);
-            const owner = createSessionMaintenanceOwner({
+            const owner = createTrackedOwner({
               sessionKey: "session:detached",
               preemptible,
             });
-            const work = owner.track(
-              owner.run(async () => {
-                expect(getGatewayToolCallerIdentity()).toBeUndefined();
-                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
-                await Promise.resolve();
-                owner.assertCurrent();
-                expect(getGatewayToolCallerIdentity()).toBeUndefined();
-                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
-                return "maintenance completed";
-              }),
-            );
+            const work = owner.run(async () => {
+              expect(getGatewayToolCallerIdentity()).toBeUndefined();
+              expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+              await Promise.resolve();
+              owner.assertCurrent();
+              expect(getGatewayToolCallerIdentity()).toBeUndefined();
+              expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+              return "maintenance completed";
+            });
             source.abort();
             await expect(work).resolves.toBe("maintenance completed");
             expect(getGatewayToolCallerIdentity()).toBe(caller);
@@ -75,73 +86,69 @@ describe("session maintenance ownership", () => {
     const cleanupStarted = createDeferred();
     const finishCleanup = createDeferred();
     const events: string[] = [];
-    const owner = createSessionMaintenanceOwner({
+    const owner = createTrackedOwner({
       sessionKey: "session:cancel",
       preemptible: true,
     });
     owner.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-    const work = owner.track(
-      owner.run(async () => {
-        started.resolve();
-        try {
-          await aborted.promise;
-          owner.assertCurrent();
-        } finally {
-          events.push("cleanup started");
-          cleanupStarted.resolve();
-          await finishCleanup.promise;
-          events.push("cleanup finished");
-        }
-      }),
-    );
+    const work = owner.run(async () => {
+      started.resolve();
+      try {
+        await aborted.promise;
+        owner.assertCurrent();
+      } finally {
+        events.push("cleanup:start");
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+        events.push("cleanup:finish");
+      }
+    });
     const rejection = expect(work).rejects.toMatchObject({ name: "AbortError" });
     await started.promise;
 
     const admission = beginForegroundSessionMaintenance("session:cancel").then((release) => {
-      events.push("foreground admitted");
+      events.push("foreground:admit");
       return release;
     });
     try {
       await cleanupStarted.promise;
       expect(owner.signal.aborted).toBe(true);
-      expect(events).toEqual(["cleanup started"]);
+      expect(events).toEqual(["cleanup:start"]);
     } finally {
       finishCleanup.resolve();
       (await admission)();
       await rejection;
     }
-    expect(events).toEqual(["cleanup started", "cleanup finished", "foreground admitted"]);
+    expect(events).toEqual(["cleanup:start", "cleanup:finish", "foreground:admit"]);
     await owner.done;
   });
 
   it("keeps optional work pending until every foreground reservation releases without blocking reads", async () => {
     const releaseFirst = await beginForegroundSessionMaintenance("session:pending");
     const releaseSecond = await beginForegroundSessionMaintenance("session:pending");
-    const owner = createSessionMaintenanceOwner({
+    const owner = createTrackedOwner({
       sessionKey: "session:pending",
       preemptible: true,
     });
     let ran = false;
     let admitted = false;
-    const work = owner.track(
-      owner.run({
-        admit: (run) =>
-          withSessionTurn(
-            {
-              sessionKey: "session:pending",
-              sessionId: "pending",
-              storePath: "/maintenance/pending",
-            },
-            () => {
-              admitted = true;
-              return run(async () => {
-                owner.assertCurrent();
-                ran = true;
-              });
-            },
-          ),
-      }),
-    );
+    const work = owner.run({
+      admit: (run) =>
+        withSessionTurn(
+          {
+            sessionKey: "session:pending",
+            sessionId: "pending",
+            storePath: "/maintenance/pending",
+          },
+          () => {
+            admitted = true;
+            return run(async () => {
+              owner.assertCurrent();
+              ran = true;
+            });
+          },
+        ),
+    });
     try {
       await waitForSessionMaintenance("session:pending");
       expect(admitted).toBe(false);
@@ -164,13 +171,11 @@ describe("session maintenance ownership", () => {
   it("admits another session while non-preemptible maintenance keeps its own session waiting", async () => {
     const started = createDeferred();
     const finish = createDeferred();
-    const owner = createSessionMaintenanceOwner({ sessionKey: "session:busy" });
-    const work = owner.track(
-      owner.run(async () => {
-        started.resolve();
-        await finish.promise;
-      }),
-    );
+    const owner = createTrackedOwner({ sessionKey: "session:busy" });
+    const work = owner.run(async () => {
+      started.resolve();
+      await finish.promise;
+    });
     await started.promise;
     let busyAdmitted = false;
     const busyAdmission = beginForegroundSessionMaintenance("session:busy").then((release) => {
@@ -200,7 +205,7 @@ describe("session maintenance ownership", () => {
         sessionKey,
         incarnation: mode,
       });
-      const owner = createSessionMaintenanceOwner({
+      const owner = createOwner({
         sessionKey,
         target:
           mode === "pending-other-store"
@@ -227,9 +232,7 @@ describe("session maintenance ownership", () => {
           const checkpoint = waitForSessionMaintenance(sessionKey).then(() => {
             readCompleted = true;
           });
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await drainContinuations();
           expect(readCompleted).toBe(false);
           release.resolve();
           await checkpoint;
@@ -256,7 +259,7 @@ describe("session maintenance ownership", () => {
     let dependentWork = Promise.resolve();
     try {
       await withSessionTurn({ sessionKey, sessionId: "dependency", target }, async () => {
-        const optional = createSessionMaintenanceOwner({ sessionKey, target, preemptible: true });
+        const optional = createOwner({ sessionKey, target, preemptible: true });
         optionalWork = optional.track(
           runWithSessionControllerCleanup(() =>
             optional.run<void>({
@@ -272,16 +275,12 @@ describe("session maintenance ownership", () => {
           ),
         );
         // Outbox replay can register nonpreemptible engine maintenance for another active session.
-        const dependent = createSessionMaintenanceOwner({ sessionKey });
-        dependentWork = dependent.track(
-          dependent.run(async () => {
-            events.push("dependent");
-          }),
-        );
-        const checkpoint = waitForSessionMaintenance(sessionKey).then(() => events.push("read"));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
+        const dependent = createTrackedOwner({ sessionKey });
+        dependentWork = dependent.run(async () => {
+          events.push("dependent");
         });
+        const checkpoint = waitForSessionMaintenance(sessionKey).then(() => events.push("read"));
+        await drainContinuations();
         expect(events).toEqual(["read"]);
         await checkpoint;
       });
@@ -296,28 +295,6 @@ describe("session maintenance ownership", () => {
     }
   });
 
-  it("allows nested maintenance reads to exclude their own active ancestors", async () => {
-    const outer = createSessionMaintenanceOwner({ sessionKey: "session:nested" });
-    const events: string[] = [];
-    await outer.track(
-      outer.run(async () => {
-        const inner = createSessionMaintenanceOwner({ sessionKey: "session:nested" });
-        await inner.track(
-          inner.run(async () => {
-            await waitForSessionMaintenance("session:nested");
-            inner.assertCurrent();
-            outer.assertCurrent();
-            events.push("nested read completed");
-          }),
-        );
-        await waitForSessionMaintenance("session:nested");
-        events.push("outer read completed");
-      }),
-    );
-    expect(events).toEqual(["nested read completed", "outer read completed"]);
-    await waitForSessionMaintenance("session:nested");
-  });
-
   it.each([true, false])(
     "serializes independent siblings and lets the older owner read with preemptible=%s",
     async (preemptible) => {
@@ -328,41 +305,37 @@ describe("session maintenance ownership", () => {
       const finishOlder = createDeferred();
       const stop = createDeferred();
       const events: string[] = [];
-      const older = createSessionMaintenanceOwner({ sessionKey, preemptible });
-      const olderWork = older.track(
-        older.run(async () => {
-          events.push("older started");
-          started.resolve();
-          await allowRead.promise;
-          await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
-          events.push("older read completed");
-          readCompleted.resolve();
-          await finishOlder.promise;
-          events.push("older finished");
-        }),
-      );
+      const older = createTrackedOwner({ sessionKey, preemptible });
+      const olderWork = older.run(async () => {
+        events.push("older:start");
+        started.resolve();
+        await allowRead.promise;
+        await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
+        events.push("older:read");
+        readCompleted.resolve();
+        await finishOlder.promise;
+        events.push("older:finish");
+      });
       await started.promise;
-      const younger = createSessionMaintenanceOwner({ sessionKey, preemptible: !preemptible });
-      const youngerWork = younger.track(
-        younger.run(async () => {
-          events.push("younger started");
-          await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
-          events.push("younger read completed");
-        }),
-      );
+      const younger = createTrackedOwner({ sessionKey, preemptible: !preemptible });
+      const youngerWork = younger.run(async () => {
+        events.push("younger:start");
+        await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
+        events.push("younger:read");
+      });
       try {
-        expect(events).toEqual(["older started"]);
+        expect(events).toEqual(["older:start"]);
         allowRead.resolve();
         await readCompleted.promise;
-        expect(events).toEqual(["older started", "older read completed"]);
+        expect(events).toEqual(["older:start", "older:read"]);
         finishOlder.resolve();
         await Promise.all([olderWork, youngerWork]);
         expect(events).toEqual([
-          "older started",
-          "older read completed",
-          "older finished",
-          "younger started",
-          "younger read completed",
+          "older:start",
+          "older:read",
+          "older:finish",
+          "younger:start",
+          "younger:read",
         ]);
       } finally {
         // Unblock fixture reads after an ordering failure so real owner cleanup still runs.
@@ -388,54 +361,54 @@ describe("session maintenance ownership", () => {
     const finishSibling = createDeferred();
     const finishParent = createDeferred();
     const events: string[] = [];
-    const parent = createSessionMaintenanceOwner({ sessionKey });
-    let child: ReturnType<typeof createSessionMaintenanceOwner> | undefined;
+    const parent = createTrackedOwner({ sessionKey });
+    let child: ReturnType<typeof createTrackedOwner> | undefined;
     let childWork: Promise<void> = Promise.resolve();
     let siblingWork: Promise<void> = Promise.resolve();
     const startSibling = () => {
-      const sibling = createSessionMaintenanceOwner({ sessionKey });
-      siblingWork = sibling.track(
-        sibling.run(async () => {
-          events.push("sibling started");
-          siblingStarted.resolve();
-          await finishSibling.promise;
-          events.push("sibling completed");
-        }),
-      );
+      const sibling = createTrackedOwner({ sessionKey });
+      siblingWork = sibling.run(async () => {
+        events.push("sibling:start");
+        siblingStarted.resolve();
+        await finishSibling.promise;
+        events.push("sibling:done");
+      });
     };
-    const parentWork = parent.track(
-      parent.run(async () => {
-        events.push("parent started");
-        parentStarted.resolve();
-        await allowChild.promise;
-        if (placement === "nested independent") {
-          startSibling();
-          await siblingStarted.promise;
-        } else if (placement === "released parent") {
-          parent.releaseWrites();
-          await siblingStarted.promise;
+    const parentWork = parent.run(async () => {
+      events.push("parent:start");
+      parentStarted.resolve();
+      await allowChild.promise;
+      if (placement === "nested independent") {
+        startSibling();
+        await siblingStarted.promise;
+      } else if (placement === "released parent") {
+        parent.releaseWrites();
+        await siblingStarted.promise;
+      }
+      const childOwner = createTrackedOwner({ sessionKey });
+      child = childOwner;
+      childWork = childOwner.run(async () => {
+        events.push("child:start");
+        if (action === "read") {
+          await waitForSessionMaintenance(sessionKey);
+        } else {
+          const release = await beginForegroundSessionMaintenance(sessionKey);
+          release();
         }
-        child = createSessionMaintenanceOwner({ sessionKey });
-        childWork = child.track(
-          child.run(async () => {
-            events.push("child started");
-            if (action === "read") {
-              await waitForSessionMaintenance(sessionKey);
-            } else {
-              const release = await beginForegroundSessionMaintenance(sessionKey);
-              release();
-            }
-            events.push("child completed");
-            childCompleted.resolve();
-          }),
-        );
-        childCreated.resolve();
-        await childWork;
-        events.push("parent resumed");
-        await finishParent.promise;
-        events.push("parent completed");
-      }),
-    );
+        childOwner.assertCurrent();
+        if (placement !== "released parent") {
+          parent.assertCurrent();
+        }
+        events.push("child:done");
+        childCompleted.resolve();
+      });
+      childCreated.resolve();
+      await childWork;
+      await waitForSessionMaintenance(sessionKey);
+      events.push("parent:resume");
+      await finishParent.promise;
+      events.push("parent:done");
+    });
     try {
       await parentStarted.promise;
       if (placement !== "nested independent") {
@@ -445,18 +418,11 @@ describe("session maintenance ownership", () => {
       await childCreated.promise;
       // These owner waits have no I/O: drain the scheduled continuations without
       // relying on a test timeout to discover a circular dependency.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await drainContinuations();
       if (placement === "external dependent") {
-        expect([...events]).toEqual([
-          "parent started",
-          "child started",
-          "child completed",
-          "parent resumed",
-        ]);
+        expect([...events]).toEqual(["parent:start", "child:start", "child:done", "parent:resume"]);
       } else {
-        expect([...events]).toEqual(["parent started", "sibling started"]);
+        expect([...events]).toEqual(["parent:start", "sibling:start"]);
         finishSibling.resolve();
         await childCompleted.promise;
       }
@@ -467,8 +433,8 @@ describe("session maintenance ownership", () => {
       await siblingWork;
       const ordered =
         placement === "external dependent"
-          ? ["child completed", "parent completed", "sibling started"]
-          : ["sibling completed", "child started", "parent completed"];
+          ? ["child:done", "parent:done", "sibling:start"]
+          : ["sibling:done", "child:start", "parent:done"];
       expect(events.filter((event) => ordered.includes(event))).toEqual(ordered);
     } finally {
       // Break a failed fixture's dependency cycle only after its ordering assertion;
@@ -491,50 +457,41 @@ describe("session maintenance ownership", () => {
     const finishChild = createDeferred();
     const stop = createDeferred();
     const events: string[] = [];
-    const parent = createSessionMaintenanceOwner({ sessionKey });
+    const parent = createTrackedOwner({ sessionKey });
     let childWork: Promise<void> = Promise.resolve();
-    const parentWork = parent.track(
-      parent.run(async () => {
-        events.push("parent disposing");
-        disposing.resolve();
-        await finishDisposal.promise;
-        parent.releaseWrites();
-        expect(parent.assertCurrent).toThrow();
-        events.push("parent writes released");
-        await childWork;
-        events.push("parent completed");
-      }),
-    );
+    const parentWork = parent.run(async () => {
+      events.push("parent:dispose");
+      disposing.resolve();
+      await finishDisposal.promise;
+      parent.releaseWrites();
+      expect(parent.assertCurrent).toThrow();
+      events.push("parent:released");
+      await childWork;
+      events.push("parent:done");
+    });
     await disposing.promise;
-    const child = createSessionMaintenanceOwner({ sessionKey });
-    childWork = child.track(
-      child.run(async () => {
-        events.push("child started");
-        await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
-        events.push("child read completed");
-        childRead.resolve();
-        await finishChild.promise;
-        events.push("child completed");
-      }),
-    );
+    const child = createTrackedOwner({ sessionKey });
+    childWork = child.run(async () => {
+      events.push("child:start");
+      await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
+      events.push("child:read");
+      childRead.resolve();
+      await finishChild.promise;
+      events.push("child:done");
+    });
     let parentDone = false;
     void parent.done.then(() => {
       parentDone = true;
     });
     try {
-      expect(events).toEqual(["parent disposing"]);
+      expect(events).toEqual(["parent:dispose"]);
       finishDisposal.resolve();
       await childRead.promise;
-      expect(events).toEqual([
-        "parent disposing",
-        "parent writes released",
-        "child started",
-        "child read completed",
-      ]);
+      expect(events).toEqual(["parent:dispose", "parent:released", "child:start", "child:read"]);
       expect(parentDone).toBe(false);
       finishChild.resolve();
       await Promise.all([parentWork, childWork, parent.done]);
-      expect(events.slice(-2)).toEqual(["child completed", "parent completed"]);
+      expect(events.slice(-2)).toEqual(["child:done", "parent:done"]);
       expect(parentDone).toBe(true);
     } finally {
       stop.resolve();
@@ -547,7 +504,7 @@ describe("session maintenance ownership", () => {
   it.each(["fulfilled", "rejected"] as const)(
     "fences a retained assertion after tracked work is %s",
     async (outcome) => {
-      const owner = createSessionMaintenanceOwner({ sessionKey: `session:settled:${outcome}` });
+      const owner = createOwner({ sessionKey: `session:settled:${outcome}` });
       const assertCurrent = owner.assertCurrent;
       const completion = createDeferred<string>();
       const work = owner.track(completion.promise);
@@ -572,7 +529,7 @@ describe("session maintenance ownership", () => {
     "aborts active maintenance and fences retained authority on process %s",
     async (event) => {
       const finish = createDeferred();
-      const owner = createSessionMaintenanceOwner({ sessionKey: `session:lifecycle:${event}` });
+      const owner = createOwner({ sessionKey: `session:lifecycle:${event}` });
       const assertCurrent = owner.assertCurrent;
       const work = owner.track(finish.promise);
       const rotation = drainGlobalSingletonLifecycleState(event);
@@ -583,12 +540,10 @@ describe("session maintenance ownership", () => {
         finish.resolve();
         await Promise.all([work, rotation]);
       }
-      const successor = createSessionMaintenanceOwner({ sessionKey: `session:lifecycle:${event}` });
-      await successor.track(
-        successor.run(async () => {
-          successor.assertCurrent();
-        }),
-      );
+      const successor = createTrackedOwner({ sessionKey: `session:lifecycle:${event}` });
+      await successor.run(async () => {
+        successor.assertCurrent();
+      });
       expect(assertCurrent).toThrow();
     },
   );
