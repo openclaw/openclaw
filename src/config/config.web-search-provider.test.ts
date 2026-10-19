@@ -132,3 +132,13 @@ it("warns for unknown provider ids with stale plugin config", () => {
     }),
   );
 });
+
+it("accepts provider ids that differ from the manifest only in case or padding", () => {
+  for (const provider of ["Brave", "BRAVE", " brave "]) {
+    const res = validateWebSearchConfig(searchConfig(provider));
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual([]);
+    }
+  }
+});
