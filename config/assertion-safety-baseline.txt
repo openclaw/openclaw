@@ -1357,7 +1357,6 @@ src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-tool.helpers.ts	2
-src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/message-tool-discovery.ts	2
 src/agents/tools/message-tool-execution.ts	3
