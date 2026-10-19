@@ -52,7 +52,8 @@ vi.mock("./approval-reaction-poller.js", () => ({
   pollPendingIMessageApprovalReactions: vi.fn(async () => {}),
 }));
 
-vi.mock("./approval-reactions.js", () => ({
+vi.mock("./approval-reactions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./approval-reactions.js")>()),
   handleIMessageApprovalReaction: vi.fn(async () => ({ handled: false, stopPolling: false })),
 }));
 
