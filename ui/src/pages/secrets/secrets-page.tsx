@@ -19,13 +19,13 @@ import {
   type SecretsStoreDraft,
   type SecretsStoreState,
 } from "../../lib/secrets-store/index.ts";
-import { SecretsStore, type SecretsDialogMode } from "./view.tsx";
+import { SecretsStore } from "./view.tsx";
 
 const MAX_VALUE_BYTES = 64 * 1024;
 
-class SecretsPageState {
+export class SecretsPageState {
   store = createInitialSecretsStoreState();
-  dialogMode: SecretsDialogMode = null;
+  dialogMode: "add" | "edit" | null = null;
   draft: SecretsStoreDraft = {
     name: "",
     value: "",
@@ -45,6 +45,11 @@ class SecretsPageState {
     readonly context: ApplicationContext,
     readonly notify: () => void,
   ) {}
+
+  act(action: (state: SecretsPageState) => void) {
+    action(this);
+    this.notify();
+  }
 
   bindGateway(source: ApplicationContext["gateway"]) {
     this.lifecycle.invalidate();
@@ -314,58 +319,15 @@ export function SecretsPage() {
     revision();
     return model.bulkParsed;
   });
-  const act = (action: () => void) => {
-    action();
-    model.notify();
-  };
   return (
     <openclaw-secrets-page>
       <SettingsPageHeader title={t("tabs.secrets")} subtitle={t("secretsStore.hint")} />
       <SettingsWorkspace>
         <SecretsStore
-          entries={state().store.entries}
-          loading={state().store.loading}
-          busy={state().store.busy}
-          error={state().store.error}
-          notice={state().notice}
-          canList={state().canCall("secrets.store.list")}
-          canSet={state().canCall("secrets.store.set")}
-          canDelete={state().canCall("secrets.store.delete")}
-          dialogMode={state().dialogMode}
-          draft={state().draft}
-          formError={state().formError}
-          bulkOpen={state().bulkOpen}
-          bulkRaw={state().bulkRaw}
-          bulkAutoDetect={state().bulkAutoDetect}
+          state={state()}
           bulkSecretCount={parsed().entries.filter((entry) => entry.kind === "secret").length}
           bulkEntryCount={parsed().entries.length}
           bulkInvalidNames={parsed().invalidNames}
-          onRefresh={() => {
-            if (model.canCall("secrets.store.list")) {
-              void model.runStoreTask(loadSecretsStore);
-            }
-          }}
-          onOpenAdd={() => act(() => model.openEntry())}
-          onOpenEdit={(entry) => act(() => model.openEntry(entry))}
-          onCloseDialog={() => act(() => model.closeDialog())}
-          onDraftChange={(patch) => act(() => model.patchDraft(patch))}
-          onSubmitDraft={() => act(() => model.submitDraft())}
-          onOpenBulk={() => act(() => model.openBulk())}
-          onCloseBulk={() => act(() => model.closeDialog(true))}
-          onBulkRawChange={(raw) =>
-            act(() => {
-              model.bulkRaw = raw;
-              model.formError = null;
-            })
-          }
-          onBulkAutoDetectChange={(enabled) =>
-            act(() => {
-              model.bulkAutoDetect = enabled;
-              model.formError = null;
-            })
-          }
-          onSubmitBulk={() => act(() => model.submitBulk())}
-          onDelete={(entry) => void model.removeEntry(entry)}
         />
       </SettingsWorkspace>
     </openclaw-secrets-page>

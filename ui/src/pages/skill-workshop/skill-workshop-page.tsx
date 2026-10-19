@@ -427,6 +427,8 @@ class SkillWorkshopPageState {
   }
 }
 
+export type SkillWorkshopViewProps = ReturnType<SkillWorkshopPageState["viewProps"]>;
+
 export function SkillWorkshopPage() {
   const context = useApplication();
   const agents = projectAgents(context.agents);

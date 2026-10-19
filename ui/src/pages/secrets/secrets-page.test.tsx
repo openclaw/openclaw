@@ -44,7 +44,7 @@ it("keeps reconnect reads current and releases the Gateway binding when the page
       type: "hello-ok",
       protocol: 1,
       auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["secrets.store.list"], events: [] },
+      features: { methods: ["secrets.store.list", "secrets.store.set"], events: [] },
     },
   };
   const source = createApplicationGateway(snapshot);
@@ -70,6 +70,24 @@ it("keeps reconnect reads current and releases the Gateway binding when the page
   flush();
   expect(page.container.textContent).toContain("CURRENT_URL");
   expect(page.container.textContent).not.toContain("STALE_URL");
+
+  page.container.querySelector<HTMLButtonElement>("button.primary")!.click();
+  await waitForSolid(() =>
+    expect(page.container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
+  );
+  const name = page.container.querySelector<HTMLInputElement>('input[name="name"]')!;
+  name.value = "api_token";
+  name.dispatchEvent(new Event("input", { bubbles: true }));
+  await waitForSolid(() => expect(name.value).toBe("API_TOKEN"));
+  expect(page.container.querySelector<HTMLInputElement>('input[value="secret"]')!.checked).toBe(
+    true,
+  );
+  page.container
+    .querySelector<HTMLButtonElement>('.secrets-store-dialog button[type="button"]')!
+    .click();
+  await waitForSolid(() =>
+    expect(page.container.querySelector("openclaw-modal-dialog")).toBeNull(),
+  );
 
   page.unmount();
   const retiredRequest = createGatewayRequestMock(async () => ({ entries: [] }));

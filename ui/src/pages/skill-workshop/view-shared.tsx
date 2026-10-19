@@ -4,14 +4,12 @@ import type {
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
 import { Show } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import type { SkillWorkshopAccess } from "./access.ts";
-import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
+import type { WorkshopMutation } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
+import type { SkillWorkshopViewProps } from "./skill-workshop-page.tsx";
 
 export type WorkshopView = () => SkillWorkshopViewProps;
 
@@ -128,33 +126,3 @@ export type WorkshopViewer =
 export type WorkshopFilter = "active" | "archived";
 export type WorkshopSort = "uses" | "recent" | "name";
 export type WorkshopTab = "instructions" | "files" | "history";
-
-type SkillWorkshopViewProps = {
-  context: ApplicationContext;
-  agentId: string | null;
-  access: SkillWorkshopAccess;
-  snapshot: WorkshopSnapshot | null;
-  loading: boolean;
-  error: string | null;
-  viewer: WorkshopViewer | null;
-  filter: WorkshopFilter;
-  sort: WorkshopSort;
-  tab: WorkshopTab;
-  pendingAction: string | null;
-  actionError: string | null;
-  mode: SkillWorkshopMode | null;
-  modeBusy: boolean;
-  modeError: string | null;
-  learningAccess: SessionMethodAccess;
-  learningBusy: boolean;
-  learningError: string | null;
-  onRetry: () => void;
-  onSelectSkill: (name: string) => void;
-  onOpen: (target: WorkshopViewerTarget) => void;
-  onMutate: (mutation: WorkshopMutation, key: string) => void;
-  onModeChange: (mode: SkillWorkshopMode) => void;
-  onLearn: () => void;
-  onFilter: (filter: WorkshopFilter) => void;
-  onSort: (sort: WorkshopSort) => void;
-  onTab: (tab: WorkshopTab) => void;
-};
