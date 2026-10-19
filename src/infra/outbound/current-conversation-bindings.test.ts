@@ -1,5 +1,3 @@
-// Verifies generic current-conversation binding persistence, TTL pruning,
-// capability discovery, touch, list, and unbind behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,12 +15,12 @@ import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
 import {
   testing,
-  bindGenericCurrentConversation,
-  getGenericCurrentConversationBindingCapabilities,
-  listGenericCurrentConversationBindingsBySession,
-  resolveGenericCurrentConversationBinding,
-  touchGenericCurrentConversationBinding,
-  unbindGenericCurrentConversationBindings,
+  bindGenericCurrentConversation as bindGeneric,
+  getGenericCurrentConversationBindingCapabilities as getCapabilities,
+  listGenericCurrentConversationBindingsBySession as listBySession,
+  resolveGenericCurrentConversationBinding as resolveGeneric,
+  touchGenericCurrentConversationBinding as touchGeneric,
+  unbindGenericCurrentConversationBindings as unbindGeneric,
 } from "./current-conversation-bindings.js";
 import { inspectSessionBindingByConversation } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
@@ -39,25 +37,33 @@ function expectSessionBinding(bound: SessionBindingRecord | null): SessionBindin
   return bound;
 }
 
-function expectBindingFields(
+function expectFields(
   binding: SessionBindingRecord | null | undefined,
   expected: Partial<SessionBindingRecord>,
 ): SessionBindingRecord {
   const record = expectSessionBinding(binding ?? null);
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key as keyof SessionBindingRecord]).toEqual(value);
-  }
+  expect(record).toEqual(expect.objectContaining(expected));
   return record;
 }
 
-function expectBindingMetadata(
+function expectMetadata(
   binding: SessionBindingRecord | null | undefined,
   expected: Record<string, unknown>,
 ): void {
-  const metadata = expectSessionBinding(binding ?? null).metadata;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(metadata?.[key]).toEqual(value);
-  }
+  expect(expectSessionBinding(binding ?? null).metadata).toEqual(expect.objectContaining(expected));
+}
+
+function persistedFields(record: SessionBindingRecord) {
+  return {
+    binding_id: record.bindingId,
+    target_session_key: record.targetSessionKey,
+    target_kind: record.targetKind,
+    status: record.status,
+    bound_at: record.boundAt,
+    expires_at: record.expiresAt ?? null,
+    metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
+    record_json: JSON.stringify(record),
+  };
 }
 
 function buildConversationKey(ref: SessionBindingRecord["conversation"]): string {
@@ -73,19 +79,12 @@ function seedPersistedBinding(record: SessionBindingRecord): void {
       db,
       bindingDb.insertInto("current_conversation_bindings").values({
         binding_key: buildConversationKey(record.conversation),
-        binding_id: record.bindingId,
-        target_session_key: record.targetSessionKey,
+        ...persistedFields(record),
         channel: record.conversation.channel,
         account_id: record.conversation.accountId,
         conversation_kind: "current",
         parent_conversation_id: record.conversation.parentConversationId ?? null,
         conversation_id: record.conversation.conversationId,
-        target_kind: record.targetKind,
-        status: record.status,
-        bound_at: record.boundAt,
-        expires_at: record.expiresAt ?? null,
-        metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-        record_json: JSON.stringify(record),
         updated_at: record.boundAt,
       }),
     );
@@ -100,14 +99,7 @@ function replacePersistedBinding(record: SessionBindingRecord): void {
       bindingDb
         .updateTable("current_conversation_bindings")
         .set({
-          binding_id: record.bindingId,
-          target_session_key: record.targetSessionKey,
-          target_kind: record.targetKind,
-          status: record.status,
-          bound_at: record.boundAt,
-          expires_at: record.expiresAt ?? null,
-          metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-          record_json: JSON.stringify(record),
+          ...persistedFields(record),
           updated_at: Date.now(),
         })
         .where("binding_key", "=", buildConversationKey(record.conversation)),
@@ -176,6 +168,36 @@ function workspaceConversation(conversationId: string) {
   };
 }
 
+function persistedRecord(
+  conversation: SessionBindingRecord["conversation"],
+  overrides: Partial<SessionBindingRecord> = {},
+): SessionBindingRecord {
+  return {
+    bindingId: `generic:${buildConversationKey(conversation)}`,
+    targetSessionKey: "agent:codex:acp:workspace-dm",
+    targetKind: "session",
+    conversation,
+    status: "active",
+    boundAt: 1234,
+    ...overrides,
+  };
+}
+
+const forumConversation = {
+  channel: "forum",
+  accountId: "default",
+  conversationId: "6098642967",
+};
+function legacyForumRecord(overrides: Partial<SessionBindingRecord> = {}) {
+  return persistedRecord(
+    { ...forumConversation, parentConversationId: "6098642967" },
+    {
+      targetSessionKey: "agent:codex:acp:forum-dm",
+      ...overrides,
+    },
+  );
+}
+
 async function bindWorkspaceConversation(
   conversationId: string,
   options: {
@@ -184,7 +206,7 @@ async function bindWorkspaceConversation(
     metadata?: Record<string, unknown>;
   } = {},
 ): Promise<SessionBindingRecord | null> {
-  return bindGenericCurrentConversation({
+  return bindGeneric({
     targetSessionKey: options.targetSessionKey ?? "agent:codex:acp:workspace-dm",
     targetKind: "session",
     conversation: workspaceConversation(conversationId),
@@ -194,7 +216,7 @@ async function bindWorkspaceConversation(
 }
 
 function resolveWorkspaceConversation(conversationId: string): SessionBindingRecord | null {
-  return resolveGenericCurrentConversationBinding(workspaceConversation(conversationId));
+  return resolveGeneric(workspaceConversation(conversationId));
 }
 
 describe("generic current-conversation bindings", () => {
@@ -241,40 +263,27 @@ describe("generic current-conversation bindings", () => {
 
   it("stores Control UI session-key conversations without a channel plugin", async () => {
     setActivePluginRegistry(createTestRegistry([]));
-    expect(
-      getGenericCurrentConversationBindingCapabilities({
-        channel: "webchat",
-        accountId: "default",
-      }),
-    ).toMatchObject({ bindSupported: true, placements: ["current"] });
-
-    const bound = await bindGenericCurrentConversation({
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: "agent:main:adopted",
+    };
+    expect(getCapabilities(conversation)).toMatchObject({
+      bindSupported: true,
+      placements: ["current"],
+    });
+    const bound = await bindGeneric({
       targetSessionKey: "agent:main:adopted",
       targetKind: "session",
-      conversation: {
-        channel: "webchat",
-        accountId: "default",
-        conversationId: "agent:main:adopted",
-      },
+      conversation,
       metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
     });
 
-    expectBindingFields(bound, {
+    expectFields(bound, {
       targetSessionKey: "agent:main:adopted",
-      conversation: {
-        channel: "webchat",
-        accountId: "default",
-        conversationId: "agent:main:adopted",
-      },
+      conversation,
     });
-    expectBindingFields(
-      resolveGenericCurrentConversationBinding({
-        channel: "webchat",
-        accountId: "default",
-        conversationId: "agent:main:adopted",
-      }),
-      { targetSessionKey: "agent:main:adopted" },
-    );
+    expectFields(resolveGeneric(conversation), { targetSessionKey: "agent:main:adopted" });
   });
 
   describe("independent SQLite owners", () => {
@@ -311,27 +320,27 @@ describe("generic current-conversation bindings", () => {
             await bindWorkspaceConversation("user:replacement");
             break;
           case "touch":
-            touchGenericCurrentConversationBinding(owned.bindingId, 1_000_500);
+            touchGeneric(owned.bindingId, 1_000_500);
             break;
           case "expiry cleanup":
             vi.setSystemTime(new Date(1_002_000));
             expect(resolveWorkspaceConversation("user:expired")).toBeNull();
             break;
           case "unbind":
-            await unbindGenericCurrentConversationBindings({
+            await unbindGeneric({
               bindingId: owned.bindingId,
               reason: "owner cleanup",
             });
             break;
         }
 
-        expectBindingFields(readPersistedBinding("user:inserted"), {
+        expectFields(readPersistedBinding("user:inserted"), {
           targetSessionKey: "agent:codex:acp:inserted-target",
         });
-        expectBindingFields(readPersistedBinding("user:updated"), {
+        expectFields(readPersistedBinding("user:updated"), {
           targetSessionKey: "agent:codex:acp:latest-target",
         });
-        expectBindingMetadata(readPersistedBinding("user:updated"), {
+        expectMetadata(readPersistedBinding("user:updated"), {
           version: "latest",
           opaque: { nested: true },
         });
@@ -362,12 +371,12 @@ describe("generic current-conversation bindings", () => {
         },
       });
 
-      touchGenericCurrentConversationBinding(initial.bindingId, 20);
+      touchGeneric(initial.bindingId, 20);
 
-      expectBindingFields(readPersistedBinding("user:owner"), {
+      expectFields(readPersistedBinding("user:owner"), {
         targetSessionKey: "agent:codex:acp:latest-target",
       });
-      expectBindingMetadata(readPersistedBinding("user:owner"), {
+      expectMetadata(readPersistedBinding("user:owner"), {
         opaque: { nested: ["latest", { preserved: true }] },
         lastActivityAt: 20,
       });
@@ -379,15 +388,11 @@ describe("generic current-conversation bindings", () => {
     it.each(["rebind", "delete"] as const)(
       "never restores a stale row when another owner commits a %s during normalization",
       (mutation) => {
-        const initial: SessionBindingRecord = {
-          bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:normalization-race",
+        const initial = persistedRecord(workspaceConversation("user:normalization-race"), {
           targetSessionKey: " agent:codex:acp:stale-target ",
-          targetKind: "session",
-          conversation: workspaceConversation("user:normalization-race"),
-          status: "active",
           boundAt: 1_000,
           metadata: { version: "stale" },
-        };
+        });
         seedPersistedBinding(initial);
         const latest: SessionBindingRecord = {
           ...initial,
@@ -424,10 +429,10 @@ describe("generic current-conversation bindings", () => {
             expect(readPersistedBinding("user:normalization-race")).toBeNull();
             return;
           }
-          expectBindingFields(resolved, {
+          expectFields(resolved, {
             targetSessionKey: "agent:codex:acp:latest-target",
           });
-          expectBindingMetadata(readPersistedBinding("user:normalization-race"), {
+          expectMetadata(readPersistedBinding("user:normalization-race"), {
             version: "latest",
             opaque: { preserved: true },
           });
@@ -461,106 +466,67 @@ describe("generic current-conversation bindings", () => {
       expect(resolveWorkspaceConversation("user:external")?.targetSessionKey).toBe(
         "agent:codex:acp:external-target",
       );
-      expectBindingMetadata(readPersistedBinding("user:external"), {
+      expectMetadata(readPersistedBinding("user:external"), {
         opaque: { survives: true },
       });
     });
   });
 
   it("migrates persisted legacy self-parent binding ids on load", async () => {
-    seedPersistedBinding({
-      bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
-      targetSessionKey: " agent:codex:acp:forum-dm ",
-      targetKind: "session",
-      conversation: {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-        parentConversationId: "6098642967",
-      },
-      status: "active",
-      boundAt: 1234,
-      metadata: {
-        label: "forum-dm",
-      },
-    });
+    seedPersistedBinding(
+      legacyForumRecord({
+        targetSessionKey: " agent:codex:acp:forum-dm ",
+        metadata: { label: "forum-dm" },
+      }),
+    );
 
-    const resolved = resolveGenericCurrentConversationBinding({
-      channel: "forum",
-      accountId: "default",
-      conversationId: "6098642967",
-    });
+    const resolved = resolveGeneric(forumConversation);
 
-    const resolvedRecord = expectBindingFields(resolved, {
+    const resolvedRecord = expectFields(resolved, {
       bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
       targetSessionKey: "agent:codex:acp:forum-dm",
     });
-    expect(resolvedRecord.conversation).toEqual({
-      channel: "forum",
-      accountId: "default",
-      conversationId: "6098642967",
-    });
+    expect(resolvedRecord.conversation).toEqual(forumConversation);
     expect(resolved?.conversation.parentConversationId).toBeUndefined();
 
-    const unbound = await unbindGenericCurrentConversationBindings({
+    const unbound = await unbindGeneric({
       bindingId: resolved?.bindingId,
       reason: "test cleanup",
     });
     expect(unbound).toHaveLength(1);
-    expectBindingFields(unbound[0], {
+    expectFields(unbound[0], {
       bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
     });
 
-    expect(
-      resolveGenericCurrentConversationBinding({
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-      }),
-    ).toBeNull();
+    expect(resolveGeneric(forumConversation)).toBeNull();
   });
 
   it.each(["touch", "unbind"] as const)(
     "supports %s by the canonical id returned for an unrepaired legacy self-parent row",
     async (operation) => {
-      const conversation = {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-        parentConversationId: "6098642967",
-      };
-      seedPersistedBinding({
-        bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
-        targetSessionKey: "agent:codex:acp:forum-dm",
-        targetKind: "session",
-        conversation,
-        status: "active",
-        boundAt: 1_234,
+      const legacy = legacyForumRecord({
         metadata: { opaque: { preserved: true } },
       });
+      seedPersistedBinding(legacy);
 
-      const listed = expectSessionBinding(
-        listGenericCurrentConversationBindingsBySession("agent:codex:acp:forum-dm")[0] ?? null,
-      );
+      const listed = expectSessionBinding(listBySession("agent:codex:acp:forum-dm")[0] ?? null);
       expect(listed.bindingId).toBe("generic:forum\u241fdefault\u241f\u241f6098642967");
 
       if (operation === "touch") {
-        touchGenericCurrentConversationBinding(listed.bindingId, 9_876);
-        expectBindingMetadata(resolveGenericCurrentConversationBinding(conversation), {
+        touchGeneric(listed.bindingId, 9_876);
+        expectMetadata(resolveGeneric(legacy.conversation), {
           opaque: { preserved: true },
           lastActivityAt: 9_876,
         });
         return;
       }
 
-      const removed = await unbindGenericCurrentConversationBindings({
+      const removed = await unbindGeneric({
         bindingId: listed.bindingId,
         reason: "legacy owner cleanup",
       });
       expect(removed).toHaveLength(1);
-      expect(listGenericCurrentConversationBindingsBySession("agent:codex:acp:forum-dm")).toEqual(
-        [],
-      );
+      expect(listBySession("agent:codex:acp:forum-dm")).toEqual([]);
     },
   );
 
@@ -588,7 +554,7 @@ describe("generic current-conversation bindings", () => {
       ]),
     );
 
-    const removed = await unbindGenericCurrentConversationBindings({
+    const removed = await unbindGeneric({
       targetSessionKey,
       reason: "owner cleanup",
     });
@@ -599,31 +565,27 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("drops persisted bindings with invalid expiration timestamps", async () => {
-    seedPersistedBinding({
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-      targetKind: "session",
-      conversation: workspaceConversation("user:U123"),
-      status: "active",
-      boundAt: 1234,
-      expiresAt: 8_640_000_000_000_001,
-    });
+    seedPersistedBinding(
+      persistedRecord(workspaceConversation("user:U123"), {
+        expiresAt: 8_640_000_000_000_001,
+      }),
+    );
 
-    expect(resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"))).toBeNull();
+    expect(resolveGeneric(workspaceConversation("user:U123"))).toBeNull();
   });
 
   it("does not bind generic current conversations when ttl expiry overflows", async () => {
     vi.setSystemTime(new Date(8_640_000_000_000_000));
 
     await expect(
-      bindGenericCurrentConversation({
+      bindGeneric({
         targetSessionKey: "agent:codex:acp:workspace-dm",
         targetKind: "session",
         conversation: workspaceConversation("user:U123"),
         ttlMs: 1,
       }),
     ).resolves.toBeNull();
-    expect(resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"))).toBeNull();
+    expect(resolveGeneric(workspaceConversation("user:U123"))).toBeNull();
   });
 
   describe("SQLite write failures", () => {
@@ -634,9 +596,7 @@ describe("generic current-conversation bindings", () => {
       const originalActivity = bound.metadata?.lastActivityAt;
 
       await expect(
-        withReadOnlyStateDatabase(() =>
-          touchGenericCurrentConversationBinding(bound.bindingId, 9_999_999),
-        ),
+        withReadOnlyStateDatabase(() => touchGeneric(bound.bindingId, 9_999_999)),
       ).rejects.toThrow();
 
       expect(resolveWorkspaceConversation("user:U1")?.metadata?.lastActivityAt).toBe(
@@ -667,13 +627,11 @@ describe("generic current-conversation bindings", () => {
 
       vi.setSystemTime(new Date(1_002_000));
       await expect(
-        withReadOnlyStateDatabase(() =>
-          listGenericCurrentConversationBindingsBySession(targetSessionKey),
-        ),
+        withReadOnlyStateDatabase(() => listBySession(targetSessionKey)),
       ).rejects.toThrow();
 
       vi.setSystemTime(new Date(1_000_500));
-      expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
+      expect(listBySession(targetSessionKey)).toHaveLength(2);
     });
 
     it("does not partially prune an unbind-by-session batch", async () => {
@@ -686,7 +644,7 @@ describe("generic current-conversation bindings", () => {
       vi.setSystemTime(new Date(1_002_000));
       await expect(
         withRejectedBindingCommit(() =>
-          unbindGenericCurrentConversationBindings({
+          unbindGeneric({
             targetSessionKey,
             reason: "test cleanup",
           }),
@@ -694,7 +652,7 @@ describe("generic current-conversation bindings", () => {
       ).rejects.toThrow();
 
       vi.setSystemTime(new Date(1_000_500));
-      expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
+      expect(listBySession(targetSessionKey)).toHaveLength(2);
     });
   });
 });

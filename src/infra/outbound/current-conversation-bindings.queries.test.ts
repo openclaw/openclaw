@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -8,25 +7,24 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import {
-  bindCurrentConversationRecordAsync,
-  deleteCurrentConversationBindingRecordsBySession,
-  inspectCurrentConversationBindingRecords,
-  listCurrentConversationBindingRecordsBySession,
-  resolveCurrentConversationBindingRecord,
-  removeCurrentConversationBindingsAsync,
-  updateCurrentConversationBindingRecord,
+  bindCurrentConversationRecordAsync as bindRecord,
+  deleteCurrentConversationBindingRecordsBySession as deleteBySession,
+  inspectCurrentConversationBindingRecords as inspectRecords,
+  listCurrentConversationBindingRecordsBySession as listBySession,
+  resolveCurrentConversationBindingRecord as resolveRecord,
+  removeCurrentConversationBindingsAsync as removeRecords,
+  updateCurrentConversationBindingRecord as updateRecord,
 } from "./current-conversation-bindings.js";
 import {
-  readCurrentConversationBindingListsInDatabase,
-  readCurrentConversationBindingSelectionInDatabase,
+  readCurrentConversationBindingListsInDatabase as readLists,
+  readCurrentConversationBindingSelectionInDatabase as readSelection,
 } from "./current-conversation-bindings.kernel.js";
-import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
+import { currentConversationBindingPublication as publication } from "./current-conversation-bindings.publication.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
 type CurrentConversationBindingPublication = Parameters<
-  Parameters<typeof currentConversationBindingPublication.subscribe>[0]
+  Parameters<typeof publication.subscribe>[0]
 >[0];
 
 afterEach(() => vi.restoreAllMocks());
@@ -44,7 +42,23 @@ function binding(id: string, accountId = "default", generic = false): SessionBin
 }
 
 function writeBinding(record: SessionBindingRecord) {
-  return updateCurrentConversationBindingRecord(record.conversation, () => record).current;
+  return updateRecord(record.conversation, () => record).current;
+}
+
+function readColumns(bindingId: string) {
+  return openOpenClawStateDatabase()
+    .db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?")
+    .get(bindingId);
+}
+
+function recordPublications() {
+  const publications: CurrentConversationBindingPublication[] = [];
+  const unsubscribe = publication.subscribe((value) => publications.push(value));
+  return { publications, unsubscribe };
+}
+
+function publicationFacts(value: CurrentConversationBindingPublication) {
+  return [...value.receipt.facts.values()];
 }
 
 it("reads ordered binding selections and target batches in one statement after committed writes", async () => {
@@ -60,20 +74,12 @@ it("reads ordered binding selections and target batches in one statement after c
     );
     const refs = [missing.conversation, original.conversation, original.conversation];
     try {
-      expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
-        null,
-        original,
-        original,
-      ]);
+      expect(readSelection(db, refs)).toEqual([null, original, original]);
       expect(statements.counts.statement).toBe(1);
       const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
       writeBinding(replacement);
       const before = statements.counts.statement;
-      expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
-        null,
-        replacement,
-        replacement,
-      ]);
+      expect(readSelection(db, refs)).toEqual([null, replacement, replacement]);
       expect(statements.counts.statement - before).toBe(1);
       writeBinding(missing);
       const listBefore = statements.counts.statement;
@@ -83,13 +89,13 @@ it("reads ordered binding selections and target batches in one statement after c
         replacement.targetSessionKey,
       ];
       expect(
-        readCurrentConversationBindingListsInDatabase(db, targets, {
+        readLists(db, targets, {
           channel: "demo",
           accountId: "default",
         }).map((list) => list.records),
       ).toEqual([[replacement], [missing], [replacement]]);
       expect(statements.counts.statement - listBefore).toBe(1);
-      expect(readCurrentConversationBindingListsInDatabase(db, targets)).toEqual(
+      expect(readLists(db, targets)).toEqual(
         targets.map(() => ({ records: [], requiresPrune: false })),
       );
     } finally {
@@ -102,7 +108,7 @@ it("invalidates warm main-thread binding rows after worker receipts and database
   await withOpenClawTestState({ label: "binding-query-freshness" }, async () => {
     const original = binding("worker-written");
     writeBinding(original);
-    const inspect = () => inspectCurrentConversationBindingRecords([original.conversation])[0];
+    const inspect = () => inspectRecords([original.conversation])[0];
     expect(inspect()).toEqual(original);
     expect(inspect()).toEqual(original);
     const owned = openOpenClawStateDatabase();
@@ -120,17 +126,13 @@ it("invalidates warm main-thread binding rows after worker receipts and database
         targetSessionKey: "agent:other:replacement",
         metadata: { opaque: { fresh: [1, 2] } },
       };
-      expect(await bindCurrentConversationRecordAsync({ record: replacement })).toEqual(
-        replacement,
-      );
+      expect(await bindRecord({ record: replacement })).toEqual(replacement);
       expect(inspect()).toEqual(replacement);
       expect(executions.counts.freshness).toBe(0);
       await closeOpenClawStateDatabaseAsync();
       expect(openOpenClawStateDatabase().db === owned.db).toBe(false);
       expect(inspect()).toEqual(replacement);
-      expect(
-        await removeCurrentConversationBindingsAsync({ conversation: original.conversation }),
-      ).toEqual([replacement]);
+      expect(await removeRecords({ conversation: original.conversation })).toEqual([replacement]);
       expect(inspect()).toBeNull();
     } finally {
       executions.restore();
@@ -160,7 +162,7 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
             : null,
     );
     const refs = [original.conversation, added.conversation];
-    const inspect = () => inspectCurrentConversationBindingRecords(refs);
+    const inspect = () => inspectRecords(refs);
     try {
       const selected = inspect();
       expect(selected).toEqual([original, null]);
@@ -180,9 +182,9 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
       clock.mockReturnValue(150);
       expect(inspect()).toEqual([null, added]);
       expect(executions.counts.selection).toBe(readsBeforeExpiry);
-      expect(inspectCurrentConversationBindingRecords(refs.toReversed())).toEqual([added, null]);
+      expect(inspectRecords(refs.toReversed())).toEqual([added, null]);
 
-      deleteCurrentConversationBindingRecordsBySession(added.targetSessionKey, undefined, false);
+      deleteBySession(added.targetSessionKey, undefined, false);
       expect(inspect()).toEqual([null, null]);
     } finally {
       executions.restore();
@@ -206,22 +208,9 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
       writeBinding(record);
     }
     const scoped = { channel: "demo", accountId: "a" };
-    expect(listCurrentConversationBindingRecordsBySession(a.targetSessionKey)).toEqual([a, c]);
-    expect(listCurrentConversationBindingRecordsBySession(a.targetSessionKey, scoped)).toEqual([
-      b,
-      a,
-    ]);
+    expect(listBySession(a.targetSessionKey)).toEqual([a, c]);
+    expect(listBySession(a.targetSessionKey, scoped)).toEqual([b, a]);
 
-    const { db } = openOpenClawStateDatabase();
-    const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(db);
-    const readColumns = (bindingId = b.bindingId) =>
-      executeSqliteQuerySync(
-        db,
-        sql
-          .selectFrom("current_conversation_bindings")
-          .selectAll()
-          .where("binding_id", "=", bindingId),
-      ).rows[0];
     const commonColumns = {
       target_session_key: "agent:main:bound",
       channel: "demo",
@@ -260,7 +249,7 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
       metadata: { version: "fresh" },
     };
     writeBinding(changed);
-    expect(readColumns()).toEqual({
+    expect(readColumns(b.bindingId)).toEqual({
       ...adapterColumns,
       target_session_key: "agent:other:retargeted",
       target_kind: "subagent",
@@ -270,24 +259,18 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
       metadata_json: '{"version":"fresh"}',
       record_json: JSON.stringify(changed),
     });
-    expect(listCurrentConversationBindingRecordsBySession(b.targetSessionKey, scoped)).toEqual([a]);
-    expect(
-      listCurrentConversationBindingRecordsBySession(changed.targetSessionKey, scoped),
-    ).toEqual([changed]);
-    expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(changed);
+    expect(listBySession(b.targetSessionKey, scoped)).toEqual([a]);
+    expect(listBySession(changed.targetSessionKey, scoped)).toEqual([changed]);
+    expect(resolveRecord(b.conversation)).toEqual(changed);
     writeBinding(b);
-    expect(readColumns()).toEqual(adapterColumns);
-    expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(b);
+    expect(readColumns(b.bindingId)).toEqual(adapterColumns);
+    expect(resolveRecord(b.conversation)).toEqual(b);
 
-    expect(
-      deleteCurrentConversationBindingRecordsBySession(a.targetSessionKey, scoped, true),
-    ).toEqual([a]);
-    expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(b);
-    expect(resolveCurrentConversationBindingRecord(c.conversation)).toEqual(c);
-    expect(
-      deleteCurrentConversationBindingRecordsBySession(a.targetSessionKey, undefined, false),
-    ).toEqual([b, c]);
-    expect(resolveCurrentConversationBindingRecord(unrelated.conversation)).toEqual(unrelated);
+    expect(deleteBySession(a.targetSessionKey, scoped, true)).toEqual([a]);
+    expect(resolveRecord(b.conversation)).toEqual(b);
+    expect(resolveRecord(c.conversation)).toEqual(c);
+    expect(deleteBySession(a.targetSessionKey, undefined, false)).toEqual([b, c]);
+    expect(resolveRecord(unrelated.conversation)).toEqual(unrelated);
   });
 });
 
@@ -295,29 +278,20 @@ it("preserves the committed row when a metadata update cannot be serialized", as
   await withOpenClawTestState({ label: "binding-query-serialization-failure" }, async () => {
     const original = binding("cyclic-metadata");
     writeBinding(original);
-    const { db } = openOpenClawStateDatabase();
-    const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(db);
-    const readRow = () =>
-      executeSqliteQuerySync(
-        db,
-        sql
-          .selectFrom("current_conversation_bindings")
-          .selectAll()
-          .where("binding_id", "=", original.bindingId),
-      ).rows[0];
+    const readRow = () => readColumns(original.bindingId);
     const before = readRow();
     expect(before).toBeDefined();
     const metadata: Record<string, unknown> = {};
     metadata.self = metadata;
     expect(() =>
-      updateCurrentConversationBindingRecord(original.conversation, () => ({
+      updateRecord(original.conversation, () => ({
         ...original,
         targetSessionKey: "agent:other:rejected",
         metadata,
       })),
     ).toThrow(TypeError);
     expect(readRow()).toEqual(before);
-    expect(resolveCurrentConversationBindingRecord(original.conversation)).toEqual(original);
+    expect(resolveRecord(original.conversation)).toEqual(original);
   });
 });
 
@@ -329,7 +303,7 @@ it("installs every native binding fact before observers and discards nested roll
     const facts = new Map<string, string>();
     const observedFacts: string[][] = [];
     const publications: CurrentConversationBindingPublication[] = [];
-    const unsubscribeFacts = currentConversationBindingPublication.subscribeFacts((change) => {
+    const unsubscribeFacts = publication.subscribeFacts((change) => {
       if (!("receipt" in change)) {
         return;
       }
@@ -342,8 +316,8 @@ it("installs every native binding fact before observers and discards nested roll
         }
       }
     });
-    const unsubscribe = currentConversationBindingPublication.subscribe((publication) => {
-      publications.push(publication);
+    const unsubscribe = publication.subscribe((value) => {
+      publications.push(value);
       observedFacts.push([...facts.values()]);
     });
     try {
@@ -367,7 +341,7 @@ it("installs every native binding fact before observers and discards nested roll
       expect(publications.every(({ receipt }) => typeof receipt.source.identity === "string")).toBe(
         true,
       );
-      expect(resolveCurrentConversationBindingRecord(discarded.conversation)).toBeNull();
+      expect(resolveRecord(discarded.conversation)).toBeNull();
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
           writeBinding(discarded);
@@ -388,10 +362,7 @@ it("publishes rebind, legacy repair, expiry and scoped deletion reverse-index in
     const sibling = binding("receipt-sibling", "other", true);
     writeBinding(original);
     writeBinding(sibling);
-    const publications: CurrentConversationBindingPublication[] = [];
-    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
-      publications.push(publication),
-    );
+    const { publications, unsubscribe } = recordPublications();
     try {
       const rebound = { ...original, targetSessionKey: "agent:main:replacement" };
       writeBinding(rebound);
@@ -403,31 +374,21 @@ it("publishes rebind, legacy repair, expiry and scoped deletion reverse-index in
       db.prepare(
         "UPDATE current_conversation_bindings SET binding_key = ? WHERE binding_id = ?",
       ).run("old-receipt-key", original.bindingId);
-      expect(resolveCurrentConversationBindingRecord(original.conversation)).toEqual(rebound);
+      expect(resolveRecord(original.conversation)).toEqual(rebound);
       const repaired = publications.at(-1)!;
       expect(repaired.receipt.facts.get("old-receipt-key")).toEqual({ kind: "absent" });
-      expect([...repaired.receipt.facts.values()]).toContainEqual({
+      expect(publicationFacts(repaired)).toContainEqual({
         kind: "postimage",
         value: rebound,
       });
       writeBinding({ ...rebound, expiresAt: 1 });
-      expect(listCurrentConversationBindingRecordsBySession(rebound.targetSessionKey)).toEqual([]);
-      expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+      expect(listBySession(rebound.targetSessionKey)).toEqual([]);
+      expect(publicationFacts(publications.at(-1)!)).toEqual([{ kind: "absent" }]);
       expect(publications.at(-1)?.sessionKeys).toEqual([rebound.targetSessionKey]);
-      expect(
-        deleteCurrentConversationBindingRecordsBySession(
-          sibling.targetSessionKey,
-          original.conversation,
-        ),
-      ).toEqual([]);
-      expect(resolveCurrentConversationBindingRecord(sibling.conversation)).toEqual(sibling);
-      expect(
-        deleteCurrentConversationBindingRecordsBySession(
-          sibling.targetSessionKey,
-          sibling.conversation,
-        ),
-      ).toEqual([sibling]);
-      expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+      expect(deleteBySession(sibling.targetSessionKey, original.conversation)).toEqual([]);
+      expect(resolveRecord(sibling.conversation)).toEqual(sibling);
+      expect(deleteBySession(sibling.targetSessionKey, sibling.conversation)).toEqual([sibling]);
+      expect(publicationFacts(publications.at(-1)!)).toEqual([{ kind: "absent" }]);
     } finally {
       unsubscribe();
     }
@@ -438,7 +399,7 @@ it("retires failed binding fact installation without hiding the durable commit",
   await withOpenClawTestState({ label: "binding-failed-receipt" }, async () => {
     const record = binding("receipt-failure");
     const publications: CurrentConversationBindingPublication[] = [];
-    const unsubscribeFacts = currentConversationBindingPublication.subscribeFacts((change) => {
+    const unsubscribeFacts = publication.subscribeFacts((change) => {
       if (!("receipt" in change)) {
         return;
       }
@@ -447,14 +408,12 @@ it("retires failed binding fact installation without hiding the durable commit",
         throw new Error("synthetic binding projection failure");
       }
     });
-    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
-      publications.push(publication),
-    );
+    const unsubscribe = publication.subscribe((value) => publications.push(value));
     try {
       expect(writeBinding(record)).toEqual(record);
-      expect(resolveCurrentConversationBindingRecord(record.conversation)).toEqual(record);
+      expect(resolveRecord(record.conversation)).toEqual(record);
       expect(publications).toHaveLength(1);
-      expect([...publications[0]!.receipt.facts.values()]).toEqual([{ kind: "unknown" }]);
+      expect(publicationFacts(publications[0]!)).toEqual([{ kind: "unknown" }]);
     } finally {
       unsubscribeFacts();
       unsubscribe();
@@ -466,10 +425,7 @@ it("publishes SQLite's actual binding and reverse-index keys for non-scalar text
   await withOpenClawTestState({ label: "binding-native-text-receipt" }, async () => {
     const record = binding("receipt-\ud800");
     record.targetSessionKey = "agent:main:receipt-\ud800";
-    const publications: CurrentConversationBindingPublication[] = [];
-    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
-      publications.push(publication),
-    );
+    const { publications, unsubscribe } = recordPublications();
     try {
       writeBinding(record);
       expect(publications).toHaveLength(1);
