@@ -12,6 +12,7 @@ import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
+// mock-isolation: Setup validation owns URL decisions without creating a live Mattermost client.
 vi.mock("./mattermost/client.js", () => ({ normalizeMattermostBaseUrl }));
 
 const baseUrl = "https://chat.example.com";

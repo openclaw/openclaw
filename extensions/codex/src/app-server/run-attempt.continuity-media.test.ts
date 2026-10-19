@@ -42,7 +42,7 @@ async function mediaParams(name: string) {
   return {
     params,
     target,
-    async append<T extends { timestamp: number }>(message: T) {
+    async append<T extends { timestamp: number }>(this: void, message: T) {
       await appendSessionTranscriptMessageByIdentity({
         ...target,
         message,

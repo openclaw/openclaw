@@ -280,6 +280,8 @@ it.skipIf(process.platform === "win32").each([
         child.kill("SIGTERM");
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
+      } else if (!archives && interruption !== "closed child stdin") {
+        child.kill(terminationSignal);
       }
       if (!pendingApproval && !restoringApproval) {
         child.send("continue", () => {});

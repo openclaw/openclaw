@@ -55,14 +55,23 @@ const identityDescriptor: PortDescriptor = {
 };
 
 function canonical(db: DatabaseSync, schema: PortDescriptor) {
-  return schema.tables.map((table) => [
-    table.name,
-    db
-      .prepare(
-        `SELECT ${table.columns.map(({ name }) => `"${name}"`).join(",")} FROM "${table.name}" ORDER BY ${table.pk.map((name) => `"${name}"`).join(",")}`,
-      )
-      .all(),
-  ]);
+  return schema.tables.map((table) => {
+    const statement = db.prepare(
+      `SELECT ${table.columns.map(({ name }) => `"${name}"`).join(",")} FROM "${table.name}" ORDER BY ${table.pk.map((name) => `"${name}"`).join(",")}`,
+    );
+    statement.setReadBigInts(true);
+    return [
+      table.name,
+      statement.all().map((row) =>
+        table.columns.map(({ name }) => {
+          const value = row[name];
+          return value instanceof Uint8Array
+            ? ["blob", Buffer.from(value).toString("hex")]
+            : [typeof value, value];
+        }),
+      ),
+    ];
+  });
 }
 
 function seedWorkboard(db: DatabaseSync) {

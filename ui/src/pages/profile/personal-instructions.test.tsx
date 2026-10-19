@@ -61,7 +61,11 @@ function createContext(
   };
   const selection = base.settingsAgentSelection;
   selection.set("main");
-  return { context: base, selection, emit: harness.emitSnapshot };
+  return {
+    context: base,
+    selection,
+    emit: (patch: Parameters<typeof harness.emitSnapshot>[0]) => harness.emitSnapshot(patch),
+  };
 }
 function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
   const harness = createContext(request, signedIn, multipleProfiles);
@@ -385,7 +389,8 @@ it("keeps the actual Profile editor mounted across an offline transition", async
     }),
     "users.github.status": () => disconnectedGitHub,
   });
-  const { context, emit } = createContext(createTestGatewayClient(request).request);
+  const client = createTestGatewayClient(request);
+  const { context, emit } = createContext(client.request.bind(client));
   const page = mountProfilePage(context);
   flush();
   const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;

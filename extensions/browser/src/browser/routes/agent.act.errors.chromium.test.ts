@@ -5,10 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import express from "express";
 import type { BrowserContext, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  closeHttpServer,
-  listenLoopback,
-} from "../../../../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "../bridge-auth-registry.js";
 import { browserAct } from "../client-actions.js";
@@ -37,10 +33,32 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
     let baseUrl: string;
     let controlPort: number;
     let cdpUrl: string;
+    let fixture: Server;
     let targetId: string;
     let refs: Record<string, { name?: string }>;
 
     beforeAll(async () => {
+      fixture = createServer((_req, res) => {
+        res.setHeader("Content-Type", "text/html");
+        res.end(`<button>Visible noneditable control</button>
+          <input type="number" aria-label="Numeric input">
+          <input readonly aria-label="Read-only input">
+          <button disabled>Disabled button</button>
+          <div style="position:relative;width:150px;height:40px">
+            <button style="width:100%;height:100%">Covered button</button>
+            <div style="position:absolute;inset:0;background:#ddd"></div>
+          </div>
+          <button id="missing">Missing button</button>
+          <button id="duplicate">Duplicate button</button>
+          <input aria-label="Working input">`);
+      });
+      await new Promise<void>((resolve) => {
+        fixture.listen(0, "127.0.0.1", resolve);
+      });
+      const address = fixture.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Fixture did not bind a TCP port");
+      }
       const port = await getFreePort();
       cdpUrl = `http://127.0.0.1:${port}`;
       context = await getPlaywrightCore().chromium.launchPersistentContext(
@@ -52,17 +70,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
         },
       );
       page = context.pages()[0] ?? (await context.newPage());
-      await page.setContent(`<button>Visible noneditable control</button>
-          <input type="number" aria-label="Numeric input">
-          <input readonly aria-label="Read-only input">
-          <button disabled>Disabled button</button>
-          <div style="position:relative;width:150px;height:40px">
-            <button style="width:100%;height:100%">Covered button</button>
-            <div style="position:absolute;inset:0;background:#ddd"></div>
-          </div>
-          <button id="missing">Missing button</button>
-          <button id="duplicate">Duplicate button</button>
-          <input aria-label="Working input">`);
+      await page.goto(`http://127.0.0.1:${address.port}`);
       const session = await context.newCDPSession(page);
       const { targetInfo } = await session.send("Target.getTargetInfo");
       targetId = targetInfo.targetId;
@@ -82,8 +90,15 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
       installBrowserAuthMiddleware(app, auth);
       registerBrowserRoutes(app, createBrowserRouteContext({ getState: () => state }));
       controlServer = createServer(app);
-      baseUrl = await listenLoopback(controlServer);
-      controlPort = Number(new URL(baseUrl).port);
+      await new Promise<void>((resolve) => {
+        controlServer.listen(0, "127.0.0.1", resolve);
+      });
+      const controlAddress = controlServer.address();
+      if (!controlAddress || typeof controlAddress === "string") {
+        throw new Error("Browser control did not bind a TCP port");
+      }
+      controlPort = controlAddress.port;
+      baseUrl = `http://127.0.0.1:${controlPort}`;
       setBridgeAuthForPort(controlPort, auth);
       const snapshot = await browserSnapshot(baseUrl, {
         targetId,
@@ -103,12 +118,19 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
     afterAll(async () => {
       if (controlServer) {
         deleteBridgeAuthForPort(controlPort);
-        await closeHttpServer(controlServer);
+        await new Promise<void>((resolve, reject) => {
+          controlServer.close((error) => (error ? reject(error) : resolve()));
+        });
       }
       if (cdpUrl) {
         await closePlaywrightBrowserConnection({ cdpUrl });
       }
       await context?.close();
+      if (fixture) {
+        await new Promise<void>((resolve, reject) => {
+          fixture.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
     });
 
     function ref(name: string) {
@@ -116,10 +138,6 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
         Object.entries(refs).find(([, info]) => info.name === name)?.[0],
         `snapshot ref for ${name}`,
       );
-    }
-
-    function target(name: string) {
-      return { targetId, ref: ref(name), timeoutMs: 700 };
     }
 
     it.each([
@@ -130,26 +148,33 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
       { name: "Covered button", kind: "click", cause: /covered|pointer events/i },
       { name: "Missing button", kind: "click", cause: /not found|no longer/i },
       { name: "Duplicate button", kind: "click", cause: /matched 2 elements/i },
-    ] as const)("preserves $name failure", async ({ name, kind, cause }) => {
-      const action: BrowserActRequest =
-        kind === "type" ? { kind, ...target(name), text: "hello" } : { kind, ...target(name) };
-      const error = await browserAct(baseUrl, action).catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(BrowserServiceError);
-      expect(error).toMatchObject({ status: 500, code: "ACT_OPERATION_FAILED" });
-      expect((error as Error).message).toMatch(cause);
-      expect((error as Error).message).not.toMatch(
-        /browser is currently unavailable|restart|retry the browser tool/i,
-      );
-      if (name !== "Missing button") {
-        expect((error as Error).message).not.toMatch(/not found or not visible/i);
-      }
-    });
+    ] as const)(
+      "preserves the $name failure without service advice",
+      async ({ name, kind, cause }) => {
+        const action: BrowserActRequest =
+          kind === "type"
+            ? { kind, targetId, ref: ref(name), text: "hello", timeoutMs: 700 }
+            : { kind, targetId, ref: ref(name), timeoutMs: 700 };
+        const error = await browserAct(baseUrl, action).catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(BrowserServiceError);
+        expect(error).toMatchObject({ status: 500, code: "ACT_OPERATION_FAILED" });
+        expect((error as Error).message).toMatch(cause);
+        expect((error as Error).message).not.toMatch(
+          /browser is currently unavailable|restart|retry the browser tool/i,
+        );
+        if (name !== "Missing button") {
+          expect((error as Error).message).not.toMatch(/not found or not visible/i);
+        }
+      },
+    );
 
     it("keeps the cause bounded for long input and inside nested batches", async () => {
       const action: BrowserActRequest = {
         kind: "type",
-        ...target("Read-only input"),
+        targetId,
+        ref: ref("Read-only input"),
         text: "x".repeat(2_000),
+        timeoutMs: 700,
       };
       const error = await browserAct(baseUrl, action).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(BrowserServiceError);
@@ -170,8 +195,10 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
     it("still fills an editable input after the action failures", async () => {
       await browserAct(baseUrl, {
         kind: "type",
-        ...target("Working input"),
+        targetId,
+        ref: ref("Working input"),
         text: "browser remains usable",
+        timeoutMs: 700,
       });
       expect(
         await page.getByRole("textbox", { name: "Working input", exact: true }).inputValue(),

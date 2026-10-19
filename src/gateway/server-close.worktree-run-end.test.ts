@@ -44,7 +44,7 @@ function registerHarness(
   );
 }
 
-it.each([false, true])(
+it.for([false, true])(
   "disposes run execution before joining its held worktree lease (sibling=%s)",
   async (withSibling, { signal }) => {
     const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-execution-close");

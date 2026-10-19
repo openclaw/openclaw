@@ -141,10 +141,13 @@ async function mountAccounts(
   if (gatewayUrl) {
     vi.spyOn(client, "gatewayUrl", "get").mockReturnValue(gatewayUrl);
   }
-  const { context, emitSnapshot } = createConnectedContext(client.request, {
+  const harness = createConnectedContext(client.request.bind(client), {
     id: "profile-1",
     name: "Ada",
   });
+  const { context } = harness;
+  const emitSnapshot = (patch: Parameters<typeof harness.emitSnapshot>[0]) =>
+    harness.emitSnapshot(patch);
   context.gateway.snapshot.client = client;
   context.gateway.snapshot.hello = {
     auth: { role: "operator", scopes },
@@ -169,7 +172,7 @@ async function mountAccounts(
   );
   return {
     accounts,
-    query: <T extends Element = HTMLElement>(selector: string) =>
+    query: <T extends Element = HTMLElement>(selector: string): T | null =>
       accounts.querySelector<T>(selector),
     click: (selector: string) => button(accounts, selector).click(),
     enter: (selector: string, value: string) => input(accounts, selector, value),

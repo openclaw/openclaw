@@ -1,3 +1,7 @@
+/**
+ * Tests for gateway secret resolution and redacted secret method responses.
+ */
+
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -23,11 +27,20 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
 
 // mock-isolation: Observe mutation dispatch without opening the real secret database.
 vi.mock("../../secrets/store/secret-store.js", () => {
+  class SecretStoreValidationError extends Error {
+    constructor(
+      readonly code: string,
+      message: string,
+    ) {
+      super(message);
+      this.name = "SecretStoreValidationError";
+    }
+  }
   return {
     deleteSecretStoreEntry: storeMocks.deleteEntry,
     listSecretStoreEntries: storeMocks.listEntries,
     purgeExpiredSecretStoreEntries: storeMocks.purgeEntries,
-    SecretStoreValidationError: class extends Error {},
+    SecretStoreValidationError,
     writeSecretStoreEntry: storeMocks.writeEntry,
     writeSecretStoreEntries: vi.fn(),
     updateSecretStoreAllowedHosts: vi.fn(),
@@ -49,53 +62,128 @@ import {
 } from "../../test-utils/talk-test-provider.js";
 import { QuestionManager } from "../question-manager.js";
 import { createSecretsHandlers, createSecretStoreWriteService } from "./secrets.js";
-import type { GatewayClient } from "./types.js";
 
-const reloadSecrets = vi.fn();
-const resolveSecrets = vi.fn();
-const warn = vi.fn();
-let handlers: ReturnType<typeof createSecretsHandlers>;
-let respond: ReturnType<typeof vi.fn>;
-
-async function invoke(method: string, params: Record<string, unknown> = {}, response = respond) {
-  const handler = expectDefined(handlers[method], `handler ${method}`);
-  await handler({
-    req: { type: "req", id: "1", method },
-    params,
-    client: method.startsWith("secrets.store.") ? storeClient : null,
+async function invokeSecretsReload(params: {
+  handlers: ReturnType<typeof createSecretsHandlers>;
+  respond: ReturnType<typeof vi.fn>;
+}) {
+  await expectDefined(
+    params.handlers["secrets.reload"],
+    'params.handlers["secrets.reload"] test invariant',
+  )({
+    req: { type: "req", id: "1", method: "secrets.reload" },
+    params: {},
+    client: null,
     isWebchatConnect: () => false,
-    respond: response,
+    respond: params.respond as unknown as Parameters<
+      ReturnType<typeof createSecretsHandlers>["secrets.reload"]
+    >[0]["respond"],
     context: {} as never,
   });
 }
 
-const storeClient = {
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    client: {
-      id: "control-ui",
-      version: "test",
-      platform: "web",
-      mode: "webchat",
-      displayName: "Control UI",
+async function invokeSecretsResolve(params: {
+  handlers: ReturnType<typeof createSecretsHandlers>;
+  respond: ReturnType<typeof vi.fn>;
+  commandName: unknown;
+  targetIds: unknown;
+  allowedPaths?: unknown;
+  forcedActivePaths?: unknown;
+}) {
+  await expectDefined(
+    params.handlers["secrets.resolve"],
+    'params.handlers["secrets.resolve"] test invariant',
+  )({
+    req: { type: "req", id: "1", method: "secrets.resolve" },
+    params: {
+      commandName: params.commandName,
+      targetIds: params.targetIds,
+      ...(params.allowedPaths !== undefined ? { allowedPaths: params.allowedPaths } : {}),
+      ...(params.forcedActivePaths !== undefined
+        ? { forcedActivePaths: params.forcedActivePaths }
+        : {}),
     },
-    role: "operator",
-    scopes: ["operator.admin"],
-  },
-} as GatewayClient;
+    client: null,
+    isWebchatConnect: () => false,
+    respond: params.respond as unknown as Parameters<
+      ReturnType<typeof createSecretsHandlers>["secrets.resolve"]
+    >[0]["respond"],
+    context: {} as never,
+  });
+}
 
-function expectRespondError(expected: { code: string; message?: string }): void {
-  const [ok, result, error] = respond.mock.calls[0] ?? [];
-  expect([ok, result]).toEqual([false, undefined]);
+async function invokeStoreMethod(params: {
+  handlers: ReturnType<typeof createSecretsHandlers>;
+  method: "secrets.store.list" | "secrets.store.set" | "secrets.store.delete";
+  requestParams: Record<string, unknown>;
+  respond: ReturnType<typeof vi.fn>;
+}) {
+  await expectDefined(
+    params.handlers[params.method],
+    `handler ${params.method}`,
+  )({
+    req: { type: "req", id: "store-1", method: params.method },
+    params: params.requestParams,
+    client: {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          id: "control-ui",
+          version: "test",
+          platform: "web",
+          mode: "webchat",
+          displayName: "Control UI",
+        },
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+    } as never,
+    isWebchatConnect: () => false,
+    respond: params.respond as never,
+    context: {} as never,
+  });
+}
+
+function expectRespondError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code: string; message?: string },
+): void {
+  const call = respond.mock.calls.at(0);
+  expect(call?.[0]).toBe(false);
+  expect(call?.[1]).toBeUndefined();
+  const error = call?.[2];
   if (!error || typeof error !== "object" || Array.isArray(error)) {
     throw new Error("Expected a non-array error record");
   }
-  expect(error).toMatchObject(expected);
+  const errorRecord = error as Record<string, unknown>;
+  expect(errorRecord.code).toBe(expected.code);
+  if (expected.message !== undefined) {
+    expect(errorRecord.message).toBe(expected.message);
+  }
 }
 
-function expectWarnMessageWith(text: string): void {
+function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): void {
   expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
+}
+
+async function expectMemoryStatusResolveUnavailable(params: {
+  handlers: ReturnType<typeof createSecretsHandlers>;
+  warn: ReturnType<typeof vi.fn>;
+  warningText: string;
+}) {
+  const respond = vi.fn();
+  await invokeSecretsResolve({
+    handlers: params.handlers,
+    respond,
+    commandName: "memory status",
+    targetIds: ["talk.providers.*.apiKey"],
+  });
+  expectRespondError(respond, {
+    code: "UNAVAILABLE",
+    message: "secrets.resolve failed",
+  });
+  expectWarnMessageWith(params.warn, params.warningText);
 }
 
 describe("secrets handlers", () => {
@@ -156,38 +244,67 @@ describe("secrets handlers", () => {
     storeMocks.writeEntry.mockReset();
     storeMocks.getSnapshot.mockReset().mockReturnValue({ sourceConfig: {} });
     storeMocks.collectRefKeys.mockReset().mockReturnValue(new Set());
-    reloadSecrets.mockReset().mockResolvedValue({ warningCount: 0 });
-    resolveSecrets
-      .mockReset()
-      .mockResolvedValue({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
-    warn.mockReset();
-    respond = vi.fn();
-    handlers = createSecretsHandlers({
-      reloadSecrets,
-      storeWriteService: createSecretStoreWriteService({ reloadSecrets, log: { warn } }),
-      resolveSecrets,
-      log: { warn },
-    });
   });
 
+  function createHandlers(overrides?: {
+    reloadSecrets?: (options?: {
+      forceColdRefKeys?: ReadonlySet<string>;
+      joinInFlight?: boolean;
+    }) => Promise<{ warningCount: number }>;
+    resolveSecrets?: (params: {
+      commandName: string;
+      targetIds: string[];
+      allowedPaths?: string[];
+      forcedActivePaths?: string[];
+    }) => Promise<{
+      assignments: Array<{ path: string; pathSegments: string[]; value: unknown }>;
+      diagnostics: string[];
+      inactiveRefPaths: string[];
+    }>;
+    log?: { warn?: (message: string) => void };
+  }) {
+    const reloadSecrets = overrides?.reloadSecrets ?? (async () => ({ warningCount: 0 }));
+    const resolveSecrets =
+      overrides?.resolveSecrets ??
+      (async () => ({
+        assignments: [],
+        diagnostics: [],
+        inactiveRefPaths: [],
+      }));
+    return createSecretsHandlers({
+      reloadSecrets,
+      storeWriteService: createSecretStoreWriteService({ reloadSecrets, log: overrides?.log }),
+      resolveSecrets,
+      log: overrides?.log,
+    });
+  }
+
   it("responds with warning count on successful reload", async () => {
-    reloadSecrets.mockResolvedValue({ warningCount: 2 });
-    await invoke("secrets.reload");
+    const handlers = createHandlers({
+      reloadSecrets: vi.fn().mockResolvedValue({ warningCount: 2 }),
+    });
+    const respond = vi.fn();
+    await invokeSecretsReload({ handlers, respond });
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 2 });
   });
 
   it("returns unavailable when reload fails", async () => {
-    reloadSecrets.mockRejectedValue(new Error("disk full"));
-    await invoke("secrets.reload");
-    expectRespondError({
+    const warn = vi.fn();
+    const handlers = createHandlers({
+      reloadSecrets: vi.fn().mockRejectedValue(new Error("disk full")),
+      log: { warn },
+    });
+    const respond = vi.fn();
+    await invokeSecretsReload({ handlers, respond });
+    expectRespondError(respond, {
       code: "UNAVAILABLE",
       message: "secrets.reload failed",
     });
-    expectWarnMessageWith("disk full");
+    expectWarnMessageWith(warn, "disk full");
   });
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
-    const resolution = {
+    const resolveSecrets = vi.fn().mockResolvedValue({
       assignments: [
         {
           path: TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -197,9 +314,12 @@ describe("secrets handlers", () => {
       ],
       diagnostics: ["note"],
       inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
-    };
-    resolveSecrets.mockResolvedValue(structuredClone(resolution));
-    await invoke("secrets.resolve", {
+    });
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
       allowedPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
@@ -211,59 +331,100 @@ describe("secrets handlers", () => {
       allowedPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
       forcedActivePaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, ...resolution });
+    expect(respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      assignments: [
+        {
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          value: "sk",
+        },
+      ],
+      diagnostics: ["note"],
+      inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
+    });
   });
 
-  it.each([
-    { targetIds: ["talk.providers.*.apiKey", 12], field: "targetIds" },
-    { targetIds: ["unknown.target"], field: 'unknown target id "unknown.target"' },
-  ])("rejects invalid resolve targets: $field", async ({ targetIds, field }) => {
-    await invoke("secrets.resolve", { commandName: "memory status", targetIds });
+  it("rejects secrets.resolve params when targetIds entries are not strings", async () => {
+    const resolveSecrets = vi.fn();
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: "memory status",
+      targetIds: ["talk.providers.*.apiKey", 12],
+    });
     expect(resolveSecrets).not.toHaveBeenCalled();
-    expectRespondError({
+    expectRespondError(respond, {
       code: "INVALID_REQUEST",
-      message: `invalid secrets.resolve params: ${field}`,
+      message: "invalid secrets.resolve params: targetIds",
+    });
+  });
+
+  it("rejects unknown secrets.resolve target ids", async () => {
+    const resolveSecrets = vi.fn();
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: "memory status",
+      targetIds: ["unknown.target"],
+    });
+    expect(resolveSecrets).not.toHaveBeenCalled();
+    expectRespondError(respond, {
+      code: "INVALID_REQUEST",
+      message: 'invalid secrets.resolve params: unknown target id "unknown.target"',
     });
   });
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
-    resolveSecrets.mockResolvedValue({
+    const warn = vi.fn();
+    const resolveSecrets = vi.fn().mockResolvedValue({
       assignments: [{ path: TALK_TEST_PROVIDER_API_KEY_PATH, pathSegments: [""], value: "sk" }],
       diagnostics: [],
       inactiveRefPaths: [],
     });
-    await invoke("secrets.resolve", {
-      commandName: "memory status",
-      targetIds: ["talk.providers.*.apiKey"],
+    const handlers = createHandlers({ resolveSecrets, log: { warn } });
+    await expectMemoryStatusResolveUnavailable({
+      handlers,
+      warn,
+      warningText: "secrets.resolve returned invalid payload.",
     });
-    expectRespondError({ code: "UNAVAILABLE", message: "secrets.resolve failed" });
-    expectWarnMessageWith("secrets.resolve returned invalid payload.");
   });
 
   it("lists env values without structurally disclosing secret values", async () => {
-    const metadata = {
-      scopeKind: "team",
-      scopeId: "",
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      updatedBy: "Operator",
-    };
     storeMocks.listEntries.mockReturnValueOnce([
       {
-        ...metadata,
         name: "SERVICE_API_KEY",
         kind: "secret",
+        scopeKind: "team",
+        scopeId: "",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        updatedBy: "Operator",
         allowedHosts: ["api.example.com"],
         valuePreview: "malicious-leak",
       },
       {
-        ...metadata,
         name: "SERVICE_URL",
         kind: "env",
+        scopeKind: "team",
+        scopeId: "",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        updatedBy: "Operator",
         valuePreview: "https://service.test",
       },
     ]);
-    await invoke("secrets.store.list");
+    const respond = vi.fn();
+    await invokeStoreMethod({
+      handlers: createHandlers(),
+      method: "secrets.store.list",
+      requestParams: {},
+      respond,
+    });
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       entries: [
         { name: "SERVICE_API_KEY", kind: "secret", allowedHosts: ["api.example.com"] },
@@ -277,7 +438,20 @@ describe("secrets handlers", () => {
     storeMocks.collectRefKeys.mockImplementation((_config, name) =>
       name === "SERVICE_API_KEY" ? new Set(["store:default:SERVICE_API_KEY"]) : new Set(),
     );
-    reloadSecrets.mockResolvedValue({ warningCount: 2 });
+    const reloadSecrets = vi.fn().mockResolvedValue({ warningCount: 2 });
+    storeMocks.getSnapshot.mockReturnValue({
+      sourceConfig: {
+        models: {
+          providers: {
+            test: {
+              apiKey: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
+            },
+          },
+        },
+      },
+    });
+    const warn = vi.fn();
+    const handlers = createHandlers({ reloadSecrets, log: { warn } });
     const expiry = createDeferred<number>();
     const expiryStarted = createDeferred();
     storeMocks.purgeEntries.mockImplementationOnce(() => {
@@ -287,23 +461,24 @@ describe("secrets handlers", () => {
 
     storeMocks.writeEntry.mockResolvedValueOnce("secret");
     const setRespond = vi.fn();
-    const mutation = invoke(
-      "secrets.store.set",
-      {
+    const mutation = invokeStoreMethod({
+      handlers,
+      method: "secrets.store.set",
+      requestParams: {
         name: "SERVICE_API_KEY",
         value: "new-value",
         kind: "secret",
         allowedHosts: ["api.example.com"],
       },
-      setRespond,
-    );
+      respond: setRespond,
+    });
     await expiryStarted.promise;
     expect(storeMocks.purgeEntries).toHaveBeenCalledOnce();
     expect(reloadSecrets).not.toHaveBeenCalled();
     expect(setRespond).not.toHaveBeenCalled();
     expiry.reject(new Error("synthetic expiry failure"));
     await mutation;
-    expectWarnMessageWith("secrets.store retention purge failed: synthetic expiry failure");
+    expectWarnMessageWith(warn, "secrets.store retention purge failed: synthetic expiry failure");
     expect(storeMocks.writeEntry).toHaveBeenCalledWith({
       scope: { kind: "team" },
       name: "SERVICE_API_KEY",
@@ -320,7 +495,12 @@ describe("secrets handlers", () => {
     });
 
     const deleteRespond = vi.fn();
-    await invoke("secrets.store.delete", { name: "SERVICE_URL" }, deleteRespond);
+    await invokeStoreMethod({
+      handlers,
+      method: "secrets.store.delete",
+      requestParams: { name: "SERVICE_URL" },
+      respond: deleteRespond,
+    });
     expect(deleteRespond).toHaveBeenCalledWith(true, { ok: true, reloaded: false });
     expect(reloadSecrets).toHaveBeenCalledTimes(1);
     expect(reloadSecrets).toHaveBeenCalledWith({
@@ -335,29 +515,47 @@ describe("secrets handlers", () => {
       expect(isSecretValueRegisteredForRedaction(value)).toBe(true);
       throw new Error("database unavailable");
     });
-    await invoke("secrets.store.set", { name: "SERVICE_API_KEY", value, kind: "secret" });
+    const respond = vi.fn();
 
-    expectRespondError({ code: "UNAVAILABLE", message: "secrets.store.set failed" });
+    await invokeStoreMethod({
+      handlers: createHandlers(),
+      method: "secrets.store.set",
+      requestParams: { name: "SERVICE_API_KEY", value, kind: "secret" },
+      respond,
+    });
+
+    expectRespondError(respond, { code: "UNAVAILABLE", message: "secrets.store.set failed" });
     expect(isSecretValueRegisteredForRedaction(value)).toBe(true);
   });
 
   it("rejects invalid store params before writing", async () => {
-    await invoke("secrets.store.set", { name: "lowercase", value: "value", kind: "secret" });
+    const respond = vi.fn();
+    await invokeStoreMethod({
+      handlers: createHandlers(),
+      method: "secrets.store.set",
+      requestParams: { name: "lowercase", value: "value", kind: "secret" },
+      respond,
+    });
     expect(storeMocks.writeEntry).not.toHaveBeenCalled();
-    expectRespondError({ code: "INVALID_REQUEST" });
+    expectRespondError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("reports a saved entry when its required runtime refresh fails", async () => {
     storeMocks.collectRefKeys.mockReturnValue(new Set(["store:default:SERVICE_API_KEY"]));
-    reloadSecrets.mockRejectedValue(new Error("provider unavailable"));
-    await invoke("secrets.store.set", {
-      name: "SERVICE_API_KEY",
-      value: "new-value",
-      kind: "secret",
+    const handlers = createHandlers({
+      reloadSecrets: vi.fn().mockRejectedValue(new Error("provider unavailable")),
+    });
+    const respond = vi.fn();
+
+    await invokeStoreMethod({
+      handlers,
+      method: "secrets.store.set",
+      requestParams: { name: "SERVICE_API_KEY", value: "new-value", kind: "secret" },
+      respond,
     });
 
     expect(storeMocks.writeEntry).toHaveBeenCalledOnce();
-    expectRespondError({
+    expectRespondError(respond, {
       code: "UNAVAILABLE",
       message:
         "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload.",

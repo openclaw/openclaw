@@ -44,20 +44,27 @@ function captureProgressInsert() {
   vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
     const statement = prepare(sql);
     if (sql.startsWith('insert into "outbound_message_progress"')) {
-      const handler = {
-        apply(
-          target: (...parameters: SQLInputValue[]) => unknown,
-          receiver: unknown,
-          parameters: SQLInputValue[],
-        ) {
-          captured = { sql, parameters };
-          return Reflect.apply(target, receiver, parameters);
-        },
+      const capture = (parameters: SQLInputValue[]) => {
+        captured = { sql, parameters };
       };
       const all = statement.all.bind(statement);
+      vi.spyOn(statement, "all").mockImplementation(
+        new Proxy(all, {
+          apply(target, receiver, parameters) {
+            capture(parameters);
+            return Reflect.apply(target, receiver, parameters);
+          },
+        }),
+      );
       const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "all").mockImplementation(new Proxy(all, handler));
-      vi.spyOn(statement, "iterate").mockImplementation(new Proxy(iterate, handler));
+      vi.spyOn(statement, "iterate").mockImplementation(
+        new Proxy(iterate, {
+          apply(target, receiver, parameters) {
+            capture(parameters);
+            return Reflect.apply(target, receiver, parameters);
+          },
+        }),
+      );
     }
     return statement;
   });
@@ -91,7 +98,6 @@ it.skipIf(!connection)(
       using anchor = openNodeSqliteDatabase(":memory:");
       const namespace = `features_${randomUUID().replaceAll("-", "")}`;
       const remote = new PostgresSyncConnection(connection!, namespace, anchor, namespace);
-      const rows = (sql: string) => remote.query(sql).rows;
       // Shared feature signatures retain DatabaseSync until the separate state-owner cutover.
       // @ts-expect-error -- The bridge intentionally omits SQLite-only methods.
       const db: DatabaseSync = remote;
@@ -128,44 +134,53 @@ it.skipIf(!connection)(
         const progressInsert = remote.prepare(progress.sql);
         expect(progressInsert.all(...progress.parameters)).toEqual([{ sequence: 1 }]);
         expect(progressInsert.all(...progress.parameters)).toEqual([]);
-        expect(rows("SELECT count(*) AS count FROM outbound_message_progress")).toEqual([
-          { count: 1 },
-        ]);
+        expect(
+          remote.query("SELECT count(*) AS count FROM outbound_message_progress").rows,
+        ).toEqual([{ count: 1 }]);
 
         const configPath = "/synthetic/openclaw.json";
         const observedJson = '{ "hash": "observed" }';
         const promotedJson = '{"hash":"promoted"}';
-        const health = (
-          lastKnownGoodJson: string | null,
-          lastPromotedGoodJson: string | null,
-          suspiciousSignature: string | null,
-          updatedAtMs: number,
-        ) => ({ lastKnownGoodJson, lastPromotedGoodJson, suspiciousSignature, updatedAtMs });
-        const patchHealth = (
-          patch: Parameters<typeof patchConfigHealthEntryInDatabase>[2],
-          basis: Parameters<typeof patchConfigHealthEntryInDatabase>[3],
-          now: number,
-        ) => patchConfigHealthEntryInDatabase(remote, configPath, patch, basis, now);
         const readHealthBasis = () =>
           configHealthReadOperations["config.health.read"](undefined, remote).snapshot.basis[
             configPath
           ];
-        const observed = health(observedJson, null, null, 100);
-        const promoted = health(observedJson, promotedJson, "observed-signature", 100);
-        for (const [patch, basis, expected] of [
-          [{ last_known_good_json: observedJson }, null, observed],
-          [
+        expect(
+          patchConfigHealthEntryInDatabase(
+            remote,
+            configPath,
+            { last_known_good_json: observedJson },
+            null,
+            100,
+          ),
+        ).toBe(true);
+        const observed = readHealthBasis();
+        expect(observed).toEqual({
+          lastKnownGoodJson: observedJson,
+          lastPromotedGoodJson: null,
+          suspiciousSignature: null,
+          updatedAtMs: 100,
+        });
+        expect(
+          patchConfigHealthEntryInDatabase(
+            remote,
+            configPath,
             {
               last_promoted_good_json: promotedJson,
               last_observed_suspicious_signature: "observed-signature",
             },
             observed,
-            promoted,
-          ],
-        ] as const) {
-          expect(patchHealth(patch, basis, 100)).toBe(true);
-          expect(readHealthBasis()).toEqual(expected);
-        }
+            100,
+          ),
+        ).toBe(true);
+        const promoted = readHealthBasis();
+        assert(promoted);
+        expect(promoted).toEqual({
+          lastKnownGoodJson: observedJson,
+          lastPromotedGoodJson: promotedJson,
+          suspiciousSignature: "observed-signature",
+          updatedAtMs: 100,
+        });
         const clearHealth = {
           last_known_good_json: null,
           last_promoted_good_json: null,
@@ -176,13 +191,30 @@ it.skipIf(!connection)(
           { ...promoted, lastPromotedGoodJson: null },
           { ...promoted, suspiciousSignature: null },
         ]) {
-          expect(patchHealth(clearHealth, stale, 200)).toBe(false);
+          expect(
+            patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, stale, 200),
+          ).toBe(false);
         }
         expect(readHealthBasis()).toEqual(promoted);
-        expect(patchHealth(clearHealth, promoted, 200)).toBe(true);
+        expect(
+          patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, promoted, 200),
+        ).toBe(true);
         const cleared = readHealthBasis();
-        expect(cleared).toEqual(health(null, null, null, 200));
-        expect(patchHealth({ last_known_good_json: observedJson }, cleared, 300)).toBe(true);
+        expect(cleared).toEqual({
+          lastKnownGoodJson: null,
+          lastPromotedGoodJson: null,
+          suspiciousSignature: null,
+          updatedAtMs: 200,
+        });
+        expect(
+          patchConfigHealthEntryInDatabase(
+            remote,
+            configPath,
+            { last_known_good_json: observedJson },
+            cleared,
+            300,
+          ),
+        ).toBe(true);
 
         const input = {
           sessionKey: "agent:main:conformance",
@@ -192,17 +224,20 @@ it.skipIf(!connection)(
           summary: "Created",
           dedupeKey: "conformance-event",
         };
-        const recordEvent = (summary: string, now: number) =>
-          runSqliteImmediateTransactionSync(db, () =>
-            recordSessionStateEventInDatabase(db, { ...input, summary }, now),
-          );
-        const heads = () => rows("SELECT last_sequence, updated_at FROM session_state_heads");
-        const first = recordEvent("Created", 100);
+        const first = runSqliteImmediateTransactionSync(db, () =>
+          recordSessionStateEventInDatabase(db, input, 100),
+        );
         expect(first.row).toMatchObject({ sequence: 1, summary: "Created" });
-        expect(heads()).toEqual([{ last_sequence: 1, updated_at: 100 }]);
-        const duplicate = recordEvent("Ignored", 200);
+        expect(
+          remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows,
+        ).toEqual([{ last_sequence: 1, updated_at: 100 }]);
+        const duplicate = runSqliteImmediateTransactionSync(db, () =>
+          recordSessionStateEventInDatabase(db, { ...input, summary: "Ignored" }, 200),
+        );
         expect(duplicate).toEqual(first);
-        expect(heads()).toEqual([{ last_sequence: 1, updated_at: 100 }]);
+        expect(
+          remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows,
+        ).toEqual([{ last_sequence: 1, updated_at: 100 }]);
 
         for (const agentId of ["alpha", "beta"]) {
           recordAgentProvenanceInDatabase(db, {
@@ -241,17 +276,22 @@ it.skipIf(!connection)(
           });
         }
         expect(capture.readBlob(blob.blobId)).toBe("synthetic payload");
-        expect(rows("SELECT content_type FROM capture_blobs")).toEqual([
+        expect(remote.query("SELECT content_type FROM capture_blobs").rows).toEqual([
           { content_type: "text/plain" },
         ]);
-        expect(rows("SELECT started_at FROM capture_sessions")).toEqual([{ started_at: 100 }]);
+        expect(remote.query("SELECT started_at FROM capture_sessions").rows).toEqual([
+          { started_at: 100 },
+        ]);
         expect(capture.getSessionEvents("conformance-capture")).toHaveLength(2);
 
         remote.exec("DROP TABLE plugin_state_entries");
-        assert.throws(
-          () => remote.query("SELECT * FROM plugin_state_entries"),
-          isMissingPluginStateTableError,
-        );
+        let missingTableError: unknown;
+        try {
+          remote.query("SELECT * FROM plugin_state_entries");
+        } catch (error) {
+          missingTableError = error;
+        }
+        expect(isMissingPluginStateTableError(missingTableError)).toBe(true);
       } finally {
         try {
           remote.exec(`DROP SCHEMA "${namespace}" CASCADE`);

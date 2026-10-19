@@ -331,7 +331,7 @@ describe("basic browser routes", () => {
         headlessSource: "profile",
         displayPresent: false,
       },
-    };
+    } as const;
     const { body } = await callStartRoute({
       error: new BrowserProfileUnavailableError("display required", { metadata }),
       expectedStatus: 409,

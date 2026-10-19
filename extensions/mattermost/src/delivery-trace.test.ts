@@ -177,7 +177,10 @@ function setupMattermostTrace(recorder: WireRecorder) {
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
-      // reply-start, tool-progress, and cancel have no REST effect; idle closes out.
+      case "reply-start":
+      case "tool-progress":
+      case "cancel":
+        break;
       case "partial":
         // These scripts contain only advancing nonempty partials.
         draftStream.updateAssistantText(step.text.trim());

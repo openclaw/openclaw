@@ -32,7 +32,7 @@ afterEach(() => {
 
 const getInventorySection = (container: Element) => getSection(container, "Paired devices");
 
-function findElement<T extends Element = HTMLElement>(scope: ParentNode, selector: string) {
+function findElement<T extends Element = HTMLElement>(scope: ParentNode, selector: string): T {
   return expectDefined(scope.querySelector<T>(selector), selector);
 }
 const texts = (scope: ParentNode, selector: string) =>

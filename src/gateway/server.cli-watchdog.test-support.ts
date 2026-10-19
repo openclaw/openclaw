@@ -197,7 +197,9 @@ export async function createWatchdogFixture() {
   const cleanup = () =>
     runQaGatewayFixture(
       () => gateway && gatewayFixture.disconnectGatewayClient(gateway.client),
-      () => gateway?.server.close({ reason: "freeze proof complete" }),
+      async () => {
+        await gateway?.server.close({ reason: "freeze proof complete" });
+      },
       () => state.cleanup(),
     );
   try {

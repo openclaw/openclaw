@@ -92,7 +92,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
     let authorized = true;
     const waiting = createDeferredCore();
     let settled = false;
-    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
+    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>> | undefined;
     let failure: unknown;
     const result = beginDoctorMaintenance({
       options: { repair: true, nonInteractive: true },
