@@ -16,7 +16,7 @@ function reverseObjectKeys(value: unknown): unknown {
 }
 
 describe("policy container diagnostics", () => {
-  it.each([
+  it.each<[string, string, string, string, string, string?, string?]>([
     [
       "sandbox checks both child containers before their keys",
       '{"sandbox":{"containers":{"unknown":true},"browser":null}}',
@@ -63,27 +63,24 @@ describe("policy container diagnostics", () => {
       "policies/release.jsonc",
       "release.policy.jsonc",
     ],
-  ] as const)(
-    "%s",
-    (_name, json, target, message, fixHint, path = "policy.jsonc", document = path) => {
-      const policy: unknown = JSON.parse(json);
-      const expected = [
-        {
-          checkId: "policy/policy-jsonc-invalid",
-          severity: "error",
-          source: "policy",
-          path,
-          target: `oc://${document}/${target}`,
-          message: `${path} ${message}`,
-          fixHint,
-        },
-      ];
-      expect(policyContainerShapeFindings(policy, path, document)).toEqual(expected);
-      expect(policyContainerShapeFindings(reverseObjectKeys(policy), path, document)).toEqual(
-        expected,
-      );
-    },
-  );
+  ])("%s", (_name, json, target, message, fixHint, path = "policy.jsonc", document = path) => {
+    const policy: unknown = JSON.parse(json);
+    const expected = [
+      {
+        checkId: "policy/policy-jsonc-invalid",
+        severity: "error",
+        source: "policy",
+        path,
+        target: `oc://${document}/${target}`,
+        message: `${path} ${message}`,
+        fixHint,
+      },
+    ];
+    expect(policyContainerShapeFindings(policy, path, document)).toEqual(expected);
+    expect(policyContainerShapeFindings(reverseObjectKeys(policy), path, document)).toEqual(
+      expected,
+    );
+  });
 
   it.each([
     [

@@ -2,6 +2,7 @@ import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type * as Durability from "@openclaw/fs-safe/durability";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import {
@@ -52,7 +53,10 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   runExec: runExecMock,
 }));
 
-vi.mock("../resolve-system-bin.js", () => ({ resolveSystemBin: () => "/usr/bin/openssl" }));
+vi.mock("../resolve-system-bin.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../resolve-system-bin.js")>()),
+  resolveSystemBin: () => "/usr/bin/openssl",
+}));
 
 import { inspectGatewayTlsCertificate, loadGatewayTlsServerRuntime } from "./gateway.js";
 
@@ -178,7 +182,7 @@ it("bounds generation and cleans a partial staged key", async () => {
   const result = await loadGatewayTlsServerRuntime(config);
 
   expect(runExecMock).toHaveBeenCalledOnce();
-  const [command, args, options] = runExecMock.mock.calls[0];
+  const [command, args, options] = expectDefined(runExecMock.mock.calls[0], "OpenSSL invocation");
   expect({ command, options }).toEqual({
     command: "/usr/bin/openssl",
     options: { logOutput: false, timeoutMs: 30_000 },

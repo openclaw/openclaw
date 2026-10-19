@@ -347,7 +347,7 @@ describe("DashboardsPage", () => {
     );
     const context = pageContext({
       sessions: {
-        listSnapshot: () => ({ result: null, error: null, loading: false }),
+        listSnapshot: () => snapshot(null),
         subscribeList: () => () => {},
       },
     });

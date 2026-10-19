@@ -148,7 +148,7 @@ describe("ExtensionRunner.emitContext", () => {
   });
 });
 
-const emitters: Record<string, Invoke> = {
+const emitters = {
   session_before_switch: (runner) => runner.emit({ type: "session_before_switch", reason: "new" }),
   message_end: (runner) =>
     runner.emitMessageEnd({ type: "message_end", message: buildMessages()[0] }),
@@ -173,7 +173,7 @@ const emitters: Record<string, Invoke> = {
     runner.emitBeforeAgentStart("hello", undefined, "system", { cwd: "/tmp" }),
   resources_discover: (runner) => runner.emitResourcesDiscover("/tmp", "startup"),
   input: (runner) => runner.emitInput("hello", undefined, "interactive"),
-};
+} satisfies Record<string, Invoke>;
 
 describe("ExtensionRunner handler dispatch", () => {
   it.each([
@@ -310,6 +310,7 @@ describe("ExtensionRunner context construction", () => {
     const createContext = vi.spyOn(runner, "createContext");
     const messages = buildMessages();
     expect(await runner.emitContext(messages)).toBe(messages);
+    await runner.emitToolCall({ type: "tool_call", ...toolCall });
     await runner.emit(messageUpdate);
     await runner.emit({
       type: "tool_execution_update",

@@ -77,15 +77,13 @@ describe("policy doctor metadata", () => {
   });
 
   it("keeps policy fix class assignments explicit", () => {
-    const grouped = Object.groupBy(POLICY_FIX_METADATA, (rule) => rule.fixClass);
-    expect(
-      Object.fromEntries(
-        Object.entries(grouped).map(([kind, rules]) => [
-          kind,
-          rules.map((rule) => rule.checkId).toSorted(),
-        ]),
-      ),
-    ).toEqual({
+    const grouped = new Map<string, string[]>();
+    for (const rule of POLICY_FIX_METADATA) {
+      const ids = grouped.get(rule.fixClass) ?? [];
+      ids.push(rule.checkId);
+      grouped.set(rule.fixClass, ids);
+    }
+    expect(Object.fromEntries([...grouped].map(([kind, ids]) => [kind, ids.toSorted()]))).toEqual({
       automatic: checkIds(`
         agents-tool-not-denied channels-denied-provider
         data-handling-telemetry-content-capture gateway-control-ui-insecure

@@ -80,8 +80,8 @@ function mountConnection({ authMode, gatewayUrl, ...overrides }: ConnectionOptio
   return props;
 }
 
-function query<T extends Element = HTMLElement>(selector: string, root: ParentNode = container) {
-  return root.querySelector<T>(selector);
+function query(selector: string, root: ParentNode = container) {
+  return root.querySelector(selector);
 }
 function text(selector: string, root: ParentNode = container) {
   return query(selector, root)?.textContent?.trim();
@@ -93,7 +93,7 @@ function attr(selector: string, name: string, root: ParentNode = container) {
   return query(selector, root)?.getAttribute(name);
 }
 function input(label: string) {
-  return query<HTMLInputElement>(`input[aria-label="${label}"]`);
+  return container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
 }
 
 function readStats() {
@@ -157,7 +157,7 @@ it("keeps edited controls and details mounted while diagnostics refresh", () => 
   const url = input("Gateway URL")!;
   const secret = input("Gateway secret")!;
   const session = input("Default session")!;
-  const details = query<HTMLDetailsElement>("details")!;
+  const details = container.querySelector<HTMLDetailsElement>("details")!;
   details.open = true;
   url.focus();
   url.setSelectionRange(4, 7);
@@ -182,7 +182,7 @@ it("keeps edited controls and details mounted while diagnostics refresh", () => 
   secret.dispatchEvent(new Event("input", { bubbles: true }));
   session.value = "next-session";
   session.dispatchEvent(new Event("input", { bubbles: true }));
-  query<HTMLButtonElement>(".connection-actions .btn.primary")!.click();
+  container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary")!.click();
   expect(props.onConnectionChange).toHaveBeenCalledWith({ gatewayUrl: "wss://next.example" });
   expect(props.onSecretChange).toHaveBeenCalledWith("next-secret");
   expect(props.onSessionKeyChange).toHaveBeenCalledWith("next-session");
