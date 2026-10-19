@@ -9,15 +9,14 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({ transcodeAudioBufferToOpus
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
 
 function makeOversizedStreamResponse(): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(16 * 1024 * 1024));
-        controller.enqueue(new Uint8Array(1));
-        controller.close();
-      },
-    }),
-  );
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(16 * 1024 * 1024));
+      controller.enqueue(new Uint8Array(1));
+      controller.close();
+    },
+  });
+  return new Response(body);
 }
 
 describe("buildXiaomiSpeechProvider", () => {
@@ -32,12 +31,11 @@ describe("buildXiaomiSpeechProvider", () => {
       ...overrides,
     });
 
-  const mockResponse = (data?: string) =>
-    vi
-      .mocked(globalThis.fetch)
-      .mockResolvedValueOnce(
-        Response.json({ choices: [{ message: data ? { audio: { data } } : {} }] }),
-      );
+  function mockResponse(data?: string) {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      Response.json({ choices: [{ message: data ? { audio: { data } } : {} }] }),
+    );
+  }
   const mockAudioResponse = (audio = "fake-mp3-audio") =>
     mockResponse(Buffer.from(audio).toString("base64"));
   const requestInit = () => vi.mocked(globalThis.fetch).mock.calls[0]?.[1];
