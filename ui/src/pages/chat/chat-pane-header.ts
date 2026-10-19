@@ -219,14 +219,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           params: { key: row.key, label: null },
           sessionScope: true,
           session: row,
+          allowDeferred: true,
         })
       : null;
-    const renameDisabledReason =
-      this.state?.connected !== true || !renameAccess
-        ? t("sessionsView.actionRequiresConnection")
-        : renameAccess.allowed
-          ? undefined
-          : renameAccess.reason;
+    const renameDisabledReason = !renameAccess
+      ? t("sessionsView.actionRequiresConnection")
+      : renameAccess.allowed
+        ? undefined
+        : renameAccess.reason;
     const configuredMainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,

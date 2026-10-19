@@ -1052,15 +1052,15 @@ export function createSessionsPage(
               request,
             })
           : await request();
-      if (patched) {
+      if (patched && !("queued" in patched)) {
         options.onConfirmed?.(patched);
       }
       if (!isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      if (!patched) {
-        state.error = scope.sessions.state.error;
-        return "failed";
+      if (!patched || "queued" in patched) {
+        state.error = patched ? null : scope.sessions.state.error;
+        return patched ? "completed" : "failed";
       }
       await refreshSessionList(scope);
       if (!isRequestScopeCurrent(scope)) {

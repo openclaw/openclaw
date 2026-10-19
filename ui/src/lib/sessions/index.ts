@@ -257,9 +257,6 @@ export function createSessionCapability(
       }
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.observations.inherit(projected, admitted);
-      if (!projected) {
-        return projected;
-      }
       for (const row of admitted?.sessions ?? []) {
         mutations.observePendingFields(
           row,
@@ -308,9 +305,12 @@ export function createSessionCapability(
 
   const mutations = createSessionMutations({
     connection,
+    defer: (intent) => gateway.defer?.(intent) ?? false,
     snapshot: () => gateway.snapshot,
     findRow: (matches) => {
-      const row = roster.observations.publishedRow(matches);
+      const row =
+        roster.observations.publishedRow(matches) ??
+        presentation.result?.sessions.find((candidate) => matches(candidate, presentation.agentId));
       return row ? roster.observations.projectFields(row) : undefined;
     },
     readState: () => state,
@@ -321,7 +321,14 @@ export function createSessionCapability(
     publishedRow: (key) => roster.observations.publishedRow((row) => row.key === key),
     archiveFields: roster.observations,
     readRevision: () => roster.requestRevision,
-    redecorateLists: roster.redecorateLists,
+    redecorateLists: () => {
+      roster.redecorateLists();
+      const result = mutations.applyRows(presentation.result, presentation.agentId);
+      if (result !== presentation.result) {
+        presentation = { ...presentation, result };
+        notifySubscribers();
+      }
+    },
     notifyPendingChange: notifySubscribers,
     notifyCreated,
     clearThink: thinkingClaims.clear,
@@ -362,26 +369,6 @@ export function createSessionCapability(
     const epoch = {};
     pullRequestEpochs.set(key.trim(), epoch);
     return epoch;
-  };
-
-  const setPullRequestSummary = (
-    key: string,
-    summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: object,
-  ) => {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
-      return;
-    }
-    if (pullRequestSummaries.get(normalizedKey) === summary) {
-      return;
-    }
-    if (summary) {
-      pullRequestSummaries.set(normalizedKey, summary);
-    } else {
-      pullRequestSummaries.delete(normalizedKey);
-    }
-    publish({ ...state });
   };
 
   const { reconcile, captureReconcile, capturePatchFields, reconcileChangedEvent, observeRow } =
@@ -475,7 +462,7 @@ export function createSessionCapability(
       retireOperationConnection(previousClient);
       groups.invalidate();
       swarmActivity.clear();
-      mutations.retireConnection();
+      mutations.retireConnection(!identityChanged);
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       if (identityChanged) {
@@ -704,7 +691,21 @@ export function createSessionCapability(
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,
     capturePullRequestEpoch,
-    setPullRequestSummary,
+    setPullRequestSummary(key, summary, epoch) {
+      const normalizedKey = key.trim();
+      if (!normalizedKey || pullRequestSummaries.get(normalizedKey) === summary) {
+        return;
+      }
+      if (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch) {
+        return;
+      }
+      if (summary) {
+        pullRequestSummaries.set(normalizedKey, summary);
+      } else {
+        pullRequestSummaries.delete(normalizedKey);
+      }
+      publish({ ...state });
+    },
     delete: deletions.delete,
     deleteMany: deletions.deleteMany,
     deletionState: deletions.deletionState,

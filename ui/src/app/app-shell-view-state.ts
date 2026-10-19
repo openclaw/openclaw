@@ -250,7 +250,9 @@ export function readShellView(host: ShellViewHost) {
   const gatewayStatus: GatewayStatusProps = {
     kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
     lastError: shellConnectionStatus ? gatewaySnapshot.lastError : null,
-    queuedCount: shellConnectionStatus ? sidebarProperties.storedOutboxes?.total : 0,
+    queuedCount: shellConnectionStatus
+      ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
+      : 0,
     onRetry: callbacks.retryGateway,
   };
   const mobileGatewayStatus =

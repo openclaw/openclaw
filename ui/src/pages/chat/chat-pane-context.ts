@@ -471,7 +471,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.assistantIdentityRequestVersion += 1;
       this.taskSuggestionsRequestVersion += 1;
       this.resetSessionSuggestions();
-      this.resetSessionReactions();
+      if (metadataOwnerChanged) {
+        this.resetSessionReactions();
+      }
       this.clearTypingActors();
       this.sessionDiscussion.clear();
       this.sessionDiscussionPanels.clear();

@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import type { SessionRefreshOutcome } from "./session-capability.ts";
 import type {
@@ -12,6 +13,7 @@ import type { createSessionRowProvenance } from "./session-row-provenance.ts";
 
 export type SessionMutationsHost = PendingRowHost &
   SessionRowLocalPatchHost & {
+    defer: ApplicationGateway["defer"];
     capturePatchFields: (
       target: Pick<PendingRowTarget, "key" | "agentId" | "sessionId">,
     ) => (fact: SessionPatchRowFact) => void;

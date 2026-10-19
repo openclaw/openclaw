@@ -1917,6 +1917,9 @@ export const en: TranslationMap & {
     suspended: "Suspended",
     retryNow: "Retry now",
     queued: "{count} queued",
+    offlineChangesDiscarded: "Offline changes discarded: {count}",
+    offlineChangesReloadBlocked:
+      "Offline changes are waiting to reconnect. Reloading would discard them.",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain:
       "The session move could not be confirmed. Refresh and check its group before retrying. {error}",

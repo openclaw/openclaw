@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-reactions.test/"} */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   MessageReactionSummary,
   SessionReactionEvent,
@@ -8,7 +8,10 @@ import type {
   SessionReactionsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import * as toast from "../../lib/toast.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
@@ -27,8 +30,12 @@ function fixture(
   set?: Promise<SessionReactionsSetResult>,
 ) {
   const requests: string[] = [];
-  const client = createTestGatewayClient((method) => {
+  const writes: unknown[] = [];
+  const client = createTestGatewayClient((method, params) => {
     requests.push(method);
+    if (method === "session.reactions.set") {
+      writes.push(params);
+    }
     return method === "session.reactions.set" ? set : list;
   });
   const created = createTestChatPane({ client });
@@ -37,6 +44,32 @@ function fixture(
     ["operator.write"],
   );
   const pane = created.pane as typeof created.pane & ReactionsPane;
+  const gateway = pane.context.gateway;
+  gateway.snapshot.selfUser = {
+    id: "alex",
+    name: "Alex",
+    identity: { type: "profile", id: "alex" },
+  };
+  gatewayPresentationScope(gateway);
+  const deferred = new Map<string, Parameters<ApplicationGateway["defer"]>[0]>();
+  const coalescedReactions: (MessageReactionSummary[] | undefined)[] = [];
+  gateway.defer = (intent) => {
+    if (gateway.snapshot.phase === "connected") {
+      return false;
+    }
+    const superseded = deferred.get(intent.key);
+    if (superseded) {
+      deferred.delete(intent.key);
+      superseded.discard?.();
+      coalescedReactions.push(pane.collaboration.reactions.get("message-1"));
+    }
+    deferred.set(intent.key, intent);
+    return true;
+  };
+  const connect = (connected: boolean) => {
+    gateway.snapshot.phase = connected ? "connected" : "reconnecting";
+    pane.applyGatewaySnapshot(gateway.snapshot);
+  };
   const session = (sessionId: string) => {
     created.state.currentSessionId = sessionId;
     created.state.sessionsResult = sessionsResult(
@@ -64,7 +97,18 @@ function fixture(
     actor: { type: "human", id: "riley", label: "Riley" },
     reactions,
   });
-  return { ...created, pane, session, event, requests };
+  return {
+    ...created,
+    pane,
+    session,
+    event,
+    requests,
+    writes,
+    deferred,
+    coalescedReactions,
+    connect,
+    client,
+  };
 }
 
 describe("pane reaction ownership", () => {
@@ -115,4 +159,109 @@ describe("pane reaction ownership", () => {
     await write;
     expect(pane.collaboration.reactions.size).toBe(0);
   });
+
+  it("keeps optimistic offline reactions through reconnect and coalesces the desired value", async () => {
+    const { pane, event, connect, deferred, writes, coalescedReactions, client } = fixture(
+      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      Promise.resolve({
+        messageId: "message-1",
+        reactions: [{ emoji: "🎉", count: 1, identities: [{ id: "alex", label: "Alex" }] }],
+      }),
+    );
+    connect(true);
+    pane.handleSessionReactionEvent(event());
+    connect(false);
+    await pane.setMessageReaction("message-1", "🎉", false);
+    expect(pane.collaboration.reactions.get("message-1")).toEqual([
+      ...peerReaction,
+      { emoji: "🎉", count: 1, identities: [{ id: "alex", label: "Alex" }] },
+    ]);
+    await pane.setMessageReaction("message-1", "🎉", true);
+    expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
+    await pane.setMessageReaction("message-1", "🎉", false);
+    expect(coalescedReactions).toEqual([
+      peerReaction,
+      [...peerReaction, { emoji: "🎉", count: 1, identities: [{ id: "alex", label: "Alex" }] }],
+    ]);
+    expect(deferred.size).toBe(1);
+    expect(writes).toEqual([]);
+    connect(true);
+    await [...deferred.values()][0].run(client);
+    expect(writes).toEqual([
+      {
+        sessionKey: "agent:main:current",
+        messageId: "message-1",
+        emoji: "🎉",
+        remove: false,
+      },
+    ]);
+    expect(pane.collaboration.reactions.get("message-1")).toEqual([
+      { emoji: "🎉", count: 1, identities: [{ id: "alex", label: "Alex" }] },
+    ]);
+    pane.handleSessionReactionEvent(event());
+    expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
+  });
+
+  it.each(["discard", "reject", "decline"] as const)(
+    "restores server-known reactions on offline intent %s",
+    async (outcome) => {
+      const rejected = createDeferred<SessionReactionsSetResult>();
+      const { pane, event, connect, deferred, client } = fixture(
+        Promise.resolve({ sessionId: "session-1", reactions: { "message-1": peerReaction } }),
+        rejected.promise,
+      );
+      connect(true);
+      pane.handleSessionReactionEvent(event());
+      connect(false);
+      if (outcome === "decline") {
+        pane.context.gateway.defer = () => false;
+      }
+      await pane.setMessageReaction("message-1", "👍", false);
+      const pending = [...deferred.values()][0];
+      if (outcome === "discard") {
+        pending.discard?.();
+      } else if (outcome === "reject") {
+        connect(true);
+        const write = pending.run(client);
+        rejected.reject(new Error("reaction denied"));
+        await write;
+        expect(pane.state.chatError).toBe("reaction denied");
+      }
+      expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
+    },
+  );
+
+  it.each(["same", "replacement client", "replacement scope"] as const)(
+    "%s: reports a departed session's deferred failure only while its Gateway owner is current",
+    async (owner) => {
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+      onTestFinished(() => showToast.mockRestore());
+      const failed = createDeferred<SessionReactionsSetResult>();
+      const { pane, session, connect, deferred, client } = fixture(
+        Promise.resolve({ sessionId: "session-1", reactions: {} }),
+        failed.promise,
+      );
+      connect(true);
+      connect(false);
+      await pane.setMessageReaction("message-1", "🎉", false);
+      connect(true);
+      pane.state.sessionKey = "agent:main:next";
+      session("session-2");
+      pane.syncSessionReactions();
+      const replay = [...deferred.values()][0].run(client);
+      if (owner === "replacement client") {
+        pane.context.gateway.snapshot.client = createTestGatewayClient(() => ({}));
+      } else if (owner === "replacement scope") {
+        Object.defineProperty(client, "recoveryScope", { get: () => "replacement-scope" });
+      }
+      failed.reject(new Error("reaction denied"));
+      await replay;
+      expect(showToast.mock.calls).toEqual(
+        owner === "same" ? [[{ message: "reaction denied" }]] : [],
+      );
+      expect(pane.state.chatError).toBeNull();
+      expect(pane.state.lastError).toBeNull();
+      expect(pane.collaboration.reactions.size).toBe(0);
+    },
+  );
 });

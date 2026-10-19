@@ -630,6 +630,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         host.publish({ ...state, result });
       }
       staged.notify();
+      // Local overlays must settle even if a retained list has not revalidated this connection.
+      for (const entry of managedLists.values()) {
+        const decorated = host.decorate(entry.snapshot.result, entry);
+        if (decorated !== entry.snapshot.result) {
+          publishManagedList(entry, { ...entry.snapshot, result: decorated });
+        }
+      }
     },
     lastOptions: () => lastListOptions,
     retireWarmLists,
