@@ -147,7 +147,7 @@ export class SessionOrganizer {
         if (action.category === null || session.category !== action.category) {
           return this.assignSessionCategory(session, action.category);
         }
-        return;
+        return undefined;
       case "new-group":
         return this.createSessionGroup([session]);
       case "wake":
