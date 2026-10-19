@@ -40,6 +40,26 @@ function channelEvent(id = "message-1") {
   };
 }
 
+function deepChannelEvent(id: string, depth: number) {
+  let node: unknown = "x";
+  for (let i = 0; i < depth; i += 1) {
+    node = { bold: [node] };
+  }
+  return {
+    nest: "chat/~zod/general",
+    response: {
+      post: {
+        id,
+        "r-post": {
+          set: {
+            essay: { author: "~nec", content: [{ inline: [node] }], sent: 1_700_000_000_000 },
+          },
+        },
+      },
+    },
+  };
+}
+
 function channelReplyEvent(id: string, nest: string) {
   return {
     nest,
@@ -117,6 +137,39 @@ describe("Tlon durable ingress", () => {
         appendError,
       );
       expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("admits and dispatches a deeply nested but serializable message", async () => {
+    await withQueue(async (queue, _stateDir, start) => {
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = start(queue, dispatch);
+      await expect(
+        monitor.receive({ source: "channels", event: deepChannelEvent("deep-500", 500) }),
+      ).resolves.toEqual({ kind: "accepted" });
+      await monitor.waitForIdle();
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("drops an event too deeply nested to serialize and keeps admitting later events", async () => {
+    await withQueue(async (queue, _stateDir, start) => {
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = start(queue, dispatch);
+      // JSON.parse accepts this depth from the wire, but JSON.stringify overflows the stack.
+      await expect(
+        monitor.receive({ source: "channels", event: deepChannelEvent("deep-poison", 100_000) }),
+      ).resolves.toEqual({ kind: "dropped" });
+      await expect(
+        monitor.receive({ source: "chat", event: chatEvent("after-poison") }),
+      ).resolves.toEqual({ kind: "accepted" });
+      await monitor.waitForIdle();
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
     });
   });
 

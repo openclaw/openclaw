@@ -39,6 +39,16 @@ describe("extractMessageText code blocks", () => {
 const SAMPLE_TS = Date.UTC(2026, 6, 1, 12, 0, 0);
 
 describe("extractMessageText nested inline content", () => {
+  const MAX_DEPTH = 100;
+
+  function nest(style: "bold" | "italics" | "strike", levels: number, leaf: unknown = "x") {
+    let node: unknown = leaf;
+    for (let i = 0; i < levels; i += 1) {
+      node = { [style]: [node] };
+    }
+    return node;
+  }
+
   it("renders legitimate nested inline styles", () => {
     const text = extractMessageText([
       { inline: [{ bold: [{ italics: ["deep "] }, { strike: ["text"] }] }] },
@@ -46,38 +56,33 @@ describe("extractMessageText nested inline content", () => {
     expect(text).toBe("***deep *~~text~~**");
   });
 
-  it("truncates instead of crashing on pathologically deep nesting", () => {
-    let node: unknown = "x";
-    for (let i = 0; i < 2000; i += 1) {
-      node = { bold: [node] };
-    }
-    const text = extractMessageText([{ inline: [node] }]);
-    // Depth 2000 is far past MAX_INLINE_DEPTH: the extractor must return
-    // (possibly empty) text rather than throwing RangeError.
-    const surrounding = extractMessageText([{ inline: [node] }, { inline: ["visible"] }]);
-    expect(Array.isArray([text])).toBe(true);
-    expect(surrounding).toContain("visible");
+  it("keeps the leaf at exactly the depth cap and drops it one level deeper", () => {
+    expect(extractMessageText([{ inline: [nest("bold", MAX_DEPTH)] }])).toBe(
+      `${"**".repeat(MAX_DEPTH)}x${"**".repeat(MAX_DEPTH)}`,
+    );
+    expect(extractMessageText([{ inline: [nest("bold", MAX_DEPTH + 1)] }])).toBe(
+      "**".repeat(MAX_DEPTH * 2),
+    );
   });
 
-  it("keeps verses around the truncation boundary renderable", () => {
-    let poisoned: unknown = "x";
-    for (let i = 0; i < 500; i += 1) {
-      poisoned = { italics: [poisoned] };
-    }
-    const text = extractMessageText([
-      { inline: [poisoned] },
-      { inline: [{ bold: ["after the poison"] }] },
-    ]);
-    expect(text).toContain("after the poison");
-  });
+  it.each(["bold", "italics", "strike"] as const)(
+    "truncates %s nesting at the cap instead of overflowing the stack",
+    (style) => {
+      const marker = { bold: "**", italics: "*", strike: "~~" }[style];
+      const text = extractMessageText([{ inline: [nest(style, 2_000)] }, { inline: ["visible"] }]);
+      expect(text).toBe(`${marker.repeat(MAX_DEPTH * 2)}\nvisible`);
+    },
+  );
 
-  it("caps mixed bold/italics/strike nesting without losing shallower content", () => {
+  it("truncates mixed-style nesting while keeping shallower siblings and later verses", () => {
     let node: unknown = { strike: ["inner"] };
     for (let i = 0; i < 150; i += 1) {
       node = i % 2 === 0 ? { bold: [node] } : { italics: [node] };
     }
-    const text = extractMessageText([{ inline: [node] }, { inline: ["tail"] }]);
-    expect(text).toContain("tail");
+    const text = extractMessageText([{ inline: ["head ", node, " tail"] }, { inline: ["next"] }]);
+    expect(text.startsWith("head ")).toBe(true);
+    expect(text).toContain(" tail\nnext");
+    expect(text).not.toContain("inner");
   });
 });
 
