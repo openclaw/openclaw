@@ -164,7 +164,19 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
       : []),
     { id: "find", label: t("chat.detailPanel.searchInFile"), icon: <Icon name="search" /> },
     ...(props.content.path
-      ? [{ id: "path", label: t("chat.detailPanel.copyPath"), icon: <Icon name="copy" /> }]
+      ? [
+          {
+            id: "path",
+            label: t(
+              props.controls.copyFeedback.path === "failed"
+                ? "common.copyFailed"
+                : props.controls.copyFeedback.path === "copied"
+                  ? "common.copied"
+                  : "chat.detailPanel.copyPath",
+            ),
+            icon: <Icon name={props.controls.copyFeedback.path === "copied" ? "check" : "copy"} />,
+          },
+        ]
       : []),
     ...(props.content.path && props.controls.onReveal
       ? [{ id: "reveal", label: t("chat.detailPanel.showInFiles"), icon: <Icon name="folder" /> }]
