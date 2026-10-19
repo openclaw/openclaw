@@ -313,7 +313,8 @@ suite.define(() => {
   it("offers the same conditional action in the compact menu without persisting deep-link intent", async () => {
     await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
       const gateway = await openDashboard(page, "split", { expandedLink: true });
-      await page.locator(".sidebar-region__primary").waitFor({ state: "hidden" });
+      await page.locator(".sidebar-region__primary").waitFor({ state: "visible" });
+      await page.locator(".chat-mobile-host openclaw-board-view").waitFor();
       expect(await presentationOverride(page)).toBeUndefined();
       await openDefaultAction(page);
       const savedMessage = await saveDefault(page, gateway);

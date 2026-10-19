@@ -86,7 +86,13 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
   await gateway.waitForRequest("board.get");
   await page.locator(".board-session-surface").waitFor();
-  await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+  if (await page.locator(".sidebar-region--mobile-host > .chat-mobile-host").isVisible()) {
+    await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+    await selectChatLayoutAction(page, "Expand Side panel");
+    await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+  } else {
+    await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+  }
   await page.locator(".chat-header-session-menu__trigger").waitFor();
   return { gateway, board };
 }
@@ -237,7 +243,7 @@ suite.define(() => {
   });
 
   it.each([false, true])(
-    "keeps the touch fullscreen widget clear with readOnly=%s",
+    "keeps the touch widget clear in the expanded mobile panel with readOnly=%s",
     async (readOnly) => {
       await suite.withPage(
         {
@@ -258,6 +264,8 @@ suite.define(() => {
             await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches),
           ).toBe(false);
           expect(await widget.locator(chrome).count()).toBe(0);
+          await selectChatLayoutAction(page, "Restore split");
+          await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
           const menu = await showHeaderMenu(page);
           expect(await menu.locator('[value="board-widget:remove"]').count()).toBe(
             readOnly ? 0 : 1,

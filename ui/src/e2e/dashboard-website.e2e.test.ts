@@ -178,19 +178,39 @@ suite.define(() => {
             page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
           )
           .toBeLessThanOrEqual(0);
-        await expect.poll(viewportFits).toBe(true);
+        const host = page.locator(".chat-mobile-host");
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        const dockHeight = (await host.boundingBox())!.height;
+        await selectChatLayoutAction(page, "Expand Side panel");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+        await expect
+          .poll(async () => (await host.boundingBox())!.height)
+          .toBeGreaterThan(dockHeight);
+        const mobileViewport = await frame.evaluate((element) => {
+          const outer = element.closest(".chat-mobile-host__panels")!.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            width: inner.width,
+            visibleHeight: Math.min(inner.bottom, outer.bottom) - Math.max(inner.top, outer.top),
+            contained: inner.left >= outer.left - 1 && inner.right <= outer.right + 1,
+          };
+        });
+        expect(mobileViewport.width).toBeGreaterThan(280);
+        expect(mobileViewport.visibleHeight).toBeGreaterThan(200);
+        expect(mobileViewport.contained).toBe(true);
+        expect(
+          await frame.evaluate((element, previous) => element === previous, originalFrame),
+        ).toBe(true);
         await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
         await selectChatLayoutAction(page, "Restore split");
-        const chat = page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Chat", exact: true });
-        await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await selectChatLayoutAction(page, "Minimize side panel");
         await frame.waitFor({ state: "hidden" });
-        expect(await chat.getAttribute("aria-pressed")).toBe("true");
-        await chat.click();
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        await selectChatLayoutAction(page, "Side panel");
         await content.getByRole("textbox", { name: "Status note" }).waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("false");
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
           "Keep this note",
         );
@@ -200,11 +220,10 @@ suite.define(() => {
         expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
         expect(await frame.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Close Files", exact: true }).click();
-        await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("true");
-        await chat.click();
+        await openChatSidePanelType(page, "Dashboard");
         await frame.waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("false");
+        await selectChatLayoutAction(page, "Expand Side panel");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
         expect(
           await frame.evaluate((element, previous) => element === previous, originalFrame),
         ).toBe(true);
