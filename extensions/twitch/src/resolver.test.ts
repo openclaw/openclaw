@@ -5,7 +5,6 @@ import type { TwitchAccountConfig } from "./types.js";
 const apiCallMocks = vi.hoisted(() => {
   class MockHttpStatusCodeError extends Error {
     readonly statusCode: number;
-
     constructor(statusCode: number) {
       super(`HTTP ${statusCode}`);
       this.statusCode = statusCode;
@@ -63,7 +62,6 @@ describe("resolveTwitchTargets", () => {
           : { id: "654321", login: query.login, display_name: "Named User" },
       ],
     }));
-
     await expect(resolveTwitchTargets(["123456", "@NamedUser"], account, "user")).resolves.toEqual([
       { input: "123456", resolved: true, id: "123456", name: "byid" },
       {
@@ -80,17 +78,9 @@ describe("resolveTwitchTargets", () => {
   });
 
   it.each([
-    {
-      name: "invalid token",
-      kind: "http401",
-      note: "API error: Invalid token supplied | HTTP 401",
-    },
-    {
-      name: "app token",
-      kind: "app",
-      note: "API error: Trying to use an app access token as a user access token",
-    },
-  ])("preserves $name validation behavior", async ({ kind, note }) => {
+    ["http401", "API error: Invalid token supplied | HTTP 401"],
+    ["app", "API error: Trying to use an app access token as a user access token"],
+  ])("preserves %s validation behavior", async (kind, note) => {
     if (kind === "http401") {
       apiCallMocks.callTwitchApi.mockRejectedValueOnce(
         new apiCallMocks.MockHttpStatusCodeError(401),
@@ -98,7 +88,6 @@ describe("resolveTwitchTargets", () => {
     } else {
       apiCallMocks.callTwitchApi.mockResolvedValueOnce({});
     }
-
     await expect(resolveTwitchTargets(["@NamedUser"], account, "user")).resolves.toEqual([
       { input: "@NamedUser", resolved: false, note },
     ]);
@@ -124,10 +113,8 @@ describe("resolveTwitchTargets", () => {
         data: [{ id: "healthy-id", login: query.login, display_name: "HealthyUser" }],
       };
     });
-
     const resultPromise = resolveTwitchTargets(["@stalleduser", "@healthyuser"], account, "user");
     await vi.advanceTimersByTimeAsync(10_000);
-
     await expect(resultPromise).resolves.toEqual([
       {
         input: "@stalleduser",
