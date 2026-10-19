@@ -25,7 +25,7 @@ import {
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
-import { SidebarProjectionMemo } from "./sidebar-projection-memo.ts";
+import { SidebarProjectionMemo } from "./sidebar-projection-cache.ts";
 
 type SessionAttentionResolver = (
   row: Partial<GatewaySessionRow> & { key: string },
