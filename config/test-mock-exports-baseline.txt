@@ -2287,7 +2287,6 @@
 ["src/agents/embedded-agent-runner/system-prompt.test.ts","../../tts/tts-settings.js","81788c2e4e5749722791d31983539afde68c65b0b716cd8c04b2ad0af131f811",1]
 ["src/agents/embedded-agent-runner/tool-schema-runtime.test.ts","../../plugins/provider-runtime.js","c9011f0a12977281d75c023fc427cec71574d00a4df74676bba448a9383f9534",1]
 ["src/agents/embedded-agent-runner/tool-schema-runtime.test.ts","./logger.js","2efca961c0a11b4646dab46c414dcb5cfc1b32bc9f8908064c7ee3a1abef8d86",1]
-["src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts","../infra/agent-events.js","8db11961bdb9122460de85fd07a78dcbb6bd468b98bdcfd925b3c266b3268945",1]
 ["src/agents/embedded-agent-subscribe.incognito-diagnostics.test.ts","../infra/fs-safe.js","6568bf6dce046dbfe074558fdd3801f9c59702cb4ade7ca4683e50e989457fd4",1]
 ["src/agents/failover/classify.legacy-provider-predicates.test.ts","../../plugins/provider-failover.js","de3c85ab3eb590eb851e4b264fbbbec30195560bc18bd74c4ab8ddf5781f43d7",1]
 ["src/agents/failover/failover-classification.corpus.test.ts","../../plugins/provider-failover.js","028007f0d77e6f17bc2452888b5d65dddf3d925b9a42d1d3ac5f5c2b63318eba",1]
