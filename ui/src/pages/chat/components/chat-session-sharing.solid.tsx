@@ -1,13 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  createUniqueId,
-  flush,
-  mapArray,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, createUniqueId, mapArray, onSettled, Show } from "solid-js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import {
   PersonAvatarLink,
@@ -336,9 +328,13 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                 if (searchOpen()) {
                   resetSearch(true);
                 } else {
+                  const selectedScope = scope();
                   setSearchOpen(true);
-                  flush();
-                  search?.focus({ preventScroll: true });
+                  onSettled(() => {
+                    if (scope() === selectedScope && menu?.overlay.open && searchOpen()) {
+                      search?.focus({ preventScroll: true });
+                    }
+                  });
                 }
               }}
             >
