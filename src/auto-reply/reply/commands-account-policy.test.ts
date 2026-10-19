@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
+import { beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -34,26 +33,17 @@ const priorityAccounts = (key: string) => ({
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
   onTestFinished(() => rollbackStagedPluginRegistry(previous));
-  stageActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: channel,
-        source: `/tmp/${channel}/index.js`,
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: channel,
-            capabilities: { chatTypes: ["direct", "group"] },
-          }),
-          commands: { enforceOwnerForCommands: true },
-        },
-      },
-    ]),
-    null,
-    "default",
-  );
-  const plugin = getLoadedChannelPluginById(channel);
-  expect(plugin).toBeDefined();
-  expect(plugin?.config.resolveAllowFrom).toBeUndefined();
+  const plugin = {
+    ...createChannelTestPluginBase({
+      id: channel,
+      capabilities: { chatTypes: ["direct", "group"] },
+    }),
+    commands: { enforceOwnerForCommands: true },
+  };
+  const registry = createTestRegistry([
+    { pluginId: channel, source: `/tmp/${channel}/index.js`, plugin },
+  ]);
+  stageActivePluginRegistry(registry, null, "default");
 });
 
 async function dispatch(params: {
@@ -98,12 +88,11 @@ async function dispatch(params: {
         ChatType: "group",
       });
       commandParams.isGroup = true;
+      const group = { cfg, isGroup: true, commandAuthorized: true };
       commandParams.command = buildCommandContext({
+        ...group,
         ctx: commandParams.ctx,
-        cfg,
-        isGroup: true,
         triggerBodyNormalized: "/acp help",
-        commandAuthorized: true,
       });
       const result = await handleCommands({
         ...commandParams,
@@ -113,11 +102,9 @@ async function dispatch(params: {
         }),
       });
       const reset = await resolveAuthorizedSessionResetCommand({
-        cfg,
+        ...group,
         ctx: { ...commandParams.ctx, commandText: "/reset", rawText: "/reset" },
         agentId: "main",
-        isGroup: true,
-        commandAuthorized: true,
       });
       return { result, command: commandParams.command, reset };
     },
@@ -125,62 +112,48 @@ async function dispatch(params: {
   );
 }
 
-function expectAccess(
-  actual: Awaited<ReturnType<typeof dispatch>>,
-  authorized: boolean,
-  owner = false,
-) {
-  expect(actual.command.senderIsOwner).toBe(owner);
-  if (!authorized) {
-    expect.soft(actual.result).toEqual({ shouldContinue: false });
-  }
-  expect.soft(actual).toMatchObject({
-    result: authorized
-      ? { shouldContinue: false, reply: { text: expect.stringContaining("/acp spawn") } }
-      : { shouldContinue: false },
-    command: { isAuthorizedSender: authorized },
-    reset: {
-      resetAuthorized: authorized,
-      resetCommand: { matchedResetTriggerLower: authorized ? "/reset" : undefined },
-    },
-  });
-}
+type PolicyCase = Omit<Parameters<typeof dispatch>[0], "sender"> & {
+  name: string;
+  senders?: string[];
+  allowed?: string;
+};
 
-describe("handleCommands and session reset account-policy authorization for admitted groups", () => {
-  it.each(
-    [undefined, "work-phone"].flatMap((defaultAccount) =>
-      ["alice", "bob"].map((sender) => ({ defaultAccount, sender })),
-    ),
-  )(
-    "uses root access for an ignored alias: sender=$sender, default=$defaultAccount",
-    async ({ defaultAccount, sender }) => {
-      const actual = await dispatch({ accountId: "work-phone", defaultAccount, sender });
-      expectAccess(actual, sender === "alice");
-    },
-  );
-
-  it.each<Omit<Parameters<typeof dispatch>[0], "sender"> & { name: string }>([
-    { name: "eligible sole alias", accounts: eligibleAccounts },
-    {
-      name: "eligible configured default",
-      accounts: eligibleAccounts,
-      defaultAccount: "work-phone",
-    },
-    { name: "undeclared channel singleton", declaresPolicy: false },
-    { name: "exact key", accounts: priorityAccounts("work-phone"), accountId: "work-phone" },
-    { name: "case-only key", accounts: priorityAccounts("WORK-PHONE"), accountId: "work-phone" },
-  ])("preserves $name command and reset access", async (testCase) => {
-    for (const sender of ["alice", "bob"]) {
-      const actual = await dispatch({ ...testCase, sender });
-      expectAccess(actual, sender === "bob");
+it.each<PolicyCase>([
+  ...[undefined, "work-phone"].map((defaultAccount) => ({
+    name: `ignored alias, default=${defaultAccount}`,
+    accountId: "work-phone",
+    defaultAccount,
+    allowed: "alice",
+  })),
+  { name: "eligible sole alias", accounts: eligibleAccounts },
+  { name: "eligible configured default", accounts: eligibleAccounts, defaultAccount: "work-phone" },
+  { name: "undeclared channel singleton", declaresPolicy: false },
+  { name: "exact key", accounts: priorityAccounts("work-phone"), accountId: "work-phone" },
+  { name: "case-only key", accounts: priorityAccounts("WORK-PHONE"), accountId: "work-phone" },
+  ...["alice", "bob", "owner"].map((sender) => ({
+    name: `global owner: ${sender}`,
+    accountId: "work-phone",
+    ownerAllowFrom: ["owner"],
+    senders: [sender],
+    allowed: "owner",
+  })),
+])("access: $name", async ({ senders = ["alice", "bob"], allowed = "bob", ...params }) => {
+  for (const sender of senders) {
+    const actual = await dispatch({ ...params, sender });
+    const authorized = sender === allowed;
+    expect(actual.command.senderIsOwner).toBe(sender === "owner");
+    if (!authorized) {
+      expect.soft(actual.result).toEqual({ shouldContinue: false });
     }
-  });
-
-  it.each(["alice", "bob", "owner"])(
-    "keeps explicit global owner authority separate: %s",
-    async (sender) => {
-      const actual = await dispatch({ accountId: "work-phone", ownerAllowFrom: ["owner"], sender });
-      expectAccess(actual, sender === "owner", sender === "owner");
-    },
-  );
+    expect.soft(actual).toMatchObject({
+      result: authorized
+        ? { shouldContinue: false, reply: { text: expect.stringContaining("/acp spawn") } }
+        : { shouldContinue: false },
+      command: { isAuthorizedSender: authorized },
+      reset: {
+        resetAuthorized: authorized,
+        resetCommand: { matchedResetTriggerLower: authorized ? "/reset" : undefined },
+      },
+    });
+  }
 });

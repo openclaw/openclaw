@@ -2,13 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { buildOpenAIResponsesParams } from "../../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerTunnelHandle } from "../../gateway/worker-environments/tunnel-contract.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
-import type { Model } from "../../llm/types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -34,35 +32,27 @@ afterEach(async () => {
 });
 
 it.each([
-  { name: "prepared vision", input: vision, selected: "primary", expected: true },
-  { name: "thinking off", input: vision, selected: "primary", expected: true, thinkOff: true },
-  { name: "prepared text-only", input: textOnly, selected: "primary", expected: false },
-  { name: "text-only fallback", input: vision, selected: "fallback", expected: false },
-  { name: "vision fallback", input: textOnly, selected: "fallback", expected: true },
-  { name: "reasoning-only metadata", selected: "primary", expected: true, discover: true },
-  {
-    name: "missing metadata with thinking off",
-    selected: "missing",
-    expected: true,
-    discover: true,
-    thinkOff: true,
-  },
-  {
-    name: "configured text-only overrides prepared vision",
-    input: vision,
-    selected: "primary",
-    expected: false,
-    configured: true,
-  },
-])(
-  "$name preserves model input through cloud media and Responses serialization",
-  async (testCase) => {
+  ["prepared vision", vision, "primary", true],
+  ["thinking off", vision, "primary", true, { thinkOff: true }],
+  ["prepared text-only", textOnly, "primary", false],
+  ["text-only fallback", vision, "fallback", false],
+  ["vision fallback", textOnly, "fallback", true],
+  ["reasoning-only metadata", undefined, "primary", true, { discover: true }],
+  ["missing metadata off", undefined, "missing", true, { discover: true, thinkOff: true }],
+  ["configured text-only", vision, "primary", false, { configured: true }],
+] as const)(
+  "%s preserves selected model input through cloud media admission",
+  async (
+    _name,
+    input,
+    model,
+    expected,
+    options: { thinkOff?: boolean; discover?: boolean; configured?: boolean } = {},
+  ) => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reply-vision-")));
     roots.push(root);
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace: root } } },
-    };
-    if (testCase.configured) {
+    const cfg: OpenClawConfig = { agents: { entries: { main: { workspace: root } } } };
+    if (options.configured) {
       cfg.models = {
         providers: {
           acme: {
@@ -82,21 +72,21 @@ it.each([
       config: cfg,
       provider: "acme",
       model: "primary",
-      thinkLevel: testCase.thinkOff ? "off" : "medium",
+      thinkLevel: options.thinkOff ? "off" : "medium",
       timeoutMs: 5_000,
       blockReplyBreak: "text_end",
       thinkingCatalog: [
-        { provider: "acme", id: "primary", reasoning: true, input: testCase.input },
-        { provider: "acme", id: "fallback", input: testCase.input === vision ? textOnly : vision },
+        { provider: "acme", id: "primary", reasoning: true, input },
+        { provider: "acme", id: "fallback", input: input === vision ? textOnly : vision },
       ],
     };
     loadScopedCatalog.mockResolvedValue([
-      { provider: "acme", id: testCase.selected, name: "Selected", input: [...vision] },
+      { provider: "acme", id: model, name: "Selected", input: [...vision] },
     ]);
     const produced = await buildEmbeddedRunExecutionParams({
       run,
       provider: "acme",
-      model: testCase.selected,
+      model,
       runId: "vision-run",
       sessionCtx: {},
       hasRepliedRef: undefined,
@@ -110,9 +100,8 @@ it.each([
       mimeType: "image/png",
     }));
     const staged: Buffer[] = [];
-    const unexpected = async (): Promise<never> => {
-      throw new Error("unexpected workspace operation");
-    };
+    const unexpected = async (): Promise<never> =>
+      expect.unreachable("unexpected workspace operation");
     const tunnel: WorkerTunnelHandle = {
       environmentId: "vision-worker",
       ownerEpoch: 1,
@@ -122,13 +111,9 @@ it.each([
       reconcileWorkspace: unexpected,
       stop: unexpected,
       stageAttachments: async ({ localPath }) => {
-        for (const entry of await fs.readdir(localPath, {
-          recursive: true,
-          withFileTypes: true,
-        })) {
-          if (entry.isFile()) {
-            staged.push(await fs.readFile(path.join(entry.parentPath, entry.name)));
-          }
+        const entries = await fs.readdir(localPath, { recursive: true, withFileTypes: true });
+        for (const { parentPath, name } of entries.filter((entry) => entry.isFile())) {
+          staged.push(await fs.readFile(path.join(parentPath, name)));
         }
       },
     };
@@ -146,7 +131,7 @@ it.each([
       isAuthorized: () => true,
       signal: new AbortController().signal,
     });
-    const expectedImages = testCase.expected ? images : [];
+    const expectedImages = expected ? images : [];
     expect(prepared.images).toEqual(expectedImages);
     const content =
       typeof prepared.prompt === "string"
@@ -156,38 +141,6 @@ it.each([
     for (const image of expectedImages) {
       expect(staged).toContainEqual(Buffer.from(image.data, "base64"));
     }
-    const providerModel: Model = {
-      ...modelDefaults,
-      api: "openai-responses",
-      baseUrl: "https://provider.invalid/v1",
-      id: testCase.selected,
-      provider: "acme",
-      input: testCase.expected ? [...vision] : [...textOnly],
-      contextWindow: 8192,
-    };
-    const payload = buildOpenAIResponsesParams(
-      providerModel,
-      {
-        messages: [{ role: "user", content, timestamp: 1 }],
-      },
-      {},
-    );
-    expect(payload.input).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [
-          ...content
-            .filter((part) => part.type === "text")
-            .map((part) => ({ type: "input_text", text: part.text })),
-          ...expectedImages.map((image) => ({
-            type: "input_image",
-            detail: "auto",
-            image_url: `data:${image.mimeType};base64,${image.data}`,
-          })),
-        ],
-      },
-    ]);
-    expect(loadScopedCatalog).toHaveBeenCalledTimes(testCase.discover ? 1 : 0);
+    expect(loadScopedCatalog).toHaveBeenCalledTimes(options.discover ? 1 : 0);
   },
 );

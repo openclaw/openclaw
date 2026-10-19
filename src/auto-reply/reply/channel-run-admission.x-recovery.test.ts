@@ -7,6 +7,7 @@ import {
 } from "../../channels/message-access/child-session-publication.js";
 import type {
   ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
   ResolveStableChannelMessageIngressParams,
 } from "../../channels/message-access/runtime-types.js";
 import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
@@ -27,25 +28,20 @@ import {
 type XPost = { id: string; author_id: string; conversation_id: string; text: string };
 type Publication = ResolveStableChannelMessageIngressParams["childSessionPublication"];
 type Snapshot = { assertCurrent: () => void };
-type IngressResult = {
-  ingress: Awaited<ReturnType<PluginRuntime["channel"]["inbound"]["ingress"]["resolveStable"]>>;
-};
+const entry = (userId: string) => ({
+  userId,
+  username: "fixture",
+  name: "Fixture",
+  addedBy: "test",
+  addedAt: 0,
+});
 
 const state = await setupAgentRunnerExecutionTestState();
-const {
-  createKeyedState,
-  createXPublicationPreparation,
-  openXAllowlist,
-  resolveXIngress,
-  setXRuntime,
-} = await loadBundledPluginFacade<{
+const x = await loadBundledPluginFacade<{
   createKeyedState: () => PluginRuntime["state"]["openKeyedStore"];
   setXRuntime: (runtime: PluginRuntime) => void;
   openXAllowlist: (runtime: PluginRuntime) => {
-    put(
-      accountId: string,
-      entry: { userId: string; username: string; name: string; addedBy: string; addedAt: number },
-    ): Promise<void>;
+    put(accountId: string, entry: ReturnType<typeof entry>): Promise<void>;
     remove(accountId: string, userId: string): Promise<unknown>;
     readSnapshot(accountId: string): Promise<Snapshot>;
   };
@@ -55,7 +51,7 @@ const {
     cfg: OpenClawConfig,
     binding?: ChannelIngressContextBinding,
     publication?: Publication,
-  ) => Promise<IngressResult>;
+  ) => Promise<{ ingress: ResolvedChannelMessageIngress }>;
   createXPublicationPreparation: (params: {
     accountId: string;
     post: XPost;
@@ -110,18 +106,11 @@ it.each([
       const hostIngress = createHostChannelIngressRuntime(owner);
       const resolveStable = vi.fn(hostIngress.resolveStable);
       const runtime = {
-        state: { openKeyedStore: createKeyedState(), resolveStateDir: () => testState.stateDir },
+        state: { openKeyedStore: x.createKeyedState(), resolveStateDir: () => testState.stateDir },
         channel: { inbound: { ingress: { resolveStable } } },
       } as unknown as PluginRuntime;
-      setXRuntime(runtime);
-      const allowlist = openXAllowlist(runtime);
-      const entry = (userId: string) => ({
-        userId,
-        username: "fixture",
-        name: "Fixture",
-        addedBy: "test",
-        addedAt: 0,
-      });
+      x.setXRuntime(runtime);
+      const allowlist = x.openXAllowlist(runtime);
       await allowlist.put("default", entry("30"));
       const route = resolveAgentRoute({
         cfg,
@@ -133,7 +122,7 @@ it.each([
       const publication = {
         audience: "public" as const,
         assertCurrent: snapshot.assertCurrent,
-        prepare: createXPublicationPreparation({
+        prepare: x.createXPublicationPreparation({
           accountId: "default",
           post,
           cfg,
@@ -142,7 +131,7 @@ it.each([
           assertActive: () => {},
         }),
       };
-      const authorization = await resolveXIngress(
+      const authorization = await x.resolveXIngress(
         "default",
         post,
         cfg,
@@ -181,16 +170,14 @@ it.each([
         currentConfig = { ...cfg, bindings: [{ agentId: "other", match: { channel: "x" } }] };
       } else if (scenario === "unavailable authorization") {
         resolveStable.mockRejectedValue(new Error("authorization storage unavailable"));
-      } else if (scenario === "retired owner") {
-        resolveStable.mockImplementation(async (params) => {
-          const result = await hostIngress.resolveStable(params);
-          ownerActive = false;
-          return result;
-        });
-      } else if (scenario === "one policy race" || scenario === "continuous mutation") {
+      } else if (["retired owner", "one policy race", "continuous mutation"].includes(scenario)) {
         const mutate = async (params: Parameters<typeof hostIngress.resolveStable>[0]) => {
           const result = await hostIngress.resolveStable(params);
-          await allowlist.put("default", entry("40"));
+          if (scenario === "retired owner") {
+            ownerActive = false;
+          } else {
+            await allowlist.put("default", entry("40"));
+          }
           return result;
         };
         if (scenario === "one policy race") {
