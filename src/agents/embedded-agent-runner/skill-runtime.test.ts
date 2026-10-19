@@ -359,50 +359,15 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         // The first preparation's retained entries keep the identity they
         // loaded with.
         expect(entry.bundleFingerprint).toBe(loaded);
+        // The support-file edit never touched SKILL.md bytes, so the
+        // instruction-identity contentHash stays put while the bundle
+        // identity moves with the whole edited tree.
+        expect(entrySecond.contentHash).toBe(entry.contentHash);
       } finally {
         second.restoreSkillEnv();
       }
     } finally {
       prepared.restoreSkillEnv();
-    }
-  });
-
-  it("restamps a new identity after a support-file edit once the watcher reloads", async () => {
-    setDiagnosticsEnabledForProcess(true);
-    registerActiveTracingBridge();
-    const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-edit-"));
-    const baseDir = await writePondSkill(workspace);
-    const first = await prepareLocalRun(workspace);
-    try {
-      const entryFirst = first.skillsSnapshotForRun!.resolvedSkills!.find(
-        (skill) => skill.name === "pond",
-      )!;
-      const identityFirst = entryFirst.bundleFingerprint;
-      expect(identityFirst).toBeTypeOf("string");
-      // Support-file-only edit: SKILL.md bytes stay identical while the bundle
-      // identity moves. The watcher reloads the edited skill — modeled here by
-      // the version bump it publishes — so the next preparation re-discovers
-      // and restamps the edited bundle.
-      await fs.writeFile(path.join(baseDir, "scripts", "check.sh"), "#!/bin/sh\nprintf pond-two\n");
-      bumpSkillsSnapshotVersion({ workspaceDir: workspace, reason: "manual" });
-      const second = await prepareLocalRun(workspace);
-      try {
-        const entrySecond = second.skillsSnapshotForRun!.resolvedSkills!.find(
-          (skill) => skill.name === "pond",
-        )!;
-        const expected = prepareSkillBundle(
-          (await readSkillResourceFiles(entrySecond, { allowMissingRoot: false }))!,
-        ).revision;
-        expect(entrySecond.bundleFingerprint).toBe(expected);
-        expect(entrySecond.bundleFingerprint).not.toBe(identityFirst);
-        // The first preparation's retained entries keep their delivered identity.
-        expect(entryFirst.bundleFingerprint).toBe(identityFirst);
-        expect(entrySecond.contentHash).toBe(entryFirst.contentHash);
-      } finally {
-        second.restoreSkillEnv();
-      }
-    } finally {
-      first.restoreSkillEnv();
     }
   });
 
