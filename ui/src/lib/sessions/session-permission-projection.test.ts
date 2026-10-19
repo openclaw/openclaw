@@ -7,6 +7,7 @@ import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import type { SessionListScope } from "./session-capability.ts";
 
 const scope = {
   agentId: "main",
@@ -76,7 +77,7 @@ function harness(replies: Reply[]) {
     sessions,
     request,
     rows: () => sessions.state.result?.sessions,
-    managed: (query = scope) => sessions.listSnapshot(query),
+    managed: (query: SessionListScope = scope) => sessions.listSnapshot(query),
     event: (session: GatewaySessionRow, agentId = "main") =>
       capability.emitEvent({
         type: "event",
