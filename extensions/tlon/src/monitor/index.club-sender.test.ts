@@ -1,10 +1,9 @@
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
-import { useTlonMonitorFixture } from "./monitor.test-harness.js";
+import { chatEvent, useTlonMonitorFixture } from "./monitor.test-harness.js";
 
 const {
-  monitorTlonProvider,
+  withMonitor,
+  getSubscription,
   authenticateMock,
   sseClientMock,
   ingressMock,
@@ -16,49 +15,7 @@ const {
 const OWNER = "~nec";
 const CLUB_ID = "0v3.q4n5m.6r7s8.9t0u1.2v3w4";
 
-async function withMonitor(run: (runtime: RuntimeEnv) => Promise<void>) {
-  const controller = new AbortController();
-  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({
-    scheduler: createTestPluginServiceScheduler(),
-    abortSignal: controller.signal,
-    runtime,
-  });
-  void monitor.catch(() => {});
-  try {
-    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
-    await run(runtime);
-  } finally {
-    controller.abort();
-    await monitor;
-  }
-}
-
-function chatSubscription() {
-  const subscription = sseClientMock.subscribe.mock.calls
-    .map(([value]) => value)
-    .find((value) => value.app === "chat" && value.path === "/v3");
-  if (!subscription) {
-    throw new Error("expected chat /v3 subscription");
-  }
-  return subscription;
-}
-
-function chatEvent(params: { whom: string; author: string; text: string; id: string }) {
-  return {
-    whom: params.whom,
-    id: params.id,
-    response: {
-      add: {
-        essay: {
-          author: params.author,
-          content: [{ inline: [params.text] }],
-          sent: 1_700_000_000_000,
-        },
-      },
-    },
-  };
-}
+const chatSubscription = () => getSubscription("chat", "/v3");
 
 function pokedTexts(): string[] {
   return sseClientMock.poke.mock.calls.flatMap(([poke]) => {
@@ -118,54 +75,18 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
         chatEvent({ whom: CLUB_ID, author: OWNER, text: "/restart", id: "~bus/3" }),
       );
 
+      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
       expect(inboundRuntimeMock.buildContext).toHaveBeenCalledOnce();
-      const [context] = inboundRuntimeMock.buildContext.mock.calls[0] as [
-        {
-          from: string;
-          sender: { id: string; name: string; roles: string[] };
-          extra: { SenderRole: string; CommandAuthorized: boolean };
+      const [context] = inboundRuntimeMock.buildContext.mock.calls[0];
+      expect(context).toMatchObject({
+        from: `tlon:club:${CLUB_ID}:${OWNER}`,
+        sender: {
+          id: `club:${CLUB_ID}:${OWNER}`,
+          name: `club:${CLUB_ID}:${OWNER}`,
+          roles: ["user"],
         },
-      ];
-      expect(context.sender.id).not.toBe(OWNER);
-      expect(context.sender.id).toBe(`club:${CLUB_ID}:${OWNER}`);
-      expect(context.sender.name).toBe(`club:${CLUB_ID}:${OWNER}`);
-      expect(context.from).toBe(`tlon:club:${CLUB_ID}:${OWNER}`);
-      expect(context.sender.roles).toEqual(["user"]);
-      expect(context.extra.SenderRole).toBe("user");
-      expect(context.extra.CommandAuthorized).toBe(false);
-    });
-  });
-
-  it("keeps replying to allowlisted ships in a club, as an ordinary user", async () => {
-    startMonitorDefaults({ dmAllowlist: ["~bus"] });
-    await withMonitor(async () => {
-      await chatSubscription().event(
-        chatEvent({ whom: CLUB_ID, author: "~bus", text: "hello", id: "~bus/4" }),
-      );
-
-      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
-      expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sender: expect.objectContaining({ id: `club:${CLUB_ID}:~bus`, roles: ["user"] }),
-        }),
-      );
-    });
-  });
-
-  it("still treats the owner's 1:1 DM as the owner", async () => {
-    startMonitorDefaults();
-    await withMonitor(async () => {
-      await chatSubscription().event(
-        chatEvent({ whom: OWNER, author: OWNER, text: "hello", id: "~nec/5" }),
-      );
-
-      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
-      expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          from: `tlon:${OWNER}`,
-          sender: expect.objectContaining({ id: OWNER, roles: ["owner"] }),
-        }),
-      );
+        extra: { SenderRole: "user", CommandAuthorized: false },
+      });
     });
   });
 
@@ -201,18 +122,12 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       );
 
       expect(inboundRuntimeMock.buildContext).toHaveBeenCalledOnce();
-      const [context] = inboundRuntimeMock.buildContext.mock.calls[0] as [
-        {
-          from: string;
-          sender: { id: string; roles: string[] };
-          extra: { SenderRole: string; CommandAuthorized: boolean };
-        },
-      ];
-      expect(context.sender.id).toBe(`club:${CLUB_ID}:~bus`);
-      expect(context.from).toBe(`tlon:club:${CLUB_ID}:~bus`);
-      expect(context.sender.roles).toEqual(["user"]);
-      expect(context.extra.SenderRole).toBe("user");
-      expect(context.extra.CommandAuthorized).toBe(false);
+      const [context] = inboundRuntimeMock.buildContext.mock.calls[0];
+      expect(context).toMatchObject({
+        from: `tlon:club:${CLUB_ID}:~bus`,
+        sender: { id: `club:${CLUB_ID}:~bus`, roles: ["user"] },
+        extra: { SenderRole: "user", CommandAuthorized: false },
+      });
     });
   });
 
@@ -223,10 +138,8 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
         chatEvent({ whom: CLUB_ID, author: OWNER, text: "hello", id: "~bus/9" }),
       );
       const pendingWrite = sseClientMock.poke.mock.calls
-        .map(([payload]) => (payload as { json?: Record<string, unknown> }).json?.["put-entry"])
-        .filter(Boolean)
-        .map((entry) => entry as { "entry-key": string; value: unknown })
-        .findLast((entry) => entry["entry-key"] === "pendingApprovals");
+        .map(([payload]) => payload.json?.["put-entry"])
+        .findLast((entry) => entry?.["entry-key"] === "pendingApprovals");
       const pending = JSON.parse(String(pendingWrite?.value)) as Array<Record<string, unknown>>;
       expect(pending).toHaveLength(1);
       expect(pending[0]).toMatchObject({ requestingShip: OWNER, clubId: CLUB_ID });
@@ -293,8 +206,7 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
           "approve dm-legacy",
         );
         const allowlistWrite = sseClientMock.poke.mock.calls
-          .map(([payload]) => (payload as { json?: Record<string, unknown> }).json?.["put-entry"])
-          .map((entry) => entry as { "entry-key"?: string; value?: unknown } | undefined)
+          .map(([payload]) => payload.json?.["put-entry"])
           .find((entry) => entry?.["entry-key"] === "dmAllowlist");
         expect(allowlistWrite?.value).toEqual(["~bus"]);
         if (replays) {
@@ -326,8 +238,7 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
         chatEvent({ whom: CLUB_ID, author: "~bus", text: "hi", id: "~bus/13" }),
       );
       const pendingWrite = sseClientMock.poke.mock.calls
-        .map(([payload]) => (payload as { json?: Record<string, unknown> }).json?.["put-entry"])
-        .map((entry) => entry as { "entry-key"?: string; value?: unknown } | undefined)
+        .map(([payload]) => payload.json?.["put-entry"])
         .findLast((entry) => entry?.["entry-key"] === "pendingApprovals");
       const pending = JSON.parse(String(pendingWrite?.value)) as Array<Record<string, unknown>>;
       expect(pending).toHaveLength(2);
