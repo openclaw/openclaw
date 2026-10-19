@@ -24,7 +24,7 @@ import "../../../styles/chat/summary-automations.css";
 
 registerEnglishCatalog(registerCronEnglish);
 
-export type SessionAutomationMobileHistoryProps = Pick<
+type SessionAutomationMobileHistoryProps = Pick<
   CronProps,
   | "runs"
   | "runsState"

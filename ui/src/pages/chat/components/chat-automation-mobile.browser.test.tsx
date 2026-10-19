@@ -5,7 +5,7 @@ import type { CronJob, CronRunLogEntry } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   SessionAutomationMobileBody,
-  type SessionAutomationMobileHistoryProps,
+  type SessionAutomationMobileBodyProps,
 } from "./chat-automation-mobile.tsx";
 
 it("forwards mobile history search, status ordering and the selected run to native callbacks", async () => {
@@ -32,9 +32,11 @@ it("forwards mobile history search, status ordering and the selected run to nati
   const onViewRunTranscript = vi.fn();
   const onRunsFiltersChange =
     vi.fn<
-      (patch: Parameters<SessionAutomationMobileHistoryProps["onRunsFiltersChange"]>[0]) => void
+      (
+        patch: Parameters<SessionAutomationMobileBodyProps["history"]["onRunsFiltersChange"]>[0],
+      ) => void
     >();
-  const [history, setHistory] = createSignal<SessionAutomationMobileHistoryProps>({
+  const [history, setHistory] = createSignal<SessionAutomationMobileBodyProps["history"]>({
     runs: [run],
     runsState: "ready",
     runsHasMore: false,
