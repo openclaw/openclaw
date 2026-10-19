@@ -37,6 +37,18 @@ export async function prepareLocalSandboxWorkspace(params: {
       owner[Symbol.dispose]();
     }
   };
+  const retainOwner = () => {
+    owner.assertCurrent();
+    retained++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        retained--;
+        releaseOwner();
+      }
+    };
+  };
   const assertCurrent = () => {
     params.assertCurrent?.();
     if (disposed) {
@@ -96,15 +108,7 @@ export async function prepareLocalSandboxWorkspace(params: {
       assertCurrent,
       retain: () => {
         assertCurrent();
-        retained++;
-        let released = false;
-        return () => {
-          if (!released) {
-            released = true;
-            retained--;
-            releaseOwner();
-          }
-        };
+        return retainOwner();
       },
       provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
         await withLocalWorkspaceProjection(
@@ -117,6 +121,15 @@ export async function prepareLocalSandboxWorkspace(params: {
           },
           { provision: true, signal },
         ),
+      terminate: async (run: () => Promise<void>) => {
+        // Cancellation can join a checkpoint after the exec's finalization has started.
+        const release = retainOwner();
+        try {
+          await withLocalWorkspaceProjection(owner, run, { provision: true });
+        } finally {
+          release();
+        }
+      },
       checkpoint: async () => {
         // Stop closes execution admission; accepted output still settles under its workspace owner.
         await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
@@ -145,7 +158,19 @@ export function bindLocalSandboxWorkspace(
   if (prepareCleanup) {
     backend.prepareProcessCleanup = (env) => {
       projection.assertCurrent();
-      return prepareCleanup(env);
+      const cleanup = prepareCleanup(env);
+      return {
+        env: cleanup.env,
+        terminate: () => projection.terminate(() => cleanup.terminate()),
+        interrupt: (timeoutMs) => {
+          const signal = AbortSignal.timeout(timeoutMs);
+          const deadline = performance.now() + timeoutMs;
+          return projection.provision(() => {
+            signal.throwIfAborted();
+            return cleanup.interrupt(Math.max(0, Math.ceil(deadline - performance.now())));
+          }, signal);
+        },
+      };
     };
   }
   const shell = backend.runShellCommand.bind(backend);
