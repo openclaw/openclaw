@@ -80,7 +80,18 @@ it.each(["before", "during"])("preserves cancellation %s transport", async (timi
     }
     signal.throwIfAborted();
     return new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener(
+        "abort",
+        () => {
+          const abortReason: unknown = signal.reason;
+          reject(
+            abortReason instanceof Error
+              ? abortReason
+              : new Error("Exa request lost caller cancellation reason"),
+          );
+        },
+        { once: true },
+      );
       // Cancel at transport entry, after cold runtime loading has completed.
       controller.abort(reason);
       expect(signal.aborted).toBe(true);
@@ -131,7 +142,13 @@ it("applies scoped auth, endpoint, contents, freshness, and result normalization
   ).toEqual(["first\nsecond", "text fallback"]);
   expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example/exa/search");
   expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ "x-api-key": "exa-config-key" });
-  const rawBodyAt = (index: number) => String(fetchMock.mock.calls[index]?.[1]?.body);
+  const rawBodyAt = (index: number) => {
+    const body = fetchMock.mock.calls[index]?.[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected Exa JSON request body");
+    }
+    return body;
+  };
   const bodyAt = (index = fetchMock.mock.calls.length - 1) => JSON.parse(rawBodyAt(index));
   expect(
     rawBodyAt(0).replace(/"startPublishedDate":"[^"]*"/, '"startPublishedDate":"<dynamic-date>"'),

@@ -50,7 +50,11 @@ function searchResult(title: string, url: string, snippet: string, extra = {}) {
 }
 
 function requestBody(index = 0) {
-  return JSON.parse(String(fetchMock.mock.calls[index]?.[1]?.body));
+  const body = fetchMock.mock.calls[index]?.[1]?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected Kimi JSON request body");
+  }
+  return JSON.parse(body);
 }
 
 beforeEach(({ task }) => {
@@ -236,9 +240,14 @@ it("forwards the execution abort signal to an in-flight Kimi search", async () =
   fetchMock.mockImplementation(
     (_url, init) =>
       new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
-          once: true,
-        });
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("Kimi search aborted"));
+          },
+          { once: true },
+        );
       }),
   );
   const controller = new AbortController();
