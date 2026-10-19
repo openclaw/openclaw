@@ -1,6 +1,6 @@
 // Nodes tool tests cover gateway-scoped node actions, media payload writing,
 // numeric schema guardrails, and pairing approval scopes.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -108,6 +108,15 @@ vi.mock("../../cli/nodes-screen.js", () => ({
   writeScreenSnapshotToFile: screenMocks.writeScreenSnapshotToFile,
 }));
 
+let extractToolResultMediaArtifact: typeof import("../embedded-agent-tool-media.js").extractToolResultMediaArtifact;
+let mergeAttemptToolMediaPayloads: typeof import("../embedded-agent-runner/run/tool-media-payloads.js").mergeAttemptToolMediaPayloads;
+let deliverOutboundPayloadsCore: typeof import("../../infra/outbound/deliver-core.js").deliverOutboundPayloadsCore;
+let createUnmodifiedPreparedOutboundBatch: typeof import("../../infra/outbound/prepared-batch.js").createUnmodifiedPreparedOutboundBatch;
+let resetPluginRuntimeStateForTest: typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("../../plugins/runtime.js").setActivePluginRegistry;
+let createOutboundTestPlugin: typeof import("../../test-utils/channel-plugins.js").createOutboundTestPlugin;
+let createTestRegistry: typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
 
 function mockNodePairApproveFlow(pendingRequest: {
@@ -157,7 +166,19 @@ describe("createNodesTool screen_record duration guardrails", () => {
     // cached prior import before wiring this file's gateway/media mocks.
     vi.resetModules();
     ({ createNodesTool } = await import("./nodes-tool.js"));
+    ({ extractToolResultMediaArtifact } = await import("../embedded-agent-tool-media.js"));
+    ({ mergeAttemptToolMediaPayloads } =
+      await import("../embedded-agent-runner/run/tool-media-payloads.js"));
+    ({ deliverOutboundPayloadsCore } = await import("../../infra/outbound/deliver-core.js"));
+    ({ createUnmodifiedPreparedOutboundBatch } =
+      await import("../../infra/outbound/prepared-batch.js"));
+    ({ setActivePluginRegistry, resetPluginRuntimeStateForTest } =
+      await import("../../plugins/runtime.js"));
+    ({ createOutboundTestPlugin, createTestRegistry } =
+      await import("../../test-utils/channel-plugins.js"));
   });
+
+  afterEach(() => resetPluginRuntimeStateForTest());
 
   beforeEach(() => {
     gatewayMocks.callGatewayTool.mockReset();
@@ -390,6 +411,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
         height: 1080,
         media: {
           mediaUrl: "/tmp/screen-snapshot.png",
+          outbound: false,
         },
       },
     });
@@ -564,10 +586,111 @@ describe("createNodesTool screen_record duration guardrails", () => {
       ],
       media: {
         mediaUrls: ["/tmp/photo-1.jpg", "/tmp/photo-2.jpg"],
+        outbound: false,
       },
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
   });
+
+  it.each([
+    { action: "screen_snapshot", vision: true, retained: false },
+    { action: "screen_snapshot", vision: false, retained: false },
+    ...["camera_snap", "photos_latest"].flatMap((action) => [
+      { action, vision: undefined, retained: false },
+      { action, vision: false, retained: false },
+      { action, vision: true, retained: true },
+      { action, vision: true, retained: false },
+    ]),
+  ])(
+    "keeps $action private with vision=$vision retained=$retained, but permits explicit sharing",
+    async ({ action, vision, retained }) => {
+      // Native I/O is synthetic; image sanitation, extraction, payload merging and
+      // channel delivery are real. No operator files, nodes or network are used.
+      const png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=";
+      if (action !== "screen_snapshot") {
+        nodesCameraMocks.parseCameraSnapPayload.mockReturnValueOnce({
+          base64: retained ? png : "ZmFrZQ==",
+          format: "png",
+          width: 1,
+          height: 1,
+        });
+      }
+      gatewayMocks.callGatewayTool.mockResolvedValue({
+        payload:
+          action === "photos_latest"
+            ? { photos: [{}] }
+            : { base64: "ZmFrZQ==", format: "png", width: 1, height: 1 },
+      });
+      const result = await createNodesTool({ modelHasVision: vision }).execute("private-media", {
+        action,
+        node: "synthetic-node",
+      });
+      const artifact = extractToolResultMediaArtifact(result);
+      expect(artifact).toBeUndefined();
+      const texts = result.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+      const savedPath =
+        action === "screen_snapshot"
+          ? "/tmp/screen-snapshot.png"
+          : action === "camera_snap"
+            ? "/tmp/camera-front.jpg"
+            : "/tmp/camera.jpg";
+      expect(texts).toContain(savedPath);
+      expect(texts).not.toContain("MEDIA:");
+      if (action !== "screen_snapshot") {
+        expect(result.content.filter((block) => block.type === "image")).toHaveLength(
+          retained ? 1 : 0,
+        );
+        expect(texts.includes("Loaded 1 photo into private model context")).toBe(retained);
+      }
+      const sendText = vi.fn(async () => ({ channel: "matrix" as const, messageId: "text" }));
+      const sendMedia = vi.fn(async () => ({ channel: "matrix" as const, messageId: "media" }));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "matrix",
+              outbound: { deliveryMode: "direct", sendText, sendMedia },
+            }),
+          },
+        ]),
+      );
+      const payloads =
+        mergeAttemptToolMediaPayloads({
+          payloads: [{ text: "Inspection complete." }],
+          toolMediaUrls: artifact?.mediaUrls,
+        }) ?? [];
+      for (const to of ["group:requester", "group:other-members"]) {
+        await deliverOutboundPayloadsCore({
+          cfg: {},
+          channel: "matrix",
+          to,
+          payloads,
+          preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
+        });
+      }
+      expect(sendText).toHaveBeenCalledTimes(2);
+      expect(sendMedia).not.toHaveBeenCalled();
+      // An explicit request may still send the saved path to the chosen recipient.
+      const explicit = [{ text: "Requested photo", mediaUrl: savedPath }];
+      await deliverOutboundPayloadsCore({
+        cfg: {},
+        channel: "matrix",
+        to: "group:requester",
+        payloads: explicit,
+        preparedBatch: createUnmodifiedPreparedOutboundBatch(explicit),
+      });
+      expect(sendMedia).toHaveBeenCalledTimes(1);
+      expect(sendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "group:requester", mediaUrl: savedPath }),
+      );
+    },
+  );
 
   it("caps photos_latest limit at 20 before gateway invoke", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { photos: [] } });
