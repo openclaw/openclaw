@@ -246,7 +246,10 @@ class NodeRuntimeAgentSelectionTest {
           )
           withTimeout(2_000) {
             // The owner registers launched reads synchronously; drain them before checking omissions.
-            runtimeJob.children.filterNot { it in previousJobs }.toList().forEach { it.join() }
+            runtimeJob.children
+              .filterNot { it in previousJobs }
+              .toList()
+              .forEach { it.join() }
             if (refreshes) {
               publishedRevision = revision.get()
               repeat(2) {
@@ -261,7 +264,12 @@ class NodeRuntimeAgentSelectionTest {
           val expectedModels = if (publishedRevision == 0) emptyList() else listOf("model-$publishedRevision")
           assertEquals(expectedModels, runtime.modelCatalog.value.map { it.id })
           assertEquals(expectedModels, runtime.providerModelCatalog.value.map { it.id })
-          assertEquals("credential-$publishedRevision", runtime.modelAuthProviders.value.single().id)
+          assertEquals(
+            "credential-$publishedRevision",
+            runtime.modelAuthProviders.value
+              .single()
+              .id,
+          )
         }
       } finally {
         closeNodeRuntimeTestFixture(runtime)
