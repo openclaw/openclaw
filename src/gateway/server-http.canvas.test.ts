@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import { createCanvasDocument } from "../canvas/documents.js";
 import {
@@ -10,7 +11,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   mintPluginNodeCapabilityToken,
@@ -20,17 +21,7 @@ import {
 import { createGatewayHttpServer } from "./server-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-const resolvedAuth: ResolvedGatewayAuth = {
-  mode: "token",
-  token: "test-token",
-  allowTailscale: false,
-};
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
-  clearRuntimeConfigSnapshot();
-});
+afterEach(clearRuntimeConfigSnapshot);
 
 type HostedDocumentContext = {
   clients: Set<GatewayWsClient>;
@@ -39,77 +30,53 @@ type HostedDocumentContext = {
 };
 
 async function withHostedDocumentServer<T>(
-  params: {
-    config: OpenClawConfig;
-    skipHost?: string;
-  },
+  params: { config: OpenClawConfig; skipHost?: string },
   run: (context: HostedDocumentContext) => Promise<T>,
 ): Promise<T> {
-  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-gateway-"));
-  tempDirs.push(stateDir);
-  const document = await createCanvasDocument(
-    {
-      id: "host-switch-test",
-      html: "<html><body>hosted</body></html>",
-    },
-    { stateDir },
-  );
-  const clients = new Set<GatewayWsClient>();
-
-  return await withEnvAsync(
-    {
-      OPENCLAW_SKIP_CANVAS_HOST: params.skipHost,
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    async () => {
-      setRuntimeConfigSnapshot(params.config);
-      const server = createGatewayHttpServer({
-        clients,
-        controlUiEnabled: false,
-        controlUiBasePath: "/__control__",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        handleHooksRequest: async () => false,
-        handlePluginRequest: async () => false,
-        resolvePluginNodeCapabilityRoute: (pathContext) =>
-          resolveCanvasNodeCapability(pathContext.candidates),
-        resolvedAuth,
-        getRuntimeConfig: () => params.config,
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", () => resolve());
-      });
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      try {
-        return await run({ clients, document, origin: `http://127.0.0.1:${port}` });
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+  return await withTempDir("openclaw-canvas-gateway-", async (stateDir) => {
+    const document = await createCanvasDocument(
+      { id: "host-switch-test", html: "<html><body>hosted</body></html>" },
+      { stateDir },
+    );
+    const clients = new Set<GatewayWsClient>();
+    return await withEnvAsync(
+      { OPENCLAW_SKIP_CANVAS_HOST: params.skipHost, OPENCLAW_STATE_DIR: stateDir },
+      async () => {
+        setRuntimeConfigSnapshot(params.config);
+        const server = createGatewayHttpServer({
+          clients,
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          handleHooksRequest: async () => false,
+          handlePluginRequest: async () => false,
+          resolvePluginNodeCapabilityRoute: (pathContext) =>
+            resolveCanvasNodeCapability(pathContext.candidates),
+          resolvedAuth: { mode: "token", token: "test-token", allowTailscale: false },
+          getRuntimeConfig: () => params.config,
         });
-      }
-    },
-  );
+        const origin = await listenLoopback(server);
+        try {
+          return await run({ clients, document, origin });
+        } finally {
+          await closeHttpServer(server);
+        }
+      },
+    );
+  });
 }
 
 function connectCanvasClient({ clients, document, origin }: HostedDocumentContext) {
   const client: GatewayWsClient = {
     socket: {} as GatewayWsClient["socket"],
-    connect: {
-      role: "node",
-      client: { mode: "node" },
-    } as GatewayWsClient["connect"],
+    connect: { role: "node", client: { mode: "node" } } as GatewayWsClient["connect"],
     connId: "canvas-node",
     usesSharedGatewayAuth: false,
   };
   const surface = resolveCanvasNodeCapability([document.entryUrl]);
-  if (!surface) {
-    throw new Error(`expected Canvas capability surface for ${document.entryUrl}`);
-  }
   const capability = mintPluginNodeCapabilityToken();
   const scopedUrl = buildPluginNodeCapabilityScopedHostUrl(origin, capability);
-  if (!scopedUrl) {
-    throw new Error("expected scoped Canvas host URL");
+  if (!surface || !scopedUrl) {
+    throw new Error(`expected Canvas capability surface and URL for ${document.entryUrl}`);
   }
   client.pluginSurfaceUrls = { canvas: scopedUrl };
   client.pluginNodeCapabilitySurfaces = { canvas: surface };
@@ -144,13 +111,11 @@ async function expectUnauthorized(response: Response): Promise<void> {
   });
 }
 
-describe("core Canvas Gateway host switches", () => {
+describe("core Canvas Gateway", () => {
   it.each([
     {
       label: "plugins.entries.canvas.config.host.enabled=false",
-      config: {
-        plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-      },
+      config: { plugins: { entries: { canvas: { config: { host: { enabled: false } } } } } },
     },
     { label: "OPENCLAW_SKIP_CANVAS_HOST", config: {}, skipHost: "1" },
   ])("does not register the core widget route for $label", async ({ config, skipHost }) => {
@@ -161,9 +126,6 @@ describe("core Canvas Gateway host switches", () => {
       expect(response.status).toBe(404);
     });
   });
-});
-
-describe("core Canvas Gateway capability authorization", () => {
   it("rejects an invalidated client's capability without extending its expiry", async () => {
     await withCanvasClient(async ({ client, url }) => {
       await expectHosted(url);

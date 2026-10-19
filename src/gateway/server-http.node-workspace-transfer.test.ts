@@ -1,13 +1,14 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
 
-const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 const activeLimiters: AuthRateLimiter[] = [];
 const digest = "a".repeat(64);
 const blobDigest = "b".repeat(64);
@@ -22,49 +23,36 @@ afterEach(() => {
   }
 });
 
-async function withTransferServer<T>(params: {
-  bundleCallback?: ArtifactTransferHttpCallback;
-  bootstrapCallback?: ArtifactTransferHttpCallback;
-  callback?: NodeWorkspaceTransferHttpCallback;
-  limiter?: AuthRateLimiter;
-  hooks?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+async function withTransferServer<T>({
+  run,
+  ...options
+}: Partial<Parameters<typeof createGatewayHttpServer>[0]> & {
   run(origin: string): Promise<T>;
 }): Promise<T> {
   const server = createGatewayHttpServer({
     clients: new Set(),
     controlUiEnabled: true,
     controlUiBasePath: "",
-    openAiChatCompletionsEnabled: false,
-    openResponsesEnabled: false,
-    handleHooksRequest: params.hooks ?? (async () => false),
-    resolvedAuth,
-    joinRateLimiter: params.limiter,
-    handleNodeWorkerBundleTransferRequest: params.bundleCallback,
-    handleWorkerBootstrapArtifactTransferRequest: params.bootstrapCallback,
-    handleNodeWorkspaceTransferRequest: params.callback,
+    handleHooksRequest: async () => false,
+    resolvedAuth: { mode: "none", allowTailscale: false },
     getRuntimeConfig: () => ({}),
+    ...options,
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
+  const origin = await listenLoopback(server);
   try {
-    return await params.run(`http://127.0.0.1:${port}`);
+    return await run(origin);
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 
-describe("node worker bundle transfer HTTP routing", () => {
+describe("worker transfer HTTP routing", () => {
   it("reserves the exact bundle namespace and collapses rejected auth", async () => {
     const hooks = vi.fn(async () => false);
     const callback = vi.fn<ArtifactTransferHttpCallback>(unauthorized);
     await withTransferServer({
-      bundleCallback: callback,
-      hooks,
+      handleNodeWorkerBundleTransferRequest: callback,
+      handleHooksRequest: hooks,
       run: async (origin) => {
         const url = `${origin}/__openclaw__/worker-bundle/v1/bundles/${digest}`;
         const missing = await fetch(url);
@@ -77,9 +65,6 @@ describe("node worker bundle transfer HTTP routing", () => {
       },
     });
   });
-});
-
-describe("cloud bootstrap artifact HTTP routing", () => {
   it("serves only an authorized exact artifact before node enrollment and reserves malformed paths", async () => {
     const hooks = vi.fn(async () => false);
     const callback = vi.fn<ArtifactTransferHttpCallback>(async ({ bearer, artifactKey, res }) =>
@@ -93,8 +78,8 @@ describe("cloud bootstrap artifact HTTP routing", () => {
         : { kind: "unauthorized" },
     );
     await withTransferServer({
-      bootstrapCallback: callback,
-      hooks,
+      handleWorkerBootstrapArtifactTransferRequest: callback,
+      handleHooksRequest: hooks,
       run: async (origin) => {
         const artifactDigest = "c".repeat(64);
         const url = `${origin}/__openclaw__/worker-bootstrap/artifacts/${artifactDigest}`;
@@ -167,7 +152,7 @@ describe("node workspace transfer HTTP routing", () => {
       };
     };
     await withTransferServer({
-      callback,
+      handleNodeWorkspaceTransferRequest: callback,
       run: async (origin) => {
         const request = (path: string, method = "GET") =>
           authorizedFetch(`${origin}${transferPath}/${path}`, "valid-transfer-token", method);
@@ -205,8 +190,8 @@ describe("node workspace transfer HTTP routing", () => {
     activeLimiters.push(limiter);
     const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(unauthorized);
     await withTransferServer({
-      callback,
-      limiter,
+      handleNodeWorkspaceTransferRequest: callback,
+      joinRateLimiter: limiter,
       run: async (origin) => {
         const url = `${origin}${transferPath}/snapshots/${digest}/pack`;
         const rejected = await authorizedFetch(url, "rejected-transfer-token");

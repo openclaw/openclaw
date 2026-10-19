@@ -19,10 +19,7 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type JoinSetupResult = {
-  setupCode: string;
-  joinUrl: string;
-};
+type JoinSetupResult = { setupCode: string; joinUrl: string };
 
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let adminSocket: WebSocket;
@@ -39,9 +36,7 @@ beforeAll(async () => {
     token: "secret",
     scopes: ["operator.admin"],
   });
-  if (!connected.ok) {
-    throw new Error(`admin test client failed to connect: ${JSON.stringify(connected.error)}`);
-  }
+  expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
 });
 
 afterAll(async () => {
@@ -78,21 +73,34 @@ function updateJoinCode(
   joinUrl: string,
   values: { shortcode?: string; expires_at_ms?: number; payload_json?: string | null },
 ) {
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runOpenClawStateWriteTransaction(({ db }) =>
     executeSqliteQuerySync(
       db,
       joinCodes(db)
         .updateTable("device_pairing_join_codes")
         .set(values)
         .where("shortcode", "=", shortcodeFromUrl(joinUrl)),
-    );
-  });
+    ),
+  );
 }
 
-async function expectJoined(joinUrl: string, setupCode: string) {
+async function expectJoined({ joinUrl, setupCode }: JoinSetupResult) {
   const response = await fetch(joinUrl);
   expect(response.status).toBe(200);
-  expect(await readJson(response)).toEqual(decodePairingSetupCode(setupCode));
+  expect(response.headers.get("content-type")).toContain("application/json");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const payload = (await readJson(response)) as ReturnType<typeof decodePairingSetupCode>;
+  expect(payload).toEqual(decodePairingSetupCode(setupCode));
+  return payload;
+}
+
+async function expectConcurrent(url: string, statuses: number[], bodies: Record<number, unknown>) {
+  const responses = await Promise.all(statuses.map(() => fetch(url)));
+  expect(responses.map(({ status }) => status).toSorted((a, b) => a - b)).toEqual(statuses);
+  for (const response of responses) {
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await readJson(response)).toEqual(bodies[response.status]);
+  }
 }
 
 describe("Gateway device join route", () => {
@@ -108,8 +116,7 @@ describe("Gateway device join route", () => {
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     try {
-      const setup = await mintJoinUrl();
-      await expectJoined(setup.joinUrl, setup.setupCode);
+      await expectJoined(await mintJoinUrl());
       const joinCodeSql = [...prepare.mock.calls, ...exec.mock.calls].filter(([sql]) =>
         /\bdevice_pairing_join_codes\b/u.test(sql),
       );
@@ -128,14 +135,11 @@ describe("Gateway device join route", () => {
     const joinUrl = new URL(setup.joinUrl);
     joinUrl.pathname = joinUrl.pathname.replace(originalShortcode, jPrefixedShortcode);
 
-    await expectJoined(joinUrl.href, setup.setupCode);
+    await expectJoined({ ...setup, joinUrl: joinUrl.href });
   });
 
   it("approves the joined node's initial surface but gates a later manifest escalation", async () => {
-    const setup = await mintJoinUrl();
-    const joined = await fetch(setup.joinUrl);
-    expect(joined.status).toBe(200);
-    const payload = (await readJson(joined)) as ReturnType<typeof decodePairingSetupCode>;
+    const payload = await expectJoined(await mintJoinUrl());
     const loaded = loadDeviceIdentity("join-code-node-surface");
     const client = {
       id: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -191,11 +195,7 @@ describe("Gateway device join route", () => {
       const shortcode = shortcodeFromUrl(live.joinUrl);
       expect(Buffer.from(shortcode, "base64url").byteLength).toBeGreaterThanOrEqual(16);
 
-      const first = await fetch(live.joinUrl);
-      expect(first.status).toBe(200);
-      expect(first.headers.get("content-type")).toContain("application/json");
-      expect(first.headers.get("cache-control")).toBe("no-store");
-      expect(await readJson(first)).toEqual(decodePairingSetupCode(live.setupCode));
+      await expectJoined(live);
 
       const malformed = await mintJoinUrl();
       const malformedShortcode = shortcodeFromUrl(malformed.joinUrl);
@@ -216,27 +216,15 @@ describe("Gateway device join route", () => {
     }
 
     const raced = await mintJoinUrl();
-    const racedResponses = await Promise.all([fetch(raced.joinUrl), fetch(raced.joinUrl)]);
-    expect(racedResponses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
-      200, 404,
-    ]);
-    for (const response of racedResponses) {
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(await readJson(response)).toEqual(
-        response.status === 200 ? decodePairingSetupCode(raced.setupCode) : opaqueNotFound,
-      );
-    }
+    await expectConcurrent(raced.joinUrl, [200, 404], {
+      200: decodePairingSetupCode(raced.setupCode),
+      404: opaqueNotFound,
+    });
 
     const unknownUrl = `http://127.0.0.1:${harness.port}/j/${"z".repeat(22)}`;
-    const misses = await Promise.all(Array.from({ length: 3 }, () => fetch(unknownUrl)));
-    expect(misses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
-      404, 429, 429,
-    ]);
-    for (const response of misses) {
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(await readJson(response)).toEqual(
-        response.status === 404 ? opaqueNotFound : { error: "rate_limited" },
-      );
-    }
+    await expectConcurrent(unknownUrl, [404, 429, 429], {
+      404: opaqueNotFound,
+      429: { error: "rate_limited" },
+    });
   });
 });

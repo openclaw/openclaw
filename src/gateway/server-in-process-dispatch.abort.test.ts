@@ -1,14 +1,13 @@
 /** Proves in-process Gateway cancellation reaches real paired-node invocation state. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { WorkerTaskError } from "../../packages/worker-runtime/src/worker-task-error.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
+import { makeClient } from "./node-registry.test-helpers.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const handleGatewayRequest = vi.hoisted(() => vi.fn());
 
@@ -49,35 +48,12 @@ function registerPairedNode(): { registry: NodeRegistry; frames: string[] } {
   const registry = new NodeRegistry();
   activeRegistries.add(registry);
   registry.register(
-    {
-      connId: "paired-node-connection",
-      usesSharedGatewayAuth: false,
-      socket: {
-        readyState: WebSocket.OPEN,
-        send(frame: string | Buffer) {
-          frames.push(frame.toString());
-        },
-      },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          id: GATEWAY_CLIENT_IDS.NODE_HOST,
-          version: "1.0.0",
-          platform: "linux",
-          mode: "node",
-        },
-        device: {
-          id: "paired-node",
-          publicKey: "public-key",
-          signature: "signature",
-          signedAt: 1,
-          nonce: "nonce",
-        },
-        caps: ["local-inference"],
-        commands: ["ollama.chat"],
-      },
-    } as GatewayWsClient,
+    makeClient("paired-node-connection", "paired-node", frames, {
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      platform: "linux",
+      caps: ["local-inference"],
+      commands: ["ollama.chat"],
+    }),
     { pairingIdentity: "paired-node-identity" },
   );
   return { registry, frames };
