@@ -2,9 +2,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hasAuthMock } = vi.hoisted(() => ({
-  hasAuthMock: vi.fn(),
-}));
+const { hasAuthMock } = vi.hoisted(() => ({ hasAuthMock: vi.fn() }));
 
 vi.mock("./region.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./region.js")>();
@@ -18,6 +16,7 @@ const opusThinking = { xhigh: "xhigh", max: "max" };
 const fableThinking = { off: "low", minimal: "low", ...opusThinking };
 const globalUrl = "https://aiplatform.googleapis.com";
 const usUrl = "https://aiplatform.us.rep.googleapis.com";
+const adcEnv = { ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" };
 const currentMetadata = {
   reasoning: true,
   input: ["text", "image"],
@@ -26,10 +25,7 @@ const currentMetadata = {
   maxTokens: 128_000,
 } satisfies Partial<ProviderRuntimeModel>;
 
-function staleModel(
-  id: string,
-  overrides: Partial<ProviderRuntimeModel> = {},
-): ProviderRuntimeModel {
+function staleModel(id: string, patch: Partial<ProviderRuntimeModel> = {}): ProviderRuntimeModel {
   return {
     id,
     name: id,
@@ -41,7 +37,7 @@ function staleModel(
     cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
     contextWindow: 200_000,
     maxTokens: 8192,
-    ...overrides,
+    ...patch,
   };
 }
 
@@ -62,13 +58,10 @@ describe("anthropic-vertex provider plugin", () => {
     vi.resetModules();
   });
 
-  it("resolves the ADC marker through the provider hook", async () => {
-    expect(
-      provider.resolveConfigApiKey?.({
-        provider: "anthropic-vertex",
-        env: { ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" },
-      } as never),
-    ).toBe("gcp-vertex-credentials");
+  it("resolves the ADC marker through the provider hook", () => {
+    expect(provider.resolveConfigApiKey?.({ provider: "anthropic-vertex", env: adcEnv })).toBe(
+      "gcp-vertex-credentials",
+    );
   });
 
   it("returns raw discovery for the host to merge with explicit provider overrides", async () => {
@@ -78,10 +71,7 @@ describe("anthropic-vertex provider plugin", () => {
     };
     const result = await provider.catalog?.run({
       config: { models: { providers: { "anthropic-vertex": configured } } },
-      env: {
-        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
-        GOOGLE_CLOUD_LOCATION: "us-east5",
-      },
+      env: { ...adcEnv, GOOGLE_CLOUD_LOCATION: "us-east5" },
     } as never);
 
     if (!result || !("provider" in result)) {
@@ -125,11 +115,8 @@ describe("anthropic-vertex provider plugin", () => {
 
     it("publishes current pricing with or without the shipped nowMs argument", () => {
       const env = { GOOGLE_CLOUD_LOCATION: region };
-      const providers = [
-        buildAnthropicVertexProvider({ env }),
-        buildAnthropicVertexProvider({ env, nowMs }),
-      ];
-      for (const catalog of providers) {
+      for (const params of [{ env }, { env, nowMs }]) {
+        const catalog = buildAnthropicVertexProvider(params);
         expect(catalog.models.find((model) => model.id === "claude-sonnet-5")).toMatchObject({
           cost,
           contextWindow: 1_000_000,
@@ -139,9 +126,8 @@ describe("anthropic-vertex provider plugin", () => {
       }
     });
 
-    it("repairs missing or retired pricing and leaves current pricing unchanged", async () => {
+    it("repairs missing or retired pricing and leaves current pricing unchanged", () => {
       const model = staleModel("claude-sonnet-5", {
-        name: "Claude Sonnet 5",
         baseUrl,
         ...currentMetadata,
         thinkingLevelMap: opusThinking,
@@ -153,7 +139,7 @@ describe("anthropic-vertex provider plugin", () => {
     });
   });
 
-  it("registers the shared thinking policy with canonical alias support", async () => {
+  it("registers the shared thinking policy with canonical alias support", () => {
     const profile = provider.resolveThinkingProfile?.({
       provider: "anthropic-vertex",
       modelId: "production-claude",
@@ -194,35 +180,27 @@ describe("anthropic-vertex provider plugin", () => {
       thinkingLevelMap: opusThinking,
       cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
     },
-  ])(
-    "restores metadata for $id without overriding authored thinking levels",
-    ({ id, overrides, thinkingLevelMap, cost }) => {
-      const normalized = normalize(staleModel(id, overrides));
-      expect(normalized).toMatchObject({
+  ])("restores $id metadata and authored levels", ({ id, overrides, thinkingLevelMap, cost }) => {
+    expect(normalize(staleModel(id, overrides))).toEqual(
+      expect.objectContaining({
         ...currentMetadata,
         ...(cost ? { cost } : {}),
-      });
-      // Exact maps also guard Opus's absence of mandatory off/minimal remapping.
-      expect(normalized?.thinkingLevelMap).toEqual(thinkingLevelMap);
-    },
-  );
+        thinkingLevelMap,
+      }),
+    );
+  });
 
-  it.each([
-    [
-      true,
-      {
-        apiKey: "gcp-vertex-credentials",
-        source: "gcp-vertex-credentials (ADC)",
-        mode: "api-key",
-      },
-    ],
-    [false, undefined],
-  ] as const)("resolves synthetic auth only when ADC is available=%s", (available, expected) => {
+  it.each([true, false])("resolves synthetic auth only when ADC is available=%s", (available) => {
     hasAuthMock.mockReturnValue(available);
-    expect(
-      provider.resolveSyntheticAuth?.({
-        provider: "anthropic-vertex",
-      } as never),
-    ).toEqual(expected);
+    const auth = provider.resolveSyntheticAuth?.({ provider: "anthropic-vertex" } as never);
+    expect(auth).toEqual(
+      available
+        ? {
+            apiKey: "gcp-vertex-credentials",
+            source: "gcp-vertex-credentials (ADC)",
+            mode: "api-key",
+          }
+        : undefined,
+    );
   });
 });
