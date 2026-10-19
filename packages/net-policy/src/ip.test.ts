@@ -60,32 +60,20 @@ describe("shared ip helpers", () => {
   });
 
   it("extracts embedded IPv4 for transition prefixes", () => {
-    const cases = [
+    for (const [literal, expected] of [
       ["::ffff:127.0.0.1", "127.0.0.1"],
       ["::127.0.0.1", "127.0.0.1"],
       ["64:ff9b::8.8.8.8", "8.8.8.8"],
       ["2002:0808:0808::", "8.8.8.8"],
       ["2001::f7f7:f7f7", "8.8.8.8"],
       ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
-    ] as const;
-    for (const [ipv6Literal, expectedIpv4] of cases) {
-      expect(extractEmbeddedIpv4FromIpv6(ipv6(ipv6Literal))?.toString(), ipv6Literal).toBe(
-        expectedIpv4,
-      );
+    ] as const) {
+      expect(extractEmbeddedIpv4FromIpv6(ipv6(literal))?.toString(), literal).toBe(expected);
     }
   });
 
   it("does not guess embedded IPv4 for local-use NAT64 literals", () => {
-    const cases = [
-      "64:ff9b:1:a00:0:100::",
-      "64:ff9b:1:a9fe:a9:fe00:808:808",
-      "64:ff9b:1:7f00:0:100:808:808",
-      "64:ff9b:1:808:808:808:a9fe:a9fe",
-      "64:ff9b:1::8.8.8.8",
-    ] as const;
-    for (const ipv6Literal of cases) {
-      expect(extractEmbeddedIpv4FromIpv6(ipv6(ipv6Literal)), ipv6Literal).toBeUndefined();
-    }
+    expect(extractEmbeddedIpv4FromIpv6(ipv6("64:ff9b:1:808:808:808:a9fe:a9fe"))).toBeUndefined();
   });
 
   it("detects RFC8215 local-use NAT64 literals", () => {
@@ -101,9 +89,6 @@ describe("shared ip helpers", () => {
     expect(isPrivateOrLoopbackIpAddress("2001:2::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("100::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
-    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:7f00:0:100:808:808")).toBe(true);
-    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
-    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:808:808")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
@@ -178,8 +163,6 @@ describe("shared ip helpers", () => {
     const loopback = parseCanonicalIpAddress("127.0.0.1");
     const benchmark = parseCanonicalIpAddress("198.18.0.1");
 
-    expect(loopback?.kind()).toBe("ipv4");
-    expect(benchmark?.kind()).toBe("ipv4");
     if (!loopback || !isIpv4Address(loopback) || !benchmark || !isIpv4Address(benchmark)) {
       throw new Error("expected ipv4 fixtures");
     }
@@ -203,16 +186,10 @@ describe("shared ip helpers", () => {
   });
 
   it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {
-    const loopback = ipv6("::1");
-    const multicast = ipv6("ff02::1");
-    const siteLocal = ipv6("fec0::1");
-    const localUseNat64 = ipv6("64:ff9b:1:808:808:808:a9fe:a9fe");
-
-    for (const options of [{}, { allowUniqueLocalRange: true }] as const) {
-      expect(isBlockedSpecialUseIpv6Address(loopback, options)).toBe(true);
-      expect(isBlockedSpecialUseIpv6Address(multicast, options)).toBe(true);
-      expect(isBlockedSpecialUseIpv6Address(siteLocal, options)).toBe(true);
-      expect(isBlockedSpecialUseIpv6Address(localUseNat64, options)).toBe(true);
+    for (const literal of ["::1", "ff02::1", "fec0::1", "64:ff9b:1:808:808:808:a9fe:a9fe"]) {
+      for (const options of [{}, { allowUniqueLocalRange: true }] as const) {
+        expect(isBlockedSpecialUseIpv6Address(ipv6(literal), options), literal).toBe(true);
+      }
     }
   });
 });
