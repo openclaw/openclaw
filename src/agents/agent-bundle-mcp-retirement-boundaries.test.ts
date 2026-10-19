@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { startMcpLifecycleServer } from "./agent-bundle-mcp-lifecycle.test-support.js";
 import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
@@ -41,57 +40,12 @@ async function withMcpFixture(
     onDelete?: (url: string) => Promise<void>;
     onList?: (url: string) => Promise<void>;
   } = {};
-  const server = http.createServer((request, response) => {
-    void (async () => {
-      const endpoint = request.url ?? "/";
-      if (request.method === "DELETE") {
-        await hooks.onDelete?.(endpoint);
-        response.writeHead(200).end();
-        return;
-      }
-      if (request.method !== "POST") {
-        response.writeHead(405).end();
-        return;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as {
-        id?: number;
-        method: string;
-        params?: { protocolVersion?: string };
-      };
-      let result;
-      if (message.method === "initialize") {
-        response.setHeader("mcp-session-id", randomUUID());
-        result = {
-          protocolVersion: message.params?.protocolVersion,
-          capabilities: { tools: {} },
-          serverInfo: { name: "retirement-proof", version: "1" },
-        };
-      } else if (message.method === "tools/list") {
-        await hooks.onList?.(endpoint);
-        result = { tools: [{ name: "read", inputSchema: { type: "object" } }] };
-      } else if (message.method === "tools/call") {
-        result = { content: [{ type: "text", text: endpoint }] };
-      }
-      if (!result) {
-        response.writeHead(202).end();
-        return;
-      }
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-    })().catch(() => response.writeHead(500).end());
+  const server = await startMcpLifecycleServer({
+    toolName: "read",
+    onDelete: (endpoint) => hooks.onDelete?.(endpoint) ?? Promise.resolve(),
+    onList: (endpoint) => hooks.onList?.(endpoint) ?? Promise.resolve(),
+    text: (endpoint) => endpoint,
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP fixture did not bind");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
   await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
     await disposeAllSessionMcpRuntimes();
     const scheduler = createTestGatewayScheduler();
@@ -102,7 +56,7 @@ async function withMcpFixture(
         config: (endpoint) => ({
           plugins: { enabled: false },
           mcp: {
-            servers: { probe: { transport: "streamable-http", url: `${baseUrl}${endpoint}` } },
+            servers: { probe: { transport: "streamable-http", url: `${server.url}${endpoint}` } },
           },
         }),
         hooks,
@@ -119,10 +73,7 @@ async function withMcpFixture(
       }
       await disposeAllSessionMcpRuntimes();
       await scheduler.stop();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server.close();
     }
   });
 }
