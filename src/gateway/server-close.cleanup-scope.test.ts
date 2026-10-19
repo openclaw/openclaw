@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
@@ -12,7 +12,6 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -118,10 +117,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const completed = vi.fn();
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "drain-cleanup", status: "loaded" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
+  const { registry, record, instance } = createOwnedInstance("drain-cleanup");
   const cleanup = vi.fn(async () => {
     await trackAsyncWork(async () => {});
     void trackAsyncWork(async () => {

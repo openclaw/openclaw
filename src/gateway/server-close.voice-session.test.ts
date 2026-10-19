@@ -29,7 +29,7 @@ import {
 } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
-import { makeBridge } from "../talk/session-runtime.test-support.js";
+import { makeBridge, makeVoiceProvider } from "../talk/session-runtime.test-support.js";
 import { makeClient } from "./server-broadcast.test-helpers.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { ensureTalkRealtimeRelayVoiceSession } from "./talk/relay/operations.js";
@@ -127,13 +127,12 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
       controlSource: "delegation",
       sessionTarget: await prepareTalkSessionTarget(kernel.cfgAtStart, relayTarget.sessionKey),
       provider: {
-        id: "close-test",
-        label: "Close Test",
-        isConfigured: () => true,
-        createBridge: (callbacks) => {
+        ...makeVoiceProvider((callbacks) => {
           providerCallbacks = callbacks;
           return makeBridge({ close: providerClose });
-        },
+        }),
+        id: "close-test",
+        label: "Close Test",
       },
       providerConfig: {},
       instructions: "brief",

@@ -142,30 +142,25 @@ it("settles accepted memory usage and trajectory work across the real close prel
           startSessionTranscriptIndexReconcile(database);
           await waitForSessionTranscriptIndexReconcile(database);
           expect(isSessionTranscriptIndexReconcileRunning(database)).toBe(false);
-          expect(
-            await selected.storage!.read(
-              {
-                type: "session.history.recent",
-                input: { sessionId: target.sessionId, options: { maxMessages: 10 } },
-              },
-              authority,
-            ),
-          ).toMatchObject({
+          const history = await selected.storage!.read(
+            {
+              type: "session.history.recent",
+              input: { sessionId: target.sessionId, options: { maxMessages: 10 } },
+            },
+            authority,
+          );
+          expect(history).toMatchObject({
             totalMessages: 1,
             messages: [{ content: [{ type: "text", text: "accepted current branch" }] }],
           });
           expect(refreshed).toBe("refreshed");
           await trajectory.flush();
           expect(trajectory.describeFlushState()).toBeUndefined();
-          expect(
-            await selected.storage!.read(
-              {
-                type: "session.trajectory.read",
-                input: { sessionId: target.sessionId },
-              },
-              authority,
-            ),
-          ).toEqual([event]);
+          const events = await selected.storage!.read(
+            { type: "session.trajectory.read", input: { sessionId: target.sessionId } },
+            authority,
+          );
+          expect(events).toEqual([event]);
           const usage = await selected.storage!.read(
             {
               type: "session.usage.snapshot",

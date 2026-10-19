@@ -21,6 +21,7 @@ import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
+type DatabaseExecution = ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>;
 const scope = {
   agentId: "main",
   sessionKey: "agent:main:dashboard:accepted-close-rewind",
@@ -86,9 +87,7 @@ it("persists an accepted fork and queued rewind across the close prelude before 
   let closing: Promise<void> | undefined;
   try {
     let executions = 0;
-    const wrapExecution = (
-      owner: ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>,
-    ): ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution> => ({
+    const wrapExecution = (owner: DatabaseExecution): DatabaseExecution => ({
       ...owner,
       get fileIdentity() {
         return owner.fileIdentity;
@@ -187,6 +186,7 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     const activeEvents = reopened.prepare(
       "SELECT identity.event_id FROM session_transcript_active_events active JOIN transcript_event_identities identity ON identity.session_id = active.session_id AND identity.seq = active.event_seq WHERE active.session_id = ? AND active.message_position IS NOT NULL ORDER BY active.message_position",
     );
+    const retainedEvents = [{ event_id: "user-1" }, { event_id: "assistant-1" }];
     const row = reopened
       .prepare(
         "SELECT current_session_id AS session_id, json_extract(entry_json, '$.previousSessionId') AS previous_session_id FROM session_nodes WHERE session_key = ?",
@@ -198,17 +198,11 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     assert(typeof child?.session_id === "string");
     expect(child.session_id).not.toBe(scope.sessionId);
     expect(child.session_id).not.toBe(row?.session_id);
-    expect(activeEvents.all(child.session_id)).toEqual([
-      { event_id: "user-1" },
-      { event_id: "assistant-1" },
-    ]);
+    expect(activeEvents.all(child.session_id)).toEqual(retainedEvents);
     assert(typeof row?.session_id === "string");
     expect(row.session_id).not.toBe(scope.sessionId);
     expect(row.previous_session_id).toBe(scope.sessionId);
-    expect(activeEvents.all(row.session_id)).toEqual([
-      { event_id: "user-1" },
-      { event_id: "assistant-1" },
-    ]);
+    expect(activeEvents.all(row.session_id)).toEqual(retainedEvents);
   } finally {
     releasePersistence.resolve();
     await Promise.allSettled([forking, rewinding, closing]);

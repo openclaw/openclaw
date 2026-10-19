@@ -34,12 +34,7 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
-    fixture.config.agents = {
-      defaults: {
-        workspace: fixture.state.workspaceDir,
-        model: { primary: `${fixture.pluginId}/model` },
-      },
-    };
+    fixture.config.agents!.defaults!.model = { primary: `${fixture.pluginId}/model` };
     const pluginFailure = new Error("registered plugin cleanup failed");
     const memoryFailure = new Error("registered memory cleanup failed");
     const stateFailure = mode === "session-store";
