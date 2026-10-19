@@ -151,6 +151,33 @@ afterEach(async () => {
 });
 
 describe("SessionDiffPanel", () => {
+  it.each([
+    { saved: { split: true, wrap: false }, mode: "split", split: true },
+    { saved: { split: false, wrap: false }, mode: "unified", split: false },
+    { saved: { split: true, wrap: false, mode: "auto" }, mode: "auto", split: false },
+    { saved: null, mode: "auto", split: false },
+  ])("restores desktop mode $mode from $saved", async ({ saved, mode, split }) => {
+    setNativeGatewayTestState(null);
+    setupDesktopResizeObserver();
+    const key = "openclaw.control.sessionDiff.v1";
+    localStorage.removeItem(key);
+    onTestFinished(() => localStorage.removeItem(key));
+    if (saved) {
+      localStorage.setItem(key, JSON.stringify(saved));
+    }
+    const panel = mountPanel();
+    panel.mobile = false;
+    panel.loader = async () => fileResult("@@ -1 +1 @@\n-before\n+after");
+    await settlePanel(panel);
+    expect(
+      panel.querySelector(`button[aria-label="Diff mode: ${mode}. Switch to next mode"]`),
+    ).not.toBeNull();
+    panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector(split ? ".session-diff-split" : ".chat-diff")).not.toBeNull(),
+    );
+  });
+
   it("keeps desktop disclosure and word highlighting separate from the patch and native presentation", async () => {
     setNativeGatewayTestState(null);
     setupDesktopResizeObserver();

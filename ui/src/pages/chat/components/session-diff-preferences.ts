@@ -23,7 +23,15 @@ export function loadSessionDiffPreferences(): SessionDiffPreferences {
         "mode" in parsed &&
         (parsed.mode === "split" || parsed.mode === "unified")
           ? parsed.mode
-          : "auto",
+          : typeof parsed === "object" &&
+              parsed !== null &&
+              !("mode" in parsed) &&
+              "split" in parsed &&
+              typeof parsed.split === "boolean"
+            ? parsed.split
+              ? "split"
+              : "unified"
+            : "auto",
       wordDiffs: !(
         typeof parsed === "object" &&
         parsed !== null &&
