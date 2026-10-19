@@ -255,7 +255,7 @@ export class SessionCatalogListLifetime {
       }
     } catch {
       // Retirement intentionally ends delivery; an active subscriber needs a visible failure.
-      if (this.active() && subscriber.current && !subscriber.current.signal?.aborted) {
+      if (this.currentSubscriber(subscriber)) {
         catalogLog.warn("Session catalog progress update failed; refresh the catalog to retry.");
       }
     } finally {

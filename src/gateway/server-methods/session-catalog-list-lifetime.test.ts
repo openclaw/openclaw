@@ -64,16 +64,18 @@ function preparationGate() {
 
 describe("catalog list completion ownership", () => {
   it.each([
-    { stage: "preparation", retired: false },
-    { stage: "publication", retired: false },
-    { stage: "preparation", retired: true },
+    { stage: "preparation", retirement: "none" },
+    { stage: "publication", retirement: "none" },
+    { stage: "preparation", retirement: "lifetime" },
+    { stage: "preparation", retirement: "subscriber" },
   ])(
-    "reports late $stage failure without losing settlement (retired=$retired)",
-    async ({ stage, retired }) => {
+    "reports late $stage failure without losing settlement (retirement=$retirement)",
+    async ({ stage, retirement }) => {
       const { before, root, lifetime, finish } = admit("catalog-late-delivery-failure");
       const owner = new GatewayConnectionWork();
       const preparation = createDeferredCore();
       const failure = new Error("private fixture session details");
+      let subscriberCurrent = true;
       const delivered = vi.fn(() => {
         if (stage === "publication") {
           throw failure;
@@ -83,7 +85,13 @@ describe("catalog list completion ownership", () => {
       try {
         await owner.track(() =>
           root.run(async () => {
-            lifetime.subscribe("active", delivered, current, undefined, () => preparation.promise);
+            lifetime.subscribe(
+              "active",
+              delivered,
+              () => subscriberCurrent,
+              undefined,
+              () => preparation.promise,
+            );
             await lifetime.runProvider(
               () => lifetime.publish(catalog, new Map()),
               async (params) => params.onHost(host),
@@ -92,8 +100,10 @@ describe("catalog list completion ownership", () => {
         );
         finish();
         expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
-        if (retired) {
+        if (retirement === "lifetime") {
           lifetime.retire();
+        } else if (retirement === "subscriber") {
+          subscriberCurrent = false;
         }
         if (stage === "preparation") {
           preparation.reject(failure);
@@ -103,7 +113,7 @@ describe("catalog list completion ownership", () => {
         await owner.drain();
         expect(delivered).toHaveBeenCalledTimes(stage === "publication" ? 1 : 0);
         expect(catalogLog.warn.mock.calls).toEqual(
-          retired
+          retirement !== "none"
             ? []
             : [["Session catalog progress update failed; refresh the catalog to retry."]],
         );
