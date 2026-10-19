@@ -21,7 +21,7 @@ All `system` subcommands use Gateway RPC and accept the shared client flags:
 | `--token <token>`       | none                                 | Gateway token (if required).                                                                                                                                                                           |
 | `--password <password>` | none                                 | Gateway password (if required).                                                                                                                                                                        |
 | `--timeout <ms>`        | `30000`                              | RPC timeout in milliseconds.                                                                                                                                                                           |
-| `--expect-final`        | off                                  | Wait for final response (agent).                                                                                                                                                                       |
+| `--expect-final`        | off                                  | Accepted as a shared client flag, but has no effect on system commands.                                                                                                                                |
 | `--json`                | off                                  | Output JSON. `heartbeat last/enable/disable` and `system presence` always print the raw RPC JSON payload regardless of this flag; `system event` uses it to switch between JSON and a plain `ok` line. |
 
 ## Common commands
@@ -41,6 +41,9 @@ heartbeat injects it as a `System:` line in the prompt. Use `--mode now` to
 trigger the heartbeat immediately; `next-heartbeat` (default) waits for the
 next scheduled tick.
 
+The command returns when the Gateway accepts the event, not when the heartbeat
+finishes. `--expect-final` does not wait for a heartbeat or agent response.
+
 Pass `--session-key` to target a specific session, for example to relay an
 async-task completion back to the channel that started it. Prefer an
 agent-qualified key. For example, if the `ops` agent is configured:
@@ -48,6 +51,10 @@ agent-qualified key. For example, if the `ops` agent is configured:
 ```bash
 openclaw system event --text "Deploy finished" --session-key agent:ops:main --mode now
 ```
+
+With `heartbeat.isolatedSession: true`, a targeted wake reads and consumes the
+event from the selected session while running in a fresh heartbeat session.
+Events queued for other sessions stay untouched.
 
 <Note>
 **Timing exception with `--session-key`:** when `--session-key` is supplied,

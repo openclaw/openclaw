@@ -4,6 +4,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
@@ -14,6 +15,7 @@ import {
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
@@ -182,9 +184,12 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     transactionOptions: Pick<
       SqliteTransactionOptions,
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs" | "diagnosticContext"
-    > & { repairAdmission?: OpenClawAgentDatabaseRepairAdmission } = {},
+    > & {
+      repairAdmission?: OpenClawAgentDatabaseRepairAdmission;
+      singleStatement?: boolean;
+    } = {},
   ): T {
-    const { repairAdmission, ...writeOptions } = transactionOptions;
+    const { repairAdmission, singleStatement, ...writeOptions } = transactionOptions;
     const database = openAgentDatabase(options, undefined, undefined, repairAdmission);
     const deletionCommit = getAgentDeletionDatabaseCleanup(options)?.withCommit;
     const withCommit = repairAdmission
@@ -200,22 +205,27 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           }
         }
       : deletionCommit;
-    return withSqlitePostCommitPublications(database.db, () =>
-      runSqliteImmediateTransactionSync(
+    const write = () => {
+      assertAgentDeletionDatabaseCleanupAccess(database, options);
+      assertAgentCreationClaimAccess(database, options);
+      return operation(database);
+    };
+    // Cross-store cleanup guards and PostgreSQL writer custody retain their transaction.
+    if (singleStatement && !withCommit && !isPostgresSqlConnection(database.db)) {
+      return runWithSqliteBusyTimeout(
         database.db,
-        () => {
-          assertAgentDeletionDatabaseCleanupAccess(database, options);
-          assertAgentCreationClaimAccess(database, options);
-          return operation(database);
-        },
-        {
-          busyTimeoutMs: writeOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          databaseLabel: database.path,
-          ...writeOptions,
-          operationLabel: writeOptions.operationLabel ?? "agent.write",
-          withCommit,
-        },
-      ),
+        writeOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        () => runSqliteSingleStatementSync(database.db, write),
+      );
+    }
+    return withSqlitePostCommitPublications(database.db, () =>
+      runSqliteImmediateTransactionSync(database.db, write, {
+        busyTimeoutMs: writeOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: database.path,
+        ...writeOptions,
+        operationLabel: writeOptions.operationLabel ?? "agent.write",
+        withCommit,
+      }),
     );
   }
 

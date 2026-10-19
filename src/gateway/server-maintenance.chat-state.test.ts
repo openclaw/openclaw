@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
-import { completeQueuedChatTurn, registerQueuedChatTurn } from "./chat-queued-turns.js";
+import { retireSessionControllerInput } from "../sessions/session-controller.mailbox.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createChatAbortMarker } from "./server-chat-state.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 // mock-isolation: Chat-state timers must not start the unrelated device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -109,7 +111,7 @@ describe("gateway chat-state maintenance", () => {
     },
   );
 
-  it.each(["execution", "embedded", "queued", "abort"] as const)(
+  it.each(["execution", "embedded", "queued", "preparing"] as const)(
     "preserves a live %s owner until release",
     async (kind) => {
       await using deps = await createScenario();
@@ -127,22 +129,25 @@ describe("gateway chat-state maintenance", () => {
       if (kind === "embedded") {
         setActiveEmbeddedRun("maintenance-session", handle, "main");
       }
-      const controller = new AbortController();
-      const owner = { controller, sessionId: "maintenance-session", sessionKey: "main" };
-      if (kind === "abort") {
-        deps.chatAbortControllers.set(runId, {
-          ...owner,
-          startedAtMs: Date.now(),
-          expiresAtMs: Date.now() + ABORTED_RUN_TTL_MS,
-        });
-      }
-      if (kind === "queued") {
-        registerQueuedChatTurn({ chatQueuedTurns: deps.chatQueuedTurns, runId, ...owner });
+      const source =
+        kind === "queued" || kind === "preparing"
+          ? createRpcSourceForTest(
+              {},
+              {
+                phase: kind === "queued" ? "waiting" : "preparing",
+                sessionId: "maintenance-session",
+                sessionKey: "main",
+              },
+            )
+          : undefined;
+      if (source) {
+        rpcSourceTesting.set(runId, source);
       }
       const release = () => {
-        deps.chatAbortControllers.delete(runId);
         releaseAgentRunContext(runId, claim);
-        completeQueuedChatTurn(deps.chatQueuedTurns, runId, controller);
+        if (source) {
+          retireSessionControllerInput(source.input);
+        }
         if (kind === "embedded") {
           clearActiveEmbeddedRun("maintenance-session", handle, "main");
         }

@@ -277,8 +277,13 @@ When a newly spawned visible session starts agent-owned, the agent can assign it
 to the trusted requester profile and verify the stored owner with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
-rather than guessing from a name or pasted ID. Unlinking takes effect on
-subsequent turns without a restart.
+rather than guessing from a name or pasted ID. An owner-authorized agent can use
+`sessions` with `action: "owner_profiles"` and a verified `githubAccountIds` selection
+to resolve an existing canonical profile without visitor-management access. This
+lookup does not prove or create a Discord or Slack identity link. An unresolved
+assignee is a responsibility-metadata issue, not a permission denial: report it
+separately and continue independently authorized work in a prepared workspace.
+Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 
@@ -291,6 +296,8 @@ My GitHub requires an authenticated, durable Gateway profile, including the loca
 3. Check the connected account before using it. Personal connections use device authorization. The existing PAT alternative remains available for admin-managed shared connections.
 
 ### Publish with your account
+
+New publications create an open PR by default. Ask the agent to publish a draft to use `draft: true` on `github_publish`; omitting `draft` or setting it to `false` creates an open PR. This choice applies only when creating a PR. Publishing more changes to an existing PR preserves its current draft or open state.
 
 The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint.
 

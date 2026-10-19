@@ -1,12 +1,5 @@
-import {
-  createEffect,
-  createMemo,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-  useContext,
-} from "solid-js";
+import { spread } from "@solidjs/web";
+import { createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
@@ -43,65 +36,56 @@ function releaseParking(key: string, parked: ParkedWidget): void {
 function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: string }) {
   const presented = useContext(ContentPresentation);
   let container!: HTMLSpanElement;
-  let element: OpenClawCanvasWidgetView | undefined;
-  createEffect(
-    () => ({ properties: { ...props.properties }, active: presented() }),
-    ({ properties, active }) => {
-      if (element) {
-        Object.assign(element, properties, { presentationActive: active });
-      }
-    },
-  );
+  const [element, setElement] = createSignal<OpenClawCanvasWidgetView>();
   onSettled(() => {
-    const parked =
+    const retained =
       container.isConnected && typeof container.moveBefore === "function"
         ? parkedWidgets.get(props.widgetKey)
         : undefined;
-    const view = parked?.element ?? document.createElement("openclaw-canvas-widget-view");
+    const view = retained?.element ?? document.createElement("openclaw-canvas-widget-view");
     Object.assign(view, props.properties);
     if (!customElements.get("openclaw-canvas-widget-view")) {
       view.style.cssText = `display:block;min-height:${props.properties.preferredHeight ?? 420}px`;
     }
-    view.presentationActive = untrack(presented);
-    if (parked) {
+    view.presentationActive = presented();
+    if (retained) {
       container.moveBefore(view, null);
-      releaseParking(props.widgetKey, parked);
+      releaseParking(props.widgetKey, retained);
     } else {
       container.append(view);
     }
-    element = view;
-  });
-  onCleanup(() => {
-    const view = element;
-    if (typeof Element.prototype.moveBefore !== "function" || !view?.isConnected) {
-      return;
-    }
-    const key = props.widgetKey;
-    const older = parkedWidgets.get(key);
-    if (older) {
-      releaseParking(key, older);
-    }
-    if (!parkingRoot) {
-      parkingRoot = document.createElement("div");
-      parkingRoot.inert = true;
-      parkingRoot.setAttribute("aria-hidden", "true");
-      parkingRoot.style.cssText = "position:fixed;left:-100000px;top:0;pointer-events:none";
-      document.body.append(parkingRoot);
-    }
-    // Atomic moves retain the iframe while its transcript row changes identity.
-    const box = (view.querySelector("iframe") ?? container).getBoundingClientRect();
-    const parkedContainer = document.createElement("div");
-    parkedContainer.style.width = `${box.width}px`;
-    parkedContainer.style.height = `${box.height}px`;
-    parkingRoot.append(parkedContainer);
-    view.presentationActive = false;
-    parkedContainer.moveBefore(view, null);
-    const parked: ParkedWidget = {
-      element: view,
-      container: parkedContainer,
-      timer: setTimeout(() => releaseParking(key, parked), 1_000),
+    setElement(view);
+    return () => {
+      if (typeof Element.prototype.moveBefore !== "function" || !view.isConnected) {
+        return;
+      }
+      const key = props.widgetKey;
+      const older = parkedWidgets.get(key);
+      if (older) {
+        releaseParking(key, older);
+      }
+      if (!parkingRoot) {
+        parkingRoot = document.createElement("div");
+        parkingRoot.inert = true;
+        parkingRoot.setAttribute("aria-hidden", "true");
+        parkingRoot.style.cssText = "position:fixed;left:-100000px;top:0;pointer-events:none";
+        document.body.append(parkingRoot);
+      }
+      // Atomic moves retain the iframe while its transcript row changes identity.
+      const box = (view.previewFrame ?? container).getBoundingClientRect();
+      const parkedContainer = document.createElement("div");
+      parkedContainer.style.width = `${box.width}px`;
+      parkedContainer.style.height = `${box.height}px`;
+      parkingRoot.append(parkedContainer);
+      view.presentationActive = false;
+      parkedContainer.moveBefore(view, null);
+      const parked: ParkedWidget = {
+        element: view,
+        container: parkedContainer,
+        timer: setTimeout(() => releaseParking(key, parked), 1_000),
+      };
+      parkedWidgets.set(key, parked);
     };
-    parkedWidgets.set(key, parked);
   });
   return (
     <span
@@ -109,7 +93,29 @@ function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: stri
         container = node;
       }}
       style={{ display: "contents" }}
-    />
+    >
+      <Show when={element()} keyed>
+        {(view) => {
+          // Bind after adoption so an outgoing row can park its existing widget first.
+          spread(
+            view,
+            () => ({
+              "prop:docId": props.properties.docId,
+              "prop:sessionKey": props.properties.sessionKey,
+              "prop:messageTimestamp": props.properties.messageTimestamp,
+              "prop:title": props.properties.title,
+              "prop:preferredHeight": props.properties.preferredHeight,
+              "prop:onHeightChange": props.properties.onHeightChange,
+              "prop:allowScripts": props.properties.allowScripts,
+              "prop:connectionGeneration": props.properties.connectionGeneration,
+              "prop:presentationActive": presented(),
+            }),
+            true,
+          );
+          return null;
+        }}
+      </Show>
+    </span>
   );
 }
 

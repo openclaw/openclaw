@@ -8,7 +8,6 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createGatewayHarness } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
-import type { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
 import "./chat-page.ts";
@@ -51,13 +50,13 @@ export function createChatPageNavigationContext() {
   return { chatAttachmentHandoff, context, navigate, replace, setAgent, patch };
 }
 
-export function setNavigationContext(page: ChatPage) {
+export function setNavigationContext(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
   const navigation = createChatPageNavigationContext();
   (page as unknown as { context: ApplicationContext }).context = navigation.context;
   return navigation;
 }
 
-export function setViewerPresenceContext(page: ChatPage) {
+export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
   const navigation = setNavigationContext(page);
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ sessionKeys: [] });
   const client = { request } as unknown as GatewayBrowserClient;
@@ -183,7 +182,9 @@ export function createChatPageStateContext() {
 }
 
 /** Settles the bridge and the page-owned Solid projection without a browser timer. */
-export async function settleChatPage(page: ChatPage): Promise<void> {
+export async function settleChatPage(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+): Promise<void> {
   await page.updateComplete;
   flush();
   await Promise.resolve();

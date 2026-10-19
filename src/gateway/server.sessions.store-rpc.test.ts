@@ -106,8 +106,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },

@@ -8,12 +8,18 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type * as ExecApprovalsRuntime from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  loadUserTurnTranscriptRecorderFactoryForTest,
+  runInHarnessToolAuthorityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMuseLifecycleTests } from "./harness-lifecycle.test-support.js";
-import { createMuseAgentHarness, type MuseSessionBinding } from "./harness.js";
+import {
+  createMuseAgentHarness as createMuseAgentHarnessImpl,
+  type MuseSessionBinding,
+} from "./harness.js";
 import { createApprovalHandler } from "./src/approvals.js";
 
 const writes = vi.hoisted(() => ({
@@ -53,6 +59,15 @@ afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
   vi.unstubAllEnvs();
 });
+
+function createMuseAgentHarness(...args: Parameters<typeof createMuseAgentHarnessImpl>) {
+  const harness = createMuseAgentHarnessImpl(...args);
+  return {
+    ...harness,
+    runAttempt: (params: AgentHarnessAttemptParamsV2) =>
+      runInHarnessToolAuthorityForTest(params, "muse", (admitted) => harness.runAttempt(admitted)),
+  };
+}
 
 function setup() {
   vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
@@ -150,7 +165,14 @@ describe("Muse native MSP harness", () => {
     ).toBe(supported);
   });
 
-  registerMuseLifecycleTests({ setup, getWorkspace: () => workspace, fixture, writes, terminal });
+  registerMuseLifecycleTests({
+    setup,
+    getWorkspace: () => workspace,
+    fixture,
+    writes,
+    terminal,
+    createHarness: createMuseAgentHarness,
+  });
 
   it.each([
     ["global mode", { config: { tools: { exec: { mode: "deny" } } } }],

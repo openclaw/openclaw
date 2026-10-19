@@ -908,6 +908,43 @@ describe("mcp-app-view localization", () => {
     await expect.poll(() => transport.close, { timeout: 1_000 }).toHaveBeenCalledOnce();
     expect(frame.isConnected).toBe(false);
   });
+  it.each(["completed", "timed out"])(
+    "cancels App RPCs after graceful teardown has %s",
+    async (outcome) => {
+      const { bridge, frame, request, view } = await mountBridge("view-teardown-rpcs");
+      await view.updateComplete;
+      const teardownFinished = deferred<Record<string, never>>();
+      const pendingSave = deferred<Record<string, never>>();
+      bridge.teardownResource.mockReturnValueOnce(teardownFinished.promise);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const teardown = view.teardown();
+        expect(bridge.teardownResource).toHaveBeenCalledOnce();
+        request.mockReturnValueOnce(pendingSave.promise);
+        const save = bridge.updateModelContextHandler!({ structuredContent: { draft: "saved" } });
+        const rejected = save.catch((error: unknown) => error);
+        const signal = request.mock.calls.at(-1)?.[2]?.signal;
+        expect(signal).toBeInstanceOf(AbortSignal);
+        expect(signal?.aborted).toBe(false);
+        expect(frame.isConnected).toBe(true);
+        if (outcome === "completed") {
+          teardownFinished.resolve({});
+        } else {
+          await vi.advanceTimersByTimeAsync(250);
+        }
+        await teardown;
+        expect(frame.isConnected).toBe(false);
+        expect(signal?.aborted).toBe(true);
+        pendingSave.resolve({});
+        expect(await rejected).toMatchObject({ name: "AbortError" });
+        await expect(
+          bridge.updateModelContextHandler!({ structuredContent: {} }),
+        ).rejects.toMatchObject({ name: "AbortError" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
   it("honors an app-requested teardown before detaching its frame", async () => {
     const pending = deferred<Record<string, never>>();
     const { bridge, frame, transport } = await mountBridge(

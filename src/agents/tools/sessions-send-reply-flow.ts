@@ -14,8 +14,13 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
+import {
+  isTerminalAgentWaitTimeout,
+  readLatestAssistantReply,
+  waitForAgentRunReply,
+} from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import {
@@ -389,5 +394,25 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  return sendReplyResult({ runId, sessionKey: replyContext.displayKey, ...watchField }, result);
+  let { replyText } = result;
+  let replyTruncated: true | undefined;
+  // Whitespace trimming can shorten a truncated preview; its length is not evidence of completeness.
+  if (replyText?.endsWith("…")) {
+    const stored = await readLatestAssistantReply({
+      runId,
+      sessionKey: acceptedTargetSessionKey,
+      agentId: replyContext.targetAgentId,
+      callGateway: replyContext.callGateway,
+    }).catch(() => undefined);
+    const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
+    if (snapshot?.disposition === "visible" && snapshot.text === replyText) {
+      replyText = stored;
+    } else {
+      replyTruncated = true;
+    }
+  }
+  return sendReplyResult(
+    { runId, sessionKey: replyContext.displayKey, ...watchField },
+    { ...result, replyText, replyTruncated },
+  );
 }

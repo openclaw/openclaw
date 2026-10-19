@@ -66,7 +66,7 @@ function historyPane(request = vi.fn(async () => historyPage())) {
 }
 
 function olderRequest(sessionKey: string, offset = 2) {
-  return { sessionKey, limit: 1000, maxBytes: 1024 * 1024, toolResultMaxChars: 2_000, offset };
+  return { sessionKey, limit: 1000, maxBytes: 2 * 1024 * 1024, toolResultMaxChars: 2_000, offset };
 }
 
 function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPagination {

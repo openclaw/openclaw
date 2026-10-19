@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import type { RouteLocation } from "@openclaw/uirouter";
-import { createComponent, createEffect, createSignal } from "solid-js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -12,6 +11,7 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayEvent,
@@ -19,35 +19,21 @@ import {
 } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createActivityPageState } from "./activity-page-state.ts";
-import { ActivityPageView } from "./activity-page-view.tsx";
-
-type TestActivityPage = ReturnType<typeof createActivityPage>;
-
-function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
-  const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(() => {
-    const page = createActivityPageState(context);
-    createEffect(location, (next) => page.setRouteLocation(next));
-    return createComponent(ActivityPageView, { page });
-  });
-  flush();
-  return {
-    context,
-    container: mounted.container,
-    dispose: mounted.unmount,
-    setRouteLocation(next: RouteLocation | undefined) {
-      setLocation(next);
-      flush();
-    },
-  };
-}
+import {
+  createActivityPage,
+  expandFirst,
+  mountActivityPage,
+  previews,
+  toolEvent,
+  type TestActivityPage,
+} from "./activity-page.test-support.ts";
 
 function inspectorGateway(client: GatewayBrowserClient) {
   const source = gateway();
@@ -60,26 +46,6 @@ function inspectorGateway(client: GatewayBrowserClient) {
     },
   });
   return source;
-}
-
-function previews(page: TestActivityPage) {
-  flush();
-  return [...page.container.querySelectorAll(".activity-entry__preview")].map(
-    (entry) => entry.textContent,
-  );
-}
-
-function expandFirst(page: TestActivityPage) {
-  flush();
-  const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
-  row.open = true;
-  row.dispatchEvent(new Event("toggle"));
-  flush();
-  return row;
-}
-
-function mountActivityPage(page: TestActivityPage) {
-  return page.container;
 }
 
 function gateway(): ApplicationContext["gateway"] {
@@ -107,6 +73,10 @@ function gateway(): ApplicationContext["gateway"] {
 const activeGateways = new Set<ApplicationContext["gateway"]>();
 const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
 const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
+const activeIdentities = new Map<
+  ApplicationContext["gateway"],
+  ApplicationContext["agentIdentity"]
+>();
 
 function activityContext(source: ApplicationContext["gateway"], basePath = ""): ApplicationContext {
   let sessions = activeSessions.get(source);
@@ -119,10 +89,16 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
     agents = createAgentCapability(source);
     activeAgents.set(source, agents);
   }
+  let agentIdentity = activeIdentities.get(source);
+  if (!agentIdentity) {
+    agentIdentity = createAgentIdentityCapability(source);
+    activeIdentities.set(source, agentIdentity);
+  }
   return {
     gateway: source,
     sessions,
     agents,
+    agentIdentity,
     basePath,
     resourceBasePath: "",
     replace: vi.fn(),
@@ -138,9 +114,6 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
     },
     get connectionBootstrap(): never {
       throw new Error("Activity fixture does not provide connectionBootstrap");
-    },
-    get agentIdentity(): never {
-      throw new Error("Activity fixture does not provide agentIdentity");
     },
     get agentSelection(): never {
       throw new Error("Activity fixture does not provide agentSelection");
@@ -273,20 +246,6 @@ async function syncActivityRoster(page: TestActivityPage) {
   );
 }
 
-function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
-  return createGatewayEvent("session.tool", {
-    stream: "tool",
-    runId,
-    sessionKey,
-    data: {
-      toolCallId: id,
-      name,
-      phase: "result",
-      result: { text: `${id} output` },
-    },
-  });
-}
-
 afterEach(async () => {
   cleanupSolid();
   for (const sessions of activeSessions.values()) {
@@ -303,12 +262,98 @@ afterEach(async () => {
   activeGateways.clear();
   activeSessions.clear();
   activeAgents.clear();
+  activeIdentities.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
   sessionStorage.clear();
 });
 
 describe("ActivityPage gateway lifecycle", () => {
+  it.each(["complete", "omitted"])(
+    "preserves live and History routing for a %s roster message body",
+    async (body) => {
+      const active: GatewaySessionRow = {
+        key: "agent:main:roster",
+        agentId: "main",
+        sessionId: "roster-session",
+        kind: "direct",
+        label: "Roster task",
+        updatedAt: 100,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["roster-run"],
+      };
+      const { gateway: source, current } = activityGateway();
+      current().request.mockImplementation(async (method, params) =>
+        method === "sessions.list" ? activityRoster([active]) : activityResponse(method, params),
+      );
+      const context = activityContext(source);
+      const selection = createAgentSelectionCapability(source, context.agents);
+      Object.defineProperty(context, "agentSelection", { value: selection });
+      const page = createActivityPage(context, {
+        pathname: "/activity",
+        search: "?view=live",
+        hash: "",
+      });
+      await syncActivityRoster(page);
+      vi.useFakeTimers();
+      try {
+        const message = (session: GatewaySessionRow) =>
+          current().opts.onEvent?.(
+            createGatewayEvent("session.message", {
+              sessionKey: active.key,
+              agentId: "main",
+              messageId: "roster-message",
+              messageSeq: 2,
+              session,
+              ancestorSessions: [],
+              ...(body === "complete" ? { message: { role: "assistant", content: "Ready" } } : {}),
+            }),
+          );
+        const listReads = () =>
+          current().request.mock.calls.filter(
+            ([method, params]) =>
+              method === "sessions.list" && asOptionalRecord(params)?.source === "activity",
+          ).length;
+        const before = listReads();
+        message({ ...active, updatedAt: 200 });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(page.container.querySelectorAll(".activity-current-work__row")).toHaveLength(1);
+        expect(listReads()).toBe(before);
+        message({
+          ...active,
+          updatedAt: 300,
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        expect(page.container.querySelectorAll(".activity-current-work__row")).toHaveLength(0);
+        expect(listReads()).toBe(before);
+
+        page.setRouteLocation({ pathname: "/activity", search: "", hash: "" });
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        const historyReads = listReads();
+        expect(page.container.querySelector(".activity-feed__session-title")?.textContent).toBe(
+          "Roster task",
+        );
+        message({ ...active, updatedAt: 400, label: "Unexpected History update" });
+        await vi.advanceTimersByTimeAsync(10_000);
+        flush();
+        expect(page.container.querySelector(".activity-feed__session-title")?.textContent).toBe(
+          "Roster task",
+        );
+        expect(listReads()).toBe(historyReads);
+      } finally {
+        page.dispose();
+        selection.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("renders localized summaries and timestamps across locale changes", async () => {
     const previousLocale = i18n.getLocale();
     const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);

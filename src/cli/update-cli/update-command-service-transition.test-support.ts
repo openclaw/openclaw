@@ -69,6 +69,8 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
   ] as const)(
     "refreshes a verified installed root with $scenario",
     async ({ scenario, mode, allowed }) => {
+      // These cases test service transitions, not host I/O against the readiness deadline.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const { root, run, mocks } = getFixture();
       const replacementCli = scenario === "CLI already uses replacement install";
       const unresolved = scenario === "retained unresolved launcher";

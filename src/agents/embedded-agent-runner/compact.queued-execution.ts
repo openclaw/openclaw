@@ -27,13 +27,13 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { prepareCliHistoryCompactionBoundary } from "../cli-runner/history-boundary.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
+import { enqueueCompactionInLanes } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   QueuedCompactionHostOptions,
@@ -49,7 +49,6 @@ import {
   type AcceptedCompactionSuccessor,
 } from "./compaction-successor.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import {
@@ -91,29 +90,6 @@ export function projectQueuedCompactionSessionTarget(
       ? { threadId: params.sessionTarget.threadId }
       : {}),
   };
-}
-
-/** Both compaction runtimes cancel pending queue admission before releasing their writer. */
-function enqueueCompactionInLanes<T>(
-  params: Pick<
-    CompactEmbeddedAgentSessionParams,
-    "agentId" | "sessionKey" | "sessionId" | "spawnedBy" | "lane" | "enqueue" | "abortSignal"
-  >,
-  run: () => Promise<T>,
-): Promise<T> {
-  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane, params);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const options = {
-    abortSignal: params.abortSignal,
-    sessionTarget: {
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    },
-  };
-  return enqueueCommandInLane(sessionLane, () => enqueueGlobal(run, options), options);
 }
 
 export async function runPrimaryNativeCompactionInLanes<T>(

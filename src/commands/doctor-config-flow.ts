@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -487,6 +488,30 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     { emitWarnings: false },
   );
 
+  const { repairSystemAgentWorkspacePin } =
+    await import("./doctor/shared/system-agent-workspace-repair.js");
+  // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
+  // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
+  const parsedAgents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
+  const parsedDefaults = isRecord(parsedAgents) ? parsedAgents.defaults : undefined;
+  const authoredDefaultWorkspace =
+    snapshot.authoredConfig?.agents?.defaults?.workspace ??
+    (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
+  const systemAgentWorkspaceOptions = {
+    includeOwnsRoster,
+    authoredDefaultWorkspace:
+      typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
+  };
+  const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
+    ...systemAgentWorkspaceOptions,
+    applyFiles: shouldRepair,
+  });
+  explicitSetPaths.push(...(systemAgentWorkspace.explicitSetPaths ?? []));
+  applyConfigMutation(
+    systemAgentWorkspace,
+    `Run "${doctorFixCommand}" to pin the system agent's workspace.`,
+  );
+
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
@@ -598,8 +623,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     confirm: params.confirm,
     note,
   });
-  const cfg = finalized.cfg;
   const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
+  // An accepted preview copies the system agent's files before its workspace pin joins the write.
+  const confirmedWorkspace =
+    !shouldRepair && shouldWriteConfig && systemAgentWorkspace.restorePending
+      ? await repairSystemAgentWorkspacePin(finalized.cfg, process.env, {
+          ...systemAgentWorkspaceOptions,
+          applyFiles: true,
+        })
+      : undefined;
+  if (confirmedWorkspace) {
+    explicitSetPaths.push(...(confirmedWorkspace.explicitSetPaths ?? []));
+    if (confirmedWorkspace.warnings?.length) {
+      emitDoctorNotes({ note, warningNotes: confirmedWorkspace.warnings });
+      configRepairWarnings.push(...confirmedWorkspace.warnings);
+    }
+  }
+  const cfg = confirmedWorkspace?.config ?? finalized.cfg;
   const includeBoundaryWrite =
     shouldWriteConfig &&
     canWriteDoctorInclude(
@@ -643,7 +683,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Queued repair panels describe candidate mutations; the write runner prints
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
-  const pendingChangePanels = changesPanelSink.drain();
+  // The accepted preview already printed; its applied lines print once the write commits.
+  const pendingChangePanels = [
+    ...changesPanelSink.drain(),
+    ...(confirmedWorkspace?.changes.length ? [confirmedWorkspace.changes.join("\n")] : []),
+  ];
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
   await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.
@@ -652,6 +696,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   return {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
+    cfg,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
           confirmedConfigSource: {

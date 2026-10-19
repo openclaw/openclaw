@@ -4,10 +4,9 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  isEmbeddedAgentRunActive,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -16,9 +15,10 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { isSessionRunActive } from "../sessions/session-controller.queries.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -180,7 +180,7 @@ it.each([
       const admission =
         identity === "embedded"
           ? undefined
-          : await beginSessionWorkAdmission({
+          : await beginSessionEffect({
               scope: scope.storePath,
               identities: [
                 identity === "sessionId"
@@ -207,7 +207,7 @@ it.each([
         expect(prepareLifecycle).not.toHaveBeenCalled();
         expect(loadSessionEntry(scope)).toMatchObject(original);
         expect(onInterrupt).not.toHaveBeenCalled();
-        expect(admission?.isActive() ?? isEmbeddedAgentRunActive(first.entry.sessionId)).toBe(true);
+        expect(admission?.isActive() ?? isSessionRunActive(first.entry.sessionId)).toBe(true);
         expect(await create({ sessionRoot: originalRoot })).toMatchObject({
           ok: true,
           entry: original,
@@ -236,7 +236,7 @@ it("rejects a target identity change while waiting for lifecycle custody", () =>
     const { create, first, target, scope } = await setupCreationTarget(key);
     const entered = createDeferredCore();
     const rotate = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation("create", {
+    const mutation = runSessionMutation({
       scope: target.storePath,
       identities: [key, first.entry.sessionId],
       run: async () => {
@@ -301,7 +301,7 @@ it.each(["commit", "rollback"] as const)(
       });
       await awaitGateBeforeSettlement(entered.promise, creation, "workspace preparation");
       const observedRoots: Array<string | undefined> = [];
-      const queued = beginSessionWorkAdmission({
+      const queued = beginSessionEffect({
         scope: target.storePath,
         identities: [first.entry.sessionId],
         assertAllowed: () => {
@@ -309,7 +309,7 @@ it.each(["commit", "rollback"] as const)(
         },
       });
       try {
-        const unrelated = await beginSessionWorkAdmission({
+        const unrelated = await beginSessionEffect({
           scope: target.storePath,
           identities: ["agent:main:sibling"],
           assertAllowed: () => {},

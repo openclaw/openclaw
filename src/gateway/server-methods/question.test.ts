@@ -8,6 +8,7 @@ import {
   claimAgentRunDelegatedAuthority,
   getAgentRunContext,
   releaseAgentRunDelegatedAuthority,
+  rotateAgentRunRegistryLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -17,15 +18,12 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  type ChatAbortControllerEntry,
-} from "../chat-abort.js";
+import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -48,6 +46,7 @@ import {
   secretRequestQuestion,
   storeWriteService,
 } from "./question.test-support.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
@@ -415,7 +414,7 @@ it("requires admin scope to mint store-bound questions", async () => {
   expect(manager.list()).toEqual([]);
 });
 
-it.each(["replacement", "abort"] as const)(
+it.each(["release", "replacement", "rotation", "abort"] as const)(
   "fences a pending credential on exact requester %s while preserving ordinary questions",
   async (closure) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -425,15 +424,22 @@ it.each(["replacement", "abort"] as const)(
       const ordinaryId = (ordinary[1] as { id: string }).id;
       const waiting = manager.waitAnswer(id);
       let successor: AgentRunDelegatedAuthority | undefined;
-      if (closure === "replacement") {
+      if (closure === "release") {
+        releaseAgentRunDelegatedAuthority(requesterAuthority);
+      } else if (closure === "replacement") {
         successor = claimAgentRunDelegatedAuthority({
           instanceId: "successor-instance",
           runId: requestParams.runId,
         });
+      } else if (closure === "rotation") {
+        rotateAgentRunRegistryLifecycleGeneration();
       } else {
-        const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+        rpcSourceTesting.clear();
         const registration = registerChatAbortController({
-          chatAbortControllers,
+          target: captureRpcTargetForTest({
+            sessionKey: requestParams.sessionKey,
+            sessionId: "question-session",
+          }),
           runId: requestParams.runId,
           sessionId: "question-session",
           sessionKey: requestParams.sessionKey,
@@ -447,7 +453,6 @@ it.each(["replacement", "abort"] as const)(
           expect(
             abortChatRunById(
               {
-                chatAbortControllers,
                 chatRunState: createChatRunState(),
                 removeChatRun: () => undefined,
                 agentRunSeq: new Map(),
@@ -461,6 +466,7 @@ it.each(["replacement", "abort"] as const)(
           registration.cleanup();
         }
       }
+
       try {
         if (closure !== "abort") {
           expect(getAgentRunContext(requestParams.runId)).toBeDefined();

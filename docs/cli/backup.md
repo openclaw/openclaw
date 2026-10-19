@@ -692,6 +692,12 @@ whether it is outside the state directory, inside a workspace, or nested under
 an otherwise regenerable managed state root. `--no-include-workspace` omits
 ordinary workspace sources, not configured agent directories.
 
+State-only archives also omit registered managed chat worktrees, including
+pending or recovering allocations and live worktrees under a previous
+`worktreeRoot`. Only recorded checkout paths are excluded; neighboring files and
+paths from removed registrations remain eligible. Config, credentials, and
+agent databases nested inside an excluded checkout remain included.
+
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.
 

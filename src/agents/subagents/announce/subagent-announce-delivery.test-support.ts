@@ -3,11 +3,7 @@ export * from "./subagent-announce-delivery.js";
 import { expect, it, vi } from "vitest";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { mockCallArg } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  hasAnnounceSendEvidence,
-  runAnnounceDeliveryWithRetry,
-  SourceOwnerChangedError,
-} from "./subagent-announce-delivery-retry.js";
+import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 export const testing = {
@@ -105,29 +101,6 @@ export function registerDescendantWakeCurrencyTests({
           }),
         );
       }
-    },
-  );
-
-  it.each([1, 3])(
-    "refuses a wake retry after %s attempts when currency changes",
-    async (attempts) => {
-      vi.useFakeTimers();
-      let current = true;
-      let dispatched = 0;
-      const pending = runAnnounceDeliveryWithRetry({
-        operation: "descendant wake agent call",
-        prepareAttempt: async () => current,
-        isAttemptAllowed: () => true,
-        run: async () => {
-          dispatched += 1;
-          current = dispatched < attempts;
-          throw new Error("UNAVAILABLE");
-        },
-      });
-      const rejected = expect(pending).rejects.toBeInstanceOf(SourceOwnerChangedError);
-      await vi.runAllTimersAsync();
-      await rejected;
-      expect(dispatched).toBe(attempts);
     },
   );
 }

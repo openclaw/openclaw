@@ -4,8 +4,8 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client } from "@modelcontextprotocol/client";
+import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
@@ -413,6 +413,18 @@ describe("OpenClawStdioClientTransport", () => {
     fixture.stdout.write('invalid\n{"jsonrpc":"2.0","id":1,"result":{}}\n');
     expect(onerror).toHaveBeenCalledOnce();
     expect(onmessage).toHaveBeenCalledExactlyOnceWith({ jsonrpc: "2.0", id: 1, result: {} });
+  });
+
+  it("accepts string response ids in the generic transport", async () => {
+    const { transport, stdout, onerror, onmessage } = createFixture();
+    await transport.start();
+    stdout.write('{"jsonrpc":"2.0","id":"peer-request","result":{}}\n');
+    expect(onerror).not.toHaveBeenCalled();
+    expect(onmessage).toHaveBeenCalledExactlyOnceWith({
+      jsonrpc: "2.0",
+      id: "peer-request",
+      result: {},
+    });
   });
 
   it("reports an oversized stdout frame without an unhandled error crash", async () => {

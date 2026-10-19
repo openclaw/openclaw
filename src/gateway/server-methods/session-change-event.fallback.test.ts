@@ -47,7 +47,6 @@ afterEach(async () => {
 it("coalesces prepared keyless refreshes without repeating prepared facts", async () => {
   const context = {
     getRuntimeConfig: () => ({}),
-    chatAbortControllers: new Map(),
     getSessionEventSubscriberConnIds: () => new Set(["listener"]),
     broadcastToConnIds: vi.fn(),
   } satisfies Parameters<typeof emitSessionsChanged>[0];
@@ -167,7 +166,6 @@ it.each(["ready", "preparation"] as const)(
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,
-        chatAbortControllers: connection.chatAbortControllers,
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1", "no-read"]),
       };
@@ -272,7 +270,6 @@ it.each(["main", "global"])(
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       };

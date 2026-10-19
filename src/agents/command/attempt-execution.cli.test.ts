@@ -36,6 +36,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -644,31 +645,47 @@ describe("CLI attempt execution", () => {
       lifecycleGeneration,
     });
     try {
-      const attempt = await runEmbeddedAgentAttempt({
-        preparedRunAdmission: admission,
-        prepared: selectedPrepared,
-        opts,
-        sessionEntry: selectedPrepared.sessionEntry,
-        lifecycleGeneration,
-        onLifecycleGenerationChanged: () => {},
-        suppressVisibleSessionEffects: false,
-        preserveUserFacingSessionModelState: params.suppression === "preserved-state",
-        trackInternalModelRunTarget: () => {},
-        embeddedSessionState: {
-          sessionEntry: selectedPrepared.sessionEntry,
-          requestedThinkLevel: "off",
-          resolvedVerboseLevel: undefined,
-          skillsSnapshot: { prompt: "", skills: [] },
-          runContext: {},
+      return await withSessionTurn(
+        {
+          sessionKey: params.sessionKey,
+          sessionId: selectedPrepared.sessionId,
+          agentId: selectedPrepared.sessionAgentId,
+          storePath,
+          abortSignal: opts.abortSignal,
         },
-        modelSelection,
-      });
-      try {
-        await attempt.fallbackTrajectoryRecorder?.flush();
-        return attempt;
-      } finally {
-        await attempt.deferredLifecycle.complete();
-      }
+        async (replyOperation) => {
+          const admittedOpts = {
+            ...opts,
+            replyOperation,
+            abortSignal: replyOperation?.abortSignal ?? opts.abortSignal,
+          };
+          const attempt = await runEmbeddedAgentAttempt({
+            preparedRunAdmission: admission,
+            prepared: { ...selectedPrepared, opts: admittedOpts },
+            opts: admittedOpts,
+            sessionEntry: selectedPrepared.sessionEntry,
+            lifecycleGeneration,
+            onLifecycleGenerationChanged: () => {},
+            suppressVisibleSessionEffects: false,
+            preserveUserFacingSessionModelState: params.suppression === "preserved-state",
+            trackInternalModelRunTarget: () => {},
+            embeddedSessionState: {
+              sessionEntry: selectedPrepared.sessionEntry,
+              requestedThinkLevel: "off",
+              resolvedVerboseLevel: undefined,
+              skillsSnapshot: { prompt: "", skills: [] },
+              runContext: {},
+            },
+            modelSelection,
+          });
+          try {
+            await attempt.fallbackTrajectoryRecorder?.flush();
+            return attempt;
+          } finally {
+            await attempt.deferredLifecycle.complete();
+          }
+        },
+      );
     } finally {
       await admission.finish();
     }

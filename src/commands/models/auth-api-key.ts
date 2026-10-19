@@ -28,6 +28,7 @@ import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
+import { AuthProfileCredentialPublicationPendingError } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -135,7 +136,7 @@ export async function saveModelProviderApiKey(params: {
     ),
   );
   const validateSharedBinding = () => {
-    if (readLocalCredentials.some((read) => read())) {
+    if (readLocalCredentials.some((reader) => reader.readCurrentCredential())) {
       throw new Error(
         "An agent already overrides this shared key. Remove that agent's override before replacing the shared key.",
       );
@@ -146,56 +147,73 @@ export async function saveModelProviderApiKey(params: {
     validateSharedBinding();
     validateCurrentCredential(existing);
   };
-  validateReplacement(store.profiles[profileId]);
-  await upsertAuthProfileWithLockOrThrow({
-    profileId,
-    credential: { type: "api_key", provider, key },
-    agentDir,
-    preserveApiKeyMetadata: true,
-    resetFailureState: true,
-    validateCurrentCredential: validateReplacement,
-    assertCurrent: params.assertCurrent,
+  const withCurrentCredentials = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+    for (;;) {
+      try {
+        return await operation();
+      } catch (error) {
+        // Only a direct pre-effect refusal is retryable; cleanup failures remain failures.
+        if (!(error instanceof AuthProfileCredentialPublicationPendingError)) {
+          throw error;
+        }
+        await error.waitUntilCurrent();
+        params.assertCurrent?.();
+      }
+    }
+  };
+  await withCurrentCredentials(async () => {
+    validateReplacement(store.profiles[profileId]);
+    await upsertAuthProfileWithLockOrThrow({
+      profileId,
+      credential: { type: "api_key", provider, key },
+      agentDir,
+      preserveApiKeyMetadata: true,
+      resetFailureState: true,
+      validateCurrentCredential: validateReplacement,
+      assertCurrent: params.assertCurrent,
+    });
   });
   const application = createRuntimeConfigWriteApplication(
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
   );
   let configChanged = false;
   await updateConfig(
-    (current) => {
-      validateSharedBinding();
-      params.assertCurrent?.();
-      const id = params.profileId ? undefined : configuredKey(current);
-      if (
-        !params.profileId &&
-        (id !== connectionId ||
-          (id !== undefined &&
-            !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
-      ) {
-        throw new Error(
-          "The provider connection changed during the key update. Reopen the connection and save the key again",
-        );
-      }
-      let next = applyAuthProfileConfig(current, {
-        ...current.auth?.profiles?.[profileId],
-        profileId,
-        provider,
-        mode: "api_key",
-      });
-      if (id && next.models?.providers?.[id]) {
-        next = {
-          ...next,
-          models: {
-            ...next.models,
-            providers: {
-              ...next.models.providers,
-              [id]: { ...next.models.providers[id], apiKey: profileId },
+    (current) =>
+      withCurrentCredentials(() => {
+        validateSharedBinding();
+        params.assertCurrent?.();
+        const id = params.profileId ? undefined : configuredKey(current);
+        if (
+          !params.profileId &&
+          (id !== connectionId ||
+            (id !== undefined &&
+              !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
+        ) {
+          throw new Error(
+            "The provider connection changed during the key update. Reopen the connection and save the key again",
+          );
+        }
+        let next = applyAuthProfileConfig(current, {
+          ...current.auth?.profiles?.[profileId],
+          profileId,
+          provider,
+          mode: "api_key",
+        });
+        if (id && next.models?.providers?.[id]) {
+          next = {
+            ...next,
+            models: {
+              ...next.models,
+              providers: {
+                ...next.models.providers,
+                [id]: { ...next.models.providers[id], apiKey: profileId },
+              },
             },
-          },
-        };
-      }
-      configChanged = !isDeepStrictEqual(current, next);
-      return next;
-    },
+          };
+        }
+        configChanged = !isDeepStrictEqual(current, next);
+        return next;
+      }),
     undefined,
     params.assertCurrent,
     attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),

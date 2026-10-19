@@ -55,6 +55,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
               <button
                 type="button"
                 class="btn btn--sm"
+                aria-label={t("clawsCatalog.addNamed", { name: entry().displayName })}
                 disabled={!entry().latestVersion}
                 onClick={() => props.onSelect(entry())}
               >

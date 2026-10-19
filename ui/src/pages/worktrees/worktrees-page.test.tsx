@@ -10,7 +10,7 @@ import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigati
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
-import { WorktreesView } from "./worktrees-page.tsx";
+import { renderWorktreesView } from "./worktrees-page.tsx";
 
 // mock-isolation: Replace the imperative dialog so confirmations remain deterministic.
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -114,7 +114,7 @@ function createWorktreesPage(request?: ReturnType<typeof vi.fn>) {
     mount() {
       flush();
       document.body.append(element);
-      dispose = mountSolid(() => <WorktreesView model={model} />, { container: element }).unmount;
+      dispose = mountSolid(() => renderWorktreesView(model), { container: element }).unmount;
       mountedPages.add(page);
     },
     unmount() {

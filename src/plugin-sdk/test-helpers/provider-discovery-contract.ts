@@ -320,6 +320,10 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
   });
 }
 
+// The vLLM and SGLang contracts share these self-hosted cases. Keep discovery
+// defaults real: mock only model discovery, never provider constants or
+// provider construction. Keep the configured-transport and manual-discovery
+// cases for both providers.
 export function describeVllmProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
 }) {

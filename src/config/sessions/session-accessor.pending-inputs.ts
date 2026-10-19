@@ -204,6 +204,8 @@ type PendingInputStageOptions = PendingInputRequest & {
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
+  /** An idempotent pre-commit operation may reclaim interrupted custody in this process. */
+  retryInterrupted?: boolean;
   assertCurrent: () => void;
   assertAdmittedCurrent?: () => void;
   assertCompletionCurrent?: () => void;
@@ -360,7 +362,9 @@ async function stagePreparedPendingInput(
       if (
         (!options.requestFingerprint && !options.trackCompletion) ||
         (existing.state !== "queued" && existing.state !== "interrupted") ||
-        (existing.lifecycle_generation === lifecycleGeneration && !options.trackCompletion)
+        (existing.lifecycle_generation === lifecycleGeneration &&
+          !options.trackCompletion &&
+          !(options.retryInterrupted && existing.state === "interrupted"))
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }

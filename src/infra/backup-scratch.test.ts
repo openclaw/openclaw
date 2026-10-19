@@ -6,38 +6,50 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  createBackupScratchDirectory,
-  finishBackupScratch,
+  createBackupScratchDirectory as createScratch,
+  finishBackupScratch as finishScratch,
   maintainBackupScratch,
 } from "./backup-scratch.js";
-import * as nodeSqlite from "./node-sqlite.js";
-import * as privateDirectory from "./sqlite-private-directory.js";
-import * as stagingToken from "./sqlite-staging-token.js";
+import * as sqlite from "./node-sqlite.js";
+import * as privateDirs from "./sqlite-private-directory.js";
+import * as tokens from "./sqlite-staging-token.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const linkType = process.platform === "win32" ? "junction" : "dir";
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
 });
 
-it("inspects a scratch creator awaiting lifetime admission without reclaiming it", async () => {
-  const root = dirs.make("backup-scratch-creation-");
+function inspect(root: string, repair = true, log?: (message: string) => void) {
+  return maintainBackupScratch({ roots: [root], repair, log });
+}
+
+function pauseCreation(root: string) {
   const entered = createDeferredCore<string>();
   const resume = createDeferredCore();
-  const createDirectory = privateDirectory.createPrivateSqliteTempDirectory;
+  const create = privateDirs.createPrivateSqliteTempDirectory;
   let paused = false;
-  vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementation(
-    async (...args) => {
-      const directory = await createDirectory(...args);
-      if (!paused && args[0] === root) {
-        paused = true;
-        entered.resolve(directory);
-        await resume.promise;
-      }
-      return directory;
-    },
-  );
-  const creating = createBackupScratchDirectory(root);
+  vi.spyOn(privateDirs, "createPrivateSqliteTempDirectory").mockImplementation(async (...args) => {
+    const directory = await create(...args);
+    if (!paused && args[0] === root) {
+      paused = true;
+      entered.resolve(directory);
+      await resume.promise;
+    }
+    return directory;
+  });
+  return { entered, resume };
+}
+
+function expectContents(file: string, contents: string) {
+  return expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+}
+
+it("inspects a scratch creator awaiting lifetime admission without reclaiming it", async () => {
+  const root = dirs.make("backup-scratch-creation-");
+  const { entered, resume } = pauseCreation(root);
+  const creating = createScratch(root);
   try {
     const originalDirectory = await entered.promise;
     const report = await maintainBackupScratch({ roots: [root], repair: false, log: () => {} });
@@ -51,7 +63,7 @@ it("inspects a scratch creator awaiting lifetime admission without reclaiming it
     expect(active.active).toEqual([scratch.directory]);
   } finally {
     resume.resolve();
-    await expect(finishBackupScratch(await creating, () => {})).resolves.toBeUndefined();
+    await expect(finishScratch(await creating, () => {})).resolves.toBeUndefined();
   }
 });
 
@@ -72,7 +84,7 @@ it("rejects replaced scratch after boundary observation without removing either 
       await resume.promise;
     },
   });
-  const creating = createBackupScratchDirectory(root);
+  const creating = createScratch(root);
   // The held creator can reject before the assertion joins its outcome.
   void creating.catch(() => {});
   try {
@@ -97,28 +109,26 @@ it("rejects replaced scratch after boundary observation without removing either 
 
 it("cleans up scratch and preserves its original native token-open failure", async () => {
   const root = dirs.make("backup-scratch-create-open-");
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  const createDirectory = privateDirectory.createPrivateSqliteTempDirectory;
+  const open = sqlite.openNodeSqliteDatabase;
+  const createDirectory = privateDirs.createPrivateSqliteTempDirectory;
   let nativeFailure: unknown;
-  vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementationOnce(
+  vi.spyOn(privateDirs, "createPrivateSqliteTempDirectory").mockImplementationOnce(
     async (...args) => {
       const directory = await createDirectory(...args);
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(
-        (_location, options) => {
-          try {
-            return open(path.join(directory, "missing", "owner.sqlite"), options);
-          } catch (error) {
-            nativeFailure = error;
-            throw error;
-          }
-        },
-      );
+      vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementationOnce((_location, options) => {
+        try {
+          return open(path.join(directory, "missing", "owner.sqlite"), options);
+        } catch (error) {
+          nativeFailure = error;
+          throw error;
+        }
+      });
       return directory;
     },
   );
-  let scratch: Awaited<ReturnType<typeof createBackupScratchDirectory>> | undefined;
+  let scratch: Awaited<ReturnType<typeof createScratch>> | undefined;
   try {
-    const outcome = await createBackupScratchDirectory(root).then(
+    const outcome = await createScratch(root).then(
       (value) => ({ scratch: value }),
       (failure: unknown) => ({ failure }),
     );
@@ -130,91 +140,82 @@ it("cleans up scratch and preserves its original native token-open failure", asy
     await expect(fs.readdir(root)).resolves.toEqual([]);
   } finally {
     if (scratch) {
-      await expect(finishBackupScratch(scratch, () => {})).resolves.toBeUndefined();
+      await expect(finishScratch(scratch, () => {})).resolves.toBeUndefined();
     }
   }
 });
 
-it.each(["directory", "payload"] as const)(
-  "reports vanished %s without claiming remaining scratch was reclaimed",
-  async (removedEntry) => {
+it.each([
+  { boundary: "payload", removed: "directory" },
+  { boundary: "payload", removed: "payload" },
+  { boundary: "token", removed: "directory" },
+  { boundary: "token", removed: "token" },
+] as const)(
+  "reports vanished $removed at the $boundary boundary",
+  async ({ boundary, removed }) => {
     const root = dirs.make("backup-scratch-vanished-");
-    const directory = path.join(root, "openclaw-backup-retired-Gone01");
-    await fs.mkdir(directory);
-    let removed = false;
-    if (removedEntry === "directory") {
+    const scratch = boundary === "token" ? await createScratch(root) : undefined;
+    const directory = scratch?.directory ?? path.join(root, "openclaw-backup-retired-Gone01");
+    const open = vi.fn(sqlite.openNodeSqliteDatabase);
+    let observedRemoval = false;
+    if (scratch) {
+      scratch.release(true);
+      const tokenPath = path.join(directory, tokens.SQLITE_STAGING_TOKEN_FILES[0]);
+      const tokenLocation = sqlite.resolveExistingSqliteFileUri(tokenPath);
+      vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+        if (args[0] === tokenLocation) {
+          observedRemoval = true;
+          fsSync.rmSync(removed === "directory" ? directory : tokenPath, { recursive: true });
+        }
+        return open(...args);
+      });
+    } else if (removed === "directory") {
+      await fs.mkdir(directory);
       const rmdir = fs.rmdir;
       vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
-        if (args[0] === directory && !removed) {
-          removed = true;
+        if (args[0] === directory && !observedRemoval) {
+          observedRemoval = true;
           await fs.rm(directory, { recursive: true });
         }
         return rmdir(...args);
       });
     } else {
+      await fs.mkdir(directory);
       const payload = path.join(directory, "config-0");
       await fs.writeFile(payload, "synthetic config");
       const lstat = fs.lstat;
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
         if (args[0] === payload) {
-          removed = true;
+          observedRemoval = true;
           await fs.rm(payload, { force: true });
         }
         return lstat(...args);
       });
     }
     const log = vi.fn();
-    const report = await maintainBackupScratch({ roots: [root], repair: true, log });
-    expect(removed).toBe(true);
-    expect(report.reclaimed).toEqual([]);
-    if (removedEntry === "directory") {
-      expect(report.warnings).toEqual([]);
-      expect(report.alreadyReclaimed).toEqual([directory]);
-      expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
-    } else {
-      expect(report.alreadyReclaimed).toEqual([]);
-      expect(report.warnings).toEqual([expect.stringContaining(directory)]);
-      await expect(fs.stat(directory)).resolves.toBeDefined();
+    const report = await inspect(root, true, log);
+    expect(observedRemoval).toBe(true);
+    if (boundary === "token") {
+      expect(open.mock.results.find((result) => result.type === "throw")?.value).toBeInstanceOf(
+        Error,
+      );
+      expect(report.active).toEqual([]);
     }
-  },
-);
-
-it.each(["directory", "token"] as const)(
-  "reports native token-open failure according to remaining scratch (%s removed)",
-  async (removed) => {
-    const root = dirs.make("backup-scratch-token-vanished-");
-    const { directory, release } = await createBackupScratchDirectory(root);
-    release(true);
-    const tokenPath = path.join(directory, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
-    const tokenLocation = nodeSqlite.resolveExistingSqliteFileUri(tokenPath);
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let nativeFailure: unknown;
-    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-      if (args[0] !== tokenLocation) {
-        return open(...args);
-      }
-      fsSync.rmSync(removed === "directory" ? directory : tokenPath, { recursive: true });
-      try {
-        return open(...args);
-      } catch (error) {
-        nativeFailure = error;
-        throw error;
-      }
+    expect(report).toMatchObject({
+      reclaimed: [],
+      alreadyReclaimed: removed === "directory" ? [directory] : [],
+      warnings:
+        removed === "directory"
+          ? []
+          : [
+              expect.stringContaining(
+                boundary === "token" ? `Backup scratch preserved at ${directory}:` : directory,
+              ),
+            ],
     });
-    const log = vi.fn();
-    const report = await maintainBackupScratch({ roots: [root], repair: true, log });
-    expect(nativeFailure).toBeInstanceOf(Error);
-    expect(report.reclaimed).toEqual([]);
-    expect(report.active).toEqual([]);
     if (removed === "directory") {
-      expect(report.warnings).toEqual([]);
-      expect(report.alreadyReclaimed).toEqual([directory]);
       expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
     } else {
-      expect(report.alreadyReclaimed).toEqual([]);
-      expect(report.warnings).toEqual([
-        expect.stringContaining(`Backup scratch preserved at ${directory}:`),
-      ]);
       await expect(fs.stat(directory)).resolves.toBeDefined();
     }
   },
@@ -222,7 +223,7 @@ it.each(["directory", "token"] as const)(
 
 it("preserves a symlink target when scratch is replaced after transaction retirement", async () => {
   const parent = dirs.make("backup-scratch-replaced-");
-  const scratch = await createBackupScratchDirectory(parent);
+  const scratch = await createScratch(parent);
   await fs.writeFile(path.join(scratch.directory, "config-0"), "scratch");
   const outside = dirs.make("backup-scratch-protected-");
   const protectedFile = path.join(outside, "config-0");
@@ -233,11 +234,7 @@ it("preserves a symlink target when scratch is replaced after transaction retire
       release(retiring);
       if (retiring) {
         fsSync.renameSync(scratch.directory, `${scratch.directory}.original`);
-        fsSync.symlinkSync(
-          outside,
-          scratch.directory,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        fsSync.symlinkSync(outside, scratch.directory, linkType);
       }
     },
     {
@@ -247,26 +244,22 @@ it("preserves a symlink target when scratch is replaced after transaction retire
       },
     },
   );
-  await expect(finishBackupScratch(scratch, () => {})).resolves.toContain(scratch.directory);
-  await expect(fs.readFile(protectedFile, "utf8")).resolves.toBe("unrelated data");
+  await expect(finishScratch(scratch, () => {})).resolves.toContain(scratch.directory);
+  await expectContents(protectedFile, "unrelated data");
 });
 
 it("preserves retired scratch for maintenance instead of admitting it", async () => {
   const root = dirs.make("backup-scratch-admission-");
-  const acquire = stagingToken.acquireSqliteStagingToken;
+  const acquire = tokens.acquireSqliteStagingToken;
   let retired: string | undefined;
-  vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation(
-    (directory, mode, options) => {
-      if (mode === "create" && !retired) {
-        retired = directory;
-        acquire(directory, "create")(true);
-      }
-      return acquire(directory, mode, options);
-    },
-  );
-  await expect(createBackupScratchDirectory(root)).rejects.toBeInstanceOf(
-    stagingToken.SqliteStagingRetiredError,
-  );
+  vi.spyOn(tokens, "acquireSqliteStagingToken").mockImplementation((directory, mode, options) => {
+    if (mode === "create" && !retired) {
+      retired = directory;
+      acquire(directory, "create")(true);
+    }
+    return acquire(directory, mode, options);
+  });
+  await expect(createScratch(root)).rejects.toBeInstanceOf(tokens.SqliteStagingRetiredError);
   const report = await maintainBackupScratch({ roots: [root], repair: true });
   expect(report.reclaimed).toEqual([retired]);
   expect(report.active).toEqual([]);
@@ -274,19 +267,19 @@ it("preserves retired scratch for maintenance instead of admitting it", async ()
 
 it("preserves unexpected contents and symbolic links instead of adopting them as scratch", async () => {
   const root = dirs.make("backup-scratch-unknown-");
-  const unknown = await createBackupScratchDirectory(root);
+  const unknown = await createScratch(root);
   unknown.release();
   const archive = path.join(unknown.directory, "backup.tar.gz");
   await fs.writeFile(archive, "published backup");
   const linked = path.join(root, "openclaw-backup-linked");
-  await fs.symlink(unknown.directory, linked, process.platform === "win32" ? "junction" : "dir");
-  const report = await maintainBackupScratch({ roots: [root], repair: true });
+  await fs.symlink(unknown.directory, linked, linkType);
+  const report = await inspect(root);
   expect(report.reclaimed).toEqual([]);
   expect(report.warnings).toHaveLength(2);
   expect(report.warnings).toEqual(
     expect.arrayContaining([expect.stringContaining(archive), expect.stringContaining(linked)]),
   );
-  await expect(fs.readFile(archive, "utf8")).resolves.toBe("published backup");
+  await expectContents(archive, "published backup");
   await expect(fs.lstat(linked)).resolves.toSatisfy((entry) => entry.isSymbolicLink());
 });
 
@@ -294,27 +287,18 @@ it.each(["admitted", "creating"] as const)(
   "classifies active scratch before inspecting a journal that can disappear (%s)",
   async (phase) => {
     const root = dirs.make("backup-scratch-active-journal-");
-    const entered = createDeferredCore<string>();
-    const resume = createDeferredCore();
-    if (phase === "creating") {
-      const createDirectory = privateDirectory.createPrivateSqliteTempDirectory;
-      vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementation(
-        async (...args) => {
-          const directory = await createDirectory(...args);
-          entered.resolve(directory);
-          await resume.promise;
-          return directory;
-        },
-      );
-    }
-    const creating = createBackupScratchDirectory(root);
+    const { entered, resume } =
+      phase === "creating"
+        ? pauseCreation(root)
+        : { entered: createDeferredCore<string>(), resume: createDeferredCore() };
+    const creating = createScratch(root);
     const directory = phase === "creating" ? await entered.promise : (await creating).directory;
     const snapshot = path.join(directory, ".sqlite-snapshot-Active");
     const journal = path.join(snapshot, "database.sqlite-journal");
-    let database: ReturnType<typeof nodeSqlite.openNodeSqliteDatabase> | undefined;
+    let database: ReturnType<typeof sqlite.openNodeSqliteDatabase> | undefined;
     const startSnapshot = () => {
       fsSync.mkdirSync(snapshot);
-      const opened = nodeSqlite.openNodeSqliteDatabase(path.join(snapshot, "database.sqlite"));
+      const opened = sqlite.openNodeSqliteDatabase(path.join(snapshot, "database.sqlite"));
       database = opened;
       opened.exec(
         "PRAGMA journal_mode = DELETE; CREATE TABLE fixture (id INTEGER); BEGIN IMMEDIATE; INSERT INTO fixture VALUES (1);",
@@ -324,10 +308,10 @@ it.each(["admitted", "creating"] as const)(
     const lstat = fs.lstat;
     let inspectedJournal = false;
     let observedMissingToken = false;
-    const inspect = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const stat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       if (
         phase === "creating" &&
-        args[0] === path.join(directory, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]) &&
+        args[0] === path.join(directory, tokens.SQLITE_STAGING_TOKEN_FILES[0]) &&
         !observedMissingToken
       ) {
         try {
@@ -352,22 +336,24 @@ it.each(["admitted", "creating"] as const)(
       if (phase === "admitted") {
         startSnapshot();
       }
-      const report = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
+      const report = await inspect(root, true, () => {});
       expect(observedMissingToken).toBe(phase === "creating");
-      expect(report.warnings).toEqual([]);
-      expect(report.active).toEqual([directory]);
-      expect(report.reclaimed).toEqual([]);
-      expect(report.alreadyReclaimed).toEqual([]);
+      expect(report).toMatchObject({
+        warnings: [],
+        active: [directory],
+        reclaimed: [],
+        alreadyReclaimed: [],
+      });
       expect(inspectedJournal).toBe(false);
       expect(database?.isTransaction).toBe(true);
     } finally {
-      inspect.mockRestore();
+      stat.mockRestore();
       resume.resolve();
       if (database?.isTransaction) {
         database.exec("ROLLBACK");
       }
       database?.close();
-      await finishBackupScratch(await creating);
+      await finishScratch(await creating);
     }
   },
 );
@@ -375,8 +361,8 @@ it.each(["admitted", "creating"] as const)(
 it("reclaims abandoned archives while a live transaction protects its files", async () => {
   const payloadName = "archive.tar.gz";
   const root = dirs.make("backup-scratch-lifetime-");
-  const abandoned = await createBackupScratchDirectory(root);
-  const active = await createBackupScratchDirectory(root);
+  const abandoned = await createScratch(root);
+  const active = await createScratch(root);
   const legacy = path.join(root, "openclaw-backup-Legacy");
   const rollback = path.join(root, ".openclaw.package-backup-123-456");
   for (const directory of [abandoned.directory, active.directory, legacy, rollback]) {
@@ -385,33 +371,29 @@ it("reclaims abandoned archives while a live transaction protects its files", as
   }
   abandoned.release();
   try {
-    const inspection = await maintainBackupScratch({ roots: [root], repair: false });
+    const inspection = await inspect(root, false);
     expect(inspection.reclaimed).toEqual([]);
     expect(inspection.unchecked).toEqual(
       expect.arrayContaining([active.directory, abandoned.directory]),
     );
-    await expect(fs.readFile(path.join(abandoned.directory, payloadName), "utf8")).resolves.toBe(
-      "synthetic backup input",
-    );
+    await expectContents(path.join(abandoned.directory, payloadName), "synthetic backup input");
 
-    const repair = await maintainBackupScratch({ roots: [root], repair: true });
+    const repair = await inspect(root);
     expect(repair.reclaimed).toEqual([abandoned.directory]);
     expect(repair.active).toEqual([active.directory]);
     expect(repair.warnings).toEqual([expect.stringContaining(legacy)]);
     await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
     for (const directory of [active.directory, legacy, rollback]) {
-      await expect(fs.readFile(path.join(directory, payloadName), "utf8")).resolves.toBe(
-        "synthetic backup input",
-      );
+      await expectContents(path.join(directory, payloadName), "synthetic backup input");
     }
   } finally {
-    await finishBackupScratch(active);
+    await finishScratch(active);
   }
 });
 
 it("retries retirement after failed payload cleanup", async () => {
   const root = dirs.make("backup-scratch-retry-");
-  const scratch = await createBackupScratchDirectory(root);
+  const scratch = await createScratch(root);
   const payload = path.join(scratch.directory, "config-0");
   await fs.writeFile(payload, "synthetic config");
   const remove = fs.unlink.bind(fs);
@@ -424,7 +406,7 @@ it("retries retirement after failed payload cleanup", async () => {
   let remaining = scratch.directory;
   try {
     const log = vi.fn();
-    const warning = await finishBackupScratch(scratch, log);
+    const warning = await finishScratch(scratch, log);
     const [retired] = await fs.readdir(root);
     remaining = path.join(root, retired!);
     expect(warning).toContain(remaining);
@@ -433,7 +415,7 @@ it("retries retirement after failed payload cleanup", async () => {
   } finally {
     failure.mockRestore();
   }
-  const report = await maintainBackupScratch({ roots: [root], repair: true });
+  const report = await inspect(root);
   expect(report.reclaimed).toEqual([remaining]);
   await expect(fs.stat(remaining)).rejects.toMatchObject({ code: "ENOENT" });
 });

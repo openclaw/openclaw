@@ -245,6 +245,7 @@ export class DecisionProviderHost {
     registry: PluginRegistry,
     consumerId?: string,
     isAdmissible?: () => boolean,
+    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
   ): Promise<DecisionOutcome> {
     return this.evaluateVersion(
       submitted,
@@ -255,6 +256,7 @@ export class DecisionProviderHost {
       1,
       consumerId,
       isAdmissible,
+      onPreparedBilling,
     ) as Promise<DecisionOutcome>; // SAFETY: Version 1 dispatch pairs this V1 batch with a V1 outcome.
   }
 

@@ -126,6 +126,10 @@ type DiagnosticGatewayWsFields =
       event: string;
       count: number;
       bytes: number;
+      /** Post-codec payload bytes; excludes WebSocket and lower-level headers. */
+      wireBytes?: number;
+      /** Cumulative raw frame counts by fixed upper byte bound, including +Inf. */
+      frameBytes?: Record<string, number>;
       sessionEvent?: GatewayWsSessionEventAttribution;
       presenceMode?: GatewayWsPresenceMode;
     }

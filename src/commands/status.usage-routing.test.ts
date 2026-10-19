@@ -40,8 +40,11 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 vi.mock("./status.scan.js", () => ({ scanStatus: mocks.scan }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scan }));
+// mock-isolation: Usage routing consumes fixture scans without local database or Gateway probes.
 vi.mock("./status.scan-overview.js", () => ({
-  resolveStatusSummaryFromOverview: async () => createStatusScanResultFixture().summary,
+  prepareStatusSummaryFromOverview: async () => ({
+    publish: () => ({ summary: createStatusScanResultFixture().summary, sessionStores: undefined }),
+  }),
   collectStatusScanOverview: async ({ opts }: { opts: Parameters<typeof scanStatus>[0] }) => {
     const scan = await mocks.scan(opts);
     return {

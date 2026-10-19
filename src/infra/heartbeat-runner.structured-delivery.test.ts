@@ -87,7 +87,6 @@ function createCase({
         ...options,
         deps: {
           telegram: sendTelegram,
-          getQueueSize: () => 0,
           nowMs: () => 0,
           getReplyFromConfig: replySpy,
           ...deps,

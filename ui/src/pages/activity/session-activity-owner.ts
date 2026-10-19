@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
@@ -518,11 +519,13 @@ export function createSessionActivity(notify: () => void) {
     return pending.completion.promise;
   }
 
-  if (observesPageLifecycle) {
-    document.addEventListener("visibilitychange", handlePageLifecycle);
-    globalThis.addEventListener("pagehide", handlePageLifecycle);
-    globalThis.addEventListener("pageshow", handlePageLifecycle);
-  }
+  const lifecycleStops = observesPageLifecycle
+    ? [
+        listen(document, "visibilitychange", handlePageLifecycle),
+        listen(globalThis, "pagehide", handlePageLifecycle),
+        listen(globalThis, "pageshow", handlePageLifecycle),
+      ]
+    : [];
   function loading() {
     return requestState !== "idle" || incomplete;
   }
@@ -548,10 +551,8 @@ export function createSessionActivity(notify: () => void) {
     canonicalLocation,
     locationForFilters,
     dispose() {
-      if (observesPageLifecycle) {
-        document.removeEventListener("visibilitychange", handlePageLifecycle);
-        globalThis.removeEventListener("pagehide", handlePageLifecycle);
-        globalThis.removeEventListener("pageshow", handlePageLifecycle);
+      for (const stop of lifecycleStops) {
+        stop();
       }
       resetQuery();
     },

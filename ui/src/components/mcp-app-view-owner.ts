@@ -10,6 +10,7 @@ import { t as translate } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
@@ -58,6 +59,7 @@ type McpAppViewPayload = {
 
 type McpAppResources = {
   bridge: OpenClawAppBridge | null;
+  requestAbort: AbortController;
   cleanups: Set<() => void>;
   frameHeight: number;
   iframe: HTMLIFrameElement;
@@ -183,7 +185,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
   function updatePresentation() {
     confirmation.update();
     if (host.displayMode === "fullscreen") {
-      promoteToPopoverTopLayer(host);
+      promoteToPopoverTopLayer(host, () => [host]);
     } else {
       host.removeAttribute("popover");
     }
@@ -276,6 +278,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
           () => undefined,
         );
       }
+      resources.requestAbort.abort();
       await resources.transport?.close().catch(() => undefined);
       resources.iframe.remove();
     })();
@@ -393,6 +396,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
       mount.appendChild(iframe);
       const createdResources: McpAppResources = {
         bridge: null,
+        requestAbort: new AbortController(),
         cleanups: new Set(),
         frameHeight: host.height,
         iframe,
@@ -402,9 +406,10 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
       resources = createdResources;
       activeResources = createdResources;
       addResourceCleanup(createdResources, () => confirmation.cancel());
-      signal.addEventListener("abort", () => void teardownResources(createdResources), {
-        once: true,
-      });
+      addResourceCleanup(
+        createdResources,
+        listen(signal, "abort", () => void teardownResources(createdResources), { once: true }),
+      );
 
       const addCleanup = (cleanup: () => void) => addResourceCleanup(createdResources, cleanup);
       await loadMcpAppSandbox(
@@ -479,8 +484,9 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
         { hostContext: buildHostContext() },
       );
       createdResources.bridge = bridge;
+      // Keep saves live through graceful teardown, then retire all frame RPCs.
       const request = <T = unknown>(method: string, params: Record<string, unknown>) =>
-        requestOwner<T>(binding, method, params, signal);
+        requestOwner<T>(binding, method, params, createdResources.requestAbort.signal);
       const isCurrent = () => isCurrentBinding(binding, createdResources, signal);
       const confirm = (text: string, kind: "message" | "file") =>
         confirmation.request({

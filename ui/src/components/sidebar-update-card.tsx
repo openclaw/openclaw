@@ -23,6 +23,7 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-update-card.css";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import { SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -340,6 +341,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
             </p>
             <div class="sidebar-update-card__compact-actions">
               <button
+                ref={sidebarAttentionFocusRef()}
                 class="sidebar-update-card__review sidebar-update-card__review--primary"
                 type="button"
                 onClick={props.onReviewUpdate}
@@ -371,6 +373,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
       <Show when={campaign()}>
         {(current) => (
           <button
+            ref={sidebarAttentionFocusRef()}
             class="sidebar-update-card__hold"
             type="button"
             disabled={holdingCampaignId() === current().id}
@@ -393,6 +396,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           </div>
         ) : null}
         <button
+          ref={sidebarAttentionFocusRef()}
           class={[
             "sidebar-update-card__action",
             { "sidebar-update-card__action--busy": refreshState().inFlight },
@@ -425,7 +429,12 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     return (
       <div class="sidebar-update-card" role="status" aria-live="polite">
         {renderStatus()}
-        <button class="sidebar-update-card__action" type="button" onClick={openRun}>
+        <button
+          ref={sidebarAttentionFocusRef()}
+          class="sidebar-update-card__action"
+          type="button"
+          onClick={openRun}
+        >
           <span class="sidebar-update-card__icon" aria-hidden="true">
             <Icon
               name={
@@ -478,6 +487,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     function UpdateAction() {
       return (
         <button
+          ref={sidebarAttentionFocusRef()}
           class={[
             "sidebar-update-card__action",
             { "sidebar-update-card__action--busy": busy() || checking() },
@@ -512,6 +522,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           {renderStatus()}
           <Show when={!actionable() && props.statusBanner?.source === "read"}>
             <button
+              ref={sidebarAttentionFocusRef()}
               type="button"
               class="sidebar-update-card__review"
               disabled={checking() || !props.connected}
@@ -537,6 +548,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           </Show>
           <Show when={props.statusBanner}>
             <button
+              ref={sidebarAttentionFocusRef()}
               class="sidebar-update-card__review"
               type="button"
               onClick={props.onReviewUpdate}
@@ -633,7 +645,12 @@ function renderUpdateGitRevisions(
         <code title={revisions.targetSha}>{revisions.targetSha.slice(0, 8)}</code>
       </span>
       {revisions.compareUrl ? (
-        <a href={revisions.compareUrl} target="_blank" rel="noopener noreferrer">
+        <a
+          ref={sidebarAttentionFocusRef()}
+          href={revisions.compareUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           {t("updates.target.viewChanges")} <span aria-hidden="true">↗</span>
         </a>
       ) : null}

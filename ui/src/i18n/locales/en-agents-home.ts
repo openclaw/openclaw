@@ -36,6 +36,7 @@ const enAgentsHome = {
     unavailable: "ClawHub discovery is unavailable. Try again.",
     retry: "Retry",
     add: "Add",
+    addNamed: "Add {name}",
     adding: "Adding...",
     addAnyway: "Add anyway",
     addFailed: "The agent could not be added. Try again.",

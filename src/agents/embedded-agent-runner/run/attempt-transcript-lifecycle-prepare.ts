@@ -1,5 +1,3 @@
-/** Prepares the admitted writer context and teardown tracker for one attempt. */
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { prepareSessionEntryReplacementDatabase } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteReadScope,
@@ -17,6 +15,8 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+/** Prepares the admitted writer context and teardown tracker for one attempt. */
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { IncognitoSessionMissingError } from "../../../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";

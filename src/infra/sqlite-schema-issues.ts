@@ -93,9 +93,6 @@ function isColumnIssue(code: SqliteSchemaIssueCode): boolean {
 }
 
 function defaultIssueMessage(code: SqliteSchemaIssueCode, objectName: string): string {
-  if (!Object.hasOwn(ISSUE_DESCRIPTIONS, code)) {
-    throw new Error("Unsupported SQLite schema issue code", { cause: code });
-  }
   const target = isColumnIssue(code) ? objectName.split(".", 1)[0] : objectName;
   return `${ISSUE_DESCRIPTIONS[code]} ${target}`;
 }

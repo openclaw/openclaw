@@ -18,28 +18,7 @@ import {
 
 const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 
-type BundlePluginManifest = Extract<
-  ReturnType<typeof loadBundleManifest>,
-  { ok: true }
->["manifest"];
-
-type ReadonlyBundleManifestExpectation = Omit<
-  BundlePluginManifest,
-  "capabilities" | "hooks" | "settingsFiles" | "skills"
-> & {
-  capabilities: readonly string[];
-  hooks: readonly string[];
-  settingsFiles?: readonly string[];
-  skills: readonly string[];
-};
-
 const tempDirs: string[] = [];
-
-function makeTempDir() {
-  return makeTrackedTempDir("openclaw-bundle-manifest", tempDirs);
-}
-
-const mkdirSafe = mkdirSafeDir;
 
 function expectLoadedManifest(
   rootDir: string,
@@ -53,16 +32,8 @@ function expectLoadedManifest(
   return result.manifest;
 }
 
-function writeBundleManifest(
-  rootDir: string,
-  relativePath: string,
-  manifest: Record<string, unknown>,
-) {
-  writeBundleFixtureFile(rootDir, relativePath, manifest);
-}
-
 function writeBundleFixtureFile(rootDir: string, relativePath: string, value: unknown) {
-  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
+  mkdirSafeDir(path.dirname(path.join(rootDir, relativePath)));
   fs.writeFileSync(
     path.join(rootDir, relativePath),
     typeof value === "string" ? value : JSON.stringify(value),
@@ -70,49 +41,34 @@ function writeBundleFixtureFile(rootDir: string, relativePath: string, value: un
   );
 }
 
-function writeBundleFixtureFiles(rootDir: string, files: Readonly<Record<string, unknown>>) {
-  Object.entries(files).forEach(([relativePath, value]) => {
+function fixture(files: Readonly<Record<string, unknown>>, dirs: readonly string[] = []) {
+  const rootDir = makeTrackedTempDir("openclaw-bundle-manifest", tempDirs);
+  for (const relativeDir of dirs) {
+    mkdirSafeDir(path.join(rootDir, relativeDir));
+  }
+  for (const [relativePath, value] of Object.entries(files)) {
     writeBundleFixtureFile(rootDir, relativePath, value);
+  }
+  return rootDir;
+}
+
+function agentManifest(extra: Record<string, unknown> = {}) {
+  return { $schema: AGENT_BUNDLE_MANIFEST_SCHEMA, name: "portable", ...extra };
+}
+
+function expectLoadError(rootDir: string, bundleFormat: "agent" | "codex", error: string) {
+  expect(loadBundleManifest({ rootDir, bundleFormat })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining(error),
   });
 }
 
-function setupBundleFixture(params: {
-  rootDir: string;
-  dirs?: readonly string[];
-  jsonFiles?: Readonly<Record<string, unknown>>;
-  textFiles?: Readonly<Record<string, string>>;
-  manifestRelativePath?: string;
-  manifest?: Record<string, unknown>;
-}) {
-  for (const relativeDir of params.dirs ?? []) {
-    mkdirSafe(path.join(params.rootDir, relativeDir));
-  }
-  writeBundleFixtureFiles(params.rootDir, params.jsonFiles ?? {});
-  writeBundleFixtureFiles(params.rootDir, params.textFiles ?? {});
-  if (params.manifestRelativePath && params.manifest) {
-    writeBundleManifest(params.rootDir, params.manifestRelativePath, params.manifest);
-  }
-}
-
-function expectBundleManifest(params: {
-  rootDir: string;
-  bundleFormat: "agent" | "codex" | "claude" | "cursor";
-  expected: ReadonlyBundleManifestExpectation;
-}) {
-  expect(detectBundleManifestFormat(params.rootDir)).toBe(params.bundleFormat);
-  expect(expectLoadedManifest(params.rootDir, params.bundleFormat)).toEqual(params.expected);
-}
-
-afterEach(() => {
-  cleanupTrackedTempDirs(tempDirs);
-});
+afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
 describe("bundle manifest parsing", () => {
   it("does not treat openclaw.bundle.json as a bundle manifest", () => {
-    const rootDir = makeTempDir();
-    writeBundleManifest(rootDir, "openclaw.bundle.json", {
-      name: "Not Real",
-      skills: ["skills"],
+    const rootDir = fixture({
+      "openclaw.bundle.json": { name: "Not Real", skills: ["skills"] },
     });
 
     expect(detectBundleManifestFormat(rootDir)).toBeNull();
@@ -122,23 +78,17 @@ describe("bundle manifest parsing", () => {
     {
       name: "detects and loads Agent Plugins bundles from the portable layout",
       bundleFormat: "agent" as const,
-      setup: (rootDir: string) => {
-        setupBundleFixture({
-          rootDir,
-          dirs: ["skills/summarize"],
-          textFiles: {
-            "skills/summarize/SKILL.md": "---\nname: summarize\ndescription: Summarize\n---\n",
-            "mcp.json": "{",
-          },
-          manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
-          manifest: {
-            $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-            name: "Portable.Bundle",
-            description: "Agent Plugins fixture",
-            version: "1.2.3",
-            unknown: true,
-          },
-        });
+      dirs: [],
+      files: {
+        "skills/summarize/SKILL.md": "---\nname: summarize\ndescription: Summarize\n---\n",
+        "mcp.json": "{",
+        [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+          name: "Portable.Bundle",
+          description: "Agent Plugins fixture",
+          version: "1.2.3",
+          unknown: true,
+        },
       },
       expected: {
         id: "portable-bundle",
@@ -147,20 +97,15 @@ describe("bundle manifest parsing", () => {
         version: "1.2.3",
         bundleFormat: "agent",
         skills: ["skills"],
-        settingsFiles: [],
-        hooks: [],
         capabilities: ["skills", "mcpServers"],
       },
     },
     {
       name: "detects and loads Codex bundle manifests",
       bundleFormat: "codex" as const,
-      setup: (rootDir: string) => {
-        setupBundleFixture({
-          rootDir,
-          dirs: [".codex-plugin", "skills", "hooks"],
-          textFiles: {
-            [CODEX_BUNDLE_MANIFEST_RELATIVE_PATH]: `{
+      dirs: [".codex-plugin", "skills", "hooks"],
+      files: {
+        [CODEX_BUNDLE_MANIFEST_RELATIVE_PATH]: `{
               // Client manifests support JSON5 comments and trailing commas.
               name: "Sample Bundle",
               description: "Codex fixture",
@@ -169,17 +114,13 @@ describe("bundle manifest parsing", () => {
               mcpServers: { sample: { command: "node", args: ["server.js"] } },
               apps: { sample: { title: "Sample App" } },
             }`,
-          },
-        });
       },
       expected: {
         id: "sample-bundle",
         name: "Sample Bundle",
         description: "Codex fixture",
-        version: undefined,
         bundleFormat: "codex",
         skills: ["skills"],
-        settingsFiles: [],
         hooks: ["hooks"],
         capabilities: ["skills", "hooks", "mcpServers", "apps"],
       },
@@ -187,43 +128,34 @@ describe("bundle manifest parsing", () => {
     {
       name: "detects and loads Claude bundle manifests from the component layout",
       bundleFormat: "claude" as const,
-      setup: (rootDir: string) => {
-        setupBundleFixture({
-          rootDir,
-          dirs: [
-            ".claude-plugin",
-            "skill-packs/starter",
-            "commands-pack",
-            "agents-pack",
-            "hooks-pack",
-            "mcp",
-            "lsp",
-            "styles",
-            "hooks",
-          ],
-          textFiles: {
-            "hooks/hooks.json": '{"hooks":[]}',
-            "settings.json": '{"hideThinkingBlock":true}',
-          },
-          manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-          manifest: {
-            name: "Claude Sample",
-            description: "Claude fixture",
-            skills: ["skill-packs/starter"],
-            commands: "commands-pack",
-            agents: "agents-pack",
-            hooks: "hooks-pack",
-            mcpServers: "mcp",
-            lspServers: "lsp",
-            outputStyles: "styles",
-          },
-        });
+      dirs: [
+        "skill-packs/starter",
+        "commands-pack",
+        "agents-pack",
+        "hooks-pack",
+        "mcp",
+        "lsp",
+        "styles",
+      ],
+      files: {
+        "hooks/hooks.json": '{"hooks":[]}',
+        "settings.json": '{"hideThinkingBlock":true}',
+        [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "Claude Sample",
+          description: "Claude fixture",
+          skills: ["skill-packs/starter"],
+          commands: "commands-pack",
+          agents: "agents-pack",
+          hooks: "hooks-pack",
+          mcpServers: "mcp",
+          lspServers: "lsp",
+          outputStyles: "styles",
+        },
       },
       expected: {
         id: "claude-sample",
         name: "Claude Sample",
         description: "Claude fixture",
-        version: undefined,
         bundleFormat: "claude" as const,
         skills: ["skill-packs/starter", "commands-pack", "agents-pack", "styles"],
         settingsFiles: ["settings.json"],
@@ -243,101 +175,70 @@ describe("bundle manifest parsing", () => {
     {
       name: "detects and loads Cursor bundle manifests",
       bundleFormat: "cursor" as const,
-      setup: (rootDir: string) => {
-        setupBundleFixture({
-          rootDir,
-          dirs: [".cursor-plugin", "skills", ".cursor/commands", ".cursor/rules", ".cursor/agents"],
-          textFiles: {
-            ".cursor/hooks.json": '{"hooks":[]}',
-            ".mcp.json": '{"servers":{}}',
-          },
-          manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-          manifest: {
-            name: "Cursor Sample",
-            description: "Cursor fixture",
-            mcpServers: "./.mcp.json",
-          },
-        });
+      dirs: [".cursor-plugin", "skills", ".cursor/commands", ".cursor/rules", ".cursor/agents"],
+      files: {
+        ".cursor/hooks.json": '{"hooks":[]}',
+        ".mcp.json": '{"servers":{}}',
+        [CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "Cursor Sample",
+          description: "Cursor fixture",
+          mcpServers: "./.mcp.json",
+        },
       },
       expected: {
         id: "cursor-sample",
         name: "Cursor Sample",
         description: "Cursor fixture",
-        version: undefined,
         bundleFormat: "cursor",
         skills: ["skills", ".cursor/commands"],
-        settingsFiles: [],
-        hooks: [],
         capabilities: ["skills", "commands", "agents", "hooks", "rules", "mcpServers"],
       },
     },
     {
       name: "detects manifestless Claude bundles from the default layout",
       bundleFormat: "claude" as const,
-      setup: (rootDir: string) => {
-        setupBundleFixture({
-          rootDir,
-          dirs: ["commands", "skills"],
-          textFiles: {
-            "settings.json": '{"hideThinkingBlock":true}',
-          },
-        });
+      dirs: ["commands", "skills"],
+      files: {
+        "settings.json": '{"hideThinkingBlock":true}',
       },
       expected: (rootDir: string) => ({
         id: path.basename(rootDir).toLowerCase(),
-        name: undefined,
-        description: undefined,
-        version: undefined,
         bundleFormat: "claude" as const,
         skills: ["skills", "commands"],
         settingsFiles: ["settings.json"],
-        hooks: [],
         capabilities: ["skills", "commands", "settings"],
       }),
     },
-  ] as const)("$name", ({ bundleFormat, setup, expected }) => {
-    const rootDir = makeTempDir();
-    setup(rootDir);
+  ] as const)("$name", ({ bundleFormat, files, dirs, expected }) => {
+    const rootDir = fixture(files, dirs);
 
-    expectBundleManifest({
-      rootDir,
-      bundleFormat,
-      expected: typeof expected === "function" ? expected(rootDir) : expected,
+    expect(detectBundleManifestFormat(rootDir)).toBe(bundleFormat);
+    expect(expectLoadedManifest(rootDir, bundleFormat)).toEqual({
+      name: undefined,
+      description: undefined,
+      version: undefined,
+      settingsFiles: [],
+      hooks: [],
+      ...(typeof expected === "function" ? expected(rootDir) : expected),
     });
   });
 
   it("keeps client-specific and native formats ahead of portable Agent Plugins", () => {
-    const claudeRoot = makeTempDir();
-    setupBundleFixture({
-      rootDir: claudeRoot,
-      dirs: [".claude-plugin"],
-      jsonFiles: {
-        [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "Claude" },
-        [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
-          $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-          name: "Agent",
-        },
-      },
+    const claudeRoot = fixture({
+      [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "Claude" },
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: agentManifest({ name: "Agent" }),
     });
     expect(detectBundleManifestFormat(claudeRoot)).toBe("claude");
 
-    const nativeRoot = makeTempDir();
-    writeBundleFixtureFiles(nativeRoot, {
+    const nativeRoot = fixture({
       "openclaw.plugin.json": { id: "native", configSchema: { type: "object" } },
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
-        $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-        name: "Agent",
-      },
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: agentManifest({ name: "Agent" }),
     });
     expect(detectBundleManifestFormat(nativeRoot)).toBeNull();
 
-    const entryRoot = makeTempDir();
-    writeBundleFixtureFiles(entryRoot, {
+    const entryRoot = fixture({
       "index.ts": "export default {}",
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
-        $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-        name: "Agent",
-      },
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: agentManifest({ name: "Agent" }),
     });
     expect(detectBundleManifestFormat(entryRoot)).toBe("agent");
   });
@@ -362,8 +263,7 @@ describe("bundle manifest parsing", () => {
       expected: null,
     },
   ])("$name", ({ manifest, files, expected }) => {
-    const rootDir = makeTempDir();
-    writeBundleFixtureFiles(rootDir, {
+    const rootDir = fixture({
       [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: manifest,
       ...files,
     });
@@ -378,53 +278,33 @@ describe("bundle manifest parsing", () => {
       manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "portable" },
     },
   ])("rejects Agent Plugins manifests with $name", ({ manifest }) => {
-    const rootDir = makeTempDir();
-    writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, manifest);
-
-    const result = loadBundleManifest({ rootDir, bundleFormat: "agent" });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain(`expected $schema ${AGENT_BUNDLE_MANIFEST_SCHEMA}`);
-    }
+    const rootDir = fixture({ [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: manifest });
+    expectLoadError(rootDir, "agent", `expected $schema ${AGENT_BUNDLE_MANIFEST_SCHEMA}`);
   });
 
   it("rejects Agent Plugins manifests with missing or empty names", () => {
     for (const name of [undefined, "   "]) {
-      const rootDir = makeTempDir();
-      writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
-        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-        ...(name === undefined ? {} : { name }),
+      const rootDir = fixture({
+        [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          ...(name === undefined ? {} : { name }),
+        },
       });
-      const result = loadBundleManifest({ rootDir, bundleFormat: "agent" });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("name must be a non-empty string");
-      }
+      expectLoadError(rootDir, "agent", "name must be a non-empty string");
     }
   });
 
   it("requires strict JSON only for Agent Plugins manifests", () => {
-    const rootDir = makeTempDir();
-    writeBundleFixtureFile(
-      rootDir,
-      AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
-      '{ name: "not strict JSON", }',
-    );
+    const rootDir = fixture({
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: '{ name: "not strict JSON", }',
+    });
 
-    const result = loadBundleManifest({ rootDir, bundleFormat: "agent" });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("failed to parse plugin manifest");
-    }
+    expectLoadError(rootDir, "agent", "failed to parse plugin manifest");
   });
 
   it("does not expose Agent Plugins skills when skills is not a directory", () => {
-    const rootDir = makeTempDir();
-    writeBundleFixtureFiles(rootDir, {
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
-        $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-        name: "portable",
-      },
+    const rootDir = fixture({
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: agentManifest(),
       skills: "not a directory",
     });
 
@@ -437,18 +317,15 @@ describe("bundle manifest parsing", () => {
       onCommands: [" summarize ", ""],
       onCapabilities: ["tool", "unknown"],
     };
-    const agentRoot = makeTempDir();
-    writeBundleManifest(agentRoot, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
-      $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-      name: "portable",
-      extensions: {
-        "ai.openclaw": { activation, futureField: { enabled: true } },
-      },
+    const agentRoot = fixture({
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: agentManifest({
+        extensions: {
+          "ai.openclaw": { activation, futureField: { enabled: true } },
+        },
+      }),
     });
-    const claudeRoot = makeTempDir();
-    writeBundleManifest(claudeRoot, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
-      name: "claude",
-      activation,
+    const claudeRoot = fixture({
+      [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "claude", activation },
     });
 
     const agentActivation = expectLoadedManifest(agentRoot, "agent").activation;
@@ -471,11 +348,8 @@ describe("bundle manifest parsing", () => {
       extensions: { "com.example": { activation: { onStartup: true } } },
     },
   ])("ignores $name", ({ extensions }) => {
-    const rootDir = makeTempDir();
-    writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
-      $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-      name: "portable",
-      extensions,
+    const rootDir = fixture({
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: agentManifest({ extensions }),
     });
 
     expect(expectLoadedManifest(rootDir, "agent").activation).toBeUndefined();
@@ -493,21 +367,12 @@ describe("bundle manifest parsing", () => {
       manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
     },
   ] as const)("$name", ({ bundleFormat, manifestRelativePath }) => {
-    const rootDir = makeTempDir();
-    setupBundleFixture({
-      rootDir,
-      dirs: [path.dirname(manifestRelativePath)],
-      textFiles: {
-        [manifestRelativePath]:
-          bundleFormat === "agent" ? '"still not an object"' : "'still not an object'",
-      },
+    const rootDir = fixture({
+      [manifestRelativePath]:
+        bundleFormat === "agent" ? '"still not an object"' : "'still not an object'",
     });
 
-    const result = loadBundleManifest({ rootDir, bundleFormat });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("plugin manifest must be an object");
-    }
+    expectLoadError(rootDir, bundleFormat, "plugin manifest must be an object");
   });
 });
 
@@ -518,11 +383,12 @@ describe("OpenAI packaged onboarding skill", () => {
       "../outside/SKILL.md",
       "./other/SKILL.md",
     ]) {
-      const rootDir = makeTempDir();
-      writeBundleManifest(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH, {
-        name: "setup-demo",
-        skills: "./skills",
-        extensions: { "com.openai": { onboardingSkill } },
+      const rootDir = fixture({
+        [CODEX_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "setup-demo",
+          skills: "./skills",
+          extensions: { "com.openai": { onboardingSkill } },
+        },
       });
       const manifest = expectLoadedManifest(rootDir, "codex");
       expect(manifest.onboardingSkill).toBe(

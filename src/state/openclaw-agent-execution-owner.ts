@@ -5,7 +5,7 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -590,7 +590,7 @@ export function createAgentDatabaseExecution(
                     return;
                   }
                   void owner.closeIdle().catch(reportCleanupFailure);
-                }, SQLITE_IDLE_HANDLE_TTL_MS),
+                }, resolveAgentDatabaseIdleHandleTtlMs()),
               );
               idleTimer = timer;
               timer.unref();

@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { ConsoleMessage, Frame, Locator, Page } from "playwright";
 import { expect } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -175,13 +177,26 @@ export async function mountControlUiHost(
       contentType: "text/html",
       body: `<!doctype html><main id="mount"></main>
 <script type="module">
-import { GatewayBrowserClient } from "/src/api/gateway.ts";
+import { createApplicationGateway } from "/src/app/gateway-store.ts";
+import { waitForGatewayClient } from "/src/app/gateway-readiness.ts";
+import { loadSettings } from "/src/app/settings.ts";
 import "/src/components/mcp-app-view-registration.ts";
 import { applicationContext } from "/src/app/context.ts";
 window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
 import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
-window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
+window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => {
+  const gateway = createApplicationGateway(
+    { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
+    "",
+    "",
+    undefined,
+    { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
+  );
+  gateway.start();
+  const client = await waitForGatewayClient(gateway, AbortSignal.timeout(60_000));
+  return { gateway, client };
+};
 document.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
   event.preventDefault();
   window.mcpConformancePrompt = mcpAppMessageText(event.detail.content);
@@ -202,42 +217,18 @@ window.mcpConformanceUnmount = async () => {
   });
   await page.goto(`${baseUrl}mcp-conformance`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
-    () => Reflect.get(window, "mcpConformanceGatewayBrowserClient") !== undefined,
+    () => Reflect.get(window, "mcpConformanceConnect") !== undefined,
     undefined,
     { timeout: 30_000 },
   );
   await page.evaluate(
     async (params) => {
-      const GatewayBrowserClient = Reflect.get(
-        window,
-        "mcpConformanceGatewayBrowserClient",
-      ) as new (options: Record<string, unknown>) => {
-        start(): void;
-        request(method: string, params: unknown): Promise<unknown>;
-      };
-      let resolveHello!: () => void;
-      let rejectHello!: (error: Error) => void;
-      const connected = new Promise<void>((resolve, reject) => {
-        resolveHello = resolve;
-        rejectHello = reject;
-      });
-      const client = new GatewayBrowserClient({
-        url: params.gatewayUrl,
-        token: params.authValue,
-        onHello: () => resolveHello(),
-        onClose: (info: { code: number; reason: string; error?: unknown; willRetry: boolean }) => {
-          if (!info.willRetry) {
-            rejectHello(new Error(`Gateway connection closed: ${JSON.stringify(info)}`));
-          }
-        },
-      });
-      client.start();
-      await Promise.race([
-        connected,
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("Gateway connection timed out")), 60_000);
-        }),
-      ]);
+      const connect = Reflect.get(window, "mcpConformanceConnect") as (connection: {
+        gatewayUrl: string;
+        authValue: string;
+        sessionKey: string;
+      }) => Promise<{ gateway: ApplicationGateway; client: GatewayBrowserClient }>;
+      const { gateway, client } = await connect(params);
       const view = document.createElement("mcp-app-view");
       const root = document.documentElement;
       const themeListeners = new Set<() => void>();
@@ -251,11 +242,7 @@ window.mcpConformanceUnmount = async () => {
       };
       setTheme("dark");
       const context = {
-        gateway: {
-          snapshot: { client, phase: "connected" },
-          connection: { gatewayUrl: params.gatewayUrl },
-          subscribe: () => () => {},
-        },
+        gateway,
         theme: {
           subscribe(listener: () => void) {
             themeListeners.add(listener);
@@ -452,8 +439,8 @@ export async function writeFixtureServer(
   fixtureControlPath: string,
   fixtureEventsPath: string,
 ): Promise<void> {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/server");
+  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/server/stdio");
   await fs.writeFile(
     serverPath,
     `#!/usr/bin/env node
@@ -495,55 +482,55 @@ class ObservedStdioTransport extends StdioServerTransport {
 }
 const appUri = "ui://conformance/app";
 const server = new McpServer({ name: "mcp-app-conformance", version: "1.0.0" });
-const show = server.tool("show", "Show the conformance app", async () => ({
+const show = server.registerTool("show", { description: "Show the conformance app" }, async () => ({
   content: [{ type: "text", text: "initial-result" }],
   structuredContent: { value: "initial-result" },
 }));
 show.update({ _meta: { ui: { resourceUri: appUri } } });
-const appOnly = server.tool("app_companion", "App-only companion", async (extra) => {
-  const request = requests.get(extra.requestId);
+const appOnly = server.registerTool("app_companion", { description: "App-only companion" }, async ({ mcpReq }) => {
+  const request = requests.get(mcpReq.id);
   const config = control();
   const callDelayMs = config.callDelayMs ?? 0;
   const invocation = ++invocations;
-  const detail = { invocation, requestId: extra.requestId, scenario: request?.scenario };
+  const detail = { invocation, requestId: mcpReq.id, scenario: request?.scenario };
   const onAbort = () => record("tool-cancellation-observed", detail);
-  extra.signal.addEventListener("abort", onAbort, { once: true });
+  mcpReq.signal.addEventListener("abort", onAbort, { once: true });
   record("tool-start", detail);
   try {
     // Noncooperative work models an effect cancellation cannot undo.
     if (config.releasePath) {
       while (!existsSync(config.releasePath)) await delay(25);
     } else {
-      await delay(callDelayMs, undefined, config.cooperative ? { signal: extra.signal } : undefined);
+      await delay(callDelayMs, undefined, config.cooperative ? { signal: mcpReq.signal } : undefined);
     }
-    record("tool-complete", { ...detail, aborted: extra.signal.aborted });
+    record("tool-complete", { ...detail, aborted: mcpReq.signal.aborted });
   } catch (error) {
-    if (extra.signal.aborted) record("tool-stopped", detail);
+    if (mcpReq.signal.aborted) record("tool-stopped", detail);
     throw error;
   } finally {
-    extra.signal.removeEventListener("abort", onAbort);
+    mcpReq.signal.removeEventListener("abort", onAbort);
   }
   return {
     content: [{ type: "text", text: "companion-called" }],
     structuredContent: { value: "companion-called", invocation },
   };
 });
-const arm = server.tool("arm_refresh", "Arm fixture catalog response delay", async (extra) => {
-  const scenario = requests.get(extra.requestId)?.scenario;
+const arm = server.registerTool("arm_refresh", { description: "Arm fixture catalog response delay" }, async ({ mcpReq }) => {
+  const scenario = requests.get(mcpReq.id)?.scenario;
   delayNextList = true;
   await server.server.sendToolListChanged();
-  record("notification-sent", { scenario, requestId: extra.requestId });
+  record("notification-sent", { scenario, requestId: mcpReq.id });
   return { content: [{ type: "text", text: "armed" }] };
 });
 arm.update({ _meta: { ui: { visibility: ["app"] } } });
 appOnly.update({ _meta: { ui: { visibility: ["app"] } } });
-const cleanupSave = server.tool("cleanup_save", "Save App state before unmount", async (extra) => {
-  const scenario = requests.get(extra.requestId)?.scenario;
-  record("cleanup-save", { scenario, requestId: extra.requestId });
+const cleanupSave = server.registerTool("cleanup_save", { description: "Save App state before unmount" }, async ({ mcpReq }) => {
+  const scenario = requests.get(mcpReq.id)?.scenario;
+  record("cleanup-save", { scenario, requestId: mcpReq.id });
   return { content: [{ type: "text", text: "saved" }], structuredContent: { value: "saved" } };
 });
 cleanupSave.update({ _meta: { ui: { visibility: ["app"] } } });
-const modelOnly = server.tool("model_only", "Model-only tool", async () => ({
+const modelOnly = server.registerTool("model_only", { description: "Model-only tool" }, async () => ({
   content: [{ type: "text", text: "model-called" }],
 }));
 modelOnly.update({ _meta: { ui: { visibility: ["model"] } } });

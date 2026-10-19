@@ -35,12 +35,14 @@ import {
   resolveDelegationCapability,
 } from "../delegation-capability.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-  type EmbeddedAgentQueueMessageOptions,
+import type {
+  EmbeddedAgentQueueHandle,
+  EmbeddedAgentQueueMessageOptions,
 } from "../embedded-agent-runner/runs.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../embedded-agent-runner/runs.test-support.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -395,7 +397,9 @@ describe("sessions_send direct queue source authority", () => {
                   ? "tools.agentToAgent.send"
                   : source === "unscoped"
                     ? "guarded_injection_unsupported"
-                    : "Message injection authority is no longer current",
+                    : source === "peer-revoked"
+                      ? "Session communication state changed before admission."
+                      : "agent tool caller authority is no longer active",
             );
             expect(queued).not.toHaveBeenCalled();
           } else {

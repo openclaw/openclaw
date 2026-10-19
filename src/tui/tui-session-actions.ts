@@ -36,6 +36,7 @@ import {
   type SessionInfoDefaults,
   type SessionInfoEntry,
 } from "./tui-session-info.js";
+import { isListedTuiSession } from "./tui-session-list-policy.js";
 import {
   getTuiSessionProjection,
   readTuiSessionProjectionScope,
@@ -43,7 +44,12 @@ import {
 } from "./tui-session-projection.js";
 import * as submit from "./tui-submit-state.js";
 import { renderTuiHistoryToolResult } from "./tui-tool-activity.js";
-import type { TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
+import type {
+  TuiHistoryLoadResult,
+  TuiOptions,
+  TuiSessionRow,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type SessionActionContext = {
   client: TuiBackend;
@@ -348,6 +354,19 @@ export function createSessionActions(context: SessionActionContext) {
   // one active lookup and one follow-up with the latest selection.
   const refreshSessionInfoRunner = createTuiRefreshCoalescer(runRefreshSessionInfo);
   const refreshSessionInfo = () => refreshSessionInfoRunner.run();
+
+  /**
+   * Applies the row a selected-session event carries. Rows the picker hides
+   * fall back to the description path, which reports them as missing.
+   */
+  const applySessionEventRow = (row: TuiSessionRow) => {
+    if (!isListedTuiSession(row)) {
+      return false;
+    }
+    adoptSessionKey(row.key);
+    applySessionInfo({ entry: row });
+    return true;
+  };
 
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,
@@ -712,6 +731,7 @@ export function createSessionActions(context: SessionActionContext) {
   return {
     refreshAgents,
     refreshSessionInfo,
+    applySessionEventRow,
     applySessionInfoFromPatch,
     applySessionMutationResult,
     loadHistory,

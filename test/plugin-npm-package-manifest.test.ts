@@ -652,6 +652,11 @@ it.each(["providerCatalogEntry", "capabilityCatalogEntry"] as const)(
       id: "twitch",
       [catalogField]: "./catalog.ts",
       channels: ["twitch"],
+      controlUi: {
+        entry: "dist/control-ui/fixture/index.js",
+        activation: "settings-only",
+        settingsViews: [{ section: "channels", panel: "detail", channelId: "twitch" }],
+      },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     };
     writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);

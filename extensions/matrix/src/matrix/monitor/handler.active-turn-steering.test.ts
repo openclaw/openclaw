@@ -29,31 +29,6 @@ function createClaimSpies() {
   };
 }
 
-function releaseSyntheticResolverAdmissionTicket(options: GetReplyOptions | undefined): void {
-  if (!options) {
-    throw new Error("expected reply options with an admission ticket");
-  }
-  const symbolOptions = options as GetReplyOptions & Record<symbol, unknown>;
-  const tickets = Object.getOwnPropertySymbols(options)
-    .map((key) => symbolOptions[key])
-    .filter(
-      (value): value is { wait: (signal?: AbortSignal) => Promise<boolean>; release: () => void } =>
-        typeof value === "object" &&
-        value !== null &&
-        "wait" in value &&
-        typeof value.wait === "function" &&
-        "release" in value &&
-        typeof value.release === "function",
-    );
-  const ticket = tickets.at(0);
-  if (tickets.length !== 1 || !ticket) {
-    throw new Error(`expected one reply admission ticket, received ${tickets.length}`);
-  }
-  // A real getReplyFromConfig run releases this ticket when runReplyAgent publishes
-  // queue/run ownership. The synthetic resolver must model the same handoff.
-  ticket.release();
-}
-
 describe("Matrix active-turn steering admission", () => {
   it("lets an explicit /steer command reach queue policy while the prior Matrix turn is active", async ({
     signal,
@@ -93,7 +68,6 @@ describe("Matrix active-turn steering admission", () => {
     };
     const queuePolicyResolver = vi.fn(
       async (ctx: FinalizedMsgContext, options?: GetReplyOptions) => {
-        releaseSyntheticResolverAdmissionTicket(options);
         const eventId = ctx.MessageSid;
         if (eventId === activeEventId) {
           await options?.turnAdoptionLifecycle?.onAdopted();
@@ -246,7 +220,7 @@ describe("Matrix active-turn steering admission", () => {
     expect(claim.commit).not.toHaveBeenCalled();
     expect(claim.release).not.toHaveBeenCalled();
 
-    deferredLifecycle?.onAbandoned?.();
+    await deferredLifecycle?.onAbandoned?.();
 
     expect(claim.commit).not.toHaveBeenCalled();
     expect(claim.release).toHaveBeenCalledOnce();

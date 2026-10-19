@@ -304,6 +304,8 @@ A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
+A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
+
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">
     That rate-limit bucket is broader than plain `429`: it also includes provider messages such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, `throttled`, `resource exhausted`, and periodic usage-window limits such as `weekly limit reached` or `monthly limit exhausted`.

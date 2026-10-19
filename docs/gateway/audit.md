@@ -578,7 +578,8 @@ boundaries alongside the operator behavior above:
   absent. It must not change approval decisions when provenance is missing,
   deleted, or corrupt. Do not add eager creation, late binding, dual writes,
   fallback readers, sidecars, or schema-version workarounds. Changes require
-  older-reader open/use and candidate-reopen proof.
+  enabled, disabled, integrity, downgrade, older-reader open/use, and
+  candidate-reopen proof.
 - Invoker evidence is tri-state: tagged principal-bearing input is `present`,
   tagged principal-less input is `unknown`, and omission alone is `absent`.
   Validate the closed raw variant before projection or field dropping; reject

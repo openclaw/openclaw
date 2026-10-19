@@ -135,16 +135,6 @@ describe("sidebar rail pin menu", () => {
       await sidebar.updateComplete;
       const host = getAppSidebarOwner(sidebar.hostElement)!;
       const pins = document.createElement("div");
-      for (const entry of entries) {
-        const pin = document.createElement("div");
-        pin.className = "sidebar-rail__pin";
-        pin.dataset.sidebarEntry = entry;
-        pins.append(pin);
-      }
-      const trigger = document.createElement("button");
-      pins.append(trigger);
-      document.body.append(pins);
-      onTestFinished(() => pins.remove());
       const { menus, disposeMenus } = createRoot((disposeRoot) => ({
         menus: createSidebarMenus({
           host,
@@ -154,6 +144,17 @@ describe("sidebar rail pin menu", () => {
         disposeMenus: disposeRoot,
       }));
       onTestFinished(disposeMenus);
+      for (const entry of entries) {
+        const pin = document.createElement("div");
+        pin.className = "sidebar-rail__pin";
+        pin.dataset.sidebarEntry = entry;
+        pins.append(pin);
+        menus.railPins.set(entry, pin);
+      }
+      const trigger = document.createElement("button");
+      pins.append(trigger);
+      document.body.append(pins);
+      onTestFinished(() => pins.remove());
       menus.triggers.set("railPin", trigger);
       const position: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
         x: 12,

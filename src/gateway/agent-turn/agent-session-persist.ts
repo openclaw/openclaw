@@ -47,7 +47,7 @@ import { createClosedSessionTranscriptSource } from "../session-end-transcript-r
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
-} from "../session-reset-service.js";
+} from "../session-lifecycle-plugin-hooks.js";
 import {
   cronContinuationHasReusableRuntime,
   resolveAgentSessionWorkStartError,

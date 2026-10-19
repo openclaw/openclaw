@@ -6,7 +6,6 @@ import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   loadExactSessionEntryCandidates,
@@ -21,6 +20,7 @@ import {
   type GatewayPluginMetadataOwner,
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -345,6 +345,7 @@ export function createChatDirectiveReplyBackend(params: {
     cancel: params.cancel ?? (() => {}),
     runId: params.runId,
     supportsQueueMessageImages: params.supportsQueueMessageImages,
+    supportsTranscriptCommitWait: true,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     ...(params.legacy
       ? {

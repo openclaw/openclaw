@@ -153,9 +153,15 @@ async function captureRejectedClaudeRun(
   return { error, events };
 }
 
-function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
+async function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
+  const admittedRunContext =
+    params.admittedRunContext ?? (await params.preparedRunAdmission?.admit("embedded"));
+  if (!admittedRunContext) {
+    throw new Error("CLI runner fixture requires prepared execution admission");
+  }
+  const { preparedRunAdmission: _preparedRunAdmission, ...admittedParams } = params;
   return {
-    params,
+    params: { ...admittedParams, admittedRunContext },
     started: Date.now(),
     startedMonotonicMs: performance.now(),
     workspaceDir: params.workspaceDir,
@@ -177,7 +183,7 @@ function prepareProfile(provider: string) {
     profiles: { [profileId]: { type: "api_key", provider, key: "secret" } },
   } as const;
   prepareMock.mockImplementationOnce(async (params) => ({
-    ...makeStubContext(params),
+    ...(await makeStubContext(params)),
     effectiveAuthProfileId: profileId,
     authProfileStore: store,
     agentDir: "/tmp/agent",
@@ -191,7 +197,7 @@ beforeEach(() => {
   beforeRunMock.mockReset().mockResolvedValue(undefined);
   executeMock.mockReset().mockResolvedValue({ text: "" });
   prepareMock.mockReset();
-  prepareMock.mockImplementation(async (params) => makeStubContext(params));
+  prepareMock.mockImplementation(async (params) => await makeStubContext(params));
   closeSessionMock.mockReset();
   closeLoopbackMock.mockReset();
   retireKeyMock.mockReset().mockResolvedValue(true);
@@ -307,8 +313,8 @@ describe("runCliAgent before_agent_reply seam", () => {
     const runId = "run-owner-attribution";
     const events: DiagnosticEventPayload[] = [];
     setDiagnosticsEnabledForProcess(true);
-    prepareMock.mockImplementationOnce(async (params) =>
-      makeStubContext({ ...params, agentId: "main" }),
+    prepareMock.mockImplementationOnce(
+      async (params) => await makeStubContext({ ...params, agentId: "main" }),
     );
     executeMock.mockResolvedValueOnce({ text: "ok" });
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
@@ -413,18 +419,21 @@ describe("runCliAgent before_agent_reply seam", () => {
         [profileId]: { cooldownUntil: Date.now() + 60_000, cooldownReason: "session_expired" },
       },
     };
-    prepareMock.mockImplementationOnce(async (params) => ({
-      ...makeStubContext(params),
-      effectiveAuthProfileId: profileId,
-      authProfileStore: store,
-      agentDir: "/tmp/agent",
-      openClawHistoryPrompt: "history",
-      reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
-      params: {
-        ...params,
-        onBeforeFreshCliSessionRetry: vi.fn(async () => true),
-      },
-    }));
+    prepareMock.mockImplementationOnce(async (params) => {
+      const context = await makeStubContext(params);
+      return {
+        ...context,
+        effectiveAuthProfileId: profileId,
+        authProfileStore: store,
+        agentDir: "/tmp/agent",
+        openClawHistoryPrompt: "history",
+        reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: vi.fn(async () => true),
+        },
+      };
+    });
     executeMock
       .mockRejectedValueOnce(
         new FailoverError("stale session", {

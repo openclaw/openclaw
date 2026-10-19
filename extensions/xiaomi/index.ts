@@ -4,6 +4,7 @@ import type {
   ProviderAuthMethod,
   ProviderCatalogContext,
   ProviderRuntimeModel,
+  ProviderThinkingProfile,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
@@ -29,7 +30,6 @@ import {
   type XiaomiTokenPlanRegion,
 } from "./provider-catalog.js";
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
-import { isMiMoReasoningModelRef, resolveMiMoThinkingProfile } from "./thinking.js";
 
 const PAYG_FLAG_NAME = "--xiaomi-api-key";
 const PAYG_OPTION_KEY = "xiaomiApiKey";
@@ -42,6 +42,21 @@ const XIAOMI_WIZARD_GROUP = {
   groupLabel: "Xiaomi",
   groupHint: "Pay-as-you-go / Token Plan",
 };
+const MIMO_REASONING_MODEL_IDS = new Set([
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
+  "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
+]);
+
+const MIMO_THINKING_PROFILE = {
+  levels: (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((id) => ({
+    id,
+  })),
+  defaultLevel: "high",
+} satisfies ProviderThinkingProfile;
+
 const XIAOMI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "openai-compatible",
@@ -53,11 +68,15 @@ const XIAOMI_PROVIDER_HOOKS = {
     createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningModelRef,
+      shouldPatchModel: (model) =>
+        (model.provider === XIAOMI_PROVIDER_ID ||
+          model.provider === XIAOMI_TOKEN_PLAN_PROVIDER_ID) &&
+        MIMO_REASONING_MODEL_IDS.has(model.id.toLowerCase()),
     }),
-  resolveThinkingProfile: ({ modelId }: { modelId: string }) => resolveMiMoThinkingProfile(modelId),
+  resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
+    MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()) ? MIMO_THINKING_PROFILE : undefined,
   isModernModelRef: ({ modelId }: { modelId: string }) =>
-    Boolean(resolveMiMoThinkingProfile(modelId)),
+    MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()),
 };
 
 async function resolveXiaomiCatalog(params: {

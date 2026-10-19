@@ -104,7 +104,6 @@ describe("cross-store voice creation authority", () => {
               getRuntimeConfig: fixture.context.getRuntimeConfig,
               getClientConnIds: (filter) =>
                 new Set(!filter || filter(client) ? [client.connId] : []),
-              chatAbortControllers: fixture.context.chatAbortControllers,
               broadcastToConnIds: fixture.context.broadcastToConnIds,
             }),
             client,

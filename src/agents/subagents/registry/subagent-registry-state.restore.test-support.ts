@@ -1,7 +1,9 @@
 import { expect, it, vi } from "vitest";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
@@ -17,6 +19,49 @@ export function registerSubagentRestoreCacheCases(params: {
   refuseNextWrite(): void;
 }) {
   const { createRun } = params;
+  it("binds restored history without publishing unchanged session facts", async () => {
+    vi.useRealTimers();
+    const restored = new Map(
+      Array.from({ length: 257 }, (_, index) => {
+        const entry: SubagentRunRecord = {
+          ...createRun(`retained-${index}`),
+          execution: { status: "terminal", endedAt: 100, outcome: { status: "ok" } },
+          cleanupCompletedAt: 100,
+          delivery: { status: "not_required" },
+        };
+        return [entry.runId, entry] as const;
+      }),
+    );
+    params.mockRestoredRows(restored);
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    const first = subagentRuns.get("retained-0")!;
+    const registration = subagentRuns.captureRegistrationOwnership(first.childSessionKey, first);
+    const gateway = { resolveGatewayContext: () => gateway as never };
+    const observe = vi.fn();
+    const unsubscribe = sessionChanges.subscribe(observe);
+    try {
+      expect(
+        await bindSubagentRunGatewayOwners({
+          runs: subagentRuns,
+          resumedRuns: new Set(),
+          getGatewayContextResolver: () => gateway.resolveGatewayContext,
+          onRecovered: () => {},
+        }),
+      ).toBe(true);
+      expect(observe).not.toHaveBeenCalled();
+      expect(subagentRuns.size).toBe(restored.size);
+      for (const entry of subagentRuns.values()) {
+        expect(getGatewayContextResolver(entry)?.()).toBe(gateway);
+        expect(entry.execution.outcome).toEqual({ status: "ok" });
+      }
+      expect(() => registration.assertCurrent()).not.toThrow();
+    } finally {
+      unsubscribe();
+      registration.release();
+      subagentRuns.clear();
+    }
+  });
+
   it("publishes restored rows together after replacing ownership and cached facts", async () => {
     subagentRuns.clear();
     const previous = { ...createRun("replaced"), generation: 1 };

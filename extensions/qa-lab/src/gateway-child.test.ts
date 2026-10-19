@@ -15,6 +15,7 @@ import {
   readJsonLines,
   registerSourceGatewayHostLifelineTest,
   writePackagedGatewayFixture,
+  writeRepoCliSourceRootCaptureFixture,
 } from "./gateway-child-command.test-support.js";
 import {
   buildQaForcedRuntimeEnvPatch,
@@ -740,16 +741,7 @@ describe("buildQaRuntimeEnv", () => {
     const repoRoot = await tempDirs.makeTempDir("qa-gateway-repo-cli-");
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-source-root");
-    const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
-    await mkdir(path.dirname(runnerPath), { recursive: true });
-    await writeFile(
-      runnerPath,
-      [
-        'import fs from "node:fs";',
-        `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
-      ].join("\n"),
-      "utf8",
-    );
+    await writeRepoCliSourceRootCaptureFixture(repoRoot, observedEnvPath);
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", "/repo/current-harness");
 
     const owner = ownGateway();

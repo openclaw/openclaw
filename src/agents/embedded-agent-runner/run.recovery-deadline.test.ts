@@ -80,8 +80,8 @@ describe("overflow recovery deadline ownership through the public runner", () =>
       .mockImplementation((lane, task, options) =>
         enqueue(
           lane,
-          (marker) => {
-            const work = task(marker);
+          () => {
+            const work = task();
             queuedTasks.push(work);
             return work;
           },
@@ -203,7 +203,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
-  it("propagates the queue timeout into active recovery despite per-request progress", async () => {
+  it("propagates the detached execution deadline despite per-request progress", async () => {
     const { observed, compaction } = await start();
     for (let request = 0; request < 7; request += 1) {
       await vi.advanceTimersByTimeAsync(100_000);
@@ -212,12 +212,12 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     await vi.advanceTimersByTimeAsync(110_000);
     expect(
       compaction.abortSignal?.aborted,
-      "queue timeout must reach the active recovery owner",
+      "execution deadline must reach the active recovery owner",
     ).toBe(true);
     const result = await observed;
     expect(result).toMatchObject({
       kind: "rejected",
-      error: { name: "CommandLaneTaskTimeoutError" },
+      error: { message: "Detached execution stalled" },
     });
     if (result.kind === "rejected") {
       expect(compaction.abortSignal?.reason).toBe(result.error);

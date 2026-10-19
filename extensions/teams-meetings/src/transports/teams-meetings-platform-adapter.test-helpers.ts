@@ -222,9 +222,6 @@ export async function runStatusScript(params: StatusScriptParams) {
       return bridge;
     },
     title: "Teams",
-    getElementById() {
-      return undefined;
-    },
     querySelector(selector: string) {
       if (selector.includes("toggle-mute")) {
         return params.microphone;
@@ -322,8 +319,6 @@ export async function runStatusScript(params: StatusScriptParams) {
     waitForInCallMs: params.waitForInCallMs ?? 60_000,
   });
   const run = runInNewContext(`(${script})`, {
-    Event: globalThis.Event,
-    HTMLInputElement: function HTMLInputElement() {},
     MutationObserver: class MutationObserver {
       constructor(callback: (records?: Array<{ removedNodes: PageControl[] }>) => void) {
         captionObserverCallback = callback;

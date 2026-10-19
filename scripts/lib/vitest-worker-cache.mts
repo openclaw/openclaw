@@ -173,18 +173,14 @@ async function transferRoots(source: string, target: string, outputs: Record<str
 }
 
 /** Metadata preparation belongs to the compiler; joined cleanup does not load that graph. */
-export async function createVitestWorkerCache(
-  root: string,
-  directory: string,
-  compilerInputs: string[],
-) {
+export async function createVitestWorkerCache(root: string, directory: string) {
   if (!isCacheSlot(directory)) {
     return undefined;
   }
   const { CompilerInputSnapshot } = await import("./compiler-input-snapshot.mts");
   const snapshot = new CompilerInputSnapshot(root, {
     toolchainFiles: resolveTsdownCompilerFiles(),
-    generatorInputs: ["package.json", "pnpm-lock.yaml", ...compilerInputs],
+    generatorInputs: ["package.json", "pnpm-lock.yaml"],
     isGeneratorInput: (file) => file.endsWith("/package.json"),
   });
   // These absolute external URLs must return to the same exclusively reserved slot.
@@ -199,7 +195,7 @@ export async function createVitestWorkerCache(
   const prepare = () =>
     (metadata ??= (async () => {
       await snapshot.prepare();
-      return snapshot.signature("tsconfig.json", args, []);
+      return snapshot.environmentSignature(args);
     })());
 
   async function restoreGeneration(): Promise<VitestWorkerManifest | undefined> {

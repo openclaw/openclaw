@@ -22,6 +22,54 @@ function selectedCliJob(): CompactNodeTestShard {
   };
 }
 
+const qualifiedCoreSelections = [
+  {
+    family: "gateway-core",
+    target: "src/gateway/mcp-app-extension-runtime.test.ts",
+  },
+  {
+    family: "agents-core",
+    target: "src/agents/cli-runner.helpers.test.ts",
+  },
+];
+
+function selectedCoreJob(selection: (typeof qualifiedCoreSelections)[number]) {
+  const job = selectedCliJob();
+  job.groups[0]!.configs = [`test/vitest/vitest.${selection.family}.config.ts`];
+  job.groups[0]!.includePatterns = [selection.target];
+  return job;
+}
+
+it.each(qualifiedCoreSelections)(
+  "uses 16-class capacity for the qualified $family singleton with other serial selections",
+  (selection) => {
+    const job = selectedCoreJob(selection);
+    job.groups.push(...selectedCliJob().groups);
+    for (const backend of [undefined, "blacksmith", "hybrid"]) {
+      expect(resolveSelectedNodeTestRunner(job, backend)).toBe("blacksmith-16vcpu-ubuntu-2404");
+    }
+  },
+);
+
+it.each(qualifiedCoreSelections)(
+  "retains 32-class capacity for unqualified $family siblings",
+  (selection) => {
+    for (const placement of ["same", "separate", "replacement"]) {
+      const job = selectedCoreJob(selection);
+      const group = job.groups[0]!;
+      const sibling = "src/unqualified.test.ts";
+      if (placement === "same") {
+        group.includePatterns!.push(sibling);
+      } else if (placement === "separate") {
+        job.groups.push({ ...group, includePatterns: [sibling] });
+      } else {
+        group.includePatterns = [sibling];
+      }
+      expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(job.runner);
+    }
+  },
+);
+
 it.each(
   [undefined, "blacksmith", "hybrid"].flatMap((backend) =>
     ["cli", "gateway-client", "gateway-server", "agents-embedded-agent"].map((family) => ({
@@ -142,14 +190,16 @@ it.each<{
     },
   },
 ])("retains 32-class capacity for $reason", ({ change }) => {
-  const job = selectedCliJob();
-  change(job);
-  expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe("blacksmith-32vcpu-ubuntu-2404");
+  for (const job of [selectedCliJob(), ...qualifiedCoreSelections.map(selectedCoreJob)]) {
+    change(job);
+    expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe("blacksmith-32vcpu-ubuntu-2404");
+  }
 });
 
 it("retains hosted placement", () => {
-  const job = selectedCliJob();
-  expect(resolveSelectedNodeTestRunner(job, "github")).toBe(job.runner);
+  for (const job of [selectedCliJob(), ...qualifiedCoreSelections.map(selectedCoreJob)]) {
+    expect(resolveSelectedNodeTestRunner(job, "github")).toBe(job.runner);
+  }
 });
 
 it("uses 16-class capacity for the qualified isolated LLM boundary selection", () => {

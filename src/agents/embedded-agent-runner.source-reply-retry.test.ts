@@ -32,7 +32,7 @@ import {
 const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 let prepareAdmission: typeof import("./admitted-run-context.js").prepareSystemAgentRunAdmission;
-let createReplyOperation: typeof import("../auto-reply/reply/reply-run-registry.js").createReplyOperation;
+let createReplyOperation: typeof import("../sessions/session-controller.js").createReplyOperation;
 let createMessageTool: typeof import("./tools/message-tool-execution.js").createMessageTool;
 let mintCapability: typeof import("../gateway/message-action-turn-capability.js").mintMessageActionTurnCapability;
 let revokeCapability: typeof import("../gateway/message-action-turn-capability.js").revokeMessageActionTurnCapability;
@@ -58,7 +58,7 @@ beforeAll(async () => {
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
   ({ prepareSystemAgentRunAdmission: prepareAdmission } =
     await import("./admitted-run-context.js"));
-  ({ createReplyOperation } = await import("../auto-reply/reply/reply-run-registry.js"));
+  ({ createReplyOperation } = await import("../sessions/session-controller.js"));
   ({ createMessageTool } = await import("./tools/message-tool-execution.js"));
   ({
     mintMessageActionTurnCapability: mintCapability,
@@ -91,7 +91,7 @@ describe("source reply settlement across provider retries", () => {
     async ({ mode, fault, delivered, failures }) => {
       const id = [mode, fault, failures].join("-");
       const sessionId = id;
-      const sessionKey = "agent:test:workspace:group:C123:" + id;
+      const sessionKey = "agent:test:workspace:group:c123:" + id;
       const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
       const config = {
         ...createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]),

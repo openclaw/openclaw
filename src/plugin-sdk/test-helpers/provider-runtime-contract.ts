@@ -746,32 +746,6 @@ export function describeOpenRouterProviderRuntimeContract(
   });
 }
 
-export function describeVeniceProviderRuntimeContract(
-  load: ProviderRuntimeContractPluginLoader,
-  manifestCatalog: unknown,
-) {
-  describe("venice provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
-    const createManifestModel = createManifestModelFactory("venice", manifestCatalog);
-    const getProvider = installRuntimeHooks(load, "venice", "Venice");
-
-    it("owns xai downstream compat flags for grok-backed Venice models", () => {
-      const provider = getProvider("venice");
-      const manifestModel = createManifestModel("grok-4-5");
-      const model = provider.normalizeResolvedModel?.({
-        provider: "venice",
-        modelId: manifestModel.id,
-        model: manifestModel,
-      });
-      const { compat: _manifestCompat, ...manifestFields } = manifestModel;
-      expectFields(model, manifestFields);
-      expect(requireRecord(model?.compat, "compat")).toMatchObject({
-        toolSchemaProfile: "xai",
-        toolCallArgumentsEncoding: "html-entities",
-      });
-    });
-  });
-}
-
 export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("zai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
     const getProvider = installRuntimeHooks(load, "zai", "Z.AI");

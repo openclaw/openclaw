@@ -357,4 +357,70 @@ describe("importMemoryWikiOkfBundle", () => {
       path: "tables/private.md",
     });
   });
+
+  it("preserves imported concepts when malformed UTF-8 is mixed with valid input", async () => {
+    const { bundlePath, config, run } = await createImport("encoding-okf");
+    const conceptPath = path.join(bundlePath, "tables", "customers.md");
+    await writeConcept(conceptPath, "Customers", "Original body.\n");
+    await writeConcept(path.join(bundlePath, "valid.md"), "Valid", "Café 😀 literal \uFFFD\n");
+    const first = await run();
+    const conceptPage = first.pagePaths.find((pagePath) => pagePath.includes("customers"));
+    if (!conceptPage) {
+      throw new Error("Expected the customers concept to be imported.");
+    }
+    const pagePath = path.join(config.vault.path, conceptPage);
+    const original = await fs.readFile(pagePath);
+    const malformed = Buffer.concat([
+      Buffer.from("---\ntype: Concept\ntitle: Customers\n---\nBroken "),
+      Buffer.from([0xc3, 0x28]),
+    ]);
+    await fs.writeFile(conceptPath, malformed);
+
+    const result = await run();
+
+    expect(result).toMatchObject({
+      importedCount: 1,
+      updatedCount: 0,
+      removedCount: 0,
+      skippedCount: 1,
+    });
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        code: "unreadable-entry",
+        path: "tables/customers.md",
+        message: expect.stringContaining("UTF-8"),
+      }),
+    ]);
+    await expect(fs.readFile(pagePath)).resolves.toEqual(original);
+    await expect(fs.readFile(conceptPath)).resolves.toEqual(malformed);
+    const validPage = path.join(config.vault.path, getOnlyPagePath(result.pagePaths));
+    await expect(fs.readFile(validPage, "utf8")).resolves.toContain("Café 😀 literal \uFFFD");
+  });
+
+  it("rejects an unreadable root index without changing existing concept identities", async () => {
+    const { bundlePath, config, run } = await createImport("invalid-index-okf");
+    const indexPath = path.join(bundlePath, "index.md");
+    const index = "---\nid: stable\n---\nBundle description.\n";
+    await fs.writeFile(indexPath, index);
+    const conceptPath = path.join(bundlePath, "tables", "customers.md");
+    await writeConcept(conceptPath, "Customers", "Original body.\n");
+    const first = await run();
+    const pagesBefore = await fs.readdir(path.join(config.vault.path, "concepts"));
+    const pagePath = path.join(config.vault.path, getOnlyPagePath(first.pagePaths));
+    const original = await fs.readFile(pagePath);
+    await fs.writeFile(indexPath, Buffer.concat([Buffer.from(index), Buffer.from([0xff])]));
+    await writeConcept(conceptPath, "Customers", "Updated body.\n");
+
+    await expect(run()).rejects.toThrow(/index\.md.*UTF-8/);
+    await expect(fs.readFile(pagePath)).resolves.toEqual(original);
+    await expect(fs.readdir(path.join(config.vault.path, "concepts"))).resolves.toEqual(
+      pagesBefore,
+    );
+
+    await fs.writeFile(indexPath, index);
+    const recovered = await run();
+    expect(recovered).toMatchObject({ importedCount: 1, updatedCount: 1, warnings: [] });
+    expect(recovered.pagePaths).toEqual(first.pagePaths);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("Updated body.");
+  });
 });

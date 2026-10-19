@@ -58,27 +58,22 @@ describe("process-owned directory observation", () => {
     }
     expect(clock).not.toHaveBeenCalled();
     expect(timeout).toHaveBeenCalledOnce();
-    vi.advanceTimersByTime(300_000);
+    vi.advanceTimersByTime(30_000);
     expect(listener).toHaveBeenCalledOnce();
     subscriptions.pop()!.close();
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("recovers healthy watches every five minutes while authority subscribers keep 30 seconds", () => {
+  it("recovers healthy watches every 30 seconds", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
     const directory = tempDirs.make("owned-directory-cadence-");
     const listener = vi.fn();
     subscriptions.push(observeOwnedDirectory(directory, listener));
-    vi.advanceTimersByTime(299_999);
+    vi.advanceTimersByTime(29_999);
     expect(listener).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(listener).toHaveBeenCalledOnce();
-    const authority = vi.fn();
-    subscriptions.push(observeOwnedDirectory(directory, authority, { recoveryIntervalMs: 30_000 }));
-    vi.advanceTimersByTime(30_000);
-    expect(authority).toHaveBeenCalledOnce();
-    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the authority recovery bound across a backward wall-clock correction", () => {
@@ -86,7 +81,7 @@ describe("process-owned directory observation", () => {
     vi.setSystemTime(300_000);
     const directory = tempDirs.make("owned-directory-clock-");
     const listener = vi.fn();
-    subscriptions.push(observeOwnedDirectory(directory, listener, { recoveryIntervalMs: 30_000 }));
+    subscriptions.push(observeOwnedDirectory(directory, listener));
     vi.setSystemTime(0);
     vi.advanceTimersByTime(30_000);
     expect(listener).toHaveBeenCalledOnce();
@@ -105,7 +100,7 @@ describe("process-owned directory observation", () => {
     expect(listener).toHaveBeenCalledOnce();
     expect(watch).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(30_000);
-    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("creates long-lived observations outside importer and caller authority", () => {
@@ -219,8 +214,6 @@ describe("process-owned directory observation", () => {
     expect(listener).toHaveBeenCalledWith(undefined);
     listener.mockClear();
     vi.advanceTimersByTime(30_000);
-    expect(listener).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(270_000);
     expect(listener).toHaveBeenCalledWith(undefined);
   });
 });

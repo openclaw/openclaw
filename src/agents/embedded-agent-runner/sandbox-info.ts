@@ -2,7 +2,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
-import type { resolveSandboxContext } from "../sandbox.js";
+import type { resolveSandboxContext } from "../sandbox/context.js";
 import {
   withPreparedToolConstruction,
   type ToolConstructionPreparationOptions,

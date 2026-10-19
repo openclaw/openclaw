@@ -77,7 +77,7 @@ export async function capturePluginStateNativeBindingFacts(
   };
   try {
     if (authority) {
-      assertPluginStatePublicationSettled(identity());
+      assertPluginStatePublicationSettled(identity(), scope);
     }
     const cached = readCommittedPluginStateObservationCache(identity(), scope);
     if (cached) {
@@ -92,7 +92,7 @@ export async function capturePluginStateNativeBindingFacts(
           throw new Error("Native binding committed state is unavailable");
         }
         if (authority) {
-          assertPluginStatePublicationSettled(identity());
+          assertPluginStatePublicationSettled(identity(), scope);
           store.assertCurrent?.();
         }
         (context.assertPublicationCurrent ?? context.admission.assertCurrent)();

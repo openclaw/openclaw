@@ -5,10 +5,10 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -84,16 +84,20 @@ describe("runSkillExperienceReview", () => {
     const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
     mocks.runEmbeddedAgent.mockImplementation(
       async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
-        setActiveEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
+        registerTestEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
         try {
           expect(params.abortSignal?.aborted).toBe(false);
-          setActiveEmbeddedRun("interactive-session", interactiveHandle, "agent:other:interactive");
+          registerTestEmbeddedRun(
+            "interactive-session",
+            interactiveHandle,
+            "agent:other:interactive",
+          );
           expect(params.abortSignal?.aborted).toBe(true);
           expect(interactiveHandle.abort).not.toHaveBeenCalled();
           return { meta: { durationMs: 1, aborted: true } };
         } finally {
-          clearActiveEmbeddedRun("interactive-session", interactiveHandle);
-          clearActiveEmbeddedRun(params.sessionId, ownHandle);
+          clearTestEmbeddedRun("interactive-session", interactiveHandle);
+          clearTestEmbeddedRun(params.sessionId, ownHandle);
         }
       },
     );

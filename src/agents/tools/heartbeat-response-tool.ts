@@ -75,9 +75,7 @@ export function resolveHeartbeatResponseTool(options?: {
     : null;
 }
 
-export function createHeartbeatResponseTool(
-  options: { acceptsResponses?: boolean } = {},
-): AnyAgentTool {
+function createHeartbeatResponseTool(options: { acceptsResponses?: boolean } = {}): AnyAgentTool {
   let recorded = false;
   return {
     label: "Heartbeat",

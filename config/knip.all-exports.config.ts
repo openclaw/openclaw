@@ -80,6 +80,9 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
+  // The prerelease manifest runs this frozen planner and checks its historical config is present.
+  "test/fixtures/plugin-prerelease-frozen-target/scripts/lib/extension-test-plan.mjs!",
+  "test/fixtures/plugin-prerelease-frozen-target/test/vitest/vitest.extension-telegram.config.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",

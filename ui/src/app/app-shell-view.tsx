@@ -1,6 +1,6 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
@@ -17,7 +17,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
-import type { ChatPage } from "../pages/chat/chat-page.ts";
+import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
@@ -59,6 +59,13 @@ declare module "@solidjs/web" {
 
 export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   let content!: HTMLElement;
+  onSettled(() => {
+    const stops = [
+      props.host.shellElement && registerToastContainer(props.host.shellElement, "shell"),
+      props.host.navDrawerElement && registerToastContainer(props.host.navDrawerElement, "drawer"),
+    ];
+    return () => stops.forEach((stop) => stop?.());
+  });
   const [navResizing, setNavResizing] = createSignal(false);
   const view = createMemo(() => {
     props.host.shellRevision();
@@ -119,7 +126,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
     }),
     ({ state, status, mobile, recovery, flag }) => {
       props.host.mobileGatewayStatus = mobile;
-      const chatPage = props.host.routeOutlet?.querySelector<ChatPage>("openclaw-chat-page");
+      const chatPage = props.host.routeOutlet?.renderedElement?.("openclaw-chat-page");
       if (chatPage) {
         chatPage.gatewayStatus = mobile;
       }

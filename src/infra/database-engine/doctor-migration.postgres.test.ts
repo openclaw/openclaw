@@ -292,7 +292,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26])(
+  it.each([24, 25, 26, 27])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       closeOpenClawStateDatabaseForTest();
@@ -308,7 +308,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         DROP INDEX IF EXISTS idx_state_leases_owner;
         DROP INDEX IF EXISTS idx_skill_usage_key;
         DROP INDEX IF EXISTS idx_acp_replay_events_session_seq;
-        ${Object.values(statePostgresRuntime.preWriteIndexesV27Sql).join("\n")}
+        ${sourceVersion < 27 ? Object.values(statePostgresRuntime.preWriteIndexesV27Sql).join("\n") : indexSql}
         UPDATE "${namespace}".openclaw_schema_meta
           SET version = ${sourceVersion}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         UPDATE "${namespace}".schema_meta SET schema_version = ${sourceVersion};
@@ -321,6 +321,28 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           VALUES ('doctor.fixture', 'main', 81, 7, 1)
           ON CONFLICT (session_key, agent_id) DO UPDATE
             SET last_sequence = 81, pruned_max_sequence = 7, updated_at = 1;`);
+      // Rebuild empty fixture tables from the registered predecessor, preserving
+      // real column positions instead of leaving DROP COLUMN attnum holes.
+      for (const table of [
+        "github_publication_requests",
+        "github_personal_publication_requests",
+        "github_repository_publication_requests",
+      ]) {
+        const present = await client.query("SELECT to_regclass($1) AS relation", [
+          `${namespace}.${table}`,
+        ]);
+        if (!present.rows[0].relation) {
+          continue;
+        }
+        expect((await client.query(`SELECT 1 FROM "${namespace}".${table} LIMIT 1`)).rows).toEqual(
+          [],
+        );
+        const fragment = sourceSchema.postgresFragments!.find((entry) =>
+          entry.tables.includes(table),
+        );
+        expect(fragment).toBeDefined();
+        await client.query(`DROP TABLE "${namespace}".${table}; ${fragment!.sql}`);
+      }
       {
         using anchor = openNodeSqliteDatabase(pathname);
         publishSqliteDatabaseSchemaChange(anchor);

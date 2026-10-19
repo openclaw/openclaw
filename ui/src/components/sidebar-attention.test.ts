@@ -237,6 +237,55 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it("wraps panel focus across collapsed details, expanded actions and an empty tab", async () => {
+    const request = respond({
+      "cron.list": cronResponse(),
+      "cron.status": cronStatus(0),
+      "models.authStatus": authStatus(1),
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    harness.update({ selfUser: { id: "alice", name: "Alice" } });
+    const { element, trigger } = await mountAttention({
+      gateway: harness.gateway,
+      agentSelection: selection("main", null),
+    });
+    await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
+    await openPanel(element, trigger);
+    const details = attention(element, "modelAuthExpired") as HTMLDetailsElement;
+    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const summary = details.querySelector("summary")!;
+    const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
+    const wrap = (from: HTMLElement, shiftKey = false) => {
+      from.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      from.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    };
+
+    expect(details.open).toBe(false);
+    wrap(first, true);
+    expect(document.activeElement).toBe(dismiss);
+
+    summary.click();
+    expect(details.open).toBe(true);
+    const ask = details.querySelector<HTMLButtonElement>(
+      ".sidebar-issues-panel__body .sidebar-issues-panel__action:not(.sidebar-issues-panel__action--primary)",
+    )!;
+    wrap(ask);
+    expect(document.activeElement).toBe(first);
+
+    element.querySelector<HTMLButtonElement>("#sidebar-issues-tab-mentions")!.click();
+    flush();
+    expect(attention(element, "modelAuthExpired")).toBeNull();
+    wrap(issues(element, "panel__list")!);
+    expect(document.activeElement).toBe(element.querySelector(".sidebar-brand__icon[href]"));
+  });
+
   it.each([false, true])(
     "only dismisses on window blur into an outside frame: %s",
     async (outsideFrame) => {

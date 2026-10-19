@@ -1,5 +1,7 @@
 import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
+import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
@@ -51,13 +53,16 @@ export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
     <Show
       when={restoredInstantThreadPage(props.data)}
       fallback={<openclaw-new-session-page prop:data={props.data} />}
+      keyed
     >
-      {(page) => page()}
+      {(page) => page}
     </Show>
   );
 }
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
+// Retained draft hosts can reconnect under a fresh native bridge root.
+const renderedPages = new WeakSet<PageHost>();
 
 function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
   const place = () => props.page().place;
@@ -199,6 +204,38 @@ function DraftBlock(props: {
 }
 
 function PageContent(_props: { data: NewSessionRouteData | undefined }, host: PageHost) {
+  const context = useOptionalApplication();
+  // Native bridge roots do not inherit the router's error boundary.
+  const Content = () => {
+    const content = renderPageContent(host);
+    onSettled(() => {
+      renderedPages.add(host);
+    });
+    return content;
+  };
+  const RenderError = (props: { error: unknown; reset: () => void }) => {
+    onSettled(() => {
+      let active = true;
+      if (context && !renderedPages.has(host)) {
+        // Only failed initial mounts reload; later errors must preserve active drafts.
+        void reloadAfterRenderErrorOnce(
+          createGatewayControlUiReloadOptions(context.gateway, () => active && host.isConnected),
+        );
+      }
+      return () => {
+        active = false;
+      };
+    });
+    return <LazyViewError error={props.error} onRetry={props.reset} />;
+  };
+  return (
+    <Errored fallback={(error, reset) => <RenderError error={error()} reset={reset} />}>
+      <Content />
+    </Errored>
+  );
+}
+
+function renderPageContent(host: PageHost) {
   const owner = pageOwners.get(host) ?? new NewSessionPageOwner(host);
   pageOwners.set(host, owner);
   owner.context = useOptionalApplication();
@@ -423,6 +460,12 @@ defineSolidBridge<
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },
 });
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-new-session-page": PageHost;
+  }
+}
 
 declare module "@solidjs/web" {
   namespace JSX {

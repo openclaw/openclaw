@@ -42,6 +42,7 @@ export type { SessionOrganizerDependencies } from "./session-organizer-types.ts"
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 export class SessionOrganizer {
+  readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
   draggingSidebarSection: string | null = null;
@@ -659,8 +660,7 @@ export class SessionOrganizer {
         dataTransfer.dropEffect = "move";
       }
       const target = event.currentTarget as HTMLElement;
-      const header = target.querySelector<HTMLElement>(":scope > .sidebar-recent-sessions__head");
-      const bounds = (header ?? target).getBoundingClientRect();
+      const bounds = (this.sectionHeaders.get(sectionId) ?? target).getBoundingClientRect();
       const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
       this.sidebarSectionDropTarget = { sectionId, position };
       this.sessionDropTarget = null;

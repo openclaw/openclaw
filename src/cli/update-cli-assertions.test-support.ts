@@ -1,117 +1,87 @@
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import {
-  callGateway,
-  spawn,
-  syncPluginsForUpdateChannel,
-  updateNpmInstalledPlugins,
-} from "./update-cli-mocks.test-support.js";
-import {
-  defaultRuntime,
-  mutateConfigFileWithRetry,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  runCommandWithTimeout,
-  runUpdateFailureTriage,
-  updateGitCheckout,
-} from "./update-cli-modules.test-support.js";
+import * as mocks from "./update-cli-mocks.test-support.js";
+import * as update from "./update-cli-modules.test-support.js";
 import { createUpdateFixtureAssertions } from "./update-cli-shared-fixture.test-support.js";
 import { isLegacyUpdateDoctorCommand } from "./update-cli/update-command-transport.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-function requireValue<T>(value: T | undefined, label: string): T {
+export function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
     throw new Error(`expected ${label}`);
   }
   return value;
 }
 
-const expectUpdateCallChannel = (channel: string) => {
-  const call = vi.mocked(updateGitCheckout).mock.calls[0]?.[0];
+export const expectUpdateCallChannel = (channel: string) => {
+  const call = vi.mocked(update.updateGitCheckout).mock.calls[0]?.[0];
   expect(call?.opts.channel).toBe(channel);
   return call;
 };
-const commandCalls = () =>
-  vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<
+export const commandCalls = () =>
+  vi.mocked(update.runCommandWithTimeout).mock.calls as unknown as Array<
     [string[], Record<string, unknown>]
   >;
 
-const packageInstallCommandCall = () =>
+export const packageInstallCommandCall = () =>
   commandCalls().find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
 
 const packagePackCommandCall = () =>
   commandCalls().find(([argv]) => argv[0] === "npm" && argv[1] === "pack");
 
-const stripOpenClawPackageAlias = (spec: string) => {
-  const trimmed = spec.trim();
-  return trimmed.toLowerCase().startsWith("openclaw@")
-    ? trimmed.slice("openclaw@".length)
-    : trimmed;
-};
-
 const isNpmGitPackageSpec = (spec: string) => {
-  const target = stripOpenClawPackageAlias(spec);
-  const [repo] = target.split("#", 1);
-  const isGitHubShorthand =
-    Boolean(repo) &&
-    !expectDefined(repo, "repo test invariant").startsWith(".") &&
-    !expectDefined(repo, "repo test invariant").startsWith("/") &&
-    !expectDefined(repo, "repo test invariant").startsWith("@") &&
-    expectDefined(repo, "repo test invariant").split("/").length === 2 &&
-    expectDefined(repo, "repo test invariant")
-      .split("/")
-      .every((part) => /^[^\s/:@]+$/u.test(part));
-  let isHttpGitUrl;
+  const target = spec.trim().replace(/^openclaw@/i, "");
+  if (
+    /^(?:github:|git[+:]|ssh:\/\/)/i.test(target) ||
+    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
+    /^[^.\s/:@][^\s/:@]*\/[^\s/:@]+$/u.test(target.split("#", 1)[0] ?? "")
+  ) {
+    return true;
+  }
   try {
     const url = new URL(target);
     const pathname = url.pathname.replace(/\/+$/u, "");
-    const pathParts = pathname.split("/").filter(Boolean);
-    isHttpGitUrl =
+    return (
       (url.protocol === "https:" || url.protocol === "http:") &&
       (pathname.endsWith(".git") ||
-        (url.hostname.toLowerCase() === "github.com" && pathParts.length === 2));
+        (url.hostname.toLowerCase() === "github.com" &&
+          pathname.split("/").filter(Boolean).length === 2))
+    );
   } catch {
-    isHttpGitUrl = false;
+    return false;
   }
-  return (
-    /^github:/i.test(target) ||
-    /^git(?:\+|:)/i.test(target) ||
-    /^ssh:\/\//i.test(target) ||
-    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
-    isHttpGitUrl ||
-    isGitHubShorthand
-  );
 };
 
-const doctorCommandCall = () => commandCalls().find(([argv]) => isLegacyUpdateDoctorCommand(argv));
+export const doctorCommandCall = () =>
+  commandCalls().find(([argv]) => isLegacyUpdateDoctorCommand(argv));
 
-const doctorCommandCallIndex = () =>
+export const doctorCommandCallIndex = () =>
   commandCalls().findIndex(([argv]) => isLegacyUpdateDoctorCommand(argv));
 
-const freshRestartCalls = () =>
+export const freshRestartCalls = () =>
   vi
-    .mocked(runCommandWithTimeout)
+    .mocked(update.runCommandWithTimeout)
     .mock.calls.filter(([argv]) => argv[2] === "gateway" && argv[3] === "restart");
 
-const gatewayCommandCall = (entryPath: string, action: "install" | "restart") =>
+export const gatewayCommandCall = (entryPath: string, action: "install" | "restart") =>
   commandCalls().find(
     ([argv]) => argv[1] === entryPath && argv[2] === "gateway" && argv[3] === action,
   );
 
-const spawnCall = (index = 0) => {
-  const calls = spawn.mock.calls as unknown as Array<
+export const spawnCall = (index = 0) => {
+  const calls = mocks.spawn.mock.calls as unknown as Array<
     [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }]
   >;
   return calls[index];
 };
 
-const completionCommandCall = () => commandCalls().find(([argv]) => argv[2] === "completion");
+export const completionCommandCall = () =>
+  commandCalls().find(([argv]) => argv[2] === "completion");
 
-const {
+export const {
   syncPluginCall,
   npmPluginUpdateCall,
   lastNpmPluginUpdateCall,
@@ -122,17 +92,17 @@ const {
   getLogOutput,
   getErrorOutput,
 } = createUpdateFixtureAssertions({
-  syncPluginsForUpdateChannel,
-  updateNpmInstalledPlugins,
-  readConfigFileSnapshot,
-  mutateConfigFileWithRetry,
-  replaceConfigFile,
-  defaultRuntime,
+  syncPluginsForUpdateChannel: mocks.syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
+  readConfigFileSnapshot: update.readConfigFileSnapshot,
+  mutateConfigFileWithRetry: update.mutateConfigFileWithRetry,
+  replaceConfigFile: update.replaceConfigFile,
+  defaultRuntime: update.defaultRuntime,
 });
 
-const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
+export const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
   let current = initial;
-  vi.mocked(readConfigFileSnapshot).mockImplementation(async () => current);
+  vi.mocked(update.readConfigFileSnapshot).mockImplementation(async () => current);
   setupConfigMutationWithRetryMock((snapshot, nextConfig) => {
     current = {
       ...snapshot,
@@ -146,23 +116,26 @@ const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
 };
 
 // Failure assertions must not render the triage target's inherited environment.
-const getTriageFailures = () =>
-  vi.mocked(runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
-const expectNoSideEffects = (...effects: unknown[]) => {
+export const getTriageFailures = () =>
+  vi.mocked(update.runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
+export const expectNoSideEffects = (...effects: unknown[]) => {
   for (const effect of effects) {
     expect(effect).not.toHaveBeenCalled();
   }
 };
 
-const gatewayHealthCall = (index = 0) => callGateway.mock.calls[index]?.[0];
+export const gatewayHealthCall = (index = 0) => mocks.callGateway.mock.calls[index]?.[0];
 
-const pluginWarning = (result?: UpdateRunResult) => result?.postUpdate?.plugins?.warnings?.[0];
-const pluginOutcome = (result?: UpdateRunResult) => result?.postUpdate?.plugins?.npm.outcomes[0];
+export const pluginWarning = (result?: UpdateRunResult) =>
+  result?.postUpdate?.plugins?.warnings?.[0];
+export const pluginOutcome = (result?: UpdateRunResult) =>
+  result?.postUpdate?.plugins?.npm.outcomes[0];
 
-const expectPackageInstallSpec = (spec: string, staged = true) => {
-  expect(updateGitCheckout).not.toHaveBeenCalled();
+export const expectPackageInstallSpec = (spec: string, staged = true) => {
+  expect(update.updateGitCheckout).not.toHaveBeenCalled();
   let installSpec = spec;
-  if (isNpmGitPackageSpec(spec)) {
+  const isGit = isNpmGitPackageSpec(spec);
+  if (isGit) {
     const packCall = packagePackCommandCall();
     expect(packCall?.[0]).toEqual([
       "npm",
@@ -173,15 +146,12 @@ const expectPackageInstallSpec = (spec: string, staged = true) => {
       "--json",
       "--loglevel=error",
     ]);
-    const packDir = packCall?.[0][4];
-    if (!packDir) {
-      throw new Error("Expected package pack directory");
-    }
+    const packDir = requireValue(packCall?.[0][4] || undefined, "package pack directory");
     installSpec = path.join(packDir, "openclaw-9999.0.0.tgz");
   } else {
     expect(packagePackCommandCall()).toBeUndefined();
   }
-  const allowScriptsIdentity = isNpmGitPackageSpec(spec)
+  const allowScriptsIdentity = isGit
     ? installSpec
     : spec.toLowerCase().startsWith("openclaw@")
       ? "openclaw"
@@ -199,36 +169,5 @@ const expectPackageInstallSpec = (spec: string, staged = true) => {
     "--loglevel=error",
     "--min-release-age=0",
   ]);
-  if (call?.[1] === undefined) {
-    throw new Error("Expected package install command options");
-  }
-};
-
-export {
-  commandCalls,
-  completionCommandCall,
-  doctorCommandCall,
-  doctorCommandCallIndex,
-  expectNoSideEffects,
-  expectPackageInstallSpec,
-  expectUpdateCallChannel,
-  freshRestartCalls,
-  gatewayCommandCall,
-  gatewayHealthCall,
-  getErrorOutput,
-  getLogOutput,
-  getTriageFailures,
-  lastNpmPluginUpdateCall,
-  lastReplaceConfigCall,
-  lastWriteJsonCall,
-  mockMutableConfigSnapshot,
-  npmPluginUpdateCall,
-  packageInstallCommandCall,
-  pluginOutcome,
-  pluginWarning,
-  replaceConfigCall,
-  requireValue,
-  setupConfigMutationWithRetryMock,
-  spawnCall,
-  syncPluginCall,
+  requireValue(call?.[1], "package install command options");
 };

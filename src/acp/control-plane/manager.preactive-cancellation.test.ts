@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
   AcpSessionManager,
@@ -13,6 +14,7 @@ import {
   disposeAcpSessionManagerInstance,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockMutableSession,
   mockParentedAcpSessionEntries,
   readySessionMeta,
 } from "./manager.test-helpers.js";
@@ -30,7 +32,7 @@ describe("ACP accepted-turn cancellation", () => {
       const events: AcpRuntimeEvent[] = [];
       const lifecycle: unknown[] = [];
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-      hoisted.readAcpSessionEntryMock.mockReturnValue({ sessionKey, acp: readySessionMeta() });
+      mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
       const manager = new AcpSessionManager();
       if (phase === "controls") {
         state.getCapabilities.mockImplementationOnce(async () => {
@@ -64,7 +66,11 @@ describe("ACP accepted-turn cancellation", () => {
       // Observe rejection immediately so the baseline cannot leak an unhandled rejection.
       const settlement = Promise.allSettled([turn]);
       await entered.promise;
-      const cancel = manager.cancelSession({ cfg: baseCfg, sessionKey, reason: "preactive-proof" });
+      const cancel = stopAcpControllerTurns({
+        cfg: baseCfg,
+        sessionKey,
+        reason: "preactive-proof",
+      });
       const cancellation = Promise.allSettled([cancel]);
       release.resolve();
       const [turnResults, cancelResults] = await Promise.all([settlement, cancellation]);
@@ -84,7 +90,7 @@ describe("ACP accepted-turn cancellation", () => {
     const sessionKey = "agent:codex:acp:dispose-setup";
     const events: AcpRuntimeEvent[] = [];
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({ sessionKey, acp: readySessionMeta() });
+    mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
     state.ensureSession.mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
@@ -174,6 +180,8 @@ describe("ACP reset successor liveness", () => {
           reason: "session-reset",
         });
         fresh = manager.runTurn({ ...input, text: "fresh turn", requestId: "successor-turn" });
+        releaseOld.resolve();
+        await oldSettled;
         await Promise.race([
           freshEntered.promise,
           fresh.then(() => {
@@ -181,8 +189,6 @@ describe("ACP reset successor liveness", () => {
           }),
         ]);
         expect(ensureCount).toBe(2);
-        releaseOld.resolve();
-        await oldSettled;
         expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([sessionKey]);
         expect(getActiveAcpTurnCount()).toBe(1);
         releaseFresh.resolve();

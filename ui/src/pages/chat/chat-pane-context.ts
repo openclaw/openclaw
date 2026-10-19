@@ -17,7 +17,7 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -264,7 +264,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           resolveChatAgentId(state),
           selectedSession.sessionId,
           selectedSession.status,
-          isSessionRunActive(selectedSession),
+          isSessionRunStateActive(selectedSession),
           selectedSession.lastRunId,
           selectedSession.activeLeafEntryId,
         ])
@@ -317,7 +317,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       canonicalListPublished &&
       previousCanonical?.outboxState !== outboxState &&
       selectedSession &&
-      !isSessionRunActive(selectedSession) &&
+      !isSessionRunStateActive(selectedSession) &&
       state.chatQueue.length > 0
     ) {
       void flushChatQueueForEvent(state);

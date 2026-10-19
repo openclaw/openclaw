@@ -328,6 +328,43 @@ it("clears a recreated session's prior deletion before the debounced refresh", a
   await afterTick(2);
 });
 
+it("batches remote session creation across primary and observed lists without postponing membership", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  const rows: GatewaySessionRow[] = [];
+  const { sessions, request, change, refresh } = harness((params) =>
+    pageResult(rows, params, Date.now()),
+  );
+  const query = { ownerId: "viewer", limit: 100 };
+  cleanup.push(sessions.subscribeList(query, () => {}));
+  await refresh({ limit: 100 });
+  await sessions.refreshList(query);
+  request.mockClear();
+
+  for (let second = 0; second < 60; second++) {
+    const row = sessionRow(`agent:main:created-${second}`, Date.now(), {
+      sessionId: `created-${second}`,
+    });
+    rows.unshift(row);
+    change({ reason: "create", sessionKey: row.key, session: row });
+    await tick(1_000);
+    if (second % 5 === 4) {
+      expect(sessions.listSnapshot(query).result?.sessions.map((entry) => entry.key)).toEqual(
+        rows.map((entry) => entry.key),
+      );
+    }
+  }
+
+  expect(request.mock.calls.filter(([, params]) => asOptionalRecord(params)?.ownerId)).toHaveLength(
+    12,
+  );
+  expect(
+    request.mock.calls.filter(([, params]) => !asOptionalRecord(params)?.ownerId),
+  ).toHaveLength(12);
+  expect(sessions.state.result?.sessions).toEqual(rows);
+  await tick(20_000);
+  expect(request).toHaveBeenCalledTimes(24);
+});
+
 it("preserves queued explicit options across the active request's event debounce", async () => {
   const f = heldReads();
   const initialRefresh = f.refresh();

@@ -220,7 +220,6 @@ describe("embedded lifecycle", () => {
       name: "preserves token-limited message-tool-only delivery before runner finalization",
       stopReason: "length",
       state: { messageToolOnlySourceReplyDelivered: true },
-      params: { sourceReplyDeliveryMode: "message_tool_only" },
       expected: { livenessState: "working" },
     },
     {

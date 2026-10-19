@@ -4,8 +4,8 @@ import {
   buildEmbeddedSandboxInfo,
   resolveEmbeddedSandboxInfoExecPolicy,
 } from "./embedded-agent-runner/sandbox-info.js";
-import type { SandboxContext } from "./sandbox.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import type { SandboxContext } from "./sandbox/types.js";
 
 const sandbox = (overrides: Partial<SandboxContext> = {}) =>
   createSandboxTestContext({

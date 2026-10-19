@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { commands } from "vitest/browser";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
@@ -7,6 +7,7 @@ import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
@@ -74,6 +75,7 @@ describe("favicon presentation ownership", () => {
     };
     svgIcon = createIcon(originals[0]);
     pngIcon = createIcon(originals[1]);
+    bindControlUiDocumentHead({ themeColors: [], favicons: [svgIcon, pngIcon] });
   });
 
   afterEach(() => {
@@ -82,6 +84,7 @@ describe("favicon presentation ownership", () => {
     applyControlUiFaviconImage(null);
     applyControlUiFaviconStatus("idle");
     applyControlUiPresentation({ environment: null });
+    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     svgIcon.remove();
     pngIcon.remove();
     document.head.append(...previousIcons);
@@ -390,6 +393,11 @@ describe("favicon presentation ownership", () => {
   });
 
   it("updates both icon formats and restores their exact originals when idle without changing the title", async () => {
+    const unrelatedIcon = document.createElement("link");
+    unrelatedIcon.rel = "icon";
+    unrelatedIcon.href = "/unrelated.svg";
+    document.head.append(unrelatedIcon);
+    onTestFinished(() => unrelatedIcon.remove());
     applyControlUiFaviconStatus("working");
     await vi.waitFor(() => {
       for (const [icon, [href, type]] of [
@@ -414,6 +422,7 @@ describe("favicon presentation ownership", () => {
     expect(animations(svgDocument())).toEqual(animations(original));
     expect(animations(original).length).toBeGreaterThan(0);
     expect(document.title).toBe(previousTitle);
+    expect(unrelatedIcon.getAttribute("href")).toBe("/unrelated.svg");
     applyControlUiFaviconStatus("idle");
     expectOriginals();
   });

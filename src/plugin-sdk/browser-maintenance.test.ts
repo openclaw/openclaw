@@ -1,6 +1,3 @@
-/**
- * Tests browser maintenance facade loading and cleanup behavior.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +13,24 @@ const realRmSync = fs.rmSync.bind(fs);
 const realWriteFileSync = fs.writeFileSync.bind(fs);
 const realRealpathSyncNative = fs.realpathSync.native.bind(fs.realpathSync);
 const realCpSync = fs.cpSync.bind(fs);
+const sessionKeys = ["agent:main:test"];
+const sessionSource = {
+  agentId: "main",
+  path: "/synthetic/agent.sqlite",
+  sessionKey: sessionKeys[0]!,
+  databaseIdentity: "synthetic-source",
+};
+const cleanupSurface = {
+  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
+};
+
+function trackMoves() {
+  return {
+    renameSync: vi.spyOn(fs, "renameSync"),
+    cpSync: vi.spyOn(fs, "cpSync"),
+    rmSync: vi.spyOn(fs, "rmSync"),
+  };
+}
 
 vi.mock("./facade-runtime.js", () => ({
   tryLoadActivatedBundledPluginPublicSurfaceModule,
@@ -29,8 +44,10 @@ describe("browser maintenance", () => {
   let testRoot = "";
   let homeDir = "";
   let tmpDir = "";
+  let closeTrackedBrowserTabsForSessions: typeof import("./browser-maintenance.js").closeTrackedBrowserTabsForSessions;
+  let movePathToTrash: typeof import("./browser-maintenance.js").movePathToTrash;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.resetModules();
     testRoot = realRealpathSyncNative(
@@ -50,8 +67,10 @@ describe("browser maintenance", () => {
     );
     tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue({
       supportsSessionEntryCurrent: true,
-      closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
+      ...cleanupSurface,
     });
+    ({ closeTrackedBrowserTabsForSessions, movePathToTrash } =
+      await import("./browser-maintenance.js"));
   });
 
   afterEach(() => {
@@ -90,35 +109,58 @@ describe("browser maintenance", () => {
     expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
   }
 
-  it("skips browser cleanup when no session keys are provided", async () => {
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-
-    await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
-  });
-
-  it("reports unavailable browser cleanup when async activation fails", async () => {
-    tryLoadActivatedBundledPluginPublicSurfaceModule.mockRejectedValue(
-      new Error("activation unavailable"),
-    );
-    const onWarn = vi.fn();
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-
-    await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"], onWarn }),
-    ).resolves.toBe(0);
-    expect(onWarn).toHaveBeenCalledWith(
-      "browser cleanup unavailable: Error: activation unavailable",
-    );
-    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
-  });
+  it.each(["empty", "activation", "prepared", "native", "unpaired"] as const)(
+    "refuses unavailable or unauthorized cleanup: %s",
+    async (kind) => {
+      const onWarn = vi.fn();
+      const prepareCurrent = vi.fn(async () => true);
+      const assertCurrent = vi.fn();
+      const legacy = kind === "prepared" || kind === "native";
+      if (legacy) {
+        closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
+        tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue(cleanupSurface);
+        await expect(closeTrackedBrowserTabsForSessions({ sessionKeys })).resolves.toBe(2);
+      } else if (kind === "activation") {
+        tryLoadActivatedBundledPluginPublicSurfaceModule.mockRejectedValue(
+          new Error("activation unavailable"),
+        );
+      }
+      const params = {
+        sessionKeys: kind === "empty" ? [] : sessionKeys,
+        onWarn,
+        ...(legacy ? { prepareCurrent } : {}),
+        ...(kind === "native" || kind === "unpaired"
+          ? { sessionEntryCurrent: { source: sessionSource, assertCurrent } }
+          : {}),
+      };
+      // The unpaired row intentionally represents an untyped caller.
+      await expect(
+        Reflect.apply(closeTrackedBrowserTabsForSessions, undefined, [params]),
+      ).resolves.toBe(0);
+      expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledTimes(legacy ? 1 : 0);
+      expect(prepareCurrent).not.toHaveBeenCalled();
+      expect(assertCurrent).not.toHaveBeenCalled();
+      if (kind === "empty" || kind === "unpaired") {
+        expect(tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
+      }
+      if (kind === "empty") {
+        expect(onWarn).not.toHaveBeenCalled();
+      } else {
+        const reason = legacy
+          ? "update the Browser plugin to support session-current cleanup"
+          : kind === "unpaired"
+            ? "sessionEntryCurrent requires prepareCurrent"
+            : "Error: activation unavailable";
+        expect(onWarn).toHaveBeenCalledExactlyOnceWith(`browser cleanup unavailable: ${reason}`);
+      }
+    },
+  );
 
   it.each([undefined, () => true])(
     "delegates with owner guard %s and rechecks plugin activation before reuse",
     async (isCurrent) => {
       closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
-      const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-      const params = { sessionKeys: ["agent:main:test"], isCurrent };
+      const params = { sessionKeys, isCurrent };
       await expect(closeTrackedBrowserTabsForSessions(params)).resolves.toBe(2);
       expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledWith({
         dirName: "browser",
@@ -145,13 +187,12 @@ describe("browser maintenance", () => {
       if (phase === "activation") {
         tryLoadActivatedBundledPluginPublicSurfaceModule.mockImplementationOnce(async () => {
           await wait();
-          return { closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl };
+          return cleanupSurface;
         });
       }
-      const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
       let current = true;
       const cleanup = closeTrackedBrowserTabsForSessions({
-        sessionKeys: ["agent:main:test"],
+        sessionKeys,
         isCurrent: () => current,
         ...(phase === "preparation" ? { prepareCurrent } : {}),
       });
@@ -171,75 +212,6 @@ describe("browser maintenance", () => {
     },
   );
 
-  it.each(["prepared", "native"] as const)(
-    "keeps legacy cleanup usable but refuses an unsupported %s session check",
-    async (kind) => {
-      closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
-      tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue({
-        closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
-      });
-      const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-      const sessionKeys = ["agent:main:test"];
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys })).resolves.toBe(2);
-      const prepareCurrent = vi.fn(async () => true);
-      const assertCurrent = vi.fn();
-      const onWarn = vi.fn();
-      await expect(
-        closeTrackedBrowserTabsForSessions({
-          sessionKeys,
-          ...(kind === "prepared"
-            ? { prepareCurrent }
-            : {
-                prepareCurrent,
-                sessionEntryCurrent: {
-                  source: {
-                    agentId: "main",
-                    path: "/synthetic/agent.sqlite",
-                    sessionKey: sessionKeys[0]!,
-                    databaseIdentity: "synthetic-source",
-                  },
-                  assertCurrent,
-                },
-              }),
-          onWarn,
-        }),
-      ).resolves.toBe(0);
-      expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledOnce();
-      expect(prepareCurrent).not.toHaveBeenCalled();
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect(onWarn).toHaveBeenCalledExactlyOnceWith(
-        "browser cleanup unavailable: update the Browser plugin to support session-current cleanup",
-      );
-    },
-  );
-
-  it("refuses an unpaired native session check from an untyped caller", async () => {
-    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
-    const onWarn = vi.fn();
-    await expect(
-      Reflect.apply(closeTrackedBrowserTabsForSessions, undefined, [
-        {
-          sessionKeys: ["agent:main:test"],
-          sessionEntryCurrent: {
-            source: {
-              agentId: "main",
-              path: "/synthetic/agent.sqlite",
-              sessionKey: "agent:main:test",
-              databaseIdentity: "synthetic-source",
-            },
-            assertCurrent: vi.fn(),
-          },
-          onWarn,
-        },
-      ]),
-    ).resolves.toBe(0);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
-    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
-    expect(onWarn).toHaveBeenCalledExactlyOnceWith(
-      "browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent",
-    );
-  });
-
   it.each(["direct", "symlinked"] as const)(
     "reserves a private trash destination under a %s home without PATH commands",
     async (home) => {
@@ -253,10 +225,7 @@ describe("browser maintenance", () => {
       } else {
         realRmSync(trashDir, { recursive: true });
       }
-      const renameSync = vi.spyOn(fs, "renameSync");
-      const cpSync = vi.spyOn(fs, "cpSync");
-      const rmSync = vi.spyOn(fs, "rmSync");
-      const { movePathToTrash } = await import("./browser-maintenance.js");
+      const { renameSync, cpSync, rmSync } = trackMoves();
       const target = writeTrashTarget();
       const original = fs.lstatSync(target, { bigint: true });
       const moved = await movePathToTrash(target);
@@ -294,7 +263,6 @@ describe("browser maintenance", () => {
       vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
       target = writeTrashTarget();
     }
-    const { movePathToTrash } = await import("./browser-maintenance.js");
     await expect(movePathToTrash(target)).rejects.toThrow(message);
   });
 
@@ -309,9 +277,7 @@ describe("browser maintenance", () => {
         firstInode = fs.lstatSync(destination, { bigint: true }).ino;
         expect(fs.readFileSync(source, "utf8")).toBe("demo");
       };
-      const renameSync = vi.spyOn(fs, "renameSync");
-      const cpSync = vi.spyOn(fs, "cpSync");
-      const rmSync = vi.spyOn(fs, "rmSync");
+      const { renameSync, cpSync, rmSync } = trackMoves();
       if (kind === "copy") {
         renameSync.mockImplementation(() => {
           throw Object.assign(new Error("cross-device"), { code: "EXDEV" });
@@ -326,7 +292,6 @@ describe("browser maintenance", () => {
           throw Object.assign(new Error("exists"), { code: "EEXIST" });
         });
       }
-      const { movePathToTrash } = await import("./browser-maintenance.js");
       const target = writeTrashTarget();
       const original = fs.lstatSync(target, { bigint: true });
       const moved = await movePathToTrash(target);

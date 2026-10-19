@@ -152,8 +152,6 @@ async function withDemandFixture(
         async (_request, dispatch) => await dispatch(),
       );
     const context = makeDispatchTestContext({
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       chatRunState: createChatRunState(),
       dedupe: new Map(),
       agentRunSeq: new Map(),
@@ -188,7 +186,7 @@ async function withDemandFixture(
     };
     const heldTurns = new Map<string, HeldTurn>();
     // Preserve the real admission/ACK; the simulated node has not published a physical launch yet.
-    vi.spyOn(chatDispatch, "startChatDispatch").mockImplementation((turn) => {
+    vi.spyOn(chatDispatch, "startChatDispatch").mockImplementation(async (turn) => {
       heldTurns.set(turn.session.entry!.sessionId, turn);
     });
     const sessionKey = (id: string) => `agent:main:${id}`;

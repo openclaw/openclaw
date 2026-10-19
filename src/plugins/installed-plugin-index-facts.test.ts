@@ -45,6 +45,19 @@ function ownerIds(lookup: ReturnType<typeof createInstalledPluginIndexScopeLooku
 afterEach(() => vi.restoreAllMocks());
 
 describe("prepared installed-index readers", () => {
+  it("indexes canonical transcript sources and retained legacy installed-index contracts", () => {
+    const snapshot = createSnapshot();
+    const plugin = snapshot.index.plugins[0];
+    assert(plugin?.contributions);
+    plugin.contributions.contracts = {
+      transcriptSourceProviders: ["fixture-transcript-source"],
+      meetingNotesSourceProviders: ["fixture-legacy-source"],
+    };
+    const lookup = createInstalledPluginIndexScopeLookup(snapshot.index);
+    expect(ownerIds(lookup, "fixture-transcript-source")).toEqual(["alpha"]);
+    expect(ownerIds(lookup, "fixture-legacy-source")).toEqual(["alpha"]);
+  });
+
   it("prepares immutable ownership and install records once while preserving policy and caller copies", () => {
     withPluginCache(createPluginCache(), () => {
       const snapshot = finalizePluginMetadataSnapshot(createSnapshot());

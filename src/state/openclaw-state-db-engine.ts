@@ -32,6 +32,7 @@ import {
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
@@ -146,16 +147,23 @@ const statePostgresSchema = {
     };
   }),
 };
+const statePostgresSchemaV27 = {
+  postgres: withLegacyPublicationDraft(statePostgresSchema.postgres),
+  postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPublicationDraft(fragment.sql),
+  })),
+};
 // v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
 const statePostgresSchemaV26 = {
   postgres:
-    runtime.eagerSql.replace(
+    statePostgresSchemaV27.postgres.replace(
       /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
       runtime.preWriteIndexesV27Sql.state_leases,
     ) +
     runtime.preWriteIndexesV27Sql.skill_usage +
     runtime.preWriteIndexesV27Sql.acp_replay_events,
-  postgresFragments: statePostgresSchema.postgresFragments,
+  postgresFragments: statePostgresSchemaV27.postgresFragments,
 };
 
 export const stateEngineSchema: StoreSchema = {
@@ -189,7 +197,7 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 27,
       fromSchema: statePostgresSchemaV26,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV27,
       sql: `${runtime.writeIndexesV27Sql}
         UPDATE schema_meta
         SET schema_version = 27,
@@ -198,6 +206,24 @@ export const stateEngineSchema: StoreSchema = {
         WHERE meta_key = 'primary';
         INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
         VALUES ('state.schema.contentVersion', '27',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 28,
+      fromSchema: statePostgresSchemaV27,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE IF EXISTS github_publication_requests ADD COLUMN draft bigint;
+        ALTER TABLE IF EXISTS github_personal_publication_requests ADD COLUMN draft bigint;
+        ALTER TABLE IF EXISTS github_repository_publication_requests ADD COLUMN draft bigint;
+        UPDATE schema_meta
+        SET schema_version = 28,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '28',
           CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
         ON CONFLICT (state_key) DO UPDATE
           SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,

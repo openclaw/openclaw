@@ -20,6 +20,7 @@ type BrowserScreencastOptions = {
 
 export class BrowserScreencastClient {
   private readonly socket: WebSocket;
+  private readonly events = new AbortController();
   private closed = false;
 
   constructor(
@@ -28,16 +29,25 @@ export class BrowserScreencastClient {
   ) {
     this.socket = createWebSocket(resolveGatewayWebSocketUrl(options.wsPath, options.gatewayUrl));
     this.socket.binaryType = "arraybuffer";
-    this.socket.addEventListener("message", (event) => this.receive(event.data));
-    this.socket.addEventListener("close", ({ code, reason }) => this.finish(code, reason));
-    this.socket.addEventListener("error", () => {
-      this.finish(1006, "");
-      this.socket.close();
+    this.socket.addEventListener("message", (event) => this.receive(event.data), {
+      signal: this.events.signal,
     });
+    this.socket.addEventListener("close", ({ code, reason }) => this.finish(code, reason), {
+      signal: this.events.signal,
+    });
+    this.socket.addEventListener(
+      "error",
+      () => {
+        this.finish(1006, "");
+        this.socket.close();
+      },
+      { signal: this.events.signal },
+    );
   }
 
   close(): void {
     this.closed = true;
+    this.events.abort();
     this.socket.close();
   }
 
@@ -46,6 +56,7 @@ export class BrowserScreencastClient {
       return;
     }
     this.closed = true;
+    this.events.abort();
     this.options.onClose({ code, reason });
   }
 

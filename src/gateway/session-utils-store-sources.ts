@@ -145,35 +145,31 @@ function observeSourcePath(memo: SourceMemo, pathname: string): void {
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(
-          directory,
-          (filename) => {
-            if (!memo.current || memo.observedThisTurn) {
-              return;
-            }
-            if (
-              filename === undefined ||
-              (process.platform === "win32"
-                ? filename.toLowerCase() === name.toLowerCase()
-                : filename === name)
-            ) {
-              // One fallback sweep can notify every ancestor of the same source.
-              memo.observedThisTurn = true;
-              queueMicrotask(() => {
-                memo.observedThisTurn = false;
-              });
-              // Invalidate only; the next preparation inherits these watches.
-              try {
-                if (memo.pathsCurrent && !memo.pathsCurrent()) {
-                  memo.current = false;
-                }
-              } catch {
+        observeOwnedDirectory(directory, (filename) => {
+          if (!memo.current || memo.observedThisTurn) {
+            return;
+          }
+          if (
+            filename === undefined ||
+            (process.platform === "win32"
+              ? filename.toLowerCase() === name.toLowerCase()
+              : filename === name)
+          ) {
+            // One fallback sweep can notify every ancestor of the same source.
+            memo.observedThisTurn = true;
+            queueMicrotask(() => {
+              memo.observedThisTurn = false;
+            });
+            // Invalidate only; the next preparation inherits these watches.
+            try {
+              if (memo.pathsCurrent && !memo.pathsCurrent()) {
                 memo.current = false;
               }
+            } catch {
+              memo.current = false;
             }
-          },
-          { recoveryIntervalMs: 30_000 },
-        ),
+          }
+        }),
       );
     }
     child = directory;

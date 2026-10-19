@@ -1,5 +1,5 @@
 import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
@@ -307,19 +307,36 @@ function createBoardDocument(props: BoardDocumentProps) {
   };
 }
 
-function BoardDocumentContent(props: BoardDocumentProps) {
-  const document = createBoardDocument(props);
+const inputUpdates = new WeakMap<HTMLElement, () => void>();
+
+function BoardDocumentContent(
+  props: BoardDocumentProps,
+  host: SolidBridgeElement<BoardDocumentProps>,
+) {
+  const document = createBoardDocument(host);
   const projection = projectOwner(document, (current) => current);
-  createEffect(
-    () => ({
-      gatewaySnapshot: props.gatewaySnapshot,
-      sessions: props.sessions,
-      sessionKey: props.sessionKey,
-      preparedSession: props.preparedSession,
-    }),
-    () => document.update(),
-  );
-  onCleanup(document.dispose);
+  onSettled(() => {
+    let active = true;
+    let pending = false;
+    inputUpdates.set(host, () => {
+      if (pending) {
+        return;
+      }
+      pending = true;
+      onSettled(() => {
+        pending = false;
+        if (active) {
+          document.update();
+        }
+      });
+    });
+    document.update();
+    return () => {
+      active = false;
+      inputUpdates.delete(host);
+      document.dispose();
+    };
+  });
   const state = createMemo(() => projection.read().read(props.passive ?? false));
   const statusText = () =>
     state().kind === "missing-session"
@@ -379,6 +396,16 @@ export const OpenClawBoardDocument = defineSolidBridge<BoardDocumentProps>(
   "openclaw-board-document",
   BoardDocumentContent,
   {
+    propertyChanged: (host, key) => {
+      if (
+        key === "gatewaySnapshot" ||
+        key === "sessions" ||
+        key === "sessionKey" ||
+        key === "preparedSession"
+      ) {
+        inputUpdates.get(host)?.();
+      }
+    },
     properties: {
       gatewaySnapshot: { default: undefined, attribute: false },
       sessions: { default: undefined, attribute: false },

@@ -23,6 +23,7 @@ import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { loadActivatedBundledPluginPublicSurfaceModule } from "../../../plugin-sdk/facade-runtime.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import * as gatewayScope from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -134,7 +135,11 @@ it.each([
   "pending ACP spawn transfers work only from its live parent: %s / %s",
   async (stage, closure) => {
     const cfg = configRuntime.getRuntimeConfig();
-    await registryPersistence.writeChildSession(stateDir, parentSessionKey, "parent-session");
+    const storePath = await registryPersistence.writeSubagentSessionEntry({
+      stateDir,
+      ...parentScope,
+      defaultSessionId: "parent-session",
+    });
     const live = closure === "live";
     const thread = stage === "thread";
     const readChild = (sessionKey: string) =>
@@ -149,6 +154,11 @@ it.each([
       { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
       () => gatewayScope.getPluginRuntimeGatewayRequestScope()!.context!,
     );
+    const requestScope = {
+      context,
+      resolveGatewayContext: context.resolveGatewayContext,
+      isWebchatConnect: () => false,
+    };
     const work = new AsyncWorkScope();
     const trackExecution = context.trackExecution;
     context.trackExecution = (run) => work.track(() => trackExecution(run));
@@ -158,17 +168,24 @@ it.each([
       "main",
       "acp-authority-test",
     );
-    const parent = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
-      runId: parentRunId,
-      ...parentScope,
-      sessionId: "parent-session",
-      ownerConnId: "owner-connection",
-      timeoutMs: 60_000,
-      operationalRunInstance: admission.operationalRunInstance,
-    });
+    const parent = gatewayScope.withPluginRuntimeGatewayRequestScope(requestScope, () =>
+      registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: storePath,
+          sessionKey: parentSessionKey,
+          incarnation: "parent-session",
+          agentId: "main",
+        }),
+        runId: parentRunId,
+        ...parentScope,
+        sessionId: "parent-session",
+        ownerConnId: "owner-connection",
+        timeoutMs: 60_000,
+        operationalRunInstance: admission.operationalRunInstance,
+      }),
+    );
     const admitted = await admission.admit("embedded");
-    gatewayScope.bindGatewayContextResolver(admitted, () => context);
+    gatewayScope.bindGatewayContextResolver(admitted, context.resolveGatewayContext);
     parent.bindAgentRunDelegatedAuthority(
       admissionContext.getAdmittedRunDelegatedAuthority(admitted)!,
     );
@@ -338,24 +355,22 @@ it.each([
       hookContext: { ...parentScope, config: cfg, runId: parentRunId },
       abortSignal: parent.controller.signal,
     });
-    const wrapped = gatewayScope.withPluginRuntimeGatewayRequestScope(
-      { context, isWebchatConnect: () => false },
-      () =>
-        gatewayCaller.withGatewayToolCallerIdentity(
-          gatewayCaller.createAdmittedGatewayToolCallerIdentity({
-            ...parentScope,
-            admittedRunContext: admitted,
+    const wrapped = gatewayScope.withPluginRuntimeGatewayRequestScope(requestScope, () =>
+      gatewayCaller.withGatewayToolCallerIdentity(
+        gatewayCaller.createAdmittedGatewayToolCallerIdentity({
+          ...parentScope,
+          admittedRunContext: admitted,
+        }),
+        () =>
+          tool!.execute!("pending-acp", {
+            task: "bounded child",
+            runtime: "acp",
+            agentId: "fixture",
+            mode: "run",
+            expectsCompletionMessage: false,
+            ...(thread ? { thread: true } : {}),
           }),
-          () =>
-            tool!.execute!("pending-acp", {
-              task: "bounded child",
-              runtime: "acp",
-              agentId: "fixture",
-              mode: "run",
-              expectsCompletionMessage: false,
-              ...(thread ? { thread: true } : {}),
-            }),
-        ),
+      ),
     );
     const wrappedOutcome = wrapped.catch((error: unknown) => error);
     try {

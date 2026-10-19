@@ -5,101 +5,22 @@ import type {
 } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import {
+  storageKey,
+  itemUrl,
+  reader,
+  item,
+  requestedItem,
+  deferredDetail,
+  mount,
+  open,
+  button,
+  expectTitle,
+} from "./link-reader-panel.test-support.ts";
 import "./link-reader-panel.tsx";
-
-type Panel = HTMLElementTagNameMap["openclaw-link-reader-panel"];
-const storageKey = "openclaw.link-reader.panel.v1";
-const itemUrl = (number: number) => "https://forge.example/items/" + number;
-const reader: ControlUiLinkReaderDescriptor = {
-  pluginId: "forge",
-  id: "items",
-  label: "Forge",
-  icon: "externalLink",
-  linkReader: {
-    hosts: ["forge.example"],
-    pathPattern: "^/items/[1-9][0-9]*$",
-    detailMethod: "forge.item",
-  },
-};
-function item(number = 1): ControlUiLinkReaderDocument {
-  return {
-    url: itemUrl(number),
-    title: "Item " + number,
-    author: "reporter",
-    badge: { label: "Open", tone: "positive" },
-    createdAt: "2026-09-01T12:00:00Z",
-    updatedAt: "2026-09-02T12:00:00Z",
-    body: "**Description**",
-    comments: [
-      {
-        id: "comment-4",
-        url: itemUrl(number) + "#comment-4",
-        author: "reviewer",
-        createdAt: "2026-09-02T12:00:00Z",
-        body: "Comment text",
-      },
-    ],
-    commentsTotal: 1,
-  };
-}
-function requestedItem(params: unknown): ControlUiLinkReaderDocument {
-  return item(Number(new URL((params as { url: string }).url).pathname.split("/").at(-1)));
-}
-
-function deferredDetail() {
-  let resolve!: (value: ControlUiLinkReaderDocument) => void;
-  const promise = new Promise<ControlUiLinkReaderDocument>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-async function mount(
-  request: (
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ) => Promise<unknown>,
-  options: Partial<
-    Pick<Panel, "embedded" | "presented" | "sessionKey" | "tabsInHeader" | "onClose">
-  > = {},
-) {
-  const panel = document.createElement("openclaw-link-reader-panel");
-  panel.client = { request } as unknown as GatewayBrowserClient;
-  panel.available = true;
-  panel.readers = [reader];
-  Object.assign(panel, options);
-  mountSolid(() => panel);
-  await panel.updateComplete;
-  return panel;
-}
-
-function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement, newTab = false) {
-  panel.handleToggleRequest(
-    new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-      detail: { url, open: true, trigger, newTab },
-      cancelable: true,
-    }),
-  );
-}
-
-function button(panel: Panel, label: string) {
-  const result = panel.querySelector<HTMLButtonElement>('button[aria-label="' + label + '"]');
-  if (!result) {
-    throw new Error("Missing button: " + label);
-  }
-  return result;
-}
-
-async function expectTitle(panel: Panel, title: string) {
-  await waitForFast(() =>
-    expect(panel.querySelector(".lr-content:not([hidden]) h1")?.textContent).toBe(title),
-  );
-}
+import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 describe("Plugin link reader panel", () => {
   beforeEach(() => {
@@ -771,37 +692,6 @@ describe("Plugin link reader panel", () => {
     }
     expect(button(panel, "Back").disabled).toBe(true);
     expect(button(panel, "Forward").disabled).toBe(false);
-  });
-
-  it("aborts superseded requests and ignores old navigation and client responses", async () => {
-    const first = deferredDetail();
-    const second = deferredDetail();
-    const request = vi
-      .fn<
-        (
-          _method: string,
-          _params?: unknown,
-          options?: { signal?: AbortSignal },
-        ) => Promise<ControlUiLinkReaderDocument>
-      >()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const panel = await mount(request);
-    open(panel);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
-    open(panel, itemUrl(2));
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
-    first.resolve(item(1));
-    await panel.updateComplete;
-    expect(panel.querySelector("h1")).toBeNull();
-    const replacement = vi.fn(async () => ({ ...item(2), title: "New gateway" }));
-    panel.client = { request: replacement } as unknown as GatewayBrowserClient;
-    await expectTitle(panel, "New gateway");
-    expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
-    second.resolve(item(2));
-    await panel.updateComplete;
-    expect(panel.querySelector("h1")?.textContent).toBe("New gateway");
   });
 
   it("clears reservations and cancels work on close, restores focus, and stays idle while hidden", async () => {

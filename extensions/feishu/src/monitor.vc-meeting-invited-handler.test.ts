@@ -32,19 +32,12 @@ const dedupMocks = vi.hoisted(() => ({
 }));
 
 let dispatcher: EventDispatcher;
-
-vi.mock("./bot.js", async () => {
-  const actual = await vi.importActual<typeof FeishuBotModule>("./bot.js");
-  return {
-    ...actual,
-    handleFeishuMessage: handleFeishuMessageMock,
-  };
-});
-
-vi.mock("./client.js", () => ({
-  createEventDispatcher: createEventDispatcherMock,
+vi.mock("./bot.js", async () => ({
+  ...(await vi.importActual<typeof FeishuBotModule>("./bot.js")),
+  handleFeishuMessage: handleFeishuMessageMock,
 }));
-
+// mock-isolation: Capture dispatcher registration without constructing a real Feishu client.
+vi.mock("./client.js", () => ({ createEventDispatcher: createEventDispatcherMock }));
 vi.mock("./monitor.transport.js", () => ({
   monitorWebSocket: monitorWebSocketMock,
   monitorWebhook: monitorWebhookMock,
@@ -54,17 +47,12 @@ vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
 
-vi.mock("./dedup.js", async () => {
-  const actual = await vi.importActual<typeof FeishuDedupModule>("./dedup.js");
-  return {
-    ...actual,
-    claimUnprocessedFeishuMessage: dedupMocks.claimUnprocessedFeishuMessage,
-    warmupDedupFromPluginState: dedupMocks.warmupDedupFromPluginState,
-    hasProcessedFeishuMessage: dedupMocks.hasProcessedFeishuMessage,
-  };
-});
+vi.mock("./dedup.js", async () => ({
+  ...(await vi.importActual<typeof FeishuDedupModule>("./dedup.js")),
+  ...dedupMocks,
+}));
 
-function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
+function buildConfig(): ClawdbotConfig {
   return {
     channels: {
       feishu: {
@@ -73,7 +61,6 @@ function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
         allowFrom: ["*"],
       },
     },
-    ...overrides,
   } as ClawdbotConfig;
 }
 
@@ -130,8 +117,7 @@ const vcEnvelope = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  handleFeishuMessageMock.mockReset();
-  handleFeishuMessageMock.mockResolvedValue(undefined);
+  handleFeishuMessageMock.mockReset().mockResolvedValue(undefined);
   feishuDedupeState.guard = createChannelReplayGuard<string | null | undefined>({
     dedupe: { ttlMs: 24 * 60 * 60 * 1000, memoryMaxSize: 1000 },
     buildReplayKey: (key) => key,
@@ -162,6 +148,23 @@ function createHandler(options?: {
     autoJoin: true,
     ...options,
   });
+}
+
+function startMonitor(vcAutoJoin?: boolean) {
+  const started = createDeferred<void>();
+  const finish = createDeferred<void>();
+  monitorWebSocketMock.mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+  });
+  const monitor = monitorSingleAccount({
+    cfg: buildConfig(),
+    account: buildAccount(vcAutoJoin === undefined ? undefined : { vcAutoJoin }),
+    botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+    fireAndForget: false,
+    channelRuntime: buildChannelRuntime(),
+  });
+  return { started: started.promise, finish: finish.resolve, monitor };
 }
 
 describe("createFeishuVcMeetingInvitedHandler", () => {
@@ -219,36 +222,18 @@ describe("monitorSingleAccount VC event registration", () => {
   });
 
   it("keeps meeting invitations inert until the live account opts in", async () => {
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
-    monitorWebSocketMock.mockImplementationOnce(async () => {
-      started.resolve();
-      await finish.promise;
-    });
-    const monitor = monitorSingleAccount({
-      cfg: buildConfig(),
-      account: buildAccount(),
-      botOpenIdSource: {
-        kind: "prefetched",
-        botOpenId: "ou_bot",
-      },
-      fireAndForget: false,
-      channelRuntime: buildChannelRuntime(),
-    });
-
+    const { started, finish, monitor } = startMonitor();
     try {
-      await started.promise;
+      await started;
       await expect(dispatcher.invoke(vcEnvelope)).resolves.toBeUndefined();
       expect(handleFeishuMessageMock).not.toHaveBeenCalled();
     } finally {
-      finish.resolve();
+      finish();
       await monitor;
     }
   });
 
   it("abandons deferred invitation ownership when the account transport ends", async () => {
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
     let lifecycle: FeishuIngressLifecycle | undefined;
     handleFeishuMessageMock.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
       lifecycle = turnAdoptionLifecycle;
@@ -257,25 +242,15 @@ describe("monitorSingleAccount VC event registration", () => {
     handleFeishuMessageMock.mockImplementation(async ({ turnAdoptionLifecycle }) => {
       await turnAdoptionLifecycle?.onAdopted();
     });
-    monitorWebSocketMock.mockImplementationOnce(async () => {
-      started.resolve();
-      await finish.promise;
-    });
-    const monitor = monitorSingleAccount({
-      cfg: buildConfig(),
-      account: buildAccount({ vcAutoJoin: true }),
-      botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
-      fireAndForget: false,
-      channelRuntime: buildChannelRuntime(),
-    });
+    const { started, finish, monitor } = startMonitor(true);
     try {
-      await started.promise;
+      await started;
       await dispatcher.invoke(vcEnvelope);
       const key = dedupMocks.claimUnprocessedFeishuMessage.mock.calls[0]?.[0].messageId;
       expect((await feishuDedupeState.guard.claim(key, { namespace: "default" })).kind).toBe(
         "inflight",
       );
-      finish.resolve();
+      finish();
       await monitor;
       expect(lifecycle?.abortSignal.aborted).toBe(true);
       expect(() => lifecycle?.onAdopted()).toThrow();
@@ -285,7 +260,7 @@ describe("monitorSingleAccount VC event registration", () => {
       expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
       expect(await feishuDedupeState.guard.hasRecent(key, { namespace: "default" })).toBe(true);
     } finally {
-      finish.resolve();
+      finish();
       await monitor;
     }
   });

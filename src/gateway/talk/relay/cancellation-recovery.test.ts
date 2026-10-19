@@ -49,7 +49,6 @@ async function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridg
       broadcastToConnIds,
       broadcast: vi.fn(),
       logGateway: { warn },
-      chatAbortControllers: new Map(),
     } as never,
     connId: "conn-1",
     provider,

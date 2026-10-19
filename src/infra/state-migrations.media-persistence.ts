@@ -49,6 +49,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -196,8 +197,7 @@ async function migrateAgentDatabase(params: {
         );
       }
       if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
-        // The canonical owner admits supported versions and converges additive schema;
-        // media must not enumerate later schema revisions independently.
+        // The canonical owner admits supported versions and converges additive schema.
         if (params.migratedFromVersion !== undefined) {
           // The version phase verified this file under the same Doctor custody.
           // Only ordinary additive maintenance remains before readers can open it.
@@ -219,13 +219,13 @@ async function migrateAgentDatabase(params: {
       if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
         throw error;
       }
-      // Admission already checks the whole file. Only a proven integrity failure
-      // needs Doctor's preserving repair scan under an immediate transaction.
+      // Only proven integrity failure needs Doctor's preserving repair transaction.
       const assertCurrent = () => {
         assertAgentDatabaseMaintenanceAuthority(params.maintenance);
         assertOpenClawAgentDatabaseOwner(database, params);
       };
       integrityChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
+        ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
         label: `agent ${params.agentId}`,
         assertCurrent,
       });
@@ -306,7 +306,6 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-    const needsRepair = mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
     let preserved = false;
     const beforeRewrite = () => {
@@ -316,7 +315,7 @@ async function migrateAgentDatabase(params: {
         params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
       }
     };
-    if (needsRepair) {
+    if (mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database)) {
       const changedLegacySessions = new Set<string>();
       const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
       rewritten = runSqliteImmediateTransactionSync(
@@ -524,8 +523,7 @@ export async function migrateLegacyMediaPersistence(
     const { discovery, recoveries } = await withAgentDatabaseMaintenanceLease(
       { env, processBound: true },
       async (maintenance) => {
-        const signal = resolveSqliteInspectionSignal(maintenance.signal) ?? maintenance.signal;
-        signal.throwIfAborted();
+        (resolveSqliteInspectionSignal(maintenance.signal) ?? maintenance.signal).throwIfAborted();
         const discovered = resolveAgentDatabaseMigrationTargets({
           changes,
           configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],

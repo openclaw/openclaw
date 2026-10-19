@@ -177,7 +177,7 @@ it.each([false, true])(
         turn.revoke("bob");
         expect((await sessions("bob")).result?.isError).toBe(true);
         expect((await sessions("alice")).result?.isError).toBe(false);
-        turn.complete();
+        await turn.complete();
         expect((await sessions("alice")).result?.isError).toBe(true);
         expect(callGateway).toHaveBeenCalledTimes(4);
       },

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
@@ -89,21 +89,19 @@ export const SessionBackground = defineSolidBridge<Props>(
         ? backgroundImageReadIdentity(context()!, source.assetId)
         : null;
     };
-    // Keep live-prop snapshots outside tracking, including during effect apply.
-    const syncSurface = () =>
-      untrack(() => {
-        const surface =
-          host.isConnected && props.surface !== "preview"
-            ? host.closest<HTMLElement>(".new-session-page, .sidebar-region")
-            : null;
-        if (surfaceElement !== surface) {
-          surfaceElement?.removeAttribute("data-background-custom");
-          surfaceElement?.removeAttribute("data-background-painted");
-          surfaceElement = surface;
-        }
-        surface?.toggleAttribute("data-background-custom", host.hasAttribute("data-custom"));
-        surface?.toggleAttribute("data-background-painted", host.hasAttribute("data-painted"));
-      });
+    const syncSurface = () => {
+      const surface =
+        host.isConnected && props.surface !== "preview"
+          ? host.closest<HTMLElement>(".new-session-page, .sidebar-region")
+          : null;
+      if (surfaceElement !== surface) {
+        surfaceElement?.removeAttribute("data-background-custom");
+        surfaceElement?.removeAttribute("data-background-painted");
+        surfaceElement = surface;
+      }
+      surface?.toggleAttribute("data-background-custom", host.hasAttribute("data-custom"));
+      surface?.toggleAttribute("data-background-painted", host.hasAttribute("data-painted"));
+    };
     const releaseImage = () => {
       const prior = request;
       request = null;
@@ -117,17 +115,16 @@ export const SessionBackground = defineSolidBridge<Props>(
         URL.revokeObjectURL(prior.url);
       }
     };
-    const retireChangedImage = () =>
-      untrack(() => {
-        if (
-          request &&
-          (request.context !== context() ||
-            request.client !== context()?.gateway.snapshot.client ||
-            request.identity !== currentIdentity())
-        ) {
-          releaseImage();
-        }
-      });
+    const retireChangedImage = () => {
+      if (
+        request &&
+        (request.context !== context() ||
+          request.client !== context()?.gateway.snapshot.client ||
+          request.identity !== currentIdentity())
+      ) {
+        releaseImage();
+      }
+    };
     createEffect(
       () => context(),
       (application) => {
@@ -254,10 +251,7 @@ export const SessionBackground = defineSolidBridge<Props>(
         void readBackgroundImage(state.context, state.source.assetId, {
           signal: pending.controller.signal,
           isCurrent: () =>
-            untrack(
-              () =>
-                host.isConnected && request === pending && currentIdentity() === pending.identity,
-            ),
+            host.isConnected && request === pending && currentIdentity() === pending.identity,
         })
           .then((url) => {
             if (

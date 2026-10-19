@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -20,6 +20,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -124,7 +125,18 @@ describe("skill library worker reads and prepared selection authority", () => {
       try {
         const result = skillLibraryReadOperations["skillLibrary.read"](
           {
-            ...(kind === "list" ? { kind, params: {} } : { kind, params: undefined }),
+            ...(kind === "list"
+              ? { kind, params: {} }
+              : kind === "session"
+                ? {
+                    kind,
+                    params: undefined,
+                    sessionFacts: {
+                      profile: { id: alice.profileId!, role: null, githubLogin: null },
+                      multipleProfiles: false,
+                    },
+                  }
+                : { kind, params: undefined }),
             authority: { profileId: alice.profileId, scopes: alice.scopes, config: {} },
           },
           reader,
@@ -162,8 +174,8 @@ describe("skill library worker reads and prepared selection authority", () => {
       throw new Error("Expected session snapshot");
     }
     expect(session.result.value.selections).toHaveLength(64);
-    expect(session.calls).toBe(4);
-    expect(session.counts).toEqual({ entries: 1, profiles: 3, other: 0 });
+    expect(session.calls).toBe(2);
+    expect(session.counts).toEqual({ entries: 1, profiles: 1, other: 0 });
     expect(session.blobs).toBe(0);
     const insertOwner =
       db.prepare(`INSERT INTO user_profiles (id, display_name, created_at, updated_at)
@@ -260,18 +272,50 @@ describe("skill library worker reads and prepared selection authority", () => {
     expect(fs.existsSync(options.path)).toBe(false);
   });
 
-  it("skips SQL for an admitted empty seed and invalidates its snapshot after publication", async () => {
-    const { options, alice } = fixture();
+  it("skips empty-session SQL and refreshes committed profile and library facts", async () => {
+    const { options, alice, admin } = fixture();
+    admin.getConfig = () => ({
+      gateway: {
+        roles: {
+          default: "administrator",
+          definitions: {
+            administrator: {
+              scopes: ["operator.admin"],
+              agents: "*",
+              sessions: { others: "view" },
+            },
+            reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+          },
+        },
+      },
+    });
+    onTestFinished((await prepareUserProfileCatalog(options)).release);
     const { db } = openOpenClawStateDatabase(options);
+    using reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    const before = await prepareSkillLibrarySession(admin, options);
+    const request = reads.mock.calls.find(
+      ([, command]) => command.type === "skillLibrary.read",
+    )?.[1];
+    reads.mockRestore();
+    expect(before.selections).toEqual([]);
+    expect(before.presentation).toMatchObject({
+      profileId: alice.profileId,
+      multipleProfiles: false,
+      defaultTarget: "workspace",
+      canManageWorkspace: true,
+    });
+    if (request?.type !== "skillLibrary.read") {
+      throw new Error("Expected the cold session read");
+    }
     const sql = observeHostDataSql();
     try {
+      expect(skillLibraryReadOperations["skillLibrary.read"](request.input, db)).toMatchObject({
+        kind: "session",
+        value: { selections: [], presentation: before.presentation },
+      });
       expect(
         skillLibraryReadOperations["skillLibrary.read"](
-          {
-            kind: "seed",
-            params: undefined,
-            authority: { profileId: alice.profileId, scopes: alice.scopes, config: {} },
-          },
+          { kind: "seed", params: undefined, authority: request.input.authority },
           db,
         ),
       ).toMatchObject({ kind: "seed", value: [] });
@@ -279,11 +323,22 @@ describe("skill library worker reads and prepared selection authority", () => {
     } finally {
       sql.restore();
     }
-    const before = await prepareSkillLibrarySession(alice, options);
-    expect(before.selections).toEqual([]);
-    const saved = await saveSkillLibrary(alice, draft(), options);
+    ensureProfileForEmail("second@example.test", options);
+    expect((await prepareSkillLibrarySession(admin, options)).presentation).toMatchObject({
+      multipleProfiles: true,
+      defaultTarget: "personal",
+      canManageWorkspace: true,
+    });
+    setUserProfileRole(alice.profileId!, "reader", options);
     expect(() => before.assertCurrent()).toThrow(SkillLibraryError);
-    expect(() => assertPreparedSkillLibrarySelection(before.selections)).toThrow(SkillLibraryError);
+    expect((await prepareSkillLibrarySession(admin, options)).presentation).toMatchObject({
+      defaultTarget: "personal",
+      canManageWorkspace: false,
+    });
+    const empty = await prepareSkillLibrarySession(alice, options);
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    expect(() => empty.assertCurrent()).toThrow(SkillLibraryError);
+    expect(() => assertPreparedSkillLibrarySelection(empty.selections)).toThrow(SkillLibraryError);
     const after = await prepareSkillLibrarySession(alice, options);
     expect(after.selections).toEqual([expect.objectContaining({ skillId: saved.entry.skillId })]);
     expect(after.presentation).toMatchObject({
@@ -388,6 +443,7 @@ describe("skill library worker reads and prepared selection authority", () => {
       if (mergeTarget) {
         setUserProfileRole(mergeTarget.id, "blocked", options);
       }
+      onTestFinished((await prepareUserProfileCatalog(options)).release);
       const saved = await saveSkillLibrary(alice, draft(), options);
       await mutateSkillLibrary(
         alice,

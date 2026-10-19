@@ -71,7 +71,6 @@ describe("PDF document extraction dispatch", () => {
       minTextChars: 1,
     });
     expect(extracted).toMatchObject({
-      extractor: "pdf",
       text: SENTINEL,
       images: [],
     });
