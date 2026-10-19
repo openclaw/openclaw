@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { Match, Show, Switch, createEffect, createMemo } from "solid-js";
+import { Match, Show, Switch, createMemo, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
@@ -351,8 +351,13 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       ? props.details.retainOutputs
       : undefined,
   );
-  createEffect(outputsDemand, (retain) => retain?.());
-  return (
+  return [
+    <Show when={outputsDemand()} keyed>
+      {(retain) => {
+        onSettled(retain);
+        return null;
+      }}
+    </Show>,
     <Switch>
       <Match when={props.page.kind === "root" && props.page}>
         {(page) => (
@@ -449,8 +454,8 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
           />
         )}
       </Match>
-    </Switch>
-  );
+    </Switch>,
+  ];
 }
 
 function mobileProgressProps(

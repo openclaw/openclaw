@@ -151,6 +151,15 @@ it("retains Outputs demand across publications and returns navigation origins wi
   setPresented(true);
   flush();
   expect(retain).toHaveBeenCalledTimes(3);
+  expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
+  const releaseReplacement = vi.fn();
+  const retainReplacement = vi.fn(() => releaseReplacement);
+  setValue((current) => ({ ...current, retainOutputs: retainReplacement }));
+  flush();
+  expect(release).toHaveBeenCalledTimes(3);
+  expect(retainReplacement).toHaveBeenCalledOnce();
+  expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
   view.unmount();
   expect(release).toHaveBeenCalledTimes(3);
+  expect(releaseReplacement).toHaveBeenCalledOnce();
 });
