@@ -266,7 +266,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   if ((await progress.getAttribute("open")) === null) {
     await activate(progress.locator("summary"), touch);
   }
-  await progress.locator(".session-progress-card__body").waitFor({ state: "visible" });
+  await progress.locator(".task-progress-details__plan").waitFor({ state: "visible" });
   await closeChatDetails(page);
 
   // Use the normal offline queue owner so nothing drains during the layout proof.
@@ -290,7 +290,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
 
   // Progress scrolls inside Details rather than chaining into the queue.
   await openChatDetails(page);
-  const body = progress.locator(".session-progress-card__body");
+  const body = progress.locator(".task-progress-details__plan");
   await body.scrollIntoViewIfNeeded();
   await waitForChatScrollIdle(page);
   const beforeDetailsScroll = await thread.evaluate((element) => element.scrollTop);
