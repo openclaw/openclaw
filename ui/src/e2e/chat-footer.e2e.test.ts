@@ -179,13 +179,18 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   await page.locator(".chat-error").waitFor();
   await waitForChatScrollIdle(page);
 
-  // Details clips overflowing rows; its scrollport must stay above the notice.
+  // The mobile host follows the notice; the desktop inspector stays above it.
   const details = page.getByRole("dialog", { name: "Details", exact: true });
-  const detailsBottom = await details.evaluate((element) => element.getBoundingClientRect().bottom);
-  const noticeTop = await page
-    .locator(".chat-error")
-    .evaluate((element) => element.getBoundingClientRect().top);
-  expect(detailsBottom).toBeLessThanOrEqual(noticeTop);
+  const detailsBounds = (await (
+    touch ? page.locator(".chat-mobile-host") : details
+  ).boundingBox())!;
+  const noticeBounds = (await page.locator(".chat-error").boundingBox())!;
+  if (touch) {
+    expect(noticeBounds.y + noticeBounds.height).toBeLessThanOrEqual(detailsBounds.y);
+    expect(detailsBounds.y + detailsBounds.height).toBeLessThanOrEqual(height);
+  } else {
+    expect(detailsBounds.y + detailsBounds.height).toBeLessThanOrEqual(noticeBounds.y);
+  }
   // Bring the action into view through Details without moving the transcript reader.
   await pullRequest.locator(".chat-pr__link").click({ trial: true });
   const overlap = await pullRequest.evaluate((element) => {
@@ -227,7 +232,11 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   await menu.locator('input[name="autoFix"]:enabled').waitFor({ state: "visible" });
   const menuBounds = (await menu.boundingBox())!;
   const contextBounds = (await page.locator(".chat-footer__context").boundingBox())!;
-  expect(menuBounds.y).toBeLessThan(contextBounds.y);
+  if (touch) {
+    expect(menuBounds.y).toBeGreaterThanOrEqual(contextBounds.y + contextBounds.height);
+  } else {
+    expect(menuBounds.y).toBeLessThan(contextBounds.y);
+  }
   expect(menuBounds.y).toBeGreaterThanOrEqual(0);
   expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(height);
   await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
@@ -258,6 +267,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
     await activate(progress.locator("summary"), touch);
   }
   await progress.locator(".session-progress-card__body").waitFor({ state: "visible" });
+  await closeChatDetails(page);
 
   // Use the normal offline queue owner so nothing drains during the layout proof.
   await gateway.setOnline(false);

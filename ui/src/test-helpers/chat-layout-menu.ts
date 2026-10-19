@@ -101,22 +101,25 @@ export async function closeChatLayoutMenu(
   }
 }
 
+export function nativePane(scope: Page | Locator): Locator {
+  return "mainFrame" in scope
+    ? scope
+        .locator(
+          ".chat-pane-cache__pane--active, .chat-split-view__cell--active openclaw-chat-pane.chat-split-view__pane",
+        )
+        .filter({ visible: true })
+        .first()
+    : scope
+        .locator("xpath=ancestor-or-self::openclaw-chat-pane[1]")
+        .or(scope.locator("openclaw-chat-pane").filter({ visible: true }))
+        .first();
+}
+
 function nativePanelControl(scope: Page | Locator, name: string | RegExp): Locator | null {
-  if (name !== "Focus" && name !== "Restore split") {
+  if (name !== "Focus" && name !== "Restore split" && name !== "Expand Side panel") {
     return null;
   }
-  const pane =
-    "mainFrame" in scope
-      ? scope
-          .locator(
-            ".chat-pane-cache__pane--active, .chat-split-view__cell--active openclaw-chat-pane.chat-split-view__pane",
-          )
-          .filter({ visible: true })
-          .first()
-      : scope
-          .locator("xpath=ancestor-or-self::openclaw-chat-pane[1]")
-          .or(scope.locator("openclaw-chat-pane").filter({ visible: true }))
-          .first();
+  const pane = nativePane(scope);
   const restore = name === "Restore split";
   return pane
     .locator('.sidebar-region--desktop [data-region-header="side"]')
@@ -145,6 +148,21 @@ export async function selectChatLayoutAction(
     }
     await scope.click(action);
     await waitForMenuClose(menu);
+    return;
+  }
+  const host = nativePane(scope).locator(".chat-mobile-host");
+  const closeHost = host
+    .locator(".chat-mobile-host__header")
+    .getByRole("button", { name: "Close", exact: true });
+  const togglesPanel = ["Side panel", "Minimize side panel"].some((label) =>
+    typeof name === "string" ? name === label : name.test(label),
+  );
+  if (
+    togglesPanel &&
+    (await host.locator(".chat-mobile-host__panels").isVisible()) &&
+    (await closeHost.isVisible())
+  ) {
+    await closeHost.click();
     return;
   }
   const nativeControl = nativePanelControl(scope, name);

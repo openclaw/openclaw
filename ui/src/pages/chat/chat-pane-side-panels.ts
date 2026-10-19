@@ -302,7 +302,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   protected setChatSidePanelOpen(open: boolean, layout?: SidebarLayout): void {
     if (this.usesMobileHost) {
       if (open || this.mobilePresentation.suspended) {
-        this.navigateMobileHost(this.mobilePresentation.destination);
+        this.navigateMobileHost(
+          this.mobilePresentation.destination.area === "panels"
+            ? this.mobilePresentation.destination
+            : { area: "panels" },
+        );
       } else {
         this.mobileHost(layout ?? this.state!.sidebarLayout)?.close();
       }
