@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -11,6 +11,11 @@ import { ChatDetails } from "./chat-details.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import progressStyles from "../../../styles/chat/progress-card.css?inline";
+
+beforeAll(async () => {
+  // Keep cold module compilation outside the geometry assertions' polling budget.
+  await import("./chat-details-session.tsx");
+});
 
 const card: ProgressCard = {
   sessionKey: "agent:main:details",
