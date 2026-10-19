@@ -75,7 +75,7 @@
   font-size: 14px;
   line-height: 20px;
   text-align: start;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 @media (hover: hover) {

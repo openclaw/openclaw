@@ -3,7 +3,10 @@ import { Match, Show, Switch, createEffect, createMemo } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
-import { progressCardPresentation } from "../../../components/session-progress-card.ts";
+import {
+  progressCardNoteSummary,
+  progressCardPresentation,
+} from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
@@ -53,8 +56,8 @@ import type { ChatSessionSharingMobileAdapter } from "./chat-session-sharing-mob
 import {
   ChatSessionAccessMobile,
   ChatSessionSharingMobile,
-  ChatSessionSharingOptions,
 } from "./chat-session-sharing-mobile.tsx";
+import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
@@ -184,15 +187,12 @@ function MobileRoot(
       return "";
     }
     // Use the full note's parser/sanitizer; the compact preview omits its bars.
-    const template = document.createElement("template");
-    template.innerHTML = toSanitizedMarkdownHtml(markdown, {
-      progressBars: true,
-      codeBlockChrome: "none",
-    });
-    for (const bar of template.content.querySelectorAll("progress")) {
-      bar.remove();
-    }
-    return template.content.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+    return progressCardNoteSummary(
+      toSanitizedMarkdownHtml(markdown, {
+        progressBars: true,
+        codeBlockChrome: "none",
+      }),
+    );
   });
   const automations = (): ChatDetailsMobileRootProps["automations"] => {
     const input = props.content.automations;
@@ -340,7 +340,7 @@ function MobileRoot(
 /**
  * Mount in the session-scoped mobile host. To retain a page, keep its instance
  * mounted with presented=false and the host hidden/inert; no route store lives here.
- * The host also owns insets/scroll (Goal exposes its own body through scrollRef).
+ * The host also owns insets/scroll (Goal exposes its own body through onScrollPortRef).
  */
 export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
   // The native retain function changes only with resource identity, not catalog publications.
@@ -414,7 +414,12 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
         {(page) => <SessionAutomationMobileList {...page().content} />}
       </Match>
       <Match when={props.page.kind === "automation" && props.page}>
-        {(page) => <SessionAutomationMobileBody {...page().content} />}
+        {(page) => (
+          <SessionAutomationMobileBody
+            {...page().content}
+            onScrollPortRef={props.details.onScrollPortRef}
+          />
+        )}
       </Match>
       <Match when={props.page.kind === "automation-transcript" && props.page}>
         {(page) => <SessionAutomationMobileTranscript {...page().content} />}
@@ -431,6 +436,7 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
             {...page().content}
             goal={props.details.selectedSession?.goal ?? undefined}
             presented={props.presented}
+            onScrollPortRef={props.details.onScrollPortRef}
           />
         )}
       </Match>
