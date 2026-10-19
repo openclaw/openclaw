@@ -4344,15 +4344,17 @@ export function normalizeSingletonNodeTestJob<
   T extends Pick<NodeTestShard, "planConcurrency" | "groups" | "env">,
 >(job: T): T {
   if (job.planConcurrency === 2 && job.groups?.length === 1) {
-    // Packing is settled: no sibling can overlap this child. Keep the prior
-    // two-worker ceiling instead of unlocking the serial host's wider default.
+    // Packing is settled: no sibling can overlap this child. Explicit group
+    // limits survive projection; unpinned groups still need the two-worker ceiling.
     job.planConcurrency = 1;
-    job.env = {
-      ...job.env,
-      OPENCLAW_VITEST_MAX_WORKERS: String(
-        Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
-      ),
-    };
+    if (job.groups[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined) {
+      job.env = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+        ),
+      };
+    }
   }
   return job;
 }
