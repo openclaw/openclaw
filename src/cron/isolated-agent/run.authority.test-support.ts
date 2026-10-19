@@ -85,30 +85,29 @@ export async function withAuthorityTools<T>(
     agentId: "main",
     sessionKey: overrides.sessionKey ?? params.sessionKey,
   });
-  return withGatewayToolCallerIdentity(caller, () =>
-    run(
-      createOpenClawCodingTools({
-        config: params.config,
-        agentId: "main",
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        runId: params.runId,
-        operationalRunInstance: admitted.operationalRunInstance,
-        workspaceDir: params.workspaceDir,
-        cwd: params.cwd,
-        runtimeToolAllowlist: params.toolsAllow,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-        toolConstructionPlan: {
-          includeBaseCodingTools: true,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools,
-          includePluginTools: false,
-        },
-        ...overrides,
-      }),
-    ),
-  );
+  return withGatewayToolCallerIdentity(caller, () => {
+    const tools = createOpenClawCodingTools({
+      config: params.config,
+      agentId: "main",
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      operationalRunInstance: admitted.operationalRunInstance,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      runtimeToolAllowlist: params.toolsAllow,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools,
+        includePluginTools: false,
+      },
+      ...overrides,
+    });
+    return run(tools);
+  });
 }
 
 export function createAuthorityCronService(

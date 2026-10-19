@@ -10,49 +10,35 @@ import { contextBudgetStatusFixture } from "../../config/sessions/context-budget
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { realCronSession } from "./run.session.test-support.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveCronSessionMock,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCron = await harness.loadRunCronIsolatedAgentTurn();
 const realSession = await realCronSession();
 const { accessor } = realSession;
 
+const model = { provider: "openai", model: "gpt-5.4" };
+const agentMeta = { ...model, agentHarnessId: "openclaw", contextTokens: 128_000 };
 function completedTurn() {
-  return {
-    payloads: [{ text: "Scheduled turn completed" }],
-    meta: {
-      agentMeta: {
-        agentHarnessId: "openclaw",
-        provider: "openai",
-        model: "gpt-5.4",
-        contextTokens: 128_000,
-      },
-    },
-  };
+  return { payloads: [{ text: "Done" }], meta: { agentMeta: { ...agentMeta } } };
 }
 
 function startCron(
   target: { sessionKey: string; storePath: string },
   options: Pick<RunCronAgentTurnParams, "abortSignal" | "onLaneWait"> & { name?: string } = {},
 ) {
-  return runCronIsolatedAgentTurn(
+  return runCron(
     makeIsolatedAgentParamsFixture({
       agentId: "main",
       sessionKey: target.sessionKey,
-      job: makeIsolatedAgentJobFixture({
+      job: {
         id: options.name ?? "scheduled-turn",
         name: options.name ?? "Scheduled turn",
         sessionTarget: `session:${target.sessionKey}`,
         delivery: { mode: "none" },
-      }),
+      },
       cfg: { session: { store: target.storePath, reset: { mode: "idle", idleMinutes: 60 } } },
       abortSignal: options.abortSignal,
       onLaneWait: options.onLaneWait,
@@ -83,10 +69,10 @@ describe("session-bound cron lane admission", () => {
   }
 
   beforeEach(() => {
-    resetRunCronIsolatedAgentTurnHarness();
-    mockRunCronFallbackPassthrough();
+    harness.resetRunCronIsolatedAgentTurnHarness();
+    harness.mockRunCronFallbackPassthrough();
     realSession.install();
-    runEmbeddedAgentMock.mockImplementation(async () => completedTurn());
+    harness.runEmbeddedAgentMock.mockImplementation(async () => completedTurn());
   });
 
   it.for([
@@ -101,12 +87,12 @@ describe("session-bound cron lane admission", () => {
     const laneSignals: Parameters<NonNullable<RunCronAgentTurnParams["onLaneWait"]>>[0][] = [];
     const terminal: Partial<SessionEntry> = {
       lastInteractionAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      agentHarnessId: "openclaw",
-      contextTokens: 128_000,
+      modelProvider: model.provider,
+      model: model.model,
+      agentHarnessId: agentMeta.agentHarnessId,
+      contextTokens: agentMeta.contextTokens,
       contextTokensSource: "resolved",
-      contextBudgetStatus: contextBudgetStatusFixture({ provider: "openai", model: "gpt-5.4" }),
+      contextBudgetStatus: contextBudgetStatusFixture(model),
       inputTokens: 240,
       outputTokens: 16,
       compactionCount: 1,
@@ -136,8 +122,8 @@ describe("session-bound cron lane admission", () => {
         signal,
       );
       expect(accessor.loadSessionEntry(target)).toMatchObject(entry);
-      expect(resolveCronSessionMock).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(harness.resolveCronSessionMock).not.toHaveBeenCalled();
+      expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
       if (cancel) {
         controller.abort(new Error("cancel queued cron"));
         await expect(withinTest(run, signal)).rejects.toThrow("cancel queued cron");
@@ -160,46 +146,43 @@ describe("session-bound cron lane admission", () => {
     }
   });
 
-  it.for([false, true])(
-    "borrows the controller turn with caller cancellation=%s",
-    async (cancel, { signal }) => {
-      const { target } = await seedSession();
-      const caller = new AbortController();
-      await withinTest(
-        withSessionTurn(target, async (operation) => {
-          assert(operation, "Expected an admitted outer operation");
-          if (cancel) {
-            runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
+  it.for([false, true])("borrowed controller cancellation=%s", async (cancel, { signal }) => {
+    const { target } = await seedSession();
+    const caller = new AbortController();
+    await withinTest(
+      withSessionTurn(target, async (operation) => {
+        assert(operation, "Expected an admitted outer operation");
+        if (cancel) {
+          harness.runEmbeddedAgentMock.mockImplementationOnce(
+            async (params: RunEmbeddedAgentParams) => {
               expect(params.abortSignal?.aborted).toBe(false);
               caller.abort(new Error("cancel nested cron"));
               expect(params.abortSignal?.aborted).toBe(true);
               expect(operation.abortSignal.aborted).toBe(false);
               throw params.abortSignal?.reason;
-            });
-          }
-          const result = await startCron(target, cancel ? { abortSignal: caller.signal } : {});
-          expect(result.status).toBe(cancel ? "error" : "ok");
-          if (cancel) {
-            expect(operation.abortSignal.aborted).toBe(false);
-          }
-        }),
-        signal,
-      );
-      if (!cancel) {
-        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      }
-    },
-  );
+            },
+          );
+        }
+        const result = await startCron(target, cancel ? { abortSignal: caller.signal } : {});
+        expect(result.status).toBe(cancel ? "error" : "ok");
+        if (cancel) {
+          expect(operation.abortSignal.aborted).toBe(false);
+        }
+      }),
+      signal,
+    );
+    if (!cancel) {
+      expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    }
+  });
 
-  it("keeps prepared cron invocations in FIFO order through model settlement", async ({
-    signal,
-  }) => {
+  it("serializes cron turns through model settlement", async ({ signal }) => {
     const { target } = await seedSession();
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
     const secondWaiting = createDeferred();
     const order: string[] = [];
-    runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    harness.runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
       const name = params.prompt.includes("fifo-first") ? "first" : "second";
       order.push(name);
       if (name === "first") {
@@ -221,7 +204,7 @@ describe("session-bound cron lane admission", () => {
         signal,
       );
       expect(order).toEqual(["first"]);
-      expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+      expect(harness.resolveCronSessionMock).toHaveBeenCalledOnce();
       releaseFirst.resolve();
       await expect(withinTest(Promise.all([first, second]), signal)).resolves.toEqual([
         expect.objectContaining({ status: "ok" }),

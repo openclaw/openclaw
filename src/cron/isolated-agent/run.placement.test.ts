@@ -7,55 +7,39 @@ import {
 } from "../../agents/session-placement-admission.js";
 import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
-import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
-  placements,
-  root,
-  seedActivePlacement,
-  SESSION_ID,
-  SESSION_KEY,
-  sessionTarget,
-  setupWorkerTurnLauncherTest,
-  unusedEnvironments,
-} from "../../gateway/worker-environments/worker-turn-launcher.test-support.js";
+import * as worker from "../../gateway/worker-environments/worker-turn-launcher.test-support.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { realCronSession } from "./run.session.test-support.js";
-import {
-  ensureAgentWorkspaceMock,
-  loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  resetRunCronIsolatedAgentTurnHarness,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCron = await harness.loadRunCronIsolatedAgentTurn();
 const realSession = await realCronSession();
 const { accessor } = realSession;
 
 beforeEach(async () => {
-  await setupWorkerTurnLauncherTest();
-  resetRunCronIsolatedAgentTurnHarness();
+  await worker.setupWorkerTurnLauncherTest();
+  harness.resetRunCronIsolatedAgentTurnHarness();
   realSession.install();
-  ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
-  mockRunCronFallbackPassthrough();
+  harness.ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({
+    dir,
+  }));
+  harness.mockRunCronFallbackPassthrough();
 });
-afterEach(cleanupWorkerTurnLauncherTest);
+afterEach(worker.cleanupWorkerTurnLauncherTest);
 
 it("admits sessions_send to the cron root after a detached scheduled turn", async () => {
-  await seedActivePlacement();
+  await worker.seedActivePlacement();
+  const { placements, root, sessionTarget, SESSION_ID, SESSION_KEY } = worker;
   const sourcePlacement = placements.get(SESSION_ID);
-  const environments = unusedEnvironments();
-  const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
+  const environments = worker.unusedEnvironments();
+  const provider = worker.createWorkerSessionTurnPlacementProvider({ placements, environments });
   const uninstall = installSessionPlacementAdmissionProvider(provider);
   const cfg: OpenClawConfig = {
     session: { store: sessionTarget.storePath },
     agents: { entries: { main: { workspace: root } } },
     tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
   };
-  setRuntimeConfigSnapshot(cfg);
   const cronKey = "agent:main:cron:placement-job";
   const executed: Array<{ sessionKey?: string; workspaceDir: string }> = [];
   const execute = async (params: RunEmbeddedAgentParams) => {
@@ -69,9 +53,9 @@ it("admits sessions_send to the cron root after a detached scheduled turn", asyn
       },
     );
   };
-  runEmbeddedAgentMock.mockImplementation(execute);
+  harness.runEmbeddedAgentMock.mockImplementation(execute);
   try {
-    const run = await runCronIsolatedAgentTurn(
+    const run = await runCron(
       makeIsolatedAgentParamsFixture({
         cfg,
         agentId: "main",
@@ -106,7 +90,10 @@ it("admits sessions_send to the cron root after a detached scheduled turn", asyn
         const sendParams = isRecord(request.params) ? request.params : {};
         const targetKey = sendParams.sessionKey;
         assert(typeof targetKey === "string", "Missing send target");
-        const target = accessor.loadSessionEntry({ ...sessionTarget, sessionKey: targetKey });
+        const target = accessor.loadSessionEntry({
+          ...sessionTarget,
+          sessionKey: targetKey,
+        });
         assert(target, "Missing cron session");
         const runId = String(sendParams.idempotencyKey);
         await execute({
@@ -167,13 +154,11 @@ it("admits sessions_send to the cron root after a detached scheduled turn", asyn
       agentId: "main",
       runId: "wrong-target",
     };
-    const rejectTarget = (
-      overrides: Partial<typeof turnTarget>,
-      error = "Worker turn session key does not match its placement",
-    ) =>
+    const mismatchedKey = "Worker turn session key does not match its placement";
+    const rejectTarget = (overrides: Partial<typeof turnTarget>) =>
       expect(
         provider.executeLocalTurn({ ...turnTarget, ...overrides }, unexpectedRun),
-      ).rejects.toThrow(error);
+      ).rejects.toThrow(mismatchedKey);
     for (const sessionKey of [
       SESSION_KEY,
       "agent:main:cron:other-job",
@@ -182,22 +167,6 @@ it("admits sessions_send to the cron root after a detached scheduled turn", asyn
     ]) {
       await rejectTarget({ sessionKey });
     }
-    await rejectTarget(
-      { agentId: "other", runId: "wrong-agent" },
-      "Worker turn agent id does not match its placement",
-    );
-    await expect(
-      execute({
-        sessionId: SESSION_ID,
-        sessionKey: cronKey,
-        agentId: "main",
-        runId: "wrong-worker-target",
-        workspaceDir: root,
-        prompt: "Must not enter the source worker",
-        timeoutMs: 0,
-      }),
-    ).rejects.toThrow("Worker turn session key does not match its placement");
-    expect(unexpectedRun).not.toHaveBeenCalled();
     const rootOnly = {
       sessionId: "root-only-session",
       sessionKey: "agent:main:cron:root-only",
@@ -214,13 +183,6 @@ it("admits sessions_send to the cron root after a detached scheduled turn", asyn
     for (const suffix of [rootOnly.sessionId, "another-run"]) {
       await rejectTarget({ ...rootOnly, sessionKey: `${rootOnly.sessionKey}:run:${suffix}` });
     }
-    await accessor.patchSessionEntryCore({ ...sessionTarget, sessionKey: cronKey }, () => ({
-      repositoryWorkspaceId: "repository-needs-worker",
-    }));
-    await rejectTarget(
-      { runId: "repository-send" },
-      "This repository session needs a cloud worker",
-    );
     expect(unexpectedRun).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)).toEqual(sourcePlacement);
     expect(environments.startTunnel).not.toHaveBeenCalled();

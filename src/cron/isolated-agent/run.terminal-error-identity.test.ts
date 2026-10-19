@@ -14,22 +14,13 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  loadSessionEntryMock,
-  makeCronSession,
-  mockRunCronFallbackPassthrough,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveCronSessionMock,
-  patchSessionEntryMock,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCron = await harness.loadRunCronIsolatedAgentTurn();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-terminal-identity-");
 
 function persistentSession(target: { sessionKey: string; storePath: string }, entry: SessionEntry) {
-  return makeCronSession({
+  return harness.makeCronSession({
     storePath: target.storePath,
     store: { [target.sessionKey]: { ...entry } },
     initialSessionEntry: entry,
@@ -41,8 +32,8 @@ function persistentSession(target: { sessionKey: string; storePath: string }, en
 
 describe("cron terminal error persistence", () => {
   beforeEach(() => {
-    resetRunCronIsolatedAgentTurnHarness();
-    mockRunCronFallbackPassthrough();
+    harness.resetRunCronIsolatedAgentTurnHarness();
+    harness.mockRunCronFallbackPassthrough();
   });
 
   it("retains distinct provider failures from sequential invocations", async () => {
@@ -59,10 +50,10 @@ describe("cron terminal error persistence", () => {
       updatedAt: 1,
       systemSent: false,
     });
-    resolveCronSessionMock.mockImplementation(() =>
+    harness.resolveCronSessionMock.mockImplementation(() =>
       persistentSession(target, expectDefined(loadSessionEntry(target), "persistent test session")),
     );
-    loadSessionEntryMock.mockImplementation(() => loadSessionEntry(target));
+    harness.loadSessionEntryMock.mockImplementation(() => loadSessionEntry(target));
     const runIds: string[] = [];
     const failures = ["provider refusal response-one", "provider refusal response-two"] as const;
     const messages = failures.map((errorMessage, index) =>
@@ -74,7 +65,7 @@ describe("cron terminal error persistence", () => {
         timestamp: 10 + index,
       }),
     );
-    runEmbeddedAgentMock.mockImplementation(async (request: RunEmbeddedAgentParams) => {
+    harness.runEmbeddedAgentMock.mockImplementation(async (request: RunEmbeddedAgentParams) => {
       const index = runIds.length;
       runIds.push(request.runId);
       request.onExecutionStarted?.();
@@ -99,8 +90,8 @@ describe("cron terminal error persistence", () => {
       },
     });
     // Reuse both the job and physical transcript, in the incident's execution order.
-    const first = await runCronIsolatedAgentTurn(params);
-    const second = await runCronIsolatedAgentTurn(params);
+    const first = await runCron(params);
+    const second = await runCron(params);
     expect(first).toMatchObject({ status: "error", error: expect.stringContaining(failures[0]) });
     expect(second).toMatchObject({ status: "error", error: expect.stringContaining(failures[1]) });
     expect(new Set(runIds).size).toBe(2);
@@ -110,12 +101,8 @@ describe("cron terminal error persistence", () => {
         .getBranch()
         .filter((entry) => entry.type === "message" && entry.message.role === "assistant"),
     ).toMatchObject(
-      messages.map((message, index) => ({
-        message: {
-          errorMessage: message.errorMessage,
-          responseId: message.responseId,
-          __openclaw: { runId: runIds[index] },
-        },
+      messages.map(({ errorMessage, responseId }, index) => ({
+        message: { errorMessage, responseId, __openclaw: { runId: runIds[index] } },
       })),
     );
   });
@@ -132,72 +119,75 @@ describe("cron terminal error persistence", () => {
       const failure = "Synthetic provider failure";
       const entry = { sessionId, lifecycleRevision: "synthetic-revision", updatedAt: Date.now() };
       await accessor.replaceSessionEntry({ sessionKey, storePath }, entry);
-      patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
+      harness.patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
       const storedEntry = accessor.loadSessionEntry({ sessionKey, storePath })!;
-      resolveCronSessionMock.mockReturnValue(
+      harness.resolveCronSessionMock.mockReturnValue(
         persistentSession({ sessionKey, storePath }, storedEntry),
       );
-      loadSessionEntryMock.mockImplementation((lookupStorePath: string, lookupSessionKey: string) =>
-        accessor.loadSessionEntry({ storePath: lookupStorePath, sessionKey: lookupSessionKey }),
+      harness.loadSessionEntryMock.mockImplementation(
+        (lookupStorePath: string, lookupSessionKey: string) =>
+          accessor.loadSessionEntry({ storePath: lookupStorePath, sessionKey: lookupSessionKey }),
       );
-      runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-        expect(params.sessionKey).toBe(runKey);
-        expect(params.assistantErrorTranscript).toBeDefined();
-        assert(params.preparedRunAdmission, "Missing real cron admission");
-        const admitted = await params.preparedRunAdmission.admit("embedded");
-        const assertActive = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
-        assert(assertActive, "Missing real cron active-owner assertion");
-        await accessor.patchSessionEntryCore(target, () => ({ activeWriterRunId: params.runId }));
-        const fenced = {
-          ...target,
-          expectedWriterRunId: params.runId,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-        };
-        await withOwnedSessionTranscriptWrites(
-          {
-            sessionTarget: fenced,
-            assertCommitAllowed: assertActive,
-            withTranscriptWrite: async (run) => await run(),
-          },
-          async () => {
-            const manager = SessionManager.open(fenced, state.workspaceDir);
-            manager.appendMessage({ role: "user", content: "Synthetic task", timestamp: 1 });
-            installSessionToolResultGuard(manager, {
-              assistantErrorTranscript: params.assistantErrorTranscript,
-            });
-            manager.appendMessage(
-              makeAgentAssistantMessage({
-                content: [],
-                stopReason: "error",
-                errorMessage: failure,
-              }),
-            );
-          },
-        );
-        const exactBefore = accessor.loadSessionEntry(target);
-        await accessor.patchSessionEntryCore({ sessionKey, storePath }, () => ({
-          label: "Renamed root",
-        }));
-        expect(accessor.loadSessionEntry(target)).toEqual(exactBefore);
-        expect(accessor.loadSessionEntry(target)).toMatchObject({
-          sessionId,
-          lifecycleRevision: entry.lifecycleRevision,
-          activeWriterRunId: params.runId,
-        });
-        assertActive();
-        expect((await accessor.resolveSessionTranscriptRuntimeTarget(target)).sessionKey).toBe(
-          runKey,
-        );
-        return {
-          payloads: [],
-          meta: {
-            durationMs: 1,
-            error: { kind: "test", message: failure },
-            agentMeta: { sessionId, provider: "mock", model: "mock" },
-          },
-        };
-      });
-      const result = await runCronIsolatedAgentTurn(
+      harness.runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentParams) => {
+          expect(params.sessionKey).toBe(runKey);
+          expect(params.assistantErrorTranscript).toBeDefined();
+          assert(params.preparedRunAdmission, "Missing real cron admission");
+          const admitted = await params.preparedRunAdmission.admit("embedded");
+          const assertActive = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
+          assert(assertActive, "Missing real cron active-owner assertion");
+          await accessor.patchSessionEntryCore(target, () => ({ activeWriterRunId: params.runId }));
+          const fenced = {
+            ...target,
+            expectedWriterRunId: params.runId,
+            expectedLifecycleRevision: entry.lifecycleRevision,
+          };
+          await withOwnedSessionTranscriptWrites(
+            {
+              sessionTarget: fenced,
+              assertCommitAllowed: assertActive,
+              withTranscriptWrite: async (run) => await run(),
+            },
+            async () => {
+              const manager = SessionManager.open(fenced, state.workspaceDir);
+              manager.appendMessage({ role: "user", content: "Synthetic task", timestamp: 1 });
+              installSessionToolResultGuard(manager, {
+                assistantErrorTranscript: params.assistantErrorTranscript,
+              });
+              manager.appendMessage(
+                makeAgentAssistantMessage({
+                  content: [],
+                  stopReason: "error",
+                  errorMessage: failure,
+                }),
+              );
+            },
+          );
+          const exactBefore = accessor.loadSessionEntry(target);
+          await accessor.patchSessionEntryCore({ sessionKey, storePath }, () => ({
+            label: "Renamed root",
+          }));
+          expect(accessor.loadSessionEntry(target)).toEqual(exactBefore);
+          expect(accessor.loadSessionEntry(target)).toMatchObject({
+            sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: params.runId,
+          });
+          assertActive();
+          expect((await accessor.resolveSessionTranscriptRuntimeTarget(target)).sessionKey).toBe(
+            runKey,
+          );
+          return {
+            payloads: [],
+            meta: {
+              durationMs: 1,
+              error: { kind: "test", message: failure },
+              agentMeta: { sessionId, provider: "mock", model: "mock" },
+            },
+          };
+        },
+      );
+      const result = await runCron(
         makeIsolatedAgentParamsFixture({
           agentId: "main",
           cfg: { session: { store: storePath } },
@@ -205,7 +195,7 @@ describe("cron terminal error persistence", () => {
           job: { id: "synthetic-job", delivery: { mode: "none" } },
         }),
       );
-      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
       expect(result.error ?? "").not.toContain("session rebound");
       const messages = SessionManager.open(target)
         .getBranch()
