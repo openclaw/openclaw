@@ -2450,7 +2450,6 @@ src/tui/tui.ts	2
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
 src/utils/string-readers.ts	2
-src/utils/transcript-tools.ts	2
 src/utils/usage-format.ts	1
 src/version.ts	5
 src/video-generation/capability-overlays.ts	1
