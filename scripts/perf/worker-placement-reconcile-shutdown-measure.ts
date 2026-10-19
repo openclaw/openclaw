@@ -20,6 +20,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     "start-at": { type: "string" },
     "idle-owner-read": { type: "boolean", default: false },
+    "blocked-shutdown-tail": { type: "boolean", default: false },
     "open-existing": { type: "boolean", default: false },
   },
 });
@@ -28,7 +29,12 @@ assert(
   "Usage: --state-dir <directory> [--start-at <unix-ms>] [--idle-owner-read | --open-existing]",
 );
 assert(!(values["idle-owner-read"] && values["open-existing"]));
+assert(
+  !values["blocked-shutdown-tail"] || (!values["idle-owner-read"] && !values["open-existing"]),
+);
 const idleOwnerRead = values["idle-owner-read"];
+const blockedShutdownTail = values["blocked-shutdown-tail"];
+const placementCount = blockedShutdownTail ? 3 : 2;
 const stateDir = path.resolve(values["state-dir"]);
 if (!values["open-existing"]) {
   await fs.mkdir(stateDir, { mode: 0o700 });
@@ -234,7 +240,7 @@ const transport: NodeWorkerSupervisorTransport = {
       const input = request.params as NodeWorkerLaunchInput;
       request.onDispatchReady?.(`synthetic-${input.launchId}`);
       launched.add(input.launchId);
-      if (launched.size === 2) {
+      if (launched.size === placementCount) {
         launchesReady.resolve();
       }
       return {
@@ -254,7 +260,7 @@ const transport: NodeWorkerSupervisorTransport = {
     if (request.command === "worker.cancel.v1") {
       const identity = request.params as { launchId: string };
       cancelled.add(identity.launchId);
-      if (cancelled.size === 2) {
+      if (cancelled.size === placementCount) {
         cancellationsReady.resolve();
       }
     }
@@ -346,7 +352,7 @@ runtime.dispatchService.reconcileActive = (...args) => {
 };
 const claims: WorkerSessionTurnClaim[] = [];
 const turns: Array<Promise<string>> = [];
-for (let index = 0; index < 2; index++) {
+for (let index = 0; index < placementCount; index++) {
   const sessionId = `synthetic-session-${index}`;
   const sessionKey = `agent:main:${sessionId}`;
   const environmentId = `synthetic-environment-${index}`;
@@ -544,6 +550,25 @@ await Promise.race([
 ]).finally(() => setupDeadline.abort());
 const shutdownStartedAtMs = Date.now();
 const shutdownStarted = performance.now();
+const postShutdownStoreOperations: string[] = [];
+if (blockedShutdownTail) {
+  // Model a busy shared-store queue without copying production data. This holds
+  // only newly submitted work, never an already accepted write's settlement.
+  const waitForStore = async (operation: string) => {
+    postShutdownStoreOperations.push(operation);
+    await sleep(Math.max(0, shutdownStartedAtMs + 35_000 - Date.now()));
+  };
+  const prune = store.pruneTerminalEnvironments.bind(store);
+  store.pruneTerminalEnvironments = async (input) => {
+    await waitForStore("retention");
+    return prune(input);
+  };
+  const readCandidates = placements.readRecoveryCandidates.bind(placements);
+  placements.readRecoveryCandidates = async () => {
+    await waitForStore("candidates");
+    return readCandidates();
+  };
+}
 markGatewayRestartDraining();
 await runWithProcessCleanupBudget(
   { deadline: shutdownStarted + 85_000, warn: (message) => warnings.push(message) },
@@ -553,7 +578,7 @@ const shutdownMs = performance.now() - shutdownStarted;
 await sweep;
 const turnResults = await Promise.all(turns);
 const retained = await placements.listAsync();
-assert.equal(retained.length, 2);
+assert.equal(retained.length, placementCount);
 if (idleOwnerRead) {
   assert(retained.every((placement) => placement.turnClaim === null));
 }
@@ -583,7 +608,13 @@ const result = {
   scope: idleOwnerRead
     ? "real placement sidecar, SQLite and environment service; controlled stalled owner lookup, synthetic provider/node acknowledgements; exact production blocked await unknown"
     : "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
-  scenario: idleOwnerRead ? "controlled-stalled-owner-read" : "active-worker-cancellation",
+  scenario: blockedShutdownTail
+    ? "active-worker-cancellation-with-blocked-store-tail"
+    : idleOwnerRead
+      ? "controlled-stalled-owner-read"
+      : "active-worker-cancellation",
+  controlledStoreBusyMs: blockedShutdownTail ? 35_000 : null,
+  postShutdownStoreOperations,
   controlledOwnerReadDelayMs: idleOwnerRead ? 85_000 : null,
   wholeGatewayRestart: false,
   realModelTurns: false,
