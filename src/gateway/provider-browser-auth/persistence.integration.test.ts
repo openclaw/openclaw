@@ -45,13 +45,9 @@ async function writeBrowserProvider(workspaceDir: string, authorizationState: st
               const state = ${JSON.stringify(authorizationState)};
               const result = await oauth.authorize({
                 state, timeoutMs: 60000,
-                buildAuthorizationUrl(redirectUrl) {
-                  const callback = new URL(redirectUrl);
-                  callback.searchParams.set("state", state);
-                  const url = new URL("https://provider.example/authorize");
-                  url.searchParams.set("redirect_uri", callback.href);
-                  return url.href;
-                },
+                buildAuthorizationUrl: (redirectUrl) =>
+                  "https://provider.example/authorize?redirect_uri=" +
+                  encodeURIComponent(redirectUrl + "?state=" + state),
               });
               return { profiles: [{
                 profileId: ${JSON.stringify(profileId)},
@@ -92,7 +88,10 @@ it.each(["complete", "cancel"] as const)(
       origin: "https://gateway.example",
       mode: "serve",
     });
-    let config: OpenClawConfig = {};
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      plugins: { allow: [providerId], entries: { [providerId]: { enabled: true } } },
+    };
     const hooks = vi.fn(async () => false);
     const server = createGatewayHttpServer({
       clients: new Set(),
@@ -115,15 +114,6 @@ it.each(["complete", "cancel"] as const)(
         throw new Error("Expected a listening TCP Gateway.");
       }
       const localOrigin = `http://127.0.0.1:${address.port}`;
-      config = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-        plugins: { allow: [providerId], entries: { [providerId]: { enabled: true } } },
-        gateway: {
-          mode: "local",
-          port: address.port,
-          auth: { mode: "token", token: "fixture-gateway-token" },
-        },
-      };
       await state.writeConfig(config);
       saveAuthProfileStore({ version: 1, profiles: retainedProfiles }, undefined, {
         sharedStoreWrite: true,

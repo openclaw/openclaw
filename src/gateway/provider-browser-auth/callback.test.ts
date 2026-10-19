@@ -14,20 +14,17 @@ import type { GatewayWsBrowserOrigin } from "../server/ws-types.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 
 let clearOrigin: () => void;
-const sessions = new Set<ReturnType<typeof createProviderBrowserAuthSession>>();
+let closeSession: () => void;
+function publishOrigin() {
+  return prepareTailscalePublishedOrigin({ origin: "https://gateway.example", mode: "serve" });
+}
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  clearOrigin = prepareTailscalePublishedOrigin({
-    origin: "https://gateway.example",
-    mode: "serve",
-  });
+  clearOrigin = publishOrigin();
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const session of sessions) {
-    session.close();
-  }
-  sessions.clear();
+  closeSession?.();
   clearOrigin();
   resetGatewayWorkAdmission();
 });
@@ -35,32 +32,24 @@ afterEach(() => {
 const authorization = {
   state: "login-state",
   timeoutMs: 60_000,
-  buildAuthorizationUrl: (redirectUrl: string) => {
-    const callbackUrl = new URL(redirectUrl);
-    callbackUrl.searchParams.set("state", "login-state");
-    return `https://provider.example/authorize?callback_url=${encodeURIComponent(callbackUrl.href)}`;
-  },
+  buildAuthorizationUrl: (redirectUrl: string) =>
+    `https://provider.example/authorize?callback_url=${encodeURIComponent(`${redirectUrl}?state=login-state`)}`,
 };
 
 function createSession(params: Parameters<typeof createProviderBrowserAuthSession>[0]) {
   const session = createProviderBrowserAuthSession(params);
-  sessions.add(session);
+  closeSession = session.close;
   return session;
 }
 
-async function startLogin(
-  params: { timeoutMs?: number; browserOrigin?: GatewayWsBrowserOrigin } = {},
-) {
+async function startLogin(timeoutMs = 60_000, browserOrigin?: GatewayWsBrowserOrigin) {
   const opened = createDeferredCore<string>();
   const session = createSession({
-    browserOrigin: params.browserOrigin,
+    browserOrigin,
     openUrl: async (url) => opened.resolve(url),
   });
   expect(session.available).toBe(true);
-  const result = session.authorize({
-    ...authorization,
-    timeoutMs: params.timeoutMs ?? authorization.timeoutMs,
-  });
+  const result = session.authorize({ ...authorization, timeoutMs });
   return { session, result, opened: await opened.promise };
 }
 
@@ -85,12 +74,10 @@ it.each([
   if (origin === "https://work.example:8447") {
     clearOrigin();
   }
-  const login = await startLogin({
-    browserOrigin: {
-      origin,
-      requestHost: new URL(origin).host,
-      isLocalClient: origin.startsWith("http:"),
-    },
+  const login = await startLogin(60_000, {
+    origin,
+    requestHost: new URL(origin).host,
+    isLocalClient: origin.startsWith("http:"),
   });
   const url = new URL(login.opened);
   expect(new URL(url.searchParams.get("callback_url")!).origin).toBe(origin);
@@ -132,37 +119,28 @@ it("settles a provider denial without exposing provider-controlled text", async 
   await rejected;
 });
 
-it.each(["restart", "origin"])("rejects callback completion after %s", async (event) => {
-  const login = await startLogin();
-  const rejected = expect(login.result).rejects.toThrow();
+it.each(["restart", "origin", "timer", "deadline"])("rejects %s callbacks", async (event) => {
+  const login = await startLogin(event === "timer" ? 20 : 60_000);
+  const message = event === "deadline" ? "expired" : undefined;
+  const rejected = expect(login.result).rejects.toThrow(message);
   if (event === "restart") {
     markGatewayRestartDraining();
   }
   if (event === "origin") {
-    clearOrigin = prepareTailscalePublishedOrigin({
-      origin: "https://gateway.example",
-      mode: "serve",
-    });
+    clearOrigin = publishOrigin();
+  }
+  if (event === "deadline") {
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_001);
+  }
+  if (event === "timer") {
+    await rejected;
   }
   expect(callback("state=login-state&code=stale").res.statusCode).toBe(410);
   await rejected;
 });
 
-it("expires unanswered browser login without consuming a later callback", async () => {
-  const login = await startLogin({ timeoutMs: 20 });
-  await expect(login.result).rejects.toThrow();
-  expect(callback("state=login-state&code=late").res.statusCode).toBe(410);
-});
-
-it("rejects an expired callback even before the timeout task runs", async () => {
-  const login = await startLogin();
-  const rejected = expect(login.result).rejects.toThrow("expired");
-  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_001);
-  expect(callback("state=login-state&code=late").res.statusCode).toBe(410);
-  await rejected;
-});
-
-it.each([
+it.each<GatewayWsBrowserOrigin | undefined>([
+  undefined,
   { origin: "http://localhost:3000", requestHost: "localhost:18789", isLocalClient: true },
   { origin: "http://localhost:18789", requestHost: "localhost:18789", isLocalClient: false },
   { origin: "https://other.example", requestHost: "gateway.example", isLocalClient: false },
@@ -171,15 +149,12 @@ it.each([
   { origin: "http://192.168.1.2:18789", requestHost: "192.168.1.2:18789", isLocalClient: true },
   { origin: "file://localhost", requestHost: "localhost", isLocalClient: true },
 ])("rejects an unserved or unattested browser return ($origin)", async (browserOrigin) => {
+  if (!browserOrigin) {
+    clearOrigin();
+  }
   const openUrl = vi.fn();
   const session = createSession({ browserOrigin, openUrl });
   expect(session.available).toBe(false);
   await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
   expect(openUrl).not.toHaveBeenCalled();
-});
-
-it("does not advertise loopback or a guessed browser address", async () => {
-  clearOrigin();
-  const session = createSession({ openUrl: vi.fn() });
-  await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
 });
