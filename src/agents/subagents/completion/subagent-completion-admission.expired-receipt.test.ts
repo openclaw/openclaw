@@ -1,16 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { isDeliverySuspended } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { bindSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
+import { useCompletionDatabase } from "./completion-database.test-support.js";
 import { blockSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
@@ -18,32 +12,18 @@ import {
   reopenCompletionFixtureOwners,
   records,
   requesterWakeDriver,
-  admitCompletionFixtureDatabase,
   readCompletionSystemEvents,
-  seedSubagentCompletionDelivery,
+  seedSubagentCompletionOwner,
   settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
 
 describe("requester receipts after completion expiry", () => {
   let database: OpenClawStateDatabase;
 
-  beforeEach(async () => {
-    vi.stubEnv(
-      "OPENCLAW_STATE_DIR",
-      tempDirs.make("openclaw-expired-receipt-", resolvePreferredOpenClawTmpDir()),
-    );
-    database = openOpenClawStateDatabase();
-    await admitCompletionFixtureDatabase();
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    subagentRuns.clear();
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
+  useCompletionDatabase("openclaw-expired-receipt-", (opened) => {
+    database = opened;
   });
 
   async function suspend(
@@ -56,20 +36,18 @@ describe("requester receipts after completion expiry", () => {
     const input = armRequesterWake(records());
     input.subagent.cleanupHandled = false;
     input.subagent.cleanupCompletedAt = undefined;
+    input.subagent.delivery = { status: "pending", generation: 1 };
     input.subagent.completionTarget = options.completionTarget;
     input.subagent.completionRequesterSessionId = options.completionTarget
       ? "requester-session"
       : undefined;
-    input.subagent.delivery = { status: "pending", generation: 1 };
     if (options.resultText !== undefined) {
       input.subagent.completion!.resultText = options.resultText;
     }
-    seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
-    subagentRuns.set(input.subagent.runId, input.subagent);
+    seedSubagentCompletionOwner({ ...input, databaseOptions: { database } });
     expect(
       await blockSubagentCompletionDelivery({
         subagent: input.subagent,
-
         reason: "completion delivery expired",
         suspendedReason: options.reason ?? "expiry",
         databaseOptions: { database },
@@ -93,8 +71,7 @@ describe("requester receipts after completion expiry", () => {
     const input = armRequesterWake(records());
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.delivery = { status: "pending", generation: 1 };
-    seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
-    subagentRuns.set(input.subagent.runId, input.subagent);
+    seedSubagentCompletionOwner({ ...input, databaseOptions: { database } });
 
     await settle(input, true);
 
@@ -105,8 +82,8 @@ describe("requester receipts after completion expiry", () => {
     expect(currentCompletionRun(input).delivery?.status).toBe("delivered");
     database = await reopenCompletionFixtureOwners();
     // Process-local custody cannot survive a restart without durable completion.
-    expect(subagentRuns.get(input.subagent.runId)?.cleanupHandled).toBe(false);
-    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
+    expect(currentCompletionRun(input).cleanupHandled).toBe(false);
+    expect(currentCompletionRun(input).delivery?.status).toBe("delivered");
   });
 
   it.each([
@@ -129,11 +106,12 @@ describe("requester receipts after completion expiry", () => {
         expect(isDeliverySuspended(currentCompletionRun(input))).toBe(false);
         database = await reopenCompletionFixtureOwners();
         const stored = subagentRuns.get(input.subagent.runId);
-        expect(stored?.delivery?.status).toBe("delivered");
-        expect(stored?.delivery?.suspendedAt).toBeUndefined();
-        expect(stored?.delivery?.suspendedReason).toBeUndefined();
-        expect(stored?.delivery?.lastError).toBeUndefined();
-        expect(stored?.delivery?.payload).toBeUndefined();
+        const delivery = stored?.delivery;
+        expect(delivery?.status).toBe("delivered");
+        expect(delivery?.suspendedAt).toBeUndefined();
+        expect(delivery?.suspendedReason).toBeUndefined();
+        expect(delivery?.lastError).toBeUndefined();
+        expect(delivery?.payload).toBeUndefined();
         expect(stored?.requesterSettleWake).toBeUndefined();
         expect(stored?.completion?.resultText).toBe(resultText);
       } finally {
@@ -174,8 +152,8 @@ describe("requester receipts after completion expiry", () => {
           disposition: "permanent_failure",
           lastError: "requester turn failed",
         });
-        expect(stored?.delivery?.payload).toEqual(before.delivery?.payload);
         expect(stored?.completion).toEqual(before.completion);
+        expect(stored?.delivery?.payload).toEqual(before.delivery?.payload);
         expect(stored?.suppressCompletionDelivery).toBe(true);
         expect(stored?.requesterSettleWake).toBeUndefined();
         expect(readCompletionSystemEvents(database)).toEqual(notices);

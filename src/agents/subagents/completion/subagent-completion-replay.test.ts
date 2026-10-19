@@ -25,15 +25,16 @@ import {
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import {
   records,
+  reopenCompletionFixtureOwners,
   requesterWakeDriver,
-  seedSubagentCompletionDelivery,
+  seedSubagentCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
 
 const tempDirs = createTempDirTracker();
 
 describe("completed requester delivery replay fence", () => {
   const env = captureEnv(["OPENCLAW_STATE_DIR"]);
-  const settle = () => settleSubagentRegistryPersistenceWork();
+  const settle = settleSubagentRegistryPersistenceWork;
   beforeEach(() => {
     // Failed resource cleanup retains the capture; retired directories only need removal retry.
     if (tempDirs.dirs.size > 0) {
@@ -84,24 +85,17 @@ describe("completed requester delivery replay fence", () => {
 
   async function reopenOwners() {
     await settle();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    subagentRuns.clear();
-    openOpenClawStateDatabase();
-    for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
-      subagentRuns.set(runId, entry);
-    }
+    await reopenCompletionFixtureOwners();
   }
 
   async function runningOwner() {
     const input = records();
+    const { requesterAgentId: agentId, requesterSessionKey: sessionKey } = input.subagent;
     await replaceSessionEntry(
       {
-        agentId: input.subagent.requesterAgentId,
-        storePath: resolveSessionStorePathCore(undefined, {
-          agentId: input.subagent.requesterAgentId,
-        }),
-        sessionKey: input.subagent.requesterSessionKey,
+        agentId,
+        sessionKey,
+        storePath: resolveSessionStorePathCore(undefined, { agentId }),
       },
       { sessionId: "requester-session", updatedAt: Date.now() },
     );
@@ -109,9 +103,27 @@ describe("completed requester delivery replay fence", () => {
     input.subagent.completion = { required: true };
     input.subagent.delivery = { status: "pending", generation: 1 };
     input.subagent.retainAttachmentsOnKeep = true;
-    seedSubagentCompletionDelivery({ subagent: input.subagent });
-    subagentRuns.set(input.subagent.runId, input.subagent);
+    seedSubagentCompletionOwner(input);
     return input;
+  }
+
+  function complete(
+    driver: ReturnType<typeof requesterWakeDriver>,
+    input: ReturnType<typeof records>,
+    triggerCleanup: boolean,
+    signal: AbortSignal,
+  ) {
+    return withinTest(
+      driver.controller.completeSubagentRun({
+        runId: input.subagent.runId,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        reason: "subagent-complete",
+        terminalReply: { disposition: "visible", text: "canonical result" },
+        triggerCleanup,
+      }),
+      signal,
+    );
   }
 
   it("atomically retains the lifecycle-produced block before the announce tail, then fences reopen", async ({
@@ -137,17 +149,7 @@ describe("completed requester delivery replay fence", () => {
       return "permanent_failure";
     });
     try {
-      await withinTest(
-        driver.controller.completeSubagentRun({
-          runId: input.subagent.runId,
-          endedAt: Date.now(),
-          outcome: { status: "ok" },
-          reason: "subagent-complete",
-          terminalReply: { disposition: "visible", text: "canonical result" },
-          triggerCleanup: true,
-        }),
-        signal,
-      );
+      await complete(driver, input, true, signal);
       await withinTest(reported.promise, signal);
       const stored = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
       expect(stored.execution).toMatchObject({ status: "terminal", outcome: { status: "ok" } });
@@ -239,17 +241,7 @@ describe("completed requester delivery replay fence", () => {
       return "permanent_failure";
     });
     try {
-      await withinTest(
-        driver.controller.completeSubagentRun({
-          runId: input.subagent.runId,
-          endedAt: Date.now(),
-          outcome: { status: "ok" },
-          reason: "subagent-complete",
-          terminalReply: { disposition: "visible", text: "canonical result" },
-          triggerCleanup: false,
-        }),
-        signal,
-      );
+      await complete(driver, input, false, signal);
       // Admission must start from the committed terminal row and a pending obligation.
       await mutateSubagentRuns(
         [input.subagent.runId],

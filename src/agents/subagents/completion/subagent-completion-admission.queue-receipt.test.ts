@@ -1,5 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   deleteDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
@@ -14,13 +13,7 @@ import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   createGatewaySchedulerClock,
@@ -28,35 +21,20 @@ import {
 } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { useCompletionDatabase } from "./completion-database.test-support.js";
 import { SubagentCompletionSourceChangedError } from "./subagent-completion-admission.store.js";
 import {
-  admitCompletionFixtureDatabase,
+  seedSubagentCompletionOwner,
   settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 describe("committed requester outcome queue receipts", () => {
   let database: OpenClawStateDatabase;
 
-  beforeEach(async () => {
-    vi.stubEnv(
-      "OPENCLAW_STATE_DIR",
-      tempDirs.make("openclaw-requester-outcome-", resolvePreferredOpenClawTmpDir()),
-    );
-    database = openOpenClawStateDatabase();
-    await admitCompletionFixtureDatabase();
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    subagentRuns.clear();
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
+  useCompletionDatabase("openclaw-requester-outcome-", (opened) => {
+    database = opened;
   });
 
   it.each(["pending", "completed", "replaced", "absent"] as const)(
@@ -82,8 +60,7 @@ describe("committed requester outcome queue receipts", () => {
           batchRunIds: ["blocked-requester-outcome"],
         },
       });
-      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(entry)], []);
-      subagentRuns.set(entry.runId, entry);
+      seedSubagentCompletionOwner({ subagent: entry, databaseOptions: { database } });
       const context = captureOpenClawStateWorkerContext();
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);

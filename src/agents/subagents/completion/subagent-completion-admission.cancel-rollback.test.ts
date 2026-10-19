@@ -1,14 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
@@ -17,44 +10,27 @@ import {
 } from "../registry/subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
+import { useCompletionDatabase } from "./completion-database.test-support.js";
 import {
   advanceRequesterWakeTime,
   armRequesterWake,
   records,
   requesterWakeDriver,
-  admitCompletionFixtureDatabase,
-  seedSubagentCompletionDelivery,
+  seedSubagentCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
 
 describe("requester wake cancellation rollback", () => {
   let database: OpenClawStateDatabase;
 
-  beforeEach(async () => {
-    const tempDir = tempDirs.make("openclaw-wake-cancel-", resolvePreferredOpenClawTmpDir());
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    database = openOpenClawStateDatabase();
-    await admitCompletionFixtureDatabase();
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    vi.restoreAllMocks();
-    subagentRuns.clear();
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
-  });
-
-  function persistOwner(input: ReturnType<typeof records>) {
-    seedSubagentCompletionDelivery({
-      subagent: input.subagent,
-      databaseOptions: { database },
-    });
-    subagentRuns.set(input.subagent.runId, input.subagent);
-  }
+  useCompletionDatabase(
+    "openclaw-wake-cancel-",
+    (opened) => {
+      database = opened;
+    },
+    vi.restoreAllMocks,
+  );
 
   it.each([
     { outcome: "delivered", owner: "current" },
@@ -78,11 +54,17 @@ describe("requester wake cancellation rollback", () => {
         armRequesterWake(record, batchRunIds);
         record.subagent.requesterSettleWake!.status = "dispatching";
         record.subagent.requesterSettleWake!.attemptCount = 1;
-        persistOwner(record);
+        seedSubagentCompletionOwner({ ...record, databaseOptions: { database } });
       }
       const original = structuredClone(input.subagent);
       const driver = requesterWakeDriver(inputs);
       const finalized = vi.fn();
+      const replay = {
+        status: "dispatching" as const,
+        attemptCount: 1,
+        replayCount: 1,
+        lastError: "ambiguous transport",
+      };
       if (outcome === "delivered") {
         database.db.exec(
           "CREATE TRIGGER reject_delivered AFTER UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.delivery.status') = 'delivered' BEGIN SELECT RAISE(ABORT, 'cut:delivered'); END",
@@ -111,13 +93,10 @@ describe("requester wake cancellation rollback", () => {
           await params.transitionBatch(
             batch,
             {
-              status: "dispatching",
-              attemptCount: 1,
-              replayCount: 1,
+              ...replay,
               nextAttemptAt: Date.now() + 30_000,
               batchRunIds,
               rearmGeneration: 1,
-              lastError: "ambiguous transport",
             },
             () => {},
           );
@@ -162,11 +141,9 @@ describe("requester wake cancellation rollback", () => {
         expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
           "in_progress",
         );
-        if (outcome === "delivered") {
-          database.db.exec("DROP TRIGGER reject_delivered");
-        } else {
-          database.db.exec("DROP TRIGGER reject_replay");
-        }
+        database.db.exec(
+          `DROP TRIGGER ${outcome === "delivered" ? "reject_delivered" : "reject_replay"}`,
+        );
 
         let successor: typeof input.subagent | undefined;
         let successorWrite: Promise<void> | undefined;
@@ -201,62 +178,38 @@ describe("requester wake cancellation rollback", () => {
         );
         await settleRootWork(true);
 
-        expect(
-          driver.wake,
-          JSON.stringify({
-            warnings: driver.warn.mock.calls,
-            wakes: driver.wake.mock.calls.map(([params]) => ({
-              runId: params.settledEntry.runId,
-              wake: params.settledEntry.requesterSettleWake,
-            })),
-          }),
-        ).toHaveBeenCalledTimes(outcome === "replay budget" ? 2 : 1);
+        expect(driver.wake).toHaveBeenCalledTimes(outcome === "replay budget" ? 2 : 1);
         const stored = loadSubagentRegistryFromSqlite();
+        if (owner !== "current") {
+          expect(subagentRuns.get(input.subagent.runId)?.generation).toBe(successor?.generation);
+          expect(stored.get(input.subagent.runId)?.requesterSettleWake).toEqual(
+            successor?.requesterSettleWake,
+          );
+          expect(stored.get(input.subagent.runId)?.delivery?.status).toBe("in_progress");
+        }
         if (owner === "current" && outcome === "delivered") {
-          expect(finalized, JSON.stringify(driver.warn.mock.calls)).toHaveBeenCalledOnce();
+          expect(finalized).toHaveBeenCalledOnce();
           for (const record of inputs) {
             expect(stored.get(record.subagent.runId)?.delivery?.status).toBe("delivered");
             expect(stored.get(record.subagent.runId)?.requesterSettleWake).toBeUndefined();
           }
         } else if (outcome === "replay budget") {
-          expect(replayStates).toEqual([
-            expect.objectContaining({
-              status: "dispatching",
-              attemptCount: 1,
-              replayCount: 1,
-              lastError: "ambiguous transport",
-            }),
-          ]);
+          expect(replayStates).toEqual([expect.objectContaining(replay)]);
           for (const record of owner === "current" ? inputs : [sibling]) {
-            expect(stored.get(record.subagent.runId)?.requesterSettleWake).toMatchObject({
-              status: "dispatching",
-              attemptCount: 1,
-              replayCount: 1,
-              lastError: "ambiguous transport",
-            });
+            expect(stored.get(record.subagent.runId)?.requesterSettleWake).toMatchObject(replay);
           }
           if (owner === "replacement") {
-            expect(subagentRuns.get(input.subagent.runId)?.generation).toBe(successor?.generation);
-            expect(stored.get(input.subagent.runId)?.requesterSettleWake).toEqual(
-              successor?.requesterSettleWake,
-            );
-            expect(stored.get(input.subagent.runId)?.delivery?.status).toBe("in_progress");
             expect(driver.wake.mock.calls[1]?.[0].settledEntry.runId).toBe(sibling.subagent.runId);
           }
         } else {
-          expect(subagentRuns.get(input.subagent.runId)?.generation).toBe(successor?.generation);
-          expect(stored.get(input.subagent.runId)?.requesterSettleWake).toEqual(
-            successor?.requesterSettleWake,
-          );
           expect(stored.get(input.subagent.runId)?.requesterSettleWake?.rearmGeneration).toBe(2);
-          expect(stored.get(input.subagent.runId)?.delivery?.status).toBe("in_progress");
           expect(stored.get(sibling.subagent.runId)?.delivery?.status).toBe("delivered");
         }
         for (const record of inputs) {
-          expect(stored.get(record.subagent.runId)?.execution.outcome?.status).toBe("ok");
-          expect(stored.get(record.subagent.runId)?.completion?.resultText).toBe(
-            "canonical result",
-          );
+          expect(stored.get(record.subagent.runId)).toMatchObject({
+            execution: { outcome: { status: "ok" } },
+            completion: { resultText: "canonical result" },
+          });
         }
       } finally {
         database.db.exec("DROP TRIGGER IF EXISTS reject_delivered");
