@@ -63,7 +63,12 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
+  const records = (
+    await listClaudeSessions(resolvedHome, {
+      ...resolvedScanOptions,
+      searchTerm: params.searchTerm,
+    })
+  ).filter((record) => {
     if (!search) {
       return true;
     }

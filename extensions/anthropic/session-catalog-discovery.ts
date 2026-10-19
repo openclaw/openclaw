@@ -181,6 +181,7 @@ async function discoverCliRecords(
   context: ClaudeSessionScanContext,
   records: Map<string, CatalogRecord>,
   sidechainIds: Set<string>,
+  preferredSessionId?: string,
 ): Promise<void> {
   const { root } = context;
   if (!context.resolvedRoot) {
@@ -213,6 +214,15 @@ async function discoverCliRecords(
       if (sessionId) {
         candidates.push({ directory, name, sessionId });
       }
+    }
+  }
+  if (preferredSessionId) {
+    // Spend the bounded metadata budget on an exact-ID search before unrelated files.
+    const preferredIndex = candidates.findIndex(
+      (candidate) => candidate.sessionId === preferredSessionId,
+    );
+    if (preferredIndex > 0) {
+      candidates.unshift(...candidates.splice(preferredIndex, 1));
     }
   }
   for (const { directory, name, sessionId } of candidates) {
@@ -372,7 +382,10 @@ async function discoverCliRecords(
   }
 }
 
-async function scanClaudeSessions(snapshot: ClaudeProjectsTreeSnapshot) {
+async function scanClaudeSessions(
+  snapshot: ClaudeProjectsTreeSnapshot,
+  preferredSessionId?: string,
+) {
   const context: ClaudeSessionScanContext = {
     ...snapshot,
     complete: true,
@@ -380,7 +393,7 @@ async function scanClaudeSessions(snapshot: ClaudeProjectsTreeSnapshot) {
     directoriesByPath: new Map(snapshot.projectDirectories.map((dir) => [dir.directory, dir])),
   };
   const indexed = await readIndexRecords(context);
-  await discoverCliRecords(context, indexed.records, indexed.sidechainIds);
+  await discoverCliRecords(context, indexed.records, indexed.sidechainIds, preferredSessionId);
   return { ...indexed, context };
 }
 
@@ -433,8 +446,22 @@ async function mergeClaudeSessions(
 async function readCliScan(
   treeSnapshot: ClaudeProjectsTreeSnapshot,
   forceRefresh?: boolean,
+  searchTerm?: string,
 ): Promise<ClaudeCliScan> {
-  const cacheKey = `${treeSnapshot.root}\0cli`;
+  const expectedName = searchTerm ? `${searchTerm}.jsonl`.toLocaleLowerCase() : undefined;
+  let preferredSessionId: string | undefined;
+  if (expectedName) {
+    for (const { childNames } of treeSnapshot.projectDirectories) {
+      const name = childNames.find((candidate) => candidate.toLocaleLowerCase() === expectedName);
+      if (name) {
+        preferredSessionId = name.slice(0, -".jsonl".length);
+        break;
+      }
+    }
+  }
+  const cacheKey = preferredSessionId
+    ? `${treeSnapshot.root}\0cli\0${preferredSessionId}`
+    : `${treeSnapshot.root}\0cli`;
   const now = Date.now();
   const cached = claudeSessionScanCache.get(cacheKey);
   if (!forceRefresh && cached?.treeStamp === treeSnapshot.treeStamp && cached.hardExpiresAt > now) {
@@ -449,7 +476,7 @@ async function readCliScan(
   const entry = {
     treeStamp: treeSnapshot.treeStamp,
     hardExpiresAt: now + CLAUDE_SESSION_SCAN_HARD_TTL_MS,
-    records: scanClaudeSessions(treeSnapshot),
+    records: scanClaudeSessions(treeSnapshot, preferredSessionId),
   };
   setBoundedCache(claudeSessionScanCache, cacheKey, entry, MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES);
   try {
@@ -469,11 +496,16 @@ async function readCliScan(
 
 export async function listClaudeSessions(
   homeDir = resolveClaudeCatalogHomeDir(),
-  options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
+  options: {
+    forceRefresh?: boolean;
+    configDir?: string;
+    includeDesktop?: boolean;
+    searchTerm?: string;
+  } = {},
 ): Promise<CatalogRecord[]> {
   const [cli, desktop] = await Promise.all([
     readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options).then((snapshot) =>
-      readCliScan(snapshot, options.forceRefresh),
+      readCliScan(snapshot, options.forceRefresh, options.searchTerm),
     ),
     options.includeDesktop !== false
       ? readDesktopOverlay(homeDir, options.forceRefresh)
