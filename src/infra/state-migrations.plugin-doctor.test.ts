@@ -54,12 +54,19 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
 const tempDirs = createTrackedTempDirs();
 
 type Entry = ReturnType<typeof listPluginDoctorStateMigrationEntries>[number];
-function entry(pluginId: string, migration: Entry["migration"]): Entry {
-  return { pluginId, channelIds: [], migration };
-}
-function postEntry(pluginId: string, migration: Entry["migration"]): Entry {
+type Migration = Pick<Entry["migration"], "detectLegacyState"> &
+  Partial<Omit<Entry["migration"], "id" | "detectLegacyState">>;
+const unchanged = () => ({ changes: [], warnings: [] });
+function entry(pluginId: string, id: string, migration: Migration): Entry {
   return {
-    ...entry(pluginId, { phase: "after-session-repair", ...migration }),
+    pluginId,
+    channelIds: [],
+    migration: { id, label: id, migrateLegacyState: unchanged, ...migration },
+  };
+}
+function postEntry(pluginId: string, id: string, migration: Migration): Entry {
+  return {
+    ...entry(pluginId, id, { phase: "after-session-repair", ...migration }),
     trustedForDurableStores: false,
   };
 }
@@ -77,6 +84,9 @@ async function repairEnv() {
 }
 const plannedActions = () =>
   controls.entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id }));
+const skippedNotices = [
+  "Legacy import: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port. Preserve the source.",
+];
 
 afterEach(async () => {
   controls.entries = [];
@@ -111,18 +121,14 @@ it.each([
     });
     const undeclaredDetector = vi.fn(() => null);
     controls.entries = [
-      entry("legacy-owner", {
-        id: "legacy-import",
+      entry("legacy-owner", "legacy-import", {
         label: "Legacy import",
         sqliteOnly: { family: "state", postgresNote: "Preserve the source." },
         detectLegacyState,
         migrateLegacyState,
       }),
-      entry("unrestricted-owner", {
-        id: "ordinary-repair",
-        label: "Ordinary repair",
+      entry("unrestricted-owner", "ordinary-repair", {
         detectLegacyState: undeclaredDetector,
-        migrateLegacyState: () => ({ changes: [], warnings: [] }),
       }),
     ];
     const params = {
@@ -134,20 +140,12 @@ it.each([
     const first = await runPluginDoctorStateMigrationPlans(params);
     const replay = await runPluginDoctorStateMigrationPlans(params);
 
-    expect(first.warnings).toEqual([]);
-    expect(replay.warnings).toEqual([]);
-    expect(first.changes).toEqual(skipped ? [] : ["imported"]);
-    expect(replay.changes).toEqual([]);
+    expect(first).toMatchObject({ warnings: [], changes: skipped ? [] : ["imported"] });
+    expect(replay).toMatchObject({ warnings: [], changes: [] });
     expect(detectLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 2);
     expect(migrateLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 1);
     expect(undeclaredDetector).toHaveBeenCalledTimes(2);
-    expect(first.notices).toEqual(
-      skipped
-        ? [
-            "Legacy import: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port. Preserve the source.",
-          ]
-        : undefined,
-    );
+    expect(first.notices).toEqual(skipped ? skippedNotices : undefined);
     expect(replay.notices).toEqual(first.notices);
     expect(replay.completedPluginIds).toEqual(["legacy-owner", "unrestricted-owner"]);
   },
@@ -160,8 +158,8 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
   const cfg = {};
   const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
-  const db = new DatabaseSync(stateDbPath);
-  try {
+  {
+    using db = new DatabaseSync(stateDbPath);
     db.exec(`
       CREATE TABLE agent_databases (
         agent_id TEXT PRIMARY KEY,
@@ -172,17 +170,13 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
       );
       INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
     `);
-  } finally {
-    db.close();
   }
   const migrateLegacyState = vi.fn(() => ({
     changes: ["plugin state migrated"],
     warnings: [],
   }));
   controls.entries = [
-    entry("memory-core", {
-      id: "memory-core-test",
-      label: "Memory Core test migration",
+    entry("memory-core", "memory-core-test", {
       detectLegacyState: () => ({ preview: ["plugin state"] }),
       migrateLegacyState,
     }),
@@ -192,8 +186,8 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
     autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
   ).rejects.toThrow("unsupported agent database registry schema");
   expect(migrateLegacyState).not.toHaveBeenCalled();
-  const preserved = new DatabaseSync(stateDbPath, { readOnly: true });
-  try {
+  {
+    using preserved = new DatabaseSync(stateDbPath, { readOnly: true });
     expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
       {
         agent_id: "main",
@@ -203,8 +197,6 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
         size_bytes: 20,
       },
     ]);
-  } finally {
-    preserved.close();
   }
 
   const result = await autoMigrateLegacyPluginDoctorState({
@@ -228,19 +220,12 @@ it.each([
   "refuses a genuinely %s action within one owner",
   async (_name, actionIds, plannedIds) => {
     const env = await repairEnv();
-    const observed: string[] = [];
+    const detect = vi.fn(() => ({ preview: ["pending"] }));
+    const migrate = vi.fn(unchanged);
     controls.entries = actionIds.map((id) =>
-      postEntry("owner", {
-        id,
-        label: id,
-        detectLegacyState: () => {
-          observed.push(`detect ${id}`);
-          return { preview: ["pending"] };
-        },
-        migrateLegacyState: () => {
-          observed.push(`migrate ${id}`);
-          return { changes: [`migrated ${id}`], warnings: [] };
-        },
+      postEntry("owner", id, {
+        detectLegacyState: detect,
+        migrateLegacyState: migrate,
       }),
     );
 
@@ -256,20 +241,29 @@ it.each([
       warnings: [expect.stringContaining("immutable action order")],
       warningDisposition: undefined,
     });
-    expect(observed).toEqual([]);
+    expect(detect).not.toHaveBeenCalled();
+    expect(migrate).not.toHaveBeenCalled();
   },
 );
 
-it.each(["none", "later-action", "later-warning", "detector", "lease-settlement"] as const)(
+it.each([
+  ["none", undefined],
+  ["later-action", "second action failed"],
+  ["later-warning", "refusal"],
+  ["detector", "second detector failed"],
+  [
+    "lease-settlement",
+    "lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
+  ],
+] as const)(
   "preserves completed mutations and replay truth when failure is %s",
-  async (failure) => {
+  async (failure, message) => {
     const env = await repairEnv();
     const root = env.OPENCLAW_STATE_DIR;
     const markers = [path.join(root, "first"), path.join(root, "second")] as const;
     controls.failSettlement = failure === "lease-settlement";
     controls.entries = markers.map((marker, index) =>
-      postEntry("settlement-owner", {
-        id: `action-${index}`,
+      postEntry("settlement-owner", `action-${index}`, {
         label: `Action ${index}`,
         detectLegacyState: () => {
           if (failure === "detector" && index === 1) {
@@ -313,15 +307,7 @@ it.each(["none", "later-action", "later-warning", "detector", "lease-settlement"
       expect(first.warningDisposition).toBe("recoverable");
     } else {
       expect(first.warningDisposition).toBeUndefined();
-      expect(first.warnings.join("\n")).toContain(
-        failure === "later-action"
-          ? "second action failed"
-          : failure === "later-warning"
-            ? "refusal"
-            : failure === "detector"
-              ? "second detector failed"
-              : "lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
-      );
+      expect(first.warnings.join("\n")).toContain(message);
     }
 
     const replay = await repairPluginState(params);
@@ -336,21 +322,18 @@ it.each(["none", "later-action", "later-warning", "detector", "lease-settlement"
 it("runs default-phase detectors only when completion certification has a consumer", async () => {
   const env = await repairEnv();
   const detected: string[] = [];
-  controls.entries = (["default", "after-session-repair"] as const).map((phase) => ({
-    pluginId: "owner",
-    channelIds: [],
-    trustedForDurableStores: false,
-    migration: {
-      id: `${phase}-action`,
-      label: `${phase} action`,
-      ...(phase === "after-session-repair" ? { phase } : {}),
-      detectLegacyState: () => {
-        detected.push(phase);
-        return null;
-      },
-      migrateLegacyState: () => ({ changes: [], warnings: [] }),
-    },
-  }));
+  controls.entries = (["default", "after-session-repair"] as const).map((phase) =>
+    Object.assign(
+      entry("owner", `${phase}-action`, {
+        ...(phase === "after-session-repair" ? { phase } : {}),
+        detectLegacyState: () => {
+          detected.push(phase);
+          return null;
+        },
+      }),
+      { trustedForDurableStores: false },
+    ),
+  );
   const params = repairParams(env);
 
   // Nothing deferred and no retained sources: the fresh-install shape.

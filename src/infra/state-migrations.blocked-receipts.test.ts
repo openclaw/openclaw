@@ -48,13 +48,23 @@ function fixture() {
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
   };
+  const emitted: LegacyStateMigrationStepReceipt[] = [];
   return {
     root,
     stateDir,
     configPath,
     bundledRoot,
     env,
-    params: { cfg, env, homedir: () => root, legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES },
+    emitted,
+    migrate: (options: Partial<Parameters<typeof autoMigrateLegacyState>[0]> = {}) =>
+      autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        onStepReceipt: (receipt) => emitted.push(receipt),
+        ...options,
+      }),
   };
 }
 
@@ -64,6 +74,9 @@ function blockedBy(stepId: string, message: unknown, code = "step-refused") {
     refusal: { code: "blocked-by-prior-refusal" },
     originatingRefusal: { stepId, code, message },
   };
+}
+function refused(code = "step-refused") {
+  return { outcome: "refused", changes: [], refusal: { code } };
 }
 function receiptById(receipts: LegacyStateMigrationStepReceipt[], id: string | undefined) {
   return receipts.find((receipt) => receipt.id === id);
@@ -77,7 +90,7 @@ it.each([
 ] as const)(
   "records $input TUI refusal facts (heartbeat exits first: $exitHeartbeat)",
   async ({ input, exitHeartbeat }) => {
-    const { root, stateDir, configPath, env, params } = fixture();
+    const { root, stateDir, configPath, env, migrate, emitted } = fixture();
     const tuiPath = path.join(stateDir, "tui", "last-session.json");
     const tuiBytes =
       input === "malformed"
@@ -115,24 +128,14 @@ it.each([
         return worker;
       });
     }
-    const emitted: LegacyStateMigrationStepReceipt[] = [];
-    const result = await autoMigrateLegacyState({
-      ...params,
-      doctorOnlyStateMigrations: true,
-      onStepReceipt: (receipt) => emitted.push(receipt),
-    });
+    const { stepReceipts: receipts, warnings } = await migrate({ doctorOnlyStateMigrations: true });
     await Promise.all(terminated);
     expect(terminated).toHaveLength(exitHeartbeat ? 1 : 0);
-    const tui = receiptById(result.stepReceipts, "tui-last-session");
-    expect(tui, JSON.stringify(tui?.originatingRefusal)).toMatchObject({
-      outcome: "refused",
-      changes: [],
-      refusal: { code: input === "malformed" ? "step-refused" : "blocked-by-prior-refusal" },
-    });
-    const firstRefusalIndex = result.stepReceipts.findIndex(
-      (receipt) => receipt.outcome === "refused",
-    );
-    const firstRefusal = result.stepReceipts[firstRefusalIndex];
+    const tui = receiptById(receipts, "tui-last-session");
+    const tuiCode = input === "malformed" ? "step-refused" : "blocked-by-prior-refusal";
+    expect(tui).toMatchObject(refused(tuiCode));
+    const firstRefusalIndex = receipts.findIndex((receipt) => receipt.outcome === "refused");
+    const firstRefusal = receipts[firstRefusalIndex];
     const origin = tui?.originatingRefusal;
     if (exitHeartbeat) {
       expect(origin).toMatchObject({
@@ -143,60 +146,47 @@ it.each([
     }
     if (origin) {
       expect(origin).toEqual({ stepId: firstRefusal?.id, ...firstRefusal?.refusal });
-      expect(result.warnings).toContain(origin.message);
-      const tail = result.stepReceipts.slice(firstRefusalIndex + 1);
-      for (const receipt of tail) {
+      expect(warnings).toContain(origin.message);
+      for (const receipt of receipts.slice(firstRefusalIndex + 1)) {
         expect(receipt).toMatchObject({
-          outcome: "refused",
-          changes: [],
+          ...refused(receipt.id === "tui-last-session" ? tuiCode : "blocked-by-prior-refusal"),
           originatingRefusal: origin,
-          refusal: {
-            code:
-              receipt.id === "tui-last-session" && input === "malformed"
-                ? "step-refused"
-                : "blocked-by-prior-refusal",
-          },
         });
       }
     } else {
       expect(firstRefusal?.id).toBe("tui-last-session");
-      expectPlanReceiptDescriptorsToMatch({ plan, receipts: result.stepReceipts });
-      expect(result.warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
+      expectPlanReceiptDescriptorsToMatch({ plan, receipts });
+      expect(warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
     }
     if (input === "malformed") {
       expect(tui?.warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
-      const failure = new DoctorStateMigrationRefusalError(result.stepReceipts);
+      const failure = new DoctorStateMigrationRefusalError(receipts);
       expect(failure.failureFacts).toContainEqual({
         check: "tui-last-session",
         code: "step-refused",
         message: expect.stringContaining("Failed reading legacy TUI last-session state"),
       });
-      expect(failure.stepReceipts).toEqual(result.stepReceipts);
+      expect(failure.stepReceipts).toEqual(receipts);
     }
-    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
-      plan.steps.map((step) => step.id),
-    );
-    expect(receiptById(result.stepReceipts, "exec-approvals")).toMatchObject({
-      outcome: "refused",
-      changes: [],
+    expect(receipts.map((receipt) => receipt.id)).toEqual(plan.steps.map((step) => step.id));
+    expect(receiptById(receipts, "exec-approvals")).toMatchObject({
+      ...refused("blocked-by-prior-refusal"),
       refusal: {
         code: "blocked-by-prior-refusal",
         message: expect.stringContaining(`prior step "${origin?.stepId ?? "tui-last-session"}"`),
       },
     });
-    expect(emitted).toEqual(result.stepReceipts);
+    expect(emitted).toEqual(receipts);
     expect(fs.readFileSync(execPath, "utf8")).toBe(execBytes);
-    if (input === "absent") {
-      expect(fs.existsSync(tuiPath)).toBe(false);
-    } else {
-      expect(fs.readFileSync(tuiPath, "utf8")).toBe(tuiBytes);
-    }
+    expect(input === "absent" ? fs.existsSync(tuiPath) : fs.readFileSync(tuiPath, "utf8")).toBe(
+      input === "absent" ? false : tuiBytes,
+    );
     expect(readConfigMachineState("tui.lastSession.fixture", { env })).toBeUndefined();
   },
 );
 
 it("names the plugin refusal on the adjacent automatic-only step and Doctor error", async () => {
-  const { bundledRoot, params } = fixture();
+  const { bundledRoot, migrate, emitted } = fixture();
   const pluginRoot = path.join(bundledRoot, "refusing-owner");
   fs.mkdirSync(pluginRoot);
   fs.writeFileSync(
@@ -217,11 +207,7 @@ detectLegacyState: () => null,
 migrateLegacyState: () => { throw new Error("unapproved migration ran"); },
 }];\n`,
   );
-  const emitted: LegacyStateMigrationStepReceipt[] = [];
-  const result = await autoMigrateLegacyState({
-    ...params,
-    onStepReceipt: (receipt) => emitted.push(receipt),
-  });
+  const result = await migrate();
   const blockerIndex = result.stepReceipts.findIndex((step) => step.id === "plugin-doctor-state");
   const primaryMessage =
     "Refused plugin migrations that do not match the immutable action order and authority declared by refusing-owner.";
@@ -245,7 +231,7 @@ it.each([
   { kind: "returned", code: "step-refused", message: "uses newer schema version 999" },
   { kind: "thrown", code: "step-threw", message: "Schema inspection is unavailable" },
 ])("carries a $kind schema refusal through preparation to the automatic tail", async (failure) => {
-  const { env, params } = fixture();
+  const { env, migrate, emitted } = fixture();
   if (failure.kind === "returned") {
     const databasePath = resolveOpenClawStateSqlitePath(env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -257,20 +243,15 @@ it.each([
       throw new Error(failure.message);
     });
   }
-  const receipts: LegacyStateMigrationStepReceipt[] = [];
-
-  await expect(
-    autoMigrateLegacyState({ ...params, onStepReceipt: (receipt) => receipts.push(receipt) }),
-  ).rejects.toThrow(failure.message);
-  expect(receiptById(receipts, "legacy-main-session-keys")).toMatchObject(
+  await expect(migrate()).rejects.toThrow(failure.message);
+  expect(receiptById(emitted, "legacy-main-session-keys")).toMatchObject(
     blockedBy("state-schema", expect.stringContaining(failure.message), failure.code),
   );
 });
 
 it("carries a prelude refusal into every later Doctor receipt", async () => {
-  const { params } = fixture();
-  const result = await autoMigrateLegacyState({
-    ...params,
+  const { migrate } = fixture();
+  const result = await migrate({
     doctorOnlyStateMigrations: true,
     legacySessionSurfaces: { surfaces: [], failures: ["Session migration owner is unavailable"] },
   });

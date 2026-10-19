@@ -72,8 +72,8 @@ export function createLegacyDatabaseFixture(params: {
     : openOpenClawAgentDatabase(options).path;
   closeOpenClawAgentDatabasesForTest();
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = openNodeSqliteDatabase(databasePath);
-  try {
+  {
+    using database = openNodeSqliteDatabase(databasePath);
     if (legacy) {
       seedOpenClawAgentSchemaV21(database, agentId);
     }
@@ -143,8 +143,6 @@ export function createLegacyDatabaseFixture(params: {
         reconcileSessionTranscriptIndexInTransaction(database, sessionId);
       }
     }
-  } finally {
-    database.close();
   }
   registerOpenClawAgentDatabase({
     agentId,
@@ -210,54 +208,50 @@ function seedHistoricalTranscriptProjection(
 
 export function readDatabaseSnapshot(databasePath: string) {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    const select = (query: string) => database.prepare(query).all();
-    const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-    const rows = executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
-        .selectFrom("transcript_events")
-        .select(["session_id", "seq", "created_at"])
-        .select(
-          (version.user_version < 22
-            ? sql.ref<string>("transcript_events.event_json") // kysely-allow-raw: frozen pre22 TEXT NOT NULL.
-            : transcriptEventJsonSql(database)
-          ).as("event_json"),
-        )
-        .orderBy("session_id")
-        .orderBy("seq"),
-    ).rows;
-    const trajectoryRows = select(
-      "SELECT session_id,seq,run_id,event_json,created_at FROM trajectory_runtime_events ORDER BY session_id,seq",
-    ) as Array<{
-      session_id: string;
-      seq: number;
-      run_id: string | null;
-      event_json: string;
-      created_at: number;
-    }>;
-    return {
-      activeBranch: select(
-        "SELECT session_id,active_position,event_seq,message_position FROM session_transcript_active_events ORDER BY session_id,active_position",
-      ),
-      generations: select(
-        "SELECT session_id,generation FROM transcript_rewrite_watermarks ORDER BY session_id",
-      ),
-      identities: select(
-        "SELECT session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at FROM transcript_event_identities ORDER BY session_id,seq",
-      ),
-      rows,
-      trajectoryCount: trajectoryRows.length,
-      trajectoryRows,
-      version,
-      windows: select(
-        "SELECT session_id,session_key,created_at,updated_at,transcript_observed_at FROM session_windows ORDER BY session_id",
-      ),
-    };
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(databasePath);
+  const select = (query: string) => database.prepare(query).all();
+  const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
+  const rows = executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
+      .selectFrom("transcript_events")
+      .select(["session_id", "seq", "created_at"])
+      .select(
+        (version.user_version < 22
+          ? sql.ref<string>("transcript_events.event_json") // kysely-allow-raw: frozen pre22 TEXT NOT NULL.
+          : transcriptEventJsonSql(database)
+        ).as("event_json"),
+      )
+      .orderBy("session_id")
+      .orderBy("seq"),
+  ).rows;
+  const trajectoryRows = select(
+    "SELECT session_id,seq,run_id,event_json,created_at FROM trajectory_runtime_events ORDER BY session_id,seq",
+  ) as Array<{
+    session_id: string;
+    seq: number;
+    run_id: string | null;
+    event_json: string;
+    created_at: number;
+  }>;
+  return {
+    activeBranch: select(
+      "SELECT session_id,active_position,event_seq,message_position FROM session_transcript_active_events ORDER BY session_id,active_position",
+    ),
+    generations: select(
+      "SELECT session_id,generation FROM transcript_rewrite_watermarks ORDER BY session_id",
+    ),
+    identities: select(
+      "SELECT session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at FROM transcript_event_identities ORDER BY session_id,seq",
+    ),
+    rows,
+    trajectoryCount: trajectoryRows.length,
+    trajectoryRows,
+    version,
+    windows: select(
+      "SELECT session_id,session_key,created_at,updated_at,transcript_observed_at FROM session_windows ORDER BY session_id",
+    ),
+  };
 }
 
 export function writeArchive(filePath: string, events: FixtureEvent[], compressed: boolean): void {

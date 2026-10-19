@@ -19,16 +19,10 @@ const read32 = (buffer: Buffer, offset: number) => buffer[`readUInt32${byteOrder
 const write32 = (buffer: Buffer, value: number, offset: number) =>
   buffer[`writeUInt32${byteOrder}`](value, offset);
 
-function sha256(value: string | Buffer): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function durableHashes(databasePath: string) {
-  return {
-    database: sha256(fs.readFileSync(databasePath)),
-    wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-  };
-}
+const sha256 = (value: string | Buffer) =>
+  `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const durableHashes = (databasePath: string) =>
+  ["", "-wal"].map((suffix) => sha256(fs.readFileSync(databasePath + suffix)));
 
 function openWal(databasePath: string) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -113,10 +107,7 @@ it("defers the Workshop proposal export without touching copied proposal files",
   const fixture = await makeFixture();
   const draft = path.join(
     fixture.stateDir,
-    "skill-workshop",
-    "proposals",
-    "retained-workshop-20260905-1234567890",
-    "PROPOSAL.md",
+    "skill-workshop/proposals/retained-workshop-20260905-1234567890/PROPOSAL.md",
   );
   fs.mkdirSync(path.dirname(draft), { recursive: true });
   fs.writeFileSync(draft, "---\nname: retained\ndescription: Retained skill\n---\n");
@@ -141,27 +132,23 @@ it.each([false, true])("plans without mutating WAL state (missing shm: %s)", asy
   const fixture = await makeFixture();
   const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
   const sourcePath = missing ? path.join(fixture.root, "wal-source.sqlite") : databasePath;
-  const database = openWal(sourcePath);
-  try {
-    if (missing) {
-      copyWal(sourcePath, databasePath);
-    }
-    const durableBefore = durableHashes(databasePath);
-    const shmPath = `${databasePath}-shm`;
-    const sharedMemoryBefore = missing ? undefined : sha256(fs.readFileSync(shmPath));
-    const plan = await fixture.plan();
-    expect(durableHashes(databasePath)).toEqual(durableBefore);
-    expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
-    if (missing) {
-      expect(fs.existsSync(shmPath)).toBe(false);
-    } else {
-      expect(sha256(fs.readFileSync(shmPath))).toBe(sharedMemoryBefore);
-      const stateDigest = requireDigest(plan);
-      database.exec("INSERT INTO planner_probe(value) VALUES ('durable-change');");
-      expect((await fixture.plan(stateDigest)).refusal?.code).toBe("snapshot-identity-mismatch");
-    }
-  } finally {
-    database.close();
+  using database = openWal(sourcePath);
+  if (missing) {
+    copyWal(sourcePath, databasePath);
+  }
+  const durableBefore = durableHashes(databasePath);
+  const shmPath = `${databasePath}-shm`;
+  const sharedMemoryBefore = missing ? undefined : sha256(fs.readFileSync(shmPath));
+  const plan = await fixture.plan();
+  expect(durableHashes(databasePath)).toEqual(durableBefore);
+  expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
+  if (missing) {
+    expect(fs.existsSync(shmPath)).toBe(false);
+  } else {
+    expect(sha256(fs.readFileSync(shmPath))).toBe(sharedMemoryBefore);
+    const stateDigest = requireDigest(plan);
+    database.exec("INSERT INTO planner_probe(value) VALUES ('durable-change');");
+    expect((await fixture.plan(stateDigest)).refusal?.code).toBe("snapshot-identity-mismatch");
   }
 });
 
@@ -208,40 +195,36 @@ it("binds fake files and directories at a SQLite shared-memory path", async () =
 it.each([false, true])("binds wal-index changes (forged structure: %s)", async (forged) => {
   const fixture = await makeFixture();
   const sourcePath = path.join(fixture.root, "wal-index-source.sqlite");
-  const source = openWal(sourcePath);
-  try {
-    const databasePath = path.join(fixture.stateDir, "copied.sqlite");
-    copyWal(sourcePath, databasePath);
-    const index = Buffer.alloc(32_768, 0x5a);
-    fs.readFileSync(`${sourcePath}-shm`).copy(index, 0, 0, 48);
-    if (forged) {
-      index.writeUInt8(index.readUInt8(13) ^ 1, 13);
-      index[`writeUInt16${byteOrder}`](1, 14);
-      write32(index, 0xffff_ffff, 16);
-      writeWalIndexHeaderChecksum(index);
-    }
+  using source = openWal(sourcePath);
+  const databasePath = path.join(fixture.stateDir, "copied.sqlite");
+  copyWal(sourcePath, databasePath);
+  const index = Buffer.alloc(32_768, 0x5a);
+  fs.readFileSync(`${source.location()}-shm`).copy(index, 0, 0, 48);
+  if (forged) {
+    index.writeUInt8(index.readUInt8(13) ^ 1, 13);
+    index[`writeUInt16${byteOrder}`](1, 14);
+    write32(index, 0xffff_ffff, 16);
+    writeWalIndexHeaderChecksum(index);
+  }
+  index.copy(index, 48, 0, 48);
+  const sharedMemoryPath = `${databasePath}-shm`;
+  fs.writeFileSync(sharedMemoryPath, index);
+  const before = await captureIdentity(fixture);
+  if (forged) {
+    write32(index, 0xffff_fffe, 16);
+    writeWalIndexHeaderChecksum(index);
     index.copy(index, 48, 0, 48);
-    const sharedMemoryPath = `${databasePath}-shm`;
+  } else {
+    index.writeUInt8(index.readUInt8(200) ^ 0xff, 200);
+  }
+  fs.writeFileSync(sharedMemoryPath, index);
+  const after = await captureIdentity(fixture);
+  expect(after.stateDigest).not.toBe(before.stateDigest);
+  if (forged) {
+    index.writeUInt8(index.readUInt8(120) ^ 0xff, 120);
+    index.writeUInt8(index.readUInt8(132) ^ 0xff, 132);
     fs.writeFileSync(sharedMemoryPath, index);
-    const before = await captureIdentity(fixture);
-    if (forged) {
-      write32(index, 0xffff_fffe, 16);
-      writeWalIndexHeaderChecksum(index);
-      index.copy(index, 48, 0, 48);
-    } else {
-      index.writeUInt8(index.readUInt8(200) ^ 0xff, 200);
-    }
-    fs.writeFileSync(sharedMemoryPath, index);
-    const after = await captureIdentity(fixture);
-    expect(after.stateDigest).not.toBe(before.stateDigest);
-    if (forged) {
-      index.writeUInt8(index.readUInt8(120) ^ 0xff, 120);
-      index.writeUInt8(index.readUInt8(132) ^ 0xff, 132);
-      fs.writeFileSync(sharedMemoryPath, index);
-      const checkpoint = await captureIdentity(fixture);
-      expect(checkpoint.stateDigest).not.toBe(after.stateDigest);
-    }
-  } finally {
-    source.close();
+    const checkpoint = await captureIdentity(fixture);
+    expect(checkpoint.stateDigest).not.toBe(after.stateDigest);
   }
 });

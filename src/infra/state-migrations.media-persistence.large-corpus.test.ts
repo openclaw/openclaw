@@ -26,16 +26,10 @@ const tempDir = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 function runMigration(stateDir: string, script: string, memoryMb?: number): unknown {
+  const heapLimit = memoryMb ? [`--max-old-space-size=${memoryMb}`] : [];
   const result = spawnSync(
     memoryMb ? resolveTestNodeExecPath() : process.execPath,
-    [
-      ...(memoryMb ? [`--max-old-space-size=${memoryMb}`] : []),
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "-e",
-      script,
-    ],
+    [...heapLimit, "--import", "tsx", "--input-type=module", "-e", script],
     { cwd: process.cwd(), encoding: "utf8", env: migrationChildEnv(stateDir), timeout: 120_000 },
   );
   expect(result.status, result.stderr).toBe(0);
@@ -55,12 +49,8 @@ function createWindows(stateDir: string, prefix: string, count: number) {
     SELECT 'agent:main:'||?||i, ?||i,
       json_object('sessionId',?||i,'updatedAt',i+1), 1, i+1 FROM n`)
     .run(count, prefix, prefix, prefix);
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
-    SELECT ?||i, 'agent:main:'||?||i, i+1, i+1 FROM n`)
-    .run(count, prefix, prefix);
+  database.db.exec(`INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
+    SELECT current_session_id,session_key,updated_at,updated_at FROM session_nodes`);
   return database;
 }
 
@@ -82,12 +72,20 @@ const MEDIA_CARRIER_SCRIPT = String.raw`
   const mediaCarrier = (message) => [message.__openclaw?.media?.[0]?.path,
     Object.hasOwn(message, "MediaPath")];
 `;
-const CHILD_SCRIPT = String.raw`
-  import { createHash } from "node:crypto";
+const CHILD_IMPORTS = String.raw`
   import { DatabaseSync } from "node:sqlite";
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
-  import { migrateLegacyMediaPersistence } from "./src/infra/state-migrations.media-persistence.ts";
   import { readSqliteTranscriptPayload, sqliteTranscriptPayloadColumns } from "./scripts/lib/sqlite-transcript-payload.mjs";
+`;
+const MIGRATE_SCRIPT = String.raw`
+  const migration = await migrateLegacyMediaPersistence({
+    configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
+  });
+`;
+const CHILD_SCRIPT = String.raw`
+  import { createHash } from "node:crypto";
+  import { migrateLegacyMediaPersistence } from "./src/infra/state-migrations.media-persistence.ts";
+  ${CHILD_IMPORTS}
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
   let db = new DatabaseSync(path, { readOnly: true });
   const read = (session, seq) => readSqliteTranscriptPayload(db.prepare(
@@ -99,9 +97,7 @@ const CHILD_SCRIPT = String.raw`
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const before = [hash(read("large-corpus-20", 64)), hash(read("large-corpus-39", 127))];
   db.close();
-  const migration = await migrateLegacyMediaPersistence({
-    configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
-  });
+  ${MIGRATE_SCRIPT}
   db = new DatabaseSync(path, { readOnly: true });
   const count = (table) => db.prepare("SELECT COUNT(*) count FROM " + table).get().count;
   const first = JSON.parse(read("large-corpus-0", 0));
@@ -127,15 +123,11 @@ const SESSION_WINDOW_CHILD_SCRIPT = String.raw`
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
   import { migrateLegacyMediaPersistence } from "./src/infra/state-migrations.media-persistence.ts";
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
-  const migration = await migrateLegacyMediaPersistence({
-    configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
-  });
+  ${MIGRATE_SCRIPT}
   process.stdout.write(JSON.stringify(migration) + "\n");
 `;
 const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
-  import { DatabaseSync } from "node:sqlite";
-  import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
-  import { readSqliteTranscriptPayload, sqliteTranscriptPayloadColumns } from "./scripts/lib/sqlite-transcript-payload.mjs";
+  ${CHILD_IMPORTS}
   const originalPrepare = DatabaseSync.prototype.prepare;
   let mediaSelects = 0;
   DatabaseSync.prototype.prepare = function (sql) {
@@ -149,9 +141,7 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
     "./src/infra/state-migrations.media-persistence.ts"
   );
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
-  const migration = await migrateLegacyMediaPersistence({
-    configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
-  });
+  ${MIGRATE_SCRIPT}
   const migrationSelects = mediaSelects;
   const db = new DatabaseSync(path, { readOnly: true });
   const transcript = JSON.parse(readSqliteTranscriptPayload(db.prepare(

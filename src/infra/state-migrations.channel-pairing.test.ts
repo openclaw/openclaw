@@ -40,7 +40,10 @@ async function fixture(files: Record<string, unknown>, options: DetectionOptions
   const sourceDir = resolveOAuthDir(env, stateDir);
   fs.mkdirSync(sourceDir, { recursive: true });
   for (const [name, value] of Object.entries(files)) {
-    fs.writeFileSync(path.join(sourceDir, name), JSON.stringify(value));
+    fs.writeFileSync(
+      path.join(sourceDir, name),
+      typeof value === "string" ? value : JSON.stringify(value),
+    );
   }
   const detected = detectLegacyChannelPairingState({ sourceDir, ...options });
   return {
@@ -48,7 +51,25 @@ async function fixture(files: Record<string, unknown>, options: DetectionOptions
     sourceDir,
     detected,
     migrate: () => migrateLegacyChannelPairingState({ detected, env }),
+    read: (name: string) => fs.readFileSync(path.join(sourceDir, name), "utf8"),
+    exists: (name: string) => fs.existsSync(path.join(sourceDir, name)),
   };
+}
+
+function expectPreserved(
+  state: Awaited<ReturnType<typeof fixture>>,
+  names: string[],
+  reason: "ambiguous" | "unresolved",
+) {
+  const warnings = names.map((name) =>
+    expect.stringContaining(
+      `Legacy channel allowFrom channel/account is ${reason}; left in place at ${path.join(state.sourceDir, name)}`,
+    ),
+  );
+  const result = state.migrate();
+  expect(result).toEqual({ changes: [], warnings: expect.arrayContaining(warnings) });
+  expect(result.warnings).toHaveLength(names.length);
+  expect(names.every(state.exists)).toBe(true);
 }
 
 it.each([
@@ -56,38 +77,31 @@ it.each([
   { removedMalformed: true, configuredMalformed: false },
   { removedMalformed: false, configuredMalformed: true },
 ])(
-  "archives removed account state (malformed: $removedMalformed, configured malformed file: $configuredMalformed)",
+  "archives removed accounts: $removedMalformed / $configuredMalformed",
   async ({ removedMalformed, configuredMalformed }) => {
     const filename = "custom-channel-removed-allowFrom.json";
+    const configuredFilename = "custom-channel-active-allowFrom.json";
+    const original = removedMalformed ? "{broken\n" : '["former-user"]\n';
     const state = await fixture(
       {
-        [filename]: ["former-user"],
-        ...(configuredMalformed ? { "custom-channel-active-allowFrom.json": null } : {}),
+        [filename]: original,
+        [`${filename}.migrated`]: original,
+        ...(configuredMalformed ? { [configuredFilename]: "{broken\n" } : {}),
       },
       accounts({ "custom-channel": ["active"] }, ["custom-channel"]),
     );
     const source = path.join(state.sourceDir, filename);
-    const original = removedMalformed ? "{broken\n" : '["former-user"]\n';
-    fs.writeFileSync(source, original);
-    fs.writeFileSync(`${source}.migrated`, original);
-    const configuredSource = path.join(state.sourceDir, "custom-channel-active-allowFrom.json");
-    if (configuredMalformed) {
-      fs.writeFileSync(configuredSource, "{broken\n");
-    }
     const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
     const result = await runLegacyStateMigrationSteps(
-      [
-        { id: "channel-pairing", run: state.migrate },
-        { id: "later-repair", run: laterRepair },
-      ].map((step) =>
-        Object.assign(step, {
-          phase: "final" as const,
-          source: [],
-          target: [],
-          requiredness: "required" as const,
-          reversibility: "checkpoint-required" as const,
-        }),
-      ),
+      [state.migrate, laterRepair].map((run, index) => ({
+        id: index === 0 ? "channel-pairing" : "later-repair",
+        run,
+        phase: "final" as const,
+        source: [],
+        target: [],
+        requiredness: "required" as const,
+        reversibility: "checkpoint-required" as const,
+      })),
     );
     expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(
       configuredMalformed ? ["refused", "refused"] : ["warning", "completed"],
@@ -96,11 +110,13 @@ it.each([
     const warnings = result.receipts[0]?.warnings.join("\n");
     expect(warnings).toContain(source);
     expect(warnings).toContain(`${source}.migrated.2`);
-    expect(fs.existsSync(source)).toBe(false);
-    expect(fs.readFileSync(`${source}.migrated`, "utf8")).toBe(original);
-    expect(fs.readFileSync(`${source}.migrated.2`, "utf8")).toBe(original);
+    expect(state.exists(filename)).toBe(false);
+    expect([state.read(`${filename}.migrated`), state.read(`${filename}.migrated.2`)]).toEqual([
+      original,
+      original,
+    ]);
     if (configuredMalformed) {
-      expect(fs.readFileSync(configuredSource, "utf8")).toBe("{broken\n");
+      expect(state.read(configuredFilename)).toBe("{broken\n");
     }
     expect(readPairing("custom-channel", state.env).allowFrom).toEqual({});
   },
@@ -167,20 +183,17 @@ it("imports a built-in explicit default account without channel config", async (
     changes: ["Migrated 3 whatsapp/default allowFrom entries → shared SQLite state"],
   });
   expect(fs.readdirSync(state.sourceDir)).toEqual([]);
-  expect(readPairing("whatsapp", state.env).allowFrom).toEqual({
-    default: allowFrom,
-  });
+  expect(readPairing("whatsapp", state.env).allowFrom).toEqual({ default: allowFrom });
 });
 
 it("merges authoritative SQLite rows and keeps unreadable sources", async () => {
   const state = await fixture(
     {
       "custom-channel-primary-allowFrom.json": { version: 1, allowFrom: ["imported"] },
-      "custom-channel-pairing.json": null,
+      "custom-channel-pairing.json": "{broken\n",
     },
     accounts({ "custom-channel": ["primary"] }, ["custom-channel"]),
   );
-  fs.writeFileSync(path.join(state.sourceDir, "custom-channel-pairing.json"), "{broken\n");
   writeChannelPairingStateSnapshot(
     "custom-channel",
     { version: 1, requests: [request], allowFrom: { primary: ["kept"] } },
@@ -198,13 +211,13 @@ it("merges authoritative SQLite rows and keeps unreadable sources", async () => 
 });
 
 it("leaves case-folded filename collision sets in place", async () => {
-  const names = [
-    "telegram-AmbiguousAcct-allowFrom.json",
-    "telegram-AMBIGUOUSACCT-allowFrom.json",
-    "telegram-exactacct-allowFrom.json",
-    "telegram-ExactAcct-allowFrom.json",
-  ];
-  const state = await fixture({}, accounts({ telegram: ["ambiguousacct", "exactacct"] }));
+  const names = ["Ab", "AB", "xy", "Xy"].map((account) => `telegram-${account}-allowFrom.json`);
+  const state = await fixture(
+    Object.fromEntries(
+      names.map((name, index) => [name, { version: 1, allowFrom: [`user-${index}`] }]),
+    ),
+    accounts({ telegram: ["ab", "xy"] }),
+  );
   const marker = path.join(state.sourceDir, "case-check");
   fs.writeFileSync(marker, "case");
   const caseSensitive = !fs.existsSync(path.join(state.sourceDir, "CASE-CHECK"));
@@ -213,77 +226,29 @@ it("leaves case-folded filename collision sets in place", async () => {
     expect(caseSensitive).toBe(false);
     return;
   }
-  for (const [index, name] of names.entries()) {
-    fs.writeFileSync(
-      path.join(state.sourceDir, name),
-      JSON.stringify({ version: 1, allowFrom: [`user-${index}`] }),
-    );
-  }
-  const result = migrateLegacyChannelPairingState({
-    env: state.env,
-    detected: detectLegacyChannelPairingState({
-      sourceDir: state.sourceDir,
-      ...accounts({ telegram: ["ambiguousacct", "exactacct"] }),
-    }),
-  });
-  expect(result.changes).toEqual([]);
-  expect(result.warnings).toHaveLength(names.length);
-  expect(result.warnings).toEqual(
-    expect.arrayContaining(
-      names.map((name) =>
-        expect.stringContaining(
-          `Legacy channel allowFrom channel/account is ambiguous; left in place at ${path.join(state.sourceDir, name)}`,
-        ),
-      ),
-    ),
-  );
-  expect(names.every((name) => fs.existsSync(path.join(state.sourceDir, name)))).toBe(true);
+  expectPreserved(state, names, "ambiguous");
   expect(readPairing("telegram", state.env).allowFrom).toEqual({});
 });
 
-it.each<[string, Record<string, string[]>, string[], string[], "unresolved" | "ambiguous"]>([
-  ["telegram-ops..bot", { telegram: ["ops_bot"] }, [], ["telegram"], "unresolved"],
-  ["telegram-DEFAULT", { telegram: ["default"] }, [], ["telegram"], "unresolved"],
-  [
-    "custom-channel-default",
-    { telegram: [] },
-    ["custom-channel"],
-    ["custom-channel"],
-    "unresolved",
-  ],
-  [
-    "telegram-business",
-    { telegram: ["business"] },
-    ["telegram-business"],
-    ["telegram", "telegram-business"],
-    "ambiguous",
-  ],
+it.each<[string, Record<string, string[]>, string[], "unresolved" | "ambiguous"]>([
+  ["telegram-ops..bot", { telegram: ["ops_bot"] }, [], "unresolved"],
+  ["telegram-DEFAULT", { telegram: ["default"] }, [], "unresolved"],
+  ["custom-channel-default", { telegram: [] }, ["custom-channel"], "unresolved"],
+  ["telegram-business", { telegram: ["business"] }, ["telegram-business"], "ambiguous"],
   [
     "telegram-business-ops..bot",
     { telegram: [], "telegram-business": ["ops_bot"] },
     ["telegram-business"],
-    ["telegram", "telegram-business"],
     "unresolved",
   ],
-])(
-  "preserves account source %s",
-  async (stem, accountIds, configuredChannelIds, channels, reason) => {
-    const filename = `${stem}-allowFrom.json`;
-    const state = await fixture(
-      { [filename]: { version: 1, allowFrom: ["1003"] } },
-      accounts(accountIds, configuredChannelIds),
-    );
-    expect(state.migrate()).toEqual({
-      changes: [],
-      warnings: [
-        expect.stringContaining(
-          `Legacy channel allowFrom channel/account is ${reason}; left in place`,
-        ),
-      ],
-    });
-    expect(fs.existsSync(path.join(state.sourceDir, filename))).toBe(true);
-    for (const channel of channels) {
-      expect(readPairing(channel, state.env).allowFrom).toEqual({});
-    }
-  },
-);
+])("preserves account source %s", async (stem, accountIds, configuredChannelIds, reason) => {
+  const filename = `${stem}-allowFrom.json`;
+  const state = await fixture(
+    { [filename]: { version: 1, allowFrom: ["1003"] } },
+    accounts(accountIds, configuredChannelIds),
+  );
+  expectPreserved(state, [filename], reason);
+  for (const channel of new Set([...Object.keys(accountIds), ...configuredChannelIds])) {
+    expect(readPairing(channel, state.env).allowFrom).toEqual({});
+  }
+});

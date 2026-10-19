@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
@@ -32,7 +32,6 @@ const directiveLine = (raw: string, owner: string) =>
   });
 
 afterEach(() => {
-  vi.restoreAllMocks();
   for (const database of databases.splice(0)) {
     clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
@@ -46,10 +45,7 @@ function fixture(emptySessionIds = false) {
   const database = new DatabaseSync(pathname);
   databases.push(database);
   ensureSessionTranscriptArchiveSchema(database);
-  database.exec(`CREATE TABLE schema_meta (
-    meta_key TEXT PRIMARY KEY, role TEXT, agent_id TEXT, schema_version INTEGER,
-    app_version TEXT, created_at INTEGER, updated_at INTEGER
-  )`);
+  database.exec("CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT)");
   const insert = database.prepare(`INSERT INTO session_transcript_archives
     (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
       archive_name,created_at,published_at)
@@ -74,8 +70,6 @@ function fixture(emptySessionIds = false) {
     assertOwnedInTransaction() {},
     renew() {},
   };
-  const run = (operation: () => Promise<unknown>) =>
-    runWithAgentDatabaseMaintenanceAuthority(authority, path.join(root, "state.sqlite"), operation);
   const options = {
     agentId: "main",
     database,
@@ -92,32 +86,41 @@ function fixture(emptySessionIds = false) {
         .run(JSON.stringify(cursor));
     },
   };
-  const cursor = () => {
+  const state = () => {
     const row = database
-      .prepare("SELECT app_version FROM schema_meta WHERE meta_key='cursor'")
-      .get();
-    return row ? JSON.parse(String(row.app_version)) : undefined;
+      .prepare(`SELECT count(*) AS rewritten,
+      (SELECT app_version FROM schema_meta WHERE meta_key='cursor') AS cursor
+      FROM session_transcript_archives WHERE archive_blob != ?`)
+      .get(original);
+    return {
+      rewritten: Number(row?.rewritten),
+      cursor: row?.cursor == null ? undefined : JSON.parse(String(row.cursor)),
+      transaction: database.isTransaction,
+    };
   };
-  const rewritten = () =>
-    Number(
-      database
-        .prepare("SELECT count(*) AS n FROM session_transcript_archives WHERE archive_blob != ?")
-        .get(original)?.n,
-    );
   const migrate = (
     overrides: Partial<
       Pick<Parameters<typeof migrateArchives>[0], "start" | "onArchive" | "writeCursor">
     > = {},
-  ) => run(() => migrateArchives({ ...options, ...overrides }));
+  ) =>
+    runWithAgentDatabaseMaintenanceAuthority(authority, path.join(root, "state.sqlite"), () =>
+      migrateArchives({ ...options, ...overrides }),
+    );
   const inspect = <T>(operation: () => Promise<T>) =>
     withSqliteReadOnlyWorkerScope(operation, {
       signal: controller.signal,
       deadlineOwnedByCaller: true,
     });
   const expectProgress = (rewrites = BATCH_SIZE) => {
-    expect(database.isTransaction).toBe(false);
-    expect(rewritten()).toBe(rewrites);
-    expect(cursor()).toEqual({ sessionId: "031", generation: "retained" });
+    expect(state()).toEqual({
+      transaction: false,
+      rewritten: rewrites,
+      cursor: { sessionId: "031", generation: "retained" },
+    });
+  };
+  const expectComplete = () => {
+    const { rewritten, cursor } = state();
+    expect({ rewritten, cursor }).toEqual({ rewritten: count, cursor: { phase: "complete" } });
   };
   return {
     database,
@@ -126,9 +129,9 @@ function fixture(emptySessionIds = false) {
     migrate,
     inspect,
     options,
-    cursor,
-    rewritten,
+    state,
     expectProgress,
+    expectComplete,
   };
 }
 
@@ -144,8 +147,7 @@ it.each(["repair", "inspection"] as const)(
     };
     if (mode === "repair") {
       await f.migrate({ onArchive: visit });
-      expect(f.rewritten()).toBe(count);
-      expect(f.cursor()).toEqual({ phase: "complete" });
+      f.expectComplete();
     } else {
       expect(
         await needsMigration(f.database, f.options.start, (raw, owner) => {
@@ -153,7 +155,7 @@ it.each(["repair", "inspection"] as const)(
           return directiveLine(raw, owner);
         }),
       ).toBe(false);
-      expect(f.rewritten()).toBe(0);
+      expect(f.state().rewritten).toBe(0);
     }
     expect(visited).toBe(count);
   },
@@ -168,9 +170,8 @@ it("rolls back a failing batch, retains its committed prefix and resumes once", 
   expect(String(failure)).toMatch(/040:retained.*OpenClaw state database read admission is closed/);
   f.expectProgress();
   f.database.exec("DROP TRIGGER reject_archive");
-  await f.migrate({ start: f.cursor() });
-  expect(f.rewritten()).toBe(count);
-  expect(f.cursor()).toEqual({ phase: "complete" });
+  await f.migrate({ start: f.state().cursor });
+  f.expectComplete();
 });
 
 it.each([true, false])("cancels at a batch boundary (deferred: %s)", async (deferred) => {
@@ -181,22 +182,21 @@ it.each([true, false])("cancels at a batch boundary (deferred: %s)", async (defe
     }
   }
   const interrupted = new Error(`Doctor interrupted by ${deferred ? "SIGINT" : "SIGTERM"}`);
-  await expect(
-    f.inspect(() =>
-      f.migrate({
-        writeCursor(cursor) {
-          f.options.writeCursor(cursor);
-          if ("sessionId" in cursor && cursor.sessionId === (deferred ? "031" : "063")) {
-            if (deferred) {
-              queueMicrotask(() => f.controller.abort(interrupted));
-            } else {
-              f.controller.abort(interrupted);
-            }
+  const migration = f.inspect(() =>
+    f.migrate({
+      writeCursor(cursor) {
+        f.options.writeCursor(cursor);
+        if ("sessionId" in cursor && cursor.sessionId === (deferred ? "031" : "063")) {
+          if (deferred) {
+            queueMicrotask(() => f.controller.abort(interrupted));
+          } else {
+            f.controller.abort(interrupted);
           }
-        },
-      }),
-    ),
-  ).rejects.toThrow(interrupted);
+        }
+      },
+    }),
+  );
+  await expect(migration).rejects.toThrow(interrupted);
   f.expectProgress(deferred ? BATCH_SIZE : 64);
   if (!deferred) {
     const publication = f.database
@@ -216,38 +216,35 @@ it("cancels archive inspection while decoding a batch", async () => {
   const f = fixture();
   const interrupted = new Error("Doctor interrupted by SIGINT");
   let calls = 0;
-  await expect(
-    f.inspect(() =>
-      needsMigration(f.database, f.options.start, (raw, owner) => {
-        const line = directiveLine(raw, owner);
-        if (++calls === BATCH_SIZE) {
-          f.controller.abort(interrupted);
-        }
-        return line;
-      }),
-    ),
-  ).rejects.toBe(interrupted);
+  const inspection = f.inspect(() =>
+    needsMigration(f.database, f.options.start, (raw, owner) => {
+      const line = directiveLine(raw, owner);
+      if (++calls === BATCH_SIZE) {
+        f.controller.abort(interrupted);
+      }
+      return line;
+    }),
+  );
+  await expect(inspection).rejects.toBe(interrupted);
   expect(calls).toBe(BATCH_SIZE);
-  expect(f.rewritten()).toBe(0);
+  expect(f.state().rewritten).toBe(0);
 });
 
 it("preserves a failed archive write when interruption arrives with it", async () => {
   const f = fixture();
   const interrupted = new Error("Doctor interrupted by SIGTERM");
   const failure = new Error("archive cursor write failed");
-  await expect(
-    f.inspect(() =>
-      f.migrate({
-        writeCursor(cursor) {
-          f.options.writeCursor(cursor);
-          f.controller.abort(interrupted);
-          throw failure;
-        },
-      }),
-    ),
-  ).rejects.toMatchObject({ cause: failure });
-  expect(f.database.isTransaction).toBe(false);
-  expect(f.cursor()).toBeUndefined();
+  const migration = f.inspect(() =>
+    f.migrate({
+      writeCursor(cursor) {
+        f.options.writeCursor(cursor);
+        f.controller.abort(interrupted);
+        throw failure;
+      },
+    }),
+  );
+  await expect(migration).rejects.toMatchObject({ cause: failure });
+  expect(f.state()).toMatchObject({ transaction: false, cursor: undefined });
 });
 
 it("renews its existing maintenance owner before each synchronous batch", async () => {
@@ -271,6 +268,5 @@ it("renews its existing maintenance owner before each synchronous batch", async 
     },
   });
   expect(now).toBeGreaterThan(100);
-  expect(f.rewritten()).toBe(count);
-  expect(f.cursor()).toEqual({ phase: "complete" });
+  f.expectComplete();
 });
