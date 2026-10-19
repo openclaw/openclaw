@@ -52,41 +52,27 @@ function createProps(overrides: ChannelsViewTestOverrides = {}): ChannelsProps {
   );
 }
 
-// Rendered prompts mount <openclaw-modal-dialog> into document.body; leaked
-// containers keep an open dialog alive and poison later dialog-owning test
-// files in the same worker.
-const renderedContainers: HTMLDivElement[] = [];
-
 afterEach(() => {
   disposeChannelViews();
-  for (const container of renderedContainers.splice(0)) {
-    container.remove();
-  }
+  document.body.replaceChildren();
 });
 
-function renderInto<T extends object>(
-  component: (props: T) => JSX.Element,
-  props: T,
-): HTMLDivElement {
+function renderInto(
+  props: ChannelsProps = createProps(),
+  component: (props: ChannelsProps) => JSX.Element = renderChannelPairingQueue,
+) {
   const container = document.createElement("div");
   document.body.append(container);
-  renderedContainers.push(container);
   renderChannelView(component, props, container);
   return container;
 }
-
-// These render into the shared document, so a missing teardown leaks pairing
-// dialogs into whichever suite the worker runs next.
-afterEach(() => {
-  document.body.replaceChildren();
-});
 
 describe("channel DM access request views", () => {
   it("renders pending senders without exposing the pairing code", () => {
     const onApprove = vi.fn();
     const onDismiss = vi.fn();
     const props = createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss });
-    const container = renderInto(renderChannelPairingQueue, props);
+    const container = renderInto(props);
 
     expect(container.textContent).toContain("+15551234567");
     expect(container.textContent).toContain("Alice");
@@ -121,10 +107,7 @@ describe("channel DM access request views", () => {
   });
 
   it("hides cached sender data without pairing access", () => {
-    const container = renderInto(
-      renderChannelPairingQueue,
-      createProps({ canManagePairing: false }),
-    );
+    const container = renderInto(createProps({ canManagePairing: false }));
 
     expect(container.textContent).toContain("operator.pairing access");
     expect(container.querySelector(".settings-status--warn")?.textContent).toContain(
@@ -137,7 +120,7 @@ describe("channel DM access request views", () => {
 
   it("renders notice and error feedback as status rows without nested callouts", () => {
     const noticeProps = createProps({ pairingNotice: "Request approved" });
-    const noticeContainer = renderInto(renderChannelPairingQueue, noticeProps);
+    const noticeContainer = renderInto(noticeProps);
     const noticeSelector = '.channels-pairing-feedback[role="status"]';
     const notice = noticeContainer.querySelector(noticeSelector);
 
@@ -152,7 +135,6 @@ describe("channel DM access request views", () => {
     expect(noticeContainer.querySelector(noticeSelector)).toBeNull();
 
     const errorContainer = renderInto(
-      renderChannelPairingQueue,
       createProps({ channels: { pairingError: "Approval failed" } }),
     );
     const error = errorContainer.querySelector('.channels-pairing-feedback[role="alert"]');
@@ -165,7 +147,6 @@ describe("channel DM access request views", () => {
     const onPairingFilterChange = vi.fn();
     const base = createProps();
     const container = renderInto(
-      renderChannelPairingQueue,
       createProps({
         pairingChannelFilter: "whatsapp",
         pairingAccountFilter: "personal",
@@ -217,7 +198,7 @@ describe("channel DM access request views", () => {
         },
       },
     });
-    const container = renderInto(renderChannelPairingQueue, props);
+    const container = renderInto(props);
     const actionButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button"),
     ).filter((button) => /^(Approve|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""));
@@ -228,7 +209,6 @@ describe("channel DM access request views", () => {
 
   it("shows explicit notification and first-owner choices for an admin", () => {
     const container = renderInto(
-      renderChannelPairingPrompt,
       createProps({
         pairingPrompt: {
           kind: "approve",
@@ -237,6 +217,7 @@ describe("channel DM access request views", () => {
           bootstrapCommandOwner: false,
         },
       }),
+      renderChannelPairingPrompt,
     );
 
     expect(container.textContent).toContain("Notify the requester after approval");
@@ -248,7 +229,7 @@ describe("channel DM access request views", () => {
     const review = vi.fn();
     const props = createProps({ onPairingReviewAccount: review });
     const detail = (current: ChannelsProps) => renderChannelPairingDetail("whatsapp", current);
-    const container = renderInto(detail, props);
+    const container = renderInto(props, detail);
 
     expect(container.textContent).toContain("1 pending");
     const button = Array.from(container.querySelectorAll("button")).find(

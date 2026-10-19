@@ -6,9 +6,11 @@ import type {
 } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ControlUiPluginDistribution } from "../../plugins/control-ui-distribution.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -23,6 +25,70 @@ vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
 }));
 
 const mountedPages = new Map<HTMLElement, () => void>();
+const sources: Array<Pick<ApplicationContext, "runtimeConfig" | "channels">> = [];
+
+const channelSnapshot = (
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+): ChannelsStatusSnapshot => ({
+  ts: 0,
+  channelOrder: [],
+  channelLabels: {},
+  channels: {},
+  channelAccounts: {},
+  channelDefaultAccountId: {},
+  ...overrides,
+});
+
+const plugin = (id: string, name: string, overrides: Partial<PluginCatalogItem> = {}) => ({
+  id,
+  name,
+  installed: true,
+  enabled: true,
+  state: "enabled",
+  hasIcon: true,
+  ...overrides,
+});
+
+function mockIcon(url: string) {
+  const fetchMock = vi.fn(
+    async (_input: RequestInfo | URL) =>
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(URL, "createObjectURL").mockReturnValue(url);
+  return fetchMock;
+}
+
+function iconRequests(fetchMock: ReturnType<typeof mockIcon>) {
+  return fetchMock.mock.calls
+    .map(([input]) =>
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    )
+    .filter((url) => url.includes("/__openclaw__/plugin-icon/"));
+}
+
+function catalogFixture(plugins: object[], initial = channelSnapshot(), scopes?: string[]) {
+  let refreshed: ReturnType<typeof channelSnapshot> | undefined;
+  const gateway = createGateway(scopes, {
+    "plugins.list": () => ({ plugins, diagnostics: [], mutationAllowed: true }),
+    "channels.status": () => refreshed ?? channelSnapshot(),
+  });
+  const source = createContext(gateway);
+  source.channels.state.channelsSnapshot = initial;
+  const request = vi.spyOn(gateway.snapshot.client!, "request");
+  return {
+    gateway,
+    source,
+    request,
+    refresh: async (snapshot: typeof initial) => {
+      refreshed = snapshot;
+      await source.channels.refresh(false);
+    },
+  };
+}
 
 function mountPage(context: ApplicationContext): HTMLElement {
   const page = document.createElement("div");
@@ -58,10 +124,16 @@ type TestGateway = ApplicationContext["gateway"] & {
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
 };
 
-function createGateway(): TestGateway {
+function createGateway(
+  scopes?: string[],
+  responses: Record<string, () => unknown> = {},
+): TestGateway {
   const client = {
-    request: vi.fn(async (method: string) =>
-      method === "channels.pairing.list"
+    request: vi.fn(async (method: string) => {
+      if (responses[method]) {
+        return responses[method]();
+      }
+      return method === "channels.pairing.list"
         ? {
             accounts: [],
             requests: [],
@@ -69,18 +141,11 @@ function createGateway(): TestGateway {
             limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
           }
         : method === "channels.status"
-          ? {
-              ts: 0,
-              channelOrder: [],
-              channelLabels: {},
-              channels: {},
-              channelAccounts: {},
-              channelDefaultAccountId: {},
-            }
+          ? channelSnapshot()
           : method === "plugins.list"
             ? { plugins: [], diagnostics: [], mutationAllowed: true }
-            : {},
-    ),
+            : {};
+    }),
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
@@ -94,7 +159,7 @@ function createGateway(): TestGateway {
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  return {
+  const gateway = {
     snapshot,
     connection: { gatewayUrl: "", token: "", password: "" },
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
@@ -109,6 +174,10 @@ function createGateway(): TestGateway {
       }
     },
   } as unknown as TestGateway;
+  if (scopes) {
+    setGatewayScopes(gateway, scopes);
+  }
+  return gateway;
 }
 
 function setGatewayScopes(gateway: TestGateway, scopes: string[]) {
@@ -119,17 +188,10 @@ function setGatewayScopes(gateway: TestGateway, scopes: string[]) {
 
 function createContext(gateway: ApplicationContext["gateway"]) {
   const channels = createChannelCapability(gateway);
-  channels.state.channelsSnapshot = {
-    ts: 0,
-    channelOrder: [],
-    channelLabels: {},
-    channels: {},
-    channelAccounts: {},
-    channelDefaultAccountId: {},
-  };
+  channels.state.channelsSnapshot = channelSnapshot();
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   runtimeConfig.state.configSnapshot = { config: {}, hash: "test" };
-  const ensureSchemaLoaded = vi.spyOn(runtimeConfig, "ensureSchemaLoaded").mockResolvedValue();
+  vi.spyOn(runtimeConfig, "ensureSchemaLoaded").mockResolvedValue();
   const context = {
     basePath: "",
     resourceBasePath: "",
@@ -139,7 +201,9 @@ function createContext(gateway: ApplicationContext["gateway"]) {
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
-  return { context, ensureSchemaLoaded, runtimeConfig, channels };
+  const source = { context, runtimeConfig, channels };
+  sources.push(source);
+  return source;
 }
 
 function profileButton(page: HTMLElement, label: string): HTMLButtonElement {
@@ -171,6 +235,10 @@ afterEach(() => {
   for (const page of mountedPages.keys()) {
     disposePage(page);
   }
+  for (const source of sources.splice(0)) {
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  }
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -179,23 +247,17 @@ afterEach(() => {
 
 describe("ChannelsPage lifecycle", () => {
   it("keeps channel details available but waits for reconnect before starting setup", async () => {
-    const gateway = createGateway();
-    setGatewayScopes(gateway, ["operator.admin", "operator.read"]);
+    const gateway = createGateway(["operator.admin", "operator.read"], {
+      "wizard.start": () => ({
+        done: false,
+        status: "running",
+        sessionId: "channel-setup",
+        step: { id: "token", type: "text", title: "Channel token" },
+      }),
+    });
     const hello = gateway.snapshot.hello;
     const source = createContext(gateway);
     const request = vi.spyOn(gateway.snapshot.client!, "request");
-    const baseRequest = request.getMockImplementation();
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "wizard.start") {
-        return {
-          done: false,
-          status: "running",
-          sessionId: "channel-setup",
-          step: { id: "token", type: "text", title: "Channel token" },
-        };
-      }
-      return await baseRequest?.(method, params);
-    });
     const page = mountPage(source.context);
     await settle();
     expect(profileButton(page, "Set up").disabled).toBe(false);
@@ -243,79 +305,38 @@ describe("ChannelsPage lifecycle", () => {
     });
     expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
     disposePage(page);
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
   });
 
   it("prefers the exact plugin icon over an earlier owning plugin", async () => {
-    const gateway = createGateway();
-    gateway.emit({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-      } as unknown as ApplicationGatewaySnapshot["hello"],
-    });
-    const source = createContext(gateway);
-    source.channels.state.channelsSnapshot = {
-      ts: 0,
-      channelOrder: ["slack"],
-      channelLabels: { slack: "slack" },
-      channelDetailLabels: { slack: "Legacy channel subtitle" },
-      channels: { slack: { configured: false } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    };
-    const request = vi.spyOn(gateway.snapshot.client!, "request");
-    const baseRequest = request.getMockImplementation();
-    const owner = {
-      id: "slack-suite",
-      name: "Suite",
-      installed: true,
-      enabled: true,
-      state: "enabled",
-      hasIcon: true,
-      channelIds: ["slack"],
-    };
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "plugins.list") {
-        return {
-          plugins: [
-            owner,
-            {
-              id: "slack",
-              name: "Slack",
-              description: "OpenClaw Slack channel plugin.",
-              origin: "bundled",
-              installed: true,
-              enabled: false,
-              state: "disabled",
-              hasIcon: true,
-            },
-            {
-              id: "firecrawl",
-              name: "FireCrawl",
-              description: "Crawl websites.",
-              origin: "global",
-              installed: false,
-              enabled: false,
-              state: "available",
-              hasIcon: true,
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        };
-      }
-      return await baseRequest?.(method, params);
-    });
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL) =>
-        new Response(new Uint8Array([137, 80, 78, 71]), {
-          status: 200,
-          headers: { "Content-Type": "image/png" },
+    const { source, request } = catalogFixture(
+      [
+        plugin("slack-suite", "Suite", { channelIds: ["slack"] }),
+        plugin("slack", "Slack", {
+          description: "OpenClaw Slack channel plugin.",
+          origin: "bundled",
+          enabled: false,
+          state: "disabled",
         }),
+        {
+          id: "firecrawl",
+          name: "FireCrawl",
+          description: "Crawl websites.",
+          origin: "global",
+          installed: false,
+          enabled: false,
+          state: "available",
+          hasIcon: true,
+        },
+      ],
+      channelSnapshot({
+        channelOrder: ["slack"],
+        channelLabels: { slack: "slack" },
+        channelDetailLabels: { slack: "Legacy channel subtitle" },
+        channels: { slack: { configured: false } },
+      }),
+      ["operator.admin", "operator.read"],
     );
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
+    const fetchMock = mockIcon("blob:slack-plugin-icon");
     const page = mountPage(source.context);
 
     await waitForSolid(() => {
@@ -328,68 +349,27 @@ describe("ChannelsPage lifecycle", () => {
       );
     });
     expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
-    expect(
-      fetchMock.mock.calls
-        .map(([input]) =>
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-        )
-        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
-    ).toEqual(["/__openclaw__/plugin-icon/slack"]);
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
+    expect(iconRequests(fetchMock)).toEqual(["/__openclaw__/plugin-icon/slack"]);
   });
 
   it("loads an icon when channel status arrives after plugin metadata", async () => {
-    const gateway = createGateway();
-    gateway.emit({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-      } as unknown as ApplicationGatewaySnapshot["hello"],
-    });
-    const source = createContext(gateway);
-    const request = vi.spyOn(gateway.snapshot.client!, "request");
-    const baseRequest = request.getMockImplementation();
-    let includeMattermost = false;
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "plugins.list") {
-        return {
-          plugins: [
-            {
-              id: "mattermost",
-              name: "Mattermost",
-              description: "OpenClaw Mattermost channel plugin.",
-              origin: "bundled",
-              installed: true,
-              enabled: true,
-              state: "loaded",
-              hasIcon: true,
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        };
-      }
-      if (method === "channels.status" && includeMattermost) {
-        return {
-          ts: 1,
-          channelOrder: ["mattermost"],
-          channelLabels: { mattermost: "Mattermost" },
-          channels: { mattermost: { configured: true } },
-          channelAccounts: {},
-          channelDefaultAccountId: {},
-        };
-      }
-      return await baseRequest?.(method, params);
-    });
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(new Uint8Array([137, 80, 78, 71]), {
-          status: 200,
-          headers: { "Content-Type": "image/png" },
-        }),
+    const { source, request, refresh } = catalogFixture(
+      [
+        {
+          id: "mattermost",
+          name: "Mattermost",
+          description: "OpenClaw Mattermost channel plugin.",
+          origin: "bundled",
+          installed: true,
+          enabled: true,
+          state: "loaded",
+          hasIcon: true,
+        },
+      ],
+      channelSnapshot(),
+      ["operator.admin", "operator.read"],
     );
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mattermost-plugin-icon");
+    const fetchMock = mockIcon("blob:mattermost-plugin-icon");
     const page = mountPage(source.context);
 
     await waitForSolid(() =>
@@ -397,8 +377,14 @@ describe("ChannelsPage lifecycle", () => {
     );
     expect(fetchMock).not.toHaveBeenCalled();
 
-    includeMattermost = true;
-    await source.channels.refresh(false);
+    await refresh(
+      channelSnapshot({
+        ts: 1,
+        channelOrder: ["mattermost"],
+        channelLabels: { mattermost: "Mattermost" },
+        channels: { mattermost: { configured: true } },
+      }),
+    );
 
     await waitForSolid(() => {
       expect(page.querySelector(".settings-row__title")?.textContent).toBe("Mattermost");
@@ -407,83 +393,27 @@ describe("ChannelsPage lifecycle", () => {
       );
     });
     expect(fetchMock).toHaveBeenCalledOnce();
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
   });
 
   it("loads a channel icon through its distinct owning plugin id", async () => {
-    const gateway = createGateway();
-    gateway.emit({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-      } as unknown as ApplicationGatewaySnapshot["hello"],
-    });
-    const source = createContext(gateway);
-    source.channels.state.channelsSnapshot = {
-      ts: 0,
-      channelOrder: ["agent-system-github"],
-      channelLabels: { "agent-system-github": "GitHub Notifications" },
-      channelDetailLabels: { "agent-system-github": "GitHub notification channel" },
-      channels: { "agent-system-github": { configured: false } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    };
-    const request = vi.spyOn(gateway.snapshot.client!, "request");
-    const baseRequest = request.getMockImplementation();
-    let includeSecondChannel = false;
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "plugins.list") {
-        return {
-          plugins: [
-            {
-              id: "agent-system",
-              name: "Agent System",
-              description: "Manage agent workspaces.",
-              origin: "global",
-              installed: true,
-              enabled: true,
-              state: "enabled",
-              hasIcon: true,
-              channelIds: ["agent-system-github", "agent-system-chat"],
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        };
-      }
-      if (method === "channels.status" && includeSecondChannel) {
-        return {
-          ts: 1,
-          channelOrder: ["agent-system-github", "agent-system-chat"],
-          channelLabels: {
-            "agent-system-github": "GitHub Notifications",
-            "agent-system-chat": "Project Chat",
-          },
-          channelDetailLabels: {
-            "agent-system-github": "GitHub notification channel",
-            "agent-system-chat": "Project conversations",
-          },
-          channels: {
-            "agent-system-github": { configured: false },
-            "agent-system-chat": { configured: false },
-          },
-          channelAccounts: {},
-          channelDefaultAccountId: {},
-        };
-      }
-      return await baseRequest?.(method, params);
-    });
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL) =>
-        new Response(new Uint8Array([137, 80, 78, 71]), {
-          status: 200,
-          headers: { "Content-Type": "image/png" },
+    const { source, refresh } = catalogFixture(
+      [
+        plugin("agent-system", "Agent System", {
+          description: "Manage agent workspaces.",
+          origin: "global",
+          channelIds: ["agent-system-github", "agent-system-chat"],
         }),
+      ],
+      channelSnapshot({
+        channelOrder: ["agent-system-github"],
+        channelLabels: { "agent-system-github": "GitHub Notifications" },
+        channelDetailLabels: { "agent-system-github": "GitHub notification channel" },
+        channels: { "agent-system-github": { configured: false } },
+      }),
+      ["operator.admin", "operator.read"],
     );
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(URL, "createObjectURL")
-      .mockReturnValueOnce("blob:agent-system-plugin-icon")
-      .mockReturnValue("blob:duplicate-plugin-icon");
+    const fetchMock = mockIcon("blob:duplicate-plugin-icon");
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce("blob:agent-system-plugin-icon");
     const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const page = mountPage(source.context);
 
@@ -496,15 +426,25 @@ describe("ChannelsPage lifecycle", () => {
         "blob:agent-system-plugin-icon",
       );
     });
-    expect(
-      fetchMock.mock.calls
-        .map(([input]) =>
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-        )
-        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
-    ).toEqual(["/__openclaw__/plugin-icon/agent-system"]);
-    includeSecondChannel = true;
-    await source.channels.refresh(false);
+    expect(iconRequests(fetchMock)).toEqual(["/__openclaw__/plugin-icon/agent-system"]);
+    await refresh(
+      channelSnapshot({
+        ts: 1,
+        channelOrder: ["agent-system-github", "agent-system-chat"],
+        channelLabels: {
+          "agent-system-github": "GitHub Notifications",
+          "agent-system-chat": "Project Chat",
+        },
+        channelDetailLabels: {
+          "agent-system-github": "GitHub notification channel",
+          "agent-system-chat": "Project conversations",
+        },
+        channels: {
+          "agent-system-github": { configured: false },
+          "agent-system-chat": { configured: false },
+        },
+      }),
+    );
     await waitForSolid(() => {
       expect(
         ["GitHub Notifications", "Project Chat"].map((label) => {
@@ -518,46 +458,20 @@ describe("ChannelsPage lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     disposePage(page);
     expect(revoke.mock.calls).toEqual([["blob:agent-system-plugin-icon"]]);
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
   });
 
   it.each(["disconnect", "timeout"])(
     "cancels the owning plugin icon request on %s",
     async (cause) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const gateway = createGateway();
-      const source = createContext(gateway);
-      source.channels.state.channelsSnapshot = {
-        ts: 0,
-        channelOrder: ["agent-system-github"],
-        channelLabels: { "agent-system-github": "GitHub Notifications" },
-        channels: { "agent-system-github": { configured: false } },
-        channelAccounts: {},
-        channelDefaultAccountId: {},
-      };
-      const request = vi.spyOn(gateway.snapshot.client!, "request");
-      const baseRequest = request.getMockImplementation();
-      request.mockImplementation(async (method: string, params?: unknown) => {
-        if (method === "plugins.list") {
-          return {
-            plugins: [
-              {
-                id: "agent-system",
-                name: "Agent System",
-                installed: true,
-                enabled: true,
-                state: "enabled",
-                hasIcon: true,
-                channelIds: ["agent-system-github"],
-              },
-            ],
-            diagnostics: [],
-            mutationAllowed: true,
-          };
-        }
-        return await baseRequest?.(method, params);
-      });
+      const { gateway, source } = catalogFixture(
+        [plugin("agent-system", "Agent System", { channelIds: ["agent-system-github"] })],
+        channelSnapshot({
+          channelOrder: ["agent-system-github"],
+          channelLabels: { "agent-system-github": "GitHub Notifications" },
+          channels: { "agent-system-github": { configured: false } },
+        }),
+      );
       const aborted = createDeferred<unknown>();
       const fetchMock = vi.fn<typeof fetch>(
         async (_input, init) =>
@@ -590,16 +504,13 @@ describe("ChannelsPage lifecycle", () => {
       });
       expect(createUrl).not.toHaveBeenCalled();
       disposePage(page);
-      source.runtimeConfig.dispose();
-      source.channels.dispose();
     },
   );
 
   it("polls pairing only while visible, authorized, and mounted", async () => {
     vi.useFakeTimers();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const gateway = createGateway();
-    setGatewayScopes(gateway, ["operator.pairing"]);
+    const gateway = createGateway(["operator.pairing"]);
     const source = createContext(gateway);
     const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
     const page = mountPage(source.context);
@@ -625,13 +536,10 @@ describe("ChannelsPage lifecycle", () => {
     disposePage(page);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(refreshPairing).not.toHaveBeenCalled();
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
   });
 
   it("refreshes pairing data when the authorized scope set changes", async () => {
-    const gateway = createGateway();
-    setGatewayScopes(gateway, ["operator.pairing"]);
+    const gateway = createGateway(["operator.pairing"]);
     const source = createContext(gateway);
     source.channels.state.pairingSnapshot = {
       accounts: [
@@ -688,12 +596,18 @@ describe("ChannelsPage lifecycle", () => {
     const filters = page.querySelectorAll(".channels-pairing-filters .picker-select__trigger");
     expect(filters[0]?.textContent).toContain("All channels");
     expect(filters[1]?.textContent).toContain("All accounts");
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
   });
 
   it("keeps rejected channel configuration visible in its editor without reloading the draft", async () => {
-    const gateway = createGateway();
+    const gateway = createGateway(undefined, {
+      "config.set": () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
+        });
+      },
+    });
     gateway.emit({
       hello: {
         auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
@@ -709,14 +623,11 @@ describe("ChannelsPage lifecycle", () => {
       connected: true,
       reconnectAttempts: 0,
     };
-    source.channels.state.channelsSnapshot = {
-      ts: 0,
+    source.channels.state.channelsSnapshot = channelSnapshot({
       channelOrder: ["whatsapp"],
       channelLabels: { whatsapp: "WhatsApp" },
       channels: { whatsapp: channel },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    };
+    });
     source.channels.state.pairingSnapshot = {
       accounts: [],
       requests: [],
@@ -746,18 +657,6 @@ describe("ChannelsPage lifecycle", () => {
     });
     const refreshConfig = vi.spyOn(source.runtimeConfig, "refresh");
     const refreshChannels = vi.spyOn(source.channels, "refresh");
-    const request = vi.spyOn(gateway.snapshot.client!, "request");
-    const baseRequest = request.getMockImplementation();
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "config.set") {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message:
-            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
-        });
-      }
-      return await baseRequest?.(method, params);
-    });
     const page = mountPage(source.context);
     await settle();
 
@@ -782,8 +681,6 @@ describe("ChannelsPage lifecycle", () => {
     });
     expect(refreshConfig).not.toHaveBeenCalled();
     expect(refreshChannels).not.toHaveBeenCalled();
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
   });
 });
 
@@ -808,14 +705,11 @@ async function mountPackagedChannel(channelId = "custom-profile", scopes = ["ope
   };
   const source = createContext(gateway);
   const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
-  source.channels.state.channelsSnapshot = {
-    ts: 0,
+  source.channels.state.channelsSnapshot = channelSnapshot({
     channelOrder: [channelId, "other"],
     channelLabels: { [channelId]: "Custom profile", other: "Other" },
     channels: { [channelId]: { configured: true, linked: true }, other: { configured: true } },
-    channelAccounts: {},
-    channelDefaultAccountId: {},
-  };
+  });
   const mounts: Array<{
     context: ControlUiChannelSettingsContext;
     input: HTMLInputElement;
@@ -869,6 +763,24 @@ const profileRequest = (signal = new AbortController().signal) => ({
   body: { name: "Example" },
   signal,
 });
+const logoutPrompt = {
+  title: "Log out",
+  message: "Confirm account logout",
+  confirmLabel: "Logout",
+};
+
+type PackagedChannel = Awaited<ReturnType<typeof mountPackagedChannel>>;
+function retire(f: PackagedChannel, reason: "disconnect" | "client" | "admin" | "unmount") {
+  if (reason === "disconnect") {
+    f.gateway.emit({ phase: "stopped" });
+  } else if (reason === "client") {
+    f.gateway.emit({ client: createGateway().snapshot.client });
+  } else if (reason === "admin") {
+    setGatewayScopes(f.gateway, ["operator.read"]);
+  } else {
+    disposePage(f.page);
+  }
+}
 
 it("retains a packaged editor and its pending request across detail close, another channel, and reopen", async () => {
   const pending = createDeferred<Response>();
@@ -892,8 +804,6 @@ it("retains a packaged editor and its pending request across detail close, anoth
   expect(f.page.querySelector("[data-plugin-draft]")).toBe(original.input);
   expect(original.input.value).toBe("Retained draft");
   expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ presented: true }));
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
 });
 
 it("retires a real host configuration slot and rejects mounting through its old context", async () => {
@@ -906,12 +816,8 @@ it("retires a real host configuration slot and rejects mounting through its old 
   expect(f.context.signal.aborted).toBe(true);
   expect(container.childNodes).toHaveLength(0);
   expect(() => f.context.mountConfig(container)).toThrow();
-  expect(() => {
-    dispose();
-    dispose();
-  }).not.toThrow();
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
+  dispose();
+  dispose();
 });
 
 it("retains the editor across same-client reconnects and synchronously publishes the new transport epoch", async () => {
@@ -927,8 +833,6 @@ it("retains the editor across same-client reconnects and synchronously publishes
   expect(f.mounts).toHaveLength(1);
   expect(original.input.value).toBe("Draft");
   expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ connected: true }));
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
 });
 
 it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
@@ -942,17 +846,13 @@ it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
     const request = f.context.request(profileRequest(caller.signal));
     const rejection = expect(request).rejects.toThrow();
     const signal = fetchMock.mock.calls[0]![1]!.signal!;
-    if (retirement === "disconnect") {
-      f.gateway.emit({ phase: "stopped" });
-    } else if (retirement === "client") {
-      f.gateway.connection.token = "rotated-token";
-      f.gateway.emit({ client: createGateway().snapshot.client });
-    } else if (retirement === "admin") {
-      setGatewayScopes(f.gateway, ["operator.read"]);
-    } else if (retirement === "unmount") {
-      disposePage(f.page);
-    } else {
+    if (retirement === "caller") {
       caller.abort();
+    } else {
+      if (retirement === "client") {
+        f.gateway.connection.token = "rotated-token";
+      }
+      retire(f, retirement);
     }
     expect(signal.aborted).toBe(true);
     await expect(
@@ -964,8 +864,6 @@ it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
     if (retirement !== "disconnect" && retirement !== "caller") {
       expect(f.mounts[0]!.dispose).toHaveBeenCalledOnce();
     }
-    f.source.runtimeConfig.dispose();
-    f.source.channels.dispose();
   },
 );
 
@@ -990,8 +888,6 @@ it("checks operation authority after consuming a successful response body", asyn
   f.gateway.emit({ phase: "stopped" });
   body.resolve({ ok: true });
   await rejection;
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
 });
 
 it.each([
@@ -1036,8 +932,6 @@ it.each([
             : "HTTP 401: Unauthorized",
       );
     }
-    f.source.runtimeConfig.dispose();
-    f.source.channels.dispose();
   },
 );
 
@@ -1058,21 +952,9 @@ it("keeps a caller deadline across credential retry and response-body consumptio
           status: 200,
           json: () =>
             new Promise((_resolve, reject) => {
-              init!.signal!.addEventListener(
-                "abort",
-                () => {
-                  try {
-                    init!.signal!.throwIfAborted();
-                  } catch (error) {
-                    reject(
-                      error instanceof Error || error instanceof DOMException
-                        ? error
-                        : new Error("Unexpected abort reason", { cause: error }),
-                    );
-                  }
-                },
-                { once: true },
-              );
+              init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), {
+                once: true,
+              });
             }),
         }) as Response,
     );
@@ -1095,8 +977,6 @@ it("keeps a caller deadline across credential retry and response-body consumptio
   await rejection;
   expect(fetchMock.mock.calls[0]![1]!.signal).toBe(fetchMock.mock.calls[1]![1]!.signal);
   clearTimeout(timer);
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
 });
 
 it("binds plugin login actions to the existing owner and omits the default start/wait account", async () => {
@@ -1117,8 +997,6 @@ it("binds plugin login actions to the existing owner and omits the default start
     channel: "whatsapp",
     accountId: "default",
   });
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
 });
 
 it("denies login and confirmation capabilities to an initially read-only operator", async () => {
@@ -1128,17 +1006,9 @@ it("denies login and confirmation capabilities to an initially read-only operato
   await expect(f.context.login!.start(false)).rejects.toThrow();
   await expect(f.context.login!.wait()).rejects.toThrow();
   expect(() => f.context.login!.captureLogout()).toThrow();
-  await expect(
-    f.context.confirm!({
-      title: "Log out",
-      message: "Confirm account logout",
-      confirmLabel: "Logout",
-    }),
-  ).rejects.toThrow();
+  await expect(f.context.confirm!(logoutPrompt)).rejects.toThrow();
   expect(request).not.toHaveBeenCalled();
-  expect(document.body.textContent).not.toContain("Confirm account logout");
-  f.source.runtimeConfig.dispose();
-  f.source.channels.dispose();
+  expect(document.body.textContent).not.toContain(logoutPrompt.message);
 });
 
 it.each(["account", "linked"] as const)(
@@ -1159,8 +1029,6 @@ it.each(["account", "linked"] as const)(
     request.mockClear();
     await account.logout();
     expect(request).not.toHaveBeenCalled();
-    f.source.runtimeConfig.dispose();
-    f.source.channels.dispose();
   },
 );
 
@@ -1170,33 +1038,16 @@ it.each(["disconnect", "client", "admin", "unmount"] as const)(
     const f = await mountPackagedChannel("whatsapp");
     const request = vi.spyOn(f.gateway.snapshot.client!, "request");
     const account = f.context.login!.captureLogout()!;
-    const confirmation = f.context.confirm!({
-      title: "Log out",
-      message: "Confirm account logout",
-      confirmLabel: "Logout",
-      danger: true,
-    });
+    const confirmation = f.context.confirm!({ ...logoutPrompt, danger: true });
     const rejection = expect(confirmation).rejects.toThrow();
-    await waitForSolid(() => expect(document.body.textContent).toContain("Confirm account logout"));
-    if (retirement === "disconnect") {
-      f.gateway.emit({ phase: "stopped" });
-    } else if (retirement === "client") {
-      f.gateway.emit({ client: createGateway().snapshot.client });
-    } else if (retirement === "admin") {
-      setGatewayScopes(f.gateway, ["operator.read"]);
-    } else {
-      disposePage(f.page);
-    }
+    await waitForSolid(() => expect(document.body.textContent).toContain(logoutPrompt.message));
+    retire(f, retirement);
     request.mockClear();
     await expect(f.context.login!.start(true)).rejects.toThrow();
     await expect(f.context.login!.wait()).rejects.toThrow();
     await expect(account.logout()).rejects.toThrow();
     await rejection;
     expect(request).not.toHaveBeenCalled();
-    await waitForSolid(() =>
-      expect(document.body.textContent).not.toContain("Confirm account logout"),
-    );
-    f.source.runtimeConfig.dispose();
-    f.source.channels.dispose();
+    await waitForSolid(() => expect(document.body.textContent).not.toContain(logoutPrompt.message));
   },
 );
