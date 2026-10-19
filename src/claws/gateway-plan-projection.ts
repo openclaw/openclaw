@@ -98,10 +98,9 @@ function requestedPolicyBlockers(
 }
 
 function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
-  return collectClawSkillWarningReviews(plan).map((review) => ({
-    ...review,
-    reviewToken: digestClawValue(review),
-  }));
+  return collectClawSkillWarningReviews(plan).map((review) =>
+    Object.assign(review, { reviewToken: digestClawValue(review) }),
+  );
 }
 
 function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {

@@ -4,8 +4,7 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import { GatewayRetainedWorkScope } from "../../shared/gateway-retained-work-scope.js";
+import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
