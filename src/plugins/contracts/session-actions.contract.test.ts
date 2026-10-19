@@ -1,4 +1,3 @@
-// Session action contract tests cover plugin session action metadata and execution contracts.
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
@@ -20,7 +19,7 @@ import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import type { PluginSessionActionContext } from "../host-hooks.js";
+import type { PluginSessionActionContext, PluginSessionActionRegistration } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import {
@@ -33,14 +32,6 @@ import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
 const MAIN_SESSION_KEY = "agent:main:main";
 type HookResponse = { ok: boolean; payload?: unknown; error?: unknown };
-
-function sessionActionBody(
-  pluginId: string,
-  actionId: string,
-  extra?: Record<string, unknown>,
-): Record<string, unknown> {
-  return { pluginId, actionId, ...extra };
-}
 
 async function callPluginSessionActionForTest(
   params: {
@@ -79,35 +70,22 @@ async function callPluginSessionActionForTest(
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
 
-async function callRegisteredSessionActionForTest(params: {
-  pluginId: string;
-  actionId: string;
-  extra?: Record<string, unknown>;
-  scopes?: string[];
-}): Promise<HookResponse> {
-  return callPluginSessionActionForTest({
-    body: sessionActionBody(params.pluginId, params.actionId, params.extra),
-    ...(params.scopes ? { scopes: params.scopes } : {}),
-  });
+function callAction(
+  pluginId: string,
+  actionId: string,
+  extra?: Record<string, unknown>,
+  scopes?: string[],
+  throughGateway = false,
+) {
+  return callPluginSessionActionForTest(
+    { body: { pluginId, actionId, ...extra }, scopes },
+    throughGateway,
+  );
 }
 
-function callPluginSessionActionThroughGatewayForTest(params: {
-  body: Record<string, unknown>;
-  scopes?: string[];
-}) {
-  return callPluginSessionActionForTest(params, true);
-}
-
-async function callRegisteredSessionActionThroughGatewayForTest(params: {
-  pluginId: string;
-  actionId: string;
-  extra?: Record<string, unknown>;
-  scopes?: string[];
-}): Promise<HookResponse> {
-  return callPluginSessionActionThroughGatewayForTest({
-    body: sessionActionBody(params.pluginId, params.actionId, params.extra),
-    ...(params.scopes ? { scopes: params.scopes } : {}),
-  });
+function actionCaller(pluginId: string) {
+  return (actionId: string, extra?: Record<string, unknown>) =>
+    callAction(pluginId, actionId, extra);
 }
 
 function requireHookError(response: HookResponse): { code?: unknown; message?: unknown } {
@@ -119,17 +97,18 @@ function requireHookError(response: HookResponse): { code?: unknown; message?: u
   return error;
 }
 
-function requireObservedEvent(
+function expectObservedEvent(
   observed: unknown[],
   index: number,
-): { runId?: unknown; sessionKey?: unknown; stream?: unknown; data?: Record<string, unknown> } {
-  const event = observed[index] as
-    | { runId?: unknown; sessionKey?: unknown; stream?: unknown; data?: Record<string, unknown> }
-    | undefined;
-  if (!event) {
-    throw new Error(`expected observed event #${index + 1}`);
+  expected: Record<string, unknown>,
+) {
+  const event = expectDefined(observed[index], "expected observed event") as Record<
+    string,
+    unknown
+  >;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(event[key]).toEqual(value);
   }
-  return event;
 }
 
 function registerActionFixture(params: {
@@ -145,6 +124,17 @@ function registerActionFixture(params: {
     register: params.register,
   });
   return { config, registry };
+}
+
+function installAction(
+  pluginId: string,
+  action: PluginSessionActionRegistration,
+  status: "loaded" | "error" = "loaded",
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.sessionActions = [{ pluginId, pluginName: pluginId, source: "test", action }];
+  registry.plugins = [createPluginRecord({ id: pluginId, status })];
+  setActivePluginRegistry(registry);
 }
 
 function captureEventApi(
@@ -199,18 +189,20 @@ describe("plugin session actions", () => {
       },
     });
     expect(registry.registry.sessionActions).toHaveLength(1);
-    const actionEntry = registry.registry.sessionActions[0];
-    expect(actionEntry?.pluginId).toBe("session-action-fixture");
-    expect(actionEntry?.pluginName).toBe("Session Action Fixture");
-    expect(actionEntry?.action.id).toBe("approve");
-    expect(actionEntry?.action.description).toBe("Approve the current workflow");
-    expect(actionEntry?.action.requiredScopes).toEqual([APPROVALS_SCOPE]);
+    expect(registry.registry.sessionActions[0]).toMatchObject({
+      pluginId: "session-action-fixture",
+      pluginName: "Session Action Fixture",
+      action: {
+        id: "approve",
+        description: "Approve the current workflow",
+        requiredScopes: [APPROVALS_SCOPE],
+      },
+    });
   });
 
   it("rejects invalid or duplicate session action registrations", () => {
     const { registry } = registerActionFixture({
       id: "invalid-session-actions",
-      name: "Invalid Session Actions",
       register(api) {
         for (const action of [
           { id: "dup" },
@@ -222,14 +214,10 @@ describe("plugin session actions", () => {
             id: "bad-schema-keyword",
             schema: {
               type: "object",
-              properties: { id: { type: "string" } },
               required: "id",
             } as never,
           },
-          {
-            id: "bad-schema-ref",
-            schema: { $ref: "#/$defs/Missing" } as never,
-          },
+          { id: "bad-schema-ref", schema: { $ref: "#/$defs/Missing" } as never },
           { id: "" },
         ]) {
           api.registerSessionAction({
@@ -259,19 +247,10 @@ describe("plugin session actions", () => {
   });
 
   it("validates payload schemas and typed action results", async () => {
-    const callSchemaAction = (
-      actionId: string,
-      extra?: Record<string, unknown>,
-    ): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> =>
-      callRegisteredSessionActionForTest({
-        pluginId: "schema-action-fixture",
-        actionId,
-        ...(extra ? { extra } : {}),
-      });
+    const callSchemaAction = actionCaller("schema-action-fixture");
     const handlerCalls: unknown[] = [];
     const { registry } = registerActionFixture({
       id: "schema-action-fixture",
-      name: "Schema Action Fixture",
       register(api) {
         api.registerSessionAction({
           id: "approve",
@@ -279,9 +258,7 @@ describe("plugin session actions", () => {
             type: "object",
             additionalProperties: false,
             required: ["version"],
-            properties: {
-              version: { type: "string" },
-            },
+            properties: { version: { type: "string" } },
           },
           handler: ({ payload, sessionKey, client }) => {
             handlerCalls.push({ payload, sessionKey, scopes: client?.scopes ?? [] });
@@ -314,14 +291,12 @@ describe("plugin session actions", () => {
       },
     });
     setActivePluginRegistry(registry.registry);
-    const rejected = await callPluginSessionActionForTest({
-      body: sessionActionBody("schema-action-fixture", "approve", { payload: { version: 1 } }),
-    });
+    const rejected = await callSchemaAction("approve", { payload: { version: 1 } });
     const rejectedError = requireHookError(rejected);
-    expect(rejectedError.code).toBe("INVALID_REQUEST");
-    expect(String(rejectedError.message)).toContain(
-      "plugin session action payload does not match schema",
-    );
+    expect(rejectedError).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("plugin session action payload does not match schema"),
+    });
     expect(handlerCalls).toEqual([]);
     await expect(
       callSchemaAction("approve", {
@@ -370,94 +345,70 @@ describe("plugin session actions", () => {
   });
 
   it("validates plugin session action results before returning gateway payloads", async () => {
-    const callValidationAction = (
-      actionId: string,
-    ): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> =>
-      callRegisteredSessionActionForTest({
-        pluginId: "session-action-validation-fixture",
-        actionId,
-      });
+    const jsonError = (field: string) => `plugin session action ${field} must be JSON-compatible`;
+    const cases = [
+      ["bad-result", () => ({ result: 1n as never }), jsonError("result")],
+      ["bad-reply", () => ({ reply: { extra: () => undefined } as never }), jsonError("reply")],
+      [
+        "primitive-result",
+        () => "not-an-object" as never,
+        "plugin session action result must be an object",
+      ],
+      [
+        "bad-ok",
+        () => ({ ok: "false", error: "invalid" }) as never,
+        expect.stringContaining("/ok: must be boolean"),
+      ],
+      [
+        "error-shaped-success",
+        () => ({ error: "must declare ok false" }) as never,
+        expect.stringContaining("unexpected property 'error'"),
+      ],
+      [
+        "bad-error-details",
+        () => ({ ok: false, error: "bad details", details: { value: 1n } as never }),
+        jsonError("details"),
+      ],
+      [
+        "bad-continue-agent",
+        () => ({ continueAgent: "yes" as never }),
+        expect.stringContaining("/continueAgent: must be boolean"),
+      ],
+      [
+        "mixed-branch-fields",
+        () =>
+          ({ ok: false, error: "stop", continueAgent: true, result: { leaked: true } }) as never,
+        expect.stringContaining("unexpected property 'continueAgent'"),
+      ],
+      [
+        "unknown-success-field",
+        () => ({ extra: "unexpected" }) as never,
+        expect.stringContaining("unexpected property 'extra'"),
+      ],
+      [
+        "throws-secret",
+        () => {
+          throw new Error("fixture action failed");
+        },
+        "plugin session action failed",
+      ],
+    ] satisfies [string, PluginSessionActionRegistration["handler"], unknown][];
+    const pluginId = "session-action-validation-fixture";
     const { registry } = registerActionFixture({
-      id: "session-action-validation-fixture",
-      name: "Session Action Validation Fixture",
+      id: pluginId,
       register(api) {
-        const handlers = {
-          "bad-result": () => ({ result: 1n as never }),
-          "bad-reply": () => ({ reply: { text: "ok", extra: () => undefined } as never }),
-          "primitive-result": () => "not-an-object" as never,
-          "bad-ok": () => ({ ok: "false", error: "must not masquerade as success" }) as never,
-          "error-shaped-success": () => ({ error: "must declare ok false" }) as never,
-          "bad-error-details": () => ({
-            ok: false,
-            error: "bad details",
-            details: { value: 1n } as never,
-          }),
-          "bad-continue-agent": () => ({ continueAgent: "yes" as never }),
-          "mixed-branch-fields": () =>
-            ({
-              ok: false,
-              error: "stop",
-              continueAgent: true,
-              result: { leaked: true },
-            }) as never,
-          "unknown-success-field": () =>
-            ({
-              result: { accepted: true },
-              extra: "unexpected",
-            }) as never,
-          "throws-secret": () => {
-            throw new Error("fixture action failed");
-          },
-        };
-        for (const [id, handler] of Object.entries(handlers)) {
-          api.registerSessionAction({ id, handler: handler as never });
+        for (const [id, handler] of cases) {
+          api.registerSessionAction({ id, handler });
         }
       },
     });
     setActivePluginRegistry(registry.registry);
-    const expectValidationError = async (
-      actionId: string,
-      message: { exact: string } | { includes: string },
-    ) => {
-      const response = await callValidationAction(actionId);
-      const error = requireHookError(response);
-      expect(error.code).toBe("INVALID_REQUEST");
-      if ("exact" in message) {
-        expect(error.message).toBe(message.exact);
-      } else {
-        expect(String(error.message)).toContain(message.includes);
-      }
-    };
-    await expectValidationError("bad-result", {
-      exact: "plugin session action result must be JSON-compatible",
-    });
-    await expectValidationError("bad-reply", {
-      exact: "plugin session action reply must be JSON-compatible",
-    });
-    const primitiveResult = await callValidationAction("primitive-result");
-    const primitiveResultError = requireHookError(primitiveResult);
-    expect(primitiveResultError.code).toBe("INVALID_REQUEST");
-    expect(primitiveResultError.message).toBe("plugin session action result must be an object");
-    await expectValidationError("bad-ok", { includes: "/ok: must be boolean" });
-    await expectValidationError("error-shaped-success", {
-      includes: "unexpected property 'error'",
-    });
-    await expectValidationError("bad-error-details", {
-      exact: "plugin session action details must be JSON-compatible",
-    });
-    await expectValidationError("bad-continue-agent", {
-      includes: "/continueAgent: must be boolean",
-    });
-    await expectValidationError("mixed-branch-fields", {
-      includes: "unexpected property 'continueAgent'",
-    });
-    await expectValidationError("unknown-success-field", {
-      includes: "unexpected property 'extra'",
-    });
-    const throwsSecret = await callValidationAction("throws-secret");
-    const throwsSecretError = requireHookError(throwsSecret);
-    expect(throwsSecretError.code).toBe("UNAVAILABLE");
-    expect(throwsSecretError.message).toBe("plugin session action failed");
+    for (const [actionId, , message] of cases) {
+      expect(requireHookError(await callAction(pluginId, actionId))).toEqual({
+        code: actionId === "throws-secret" ? "UNAVAILABLE" : "INVALID_REQUEST",
+        message,
+      });
+    }
   });
   describe("authorizes session actions through the gateway by action-declared scopes", () => {
     const pluginId = "scope-action-fixture";
@@ -533,11 +484,7 @@ describe("plugin session actions", () => {
       ["no scopes cannot perform a default-write action", "default-write", [], WRITE_SCOPE],
       ["admin admits an action with default scopes", "default-write", [ADMIN_SCOPE]],
     ])("%s", async (_name, actionId, scopes, missingScope) => {
-      const response = await callRegisteredSessionActionThroughGatewayForTest({
-        pluginId,
-        actionId,
-        scopes,
-      });
+      const response = await callAction(pluginId, actionId, undefined, scopes, true);
       const expectedResponse: HookResponse = missingScope
         ? {
             ok: false,
@@ -571,12 +518,13 @@ describe("plugin session actions", () => {
     });
     it("normalizes session keys and rejects invalid params for approval-only callers", async () => {
       await expect(
-        callRegisteredSessionActionThroughGatewayForTest({
+        callAction(
           pluginId,
-          actionId: "approve",
-          extra: { sessionKey: ` ${MAIN_SESSION_KEY} ` },
-          scopes: [APPROVALS_SCOPE],
-        }),
+          "approve",
+          { sessionKey: ` ${MAIN_SESSION_KEY} ` },
+          [APPROVALS_SCOPE],
+          true,
+        ),
       ).resolves.toEqual({
         ok: true,
         payload: {
@@ -593,10 +541,13 @@ describe("plugin session actions", () => {
         agentId: "main",
         client: { connId: "test-client", scopes: [APPROVALS_SCOPE] },
       });
-      const blankPluginId = await callPluginSessionActionThroughGatewayForTest({
-        body: { pluginId: "   ", actionId: "approve" },
-        scopes: [APPROVALS_SCOPE],
-      });
+      const blankPluginId = await callPluginSessionActionForTest(
+        {
+          body: { pluginId: "   ", actionId: "approve" },
+          scopes: [APPROVALS_SCOPE],
+        },
+        true,
+      );
       expect(requireHookError(blankPluginId)).toEqual({
         code: "INVALID_REQUEST",
         message: "plugins.sessionAction pluginId and actionId must be non-empty",
@@ -606,32 +557,18 @@ describe("plugin session actions", () => {
   });
 
   it("passes a defensive copy of client scopes to session action handlers", async () => {
-    const registry = createEmptyPluginRegistry();
     let handlerScopes: string[] | undefined;
     const originalScopes = [READ_SCOPE];
-    registry.sessionActions = [
-      {
-        pluginId: "scope-copy-fixture",
-        pluginName: "Scope Copy Fixture",
-        source: "test",
-        action: {
-          id: "mutate",
-          requiredScopes: [READ_SCOPE],
-          handler: ({ client }) => {
-            handlerScopes = client?.scopes;
-            client?.scopes.push(APPROVALS_SCOPE);
-            return { result: { ok: true } };
-          },
-        },
+    installAction("scope-copy-fixture", {
+      id: "mutate",
+      requiredScopes: [READ_SCOPE],
+      handler: ({ client }) => {
+        handlerScopes = client?.scopes;
+        client?.scopes.push(APPROVALS_SCOPE);
+        return { result: { ok: true } };
       },
-    ];
-    registry.plugins = [createPluginRecord({ id: "scope-copy-fixture" })];
-    setActivePluginRegistry(registry);
-    const response = await callRegisteredSessionActionForTest({
-      pluginId: "scope-copy-fixture",
-      actionId: "mutate",
-      scopes: originalScopes,
     });
+    const response = await callAction("scope-copy-fixture", "mutate", undefined, originalScopes);
     expect(response).toEqual({
       ok: true,
       payload: { ok: true, result: { ok: true } },
@@ -644,32 +581,23 @@ describe("plugin session actions", () => {
 
   it("does not dispatch session actions for plugins that are not loaded", async () => {
     const handler = vi.fn(() => ({ result: { stale: true } }));
-    const registry = createEmptyPluginRegistry();
-    registry.sessionActions = [
-      {
-        pluginId: "failed-action-plugin",
-        pluginName: "Failed Action Plugin",
-        source: "test",
-        action: { id: "stale", requiredScopes: [READ_SCOPE], handler },
-      },
-    ];
-    registry.plugins = [
-      createPluginRecord({
-        id: "failed-action-plugin",
-        name: "Failed Action Plugin",
-        status: "error",
-      }),
-    ];
-    setActivePluginRegistry(registry);
-    const staleAction = await callPluginSessionActionThroughGatewayForTest({
-      body: { pluginId: "failed-action-plugin", actionId: "stale" },
-      scopes: [READ_SCOPE],
-    });
-    const staleActionError = requireHookError(staleAction);
-    expect(staleActionError.code).toBe("UNAVAILABLE");
-    expect(staleActionError.message).toBe(
-      "unknown plugin session action: failed-action-plugin/stale",
+    installAction(
+      "failed-action-plugin",
+      { id: "stale", requiredScopes: [READ_SCOPE], handler },
+      "error",
     );
+    const staleAction = await callPluginSessionActionForTest(
+      {
+        body: { pluginId: "failed-action-plugin", actionId: "stale" },
+        scopes: [READ_SCOPE],
+      },
+      true,
+    );
+    const staleActionError = requireHookError(staleAction);
+    expect(staleActionError).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "unknown plugin session action: failed-action-plugin/stale",
+    });
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -677,12 +605,7 @@ describe("plugin session actions", () => {
     const observed: unknown[] = [];
     const unsubscribe = onAgentEvent((event) => observed.push(event));
     const { config, registry } = createPluginRegistryFixture();
-    const bundledApi = captureEventApi(
-      "event-plugin",
-      "Event Plugin",
-      { config, registry },
-      "bundled",
-    );
+    const bundledApi = captureEventApi("event-plugin", "Event Plugin", { config, registry });
     const workspaceApi = captureEventApi(
       "workspace-event-plugin",
       "Workspace Event Plugin",
@@ -729,12 +652,8 @@ describe("plugin session actions", () => {
       unsubscribe();
     }
     expect(observed).toHaveLength(3);
-    const bundledEvent = requireObservedEvent(observed, 0);
-    expect({
-      runId: bundledEvent.runId,
-      stream: bundledEvent.stream,
-      data: bundledEvent.data,
-    }).toEqual({
+    expectObservedEvent(observed, 0, {
+      sessionKey: "agent:main:main",
       runId: "run-emit",
       stream: "approval",
       data: {
@@ -743,21 +662,17 @@ describe("plugin session actions", () => {
         pluginName: "Event Plugin",
       },
     });
-    expect(bundledEvent.sessionKey).toBe("agent:main:main");
-    const lifecycleEvent = requireObservedEvent(observed, 1);
-    expect(lifecycleEvent.stream).toBe("lifecycle");
-    expect(lifecycleEvent.data).toEqual({
-      phase: "start",
-      startedAt: 1_234,
-      pluginId: "event-plugin",
-      pluginName: "Event Plugin",
+    expectObservedEvent(observed, 1, {
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt: 1_234,
+        pluginId: "event-plugin",
+        pluginName: "Event Plugin",
+      },
     });
-    const workspaceEvent = requireObservedEvent(observed, 2);
-    expect({
-      runId: workspaceEvent.runId,
-      stream: workspaceEvent.stream,
-      data: workspaceEvent.data,
-    }).toEqual({
+    expectObservedEvent(observed, 2, {
+      sessionKey: undefined,
       runId: "run-emit",
       stream: "workspace-event-plugin.workflow",
       data: {
@@ -766,19 +681,16 @@ describe("plugin session actions", () => {
         pluginName: "Workspace Event Plugin",
       },
     });
-    expect(workspaceEvent.sessionKey).toBeUndefined();
   });
 
   it("blocks agent events from stale and non-activating plugin API closures", () => {
     const observed: unknown[] = [];
     const unsubscribe = onAgentEvent((event) => observed.push(event));
     const { config, registry } = createPluginRegistryFixture();
-    const capturedApi = captureEventApi(
-      "stale-event-plugin",
-      "Stale Event Plugin",
-      { config, registry },
-      "bundled",
-    );
+    const capturedApi = captureEventApi("stale-event-plugin", "Stale Event Plugin", {
+      config,
+      registry,
+    });
     setActivePluginRegistry(registry.registry);
     setActivePluginRegistry(createEmptyPluginRegistry());
     try {
@@ -786,15 +698,13 @@ describe("plugin session actions", () => {
         emitted: false,
         reason: "plugin is not loaded",
       });
-      const neverActiveRegistry = createPluginRegistry({
-        logger: {
-          info() {},
-          warn() {},
-          error() {},
-          debug() {},
-        },
-        runtime: {} as never,
-      });
+      const makeInactiveRegistry = (activateGlobalSideEffects = true) =>
+        createPluginRegistry({
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          runtime: {} as never,
+          activateGlobalSideEffects,
+        });
+      const neverActiveRegistry = makeInactiveRegistry();
       const neverActiveApi = captureEventApi(
         "never-active-event-plugin",
         "Never Active Event Plugin",
@@ -803,16 +713,7 @@ describe("plugin session actions", () => {
       expect(
         eventEmitter(neverActiveApi, "never-active-run")("approval", { inactive: true }),
       ).toEqual({ emitted: false, reason: "plugin is not loaded" });
-      const inactiveRegistry = createPluginRegistry({
-        logger: {
-          info() {},
-          warn() {},
-          error() {},
-          debug() {},
-        },
-        runtime: {} as never,
-        activateGlobalSideEffects: false,
-      });
+      const inactiveRegistry = makeInactiveRegistry(false);
       const inactiveApi = captureEventApi("inactive-event-plugin", "Inactive Event Plugin", {
         config,
         registry: inactiveRegistry,
@@ -831,12 +732,10 @@ describe("plugin session actions", () => {
     const observed: unknown[] = [];
     const unsubscribe = onAgentEvent((event) => observed.push(event));
     const { config, registry } = createPluginRegistryFixture();
-    const capturedApi = captureEventApi(
-      "reactivated-event-plugin",
-      "Reactivated Event Plugin",
-      { config, registry },
-      "bundled",
-    );
+    const capturedApi = captureEventApi("reactivated-event-plugin", "Reactivated Event Plugin", {
+      config,
+      registry,
+    });
     setActivePluginRegistry(registry.registry);
     const snapshot = captureActivePluginRegistrySnapshot();
     stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
@@ -850,12 +749,8 @@ describe("plugin session actions", () => {
       unsubscribe();
     }
     expect(observed).toHaveLength(1);
-    const reactivatedEvent = requireObservedEvent(observed, 0);
-    expect({
-      runId: reactivatedEvent.runId,
-      stream: reactivatedEvent.stream,
-      data: reactivatedEvent.data,
-    }).toEqual({
+    expectObservedEvent(observed, 0, {
+      sessionKey: undefined,
       runId: "reactivated-run",
       stream: "approval",
       data: {
@@ -864,6 +759,5 @@ describe("plugin session actions", () => {
         pluginName: "Reactivated Event Plugin",
       },
     });
-    expect(reactivatedEvent.sessionKey).toBeUndefined();
   });
 });

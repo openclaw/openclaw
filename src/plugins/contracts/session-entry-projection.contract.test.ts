@@ -3,7 +3,6 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-// Session entry projection contract tests cover plugin session entry projection behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -185,97 +184,59 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry.registry);
 
     await withProjectionSessionStore(async ({ read, patch }) => {
-      await patch("failing-promoted-plugin", { state: "ready" });
-      expect(read().approvalSnapshot).toEqual({ state: "ready" });
-
-      await patch("failing-promoted-plugin", { state: "bad", fail: "throw" });
-      const afterThrow = read();
-      expect(afterThrow.approvalSnapshot).toBeUndefined();
-      expect(extensionNamespace(afterThrow, "failing-promoted-plugin", "workflow")).toEqual({
-        state: "bad",
-        fail: "throw",
-      });
-
-      await patch("failing-promoted-plugin", { state: "ready-again" });
-      expect(read().approvalSnapshot).toEqual({ state: "ready-again" });
-
-      await patch("failing-promoted-plugin", { state: "async-bad", fail: "promise" });
-      const afterPromise = read();
-      expect(afterPromise.approvalSnapshot).toBeUndefined();
-      expect(extensionNamespace(afterPromise, "failing-promoted-plugin", "workflow")).toEqual({
-        state: "async-bad",
-        fail: "promise",
-      });
+      for (const [ready, state, fail] of [
+        ["ready", "bad", "throw"],
+        ["ready-again", "async-bad", "promise"],
+      ] as const) {
+        await patch("failing-promoted-plugin", { state: ready });
+        expect(read().approvalSnapshot).toEqual({ state: ready });
+        const value = { state, fail };
+        await patch("failing-promoted-plugin", value);
+        const entry = read();
+        expect(entry.approvalSnapshot).toBeUndefined();
+        expect(extensionNamespace(entry, "failing-promoted-plugin", "workflow")).toEqual(value);
+      }
     });
   });
 
-  it("rejects sessionEntrySlotKey values that collide with SessionEntry fields", () => {
-    const reservedSlots = {
-      workflow: "updatedAt",
-      "main-recovery": "mainRestartRecovery",
-      "requester-source": "restartRecoveryRequesterSource",
-      recovery: "subagentRecovery",
-      "run-error": "lastRunError",
-      "transcript-path": "transcriptPath",
-      "custom-icon": "icon",
-      "context-window-source": "contextTokensSource",
-      "sandbox-policy": "sandbox",
-      "pending-final-text": "pendingFinalDeliveryText",
-      "completion-custody": "restartRecoveryHarnessCompletion",
-      "retired-execsecurity": "execSecurity",
-      "retired-execask": "execAsk",
-      "retired-conversation-link": "conversationLink",
-    };
-    const { registry } = registerProjectionPlugin(
-      { id: "slot-collision", name: "Slot Collision" },
-      (api) => {
-        for (const [namespace, sessionEntrySlotKey] of Object.entries(reservedSlots)) {
-          api.registerSessionExtension({
-            namespace,
-            description: "reserved session field",
-            sessionEntrySlotKey,
-          });
-        }
-      },
-    );
-
+  it.each([
+    [
+      "SessionEntry",
+      [
+        "updatedAt",
+        "mainRestartRecovery",
+        "restartRecoveryRequesterSource",
+        "subagentRecovery",
+        "lastRunError",
+        "transcriptPath",
+        "icon",
+        "contextTokensSource",
+        "sandbox",
+        "pendingFinalDeliveryText",
+        "restartRecoveryHarnessCompletion",
+        "execSecurity",
+        "execAsk",
+        "conversationLink",
+      ],
+    ],
+    ["Object", ["toString", "hasOwnProperty", "valueOf"]],
+  ] as const)("rejects sessionEntrySlotKey values reserved by %s", (owner, slots) => {
+    const { registry } = registerProjectionPlugin({ id: "slot-collision" }, (api) => {
+      slots.forEach((sessionEntrySlotKey, index) =>
+        api.registerSessionExtension({
+          namespace: "slot-" + index,
+          description: "reserved slot",
+          sessionEntrySlotKey,
+        }),
+      );
+    });
     expect(registry.registry.sessionExtensions).toHaveLength(0);
     expect(
       registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
     ).toStrictEqual(
-      Object.values(reservedSlots).map((slotKey) => ({
+      slots.map((slot) => ({
         pluginId: "slot-collision",
-        message: `sessionEntrySlotKey is reserved by SessionEntry: ${slotKey}`,
-      })),
-    );
-  });
-
-  it("rejects sessionEntrySlotKey values inherited from Object.prototype", () => {
-    const reservedSlots = {
-      "to-string": "toString",
-      "has-own": "hasOwnProperty",
-      "value-of": "valueOf",
-    };
-    const { registry } = registerProjectionPlugin(
-      { id: "object-slot-collision", name: "Object Slot Collision" },
-      (api) => {
-        for (const [namespace, sessionEntrySlotKey] of Object.entries(reservedSlots)) {
-          api.registerSessionExtension({
-            namespace,
-            description: "bad object slot",
-            sessionEntrySlotKey,
-          });
-        }
-      },
-    );
-
-    expect(registry.registry.sessionExtensions).toHaveLength(0);
-    expect(
-      registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
-    ).toStrictEqual(
-      Object.values(reservedSlots).map((slotKey) => ({
-        pluginId: "object-slot-collision",
-        message: `sessionEntrySlotKey is reserved by Object: ${slotKey}`,
+        message: "sessionEntrySlotKey is reserved by " + owner + ": " + slot,
       })),
     );
   });

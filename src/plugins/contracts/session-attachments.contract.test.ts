@@ -1,4 +1,3 @@
-// Session attachment contract tests cover plugin session attachment metadata and storage.
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
@@ -25,13 +24,10 @@ const workflowMocks = vi.hoisted(() => ({ getChannelPlugin: vi.fn(), sendMessage
 const MAIN_SESSION_KEY = "agent:main:main";
 const DEFAULT_TELEGRAM_ROUTE = { channel: "telegram", to: "12345" } as const;
 
-type SessionAttachmentRequest = Parameters<typeof sendPluginSessionAttachment>[0];
-type AttachmentOptions = Partial<Parameters<typeof sendBundledSessionAttachment>[0]>;
-type TestSessionEntry = {
-  sessionId?: string;
-  updatedAt?: number;
-  delivery?: SessionEntry["delivery"];
-};
+type AttachmentOptions = Partial<Parameters<typeof sendPluginSessionAttachment>[0]>;
+type DeliveryRoute =
+  | NonNullable<Parameters<typeof normalizeSessionDeliveryState>[0]>["context"]
+  | null;
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: workflowMocks.getChannelPlugin,
@@ -55,60 +51,52 @@ async function withSessionStore(
     stateDir: string;
     storePath: string;
     filePath: string;
-    send: (params?: AttachmentOptions) => ReturnType<typeof sendBundledSessionAttachment>;
+    send: (params?: AttachmentOptions) => ReturnType<typeof sendPluginSessionAttachment>;
     reject: (error: string, params?: AttachmentOptions) => Promise<void>;
   }) => Promise<void>,
+  route: DeliveryRoute = DEFAULT_TELEGRAM_ROUTE,
 ) {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const filePath = path.join(stateDir, "x.txt");
   await fs.writeFile(filePath, "x", "utf8");
   const send = (params: AttachmentOptions = {}) =>
-    sendBundledSessionAttachment({ files: [{ path: filePath }], ...params });
+    sendPluginSessionAttachment({
+      origin: "bundled",
+      sessionKey: MAIN_SESSION_KEY,
+      files: [{ path: filePath }],
+      ...params,
+    });
   const reject = async (error: string, params?: AttachmentOptions) => {
     await expect(send(params)).resolves.toEqual({ ok: false, error });
   };
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
     withTempConfig({
       cfg: { session: { store: storePath } },
-      run: async () => await run({ stateDir, storePath, filePath, send, reject }),
+      run: async () => {
+        await writeSessionEntry(storePath, route);
+        await run({ stateDir, storePath, filePath, send, reject });
+      },
     }),
   );
 }
 
-async function writeSessionEntry(
-  storePath: string,
-  entry: TestSessionEntry = {
-    delivery: normalizeSessionDeliveryState({ context: DEFAULT_TELEGRAM_ROUTE }),
-  },
-  key = MAIN_SESSION_KEY,
-) {
-  await replaceSessionEntry({ storePath, sessionKey: key }, {
+async function writeSessionEntry(storePath: string, route: DeliveryRoute = DEFAULT_TELEGRAM_ROUTE) {
+  await replaceSessionEntry({ storePath, sessionKey: MAIN_SESSION_KEY }, {
     sessionId: "session-id",
     updatedAt: Date.now(),
-    ...entry,
+    ...(route ? { delivery: normalizeSessionDeliveryState({ context: route }) } : {}),
   } as unknown as SessionEntry);
 }
 
-function mockSuccessfulAttachmentDelivery(messageId = "attachment-1") {
+function mockSuccessfulAttachmentDelivery() {
   workflowMocks.sendMessage.mockImplementation(async (params: Record<string, unknown>) => ({
     channel: params.channel,
     to: params.to,
     via: "direct" as const,
     mediaUrl: null,
-    result: { channel: params.channel, messageId },
+    result: { channel: params.channel, messageId: "attachment-1" },
   }));
-}
-
-async function sendBundledSessionAttachment(
-  params: Omit<SessionAttachmentRequest, "origin" | "sessionKey"> &
-    Partial<Pick<SessionAttachmentRequest, "sessionKey">>,
-) {
-  return await sendPluginSessionAttachment({
-    origin: "bundled",
-    sessionKey: MAIN_SESSION_KEY,
-    ...params,
-  });
 }
 
 function captureAttachmentApi(
@@ -135,10 +123,7 @@ function captureAttachmentApi(
 }
 
 function expectTelegramAttachmentResult(result: unknown, count: number) {
-  const response = result as { ok?: unknown; channel?: unknown; count?: unknown };
-  expect(response.ok).toBe(true);
-  expect(response.channel).toBe("telegram");
-  expect(response.count).toBe(count);
+  expect(result).toMatchObject({ ok: true, channel: "telegram", count });
 }
 
 function requireFirstSendMessageParams() {
@@ -157,37 +142,33 @@ describe("plugin session attachments", () => {
     workflowMocks.sendMessage.mockReset();
     resetPluginRuntimeStateForTest();
     clearPluginLoaderCache();
-    delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
-    delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
   });
 
   it("sends validated files through the session delivery route with portable hints", async () => {
-    await withSessionStore(async ({ storePath, filePath, send }) => {
-      await writeSessionEntry(storePath, {
-        delivery: normalizeSessionDeliveryState({
-          context: { ...DEFAULT_TELEGRAM_ROUTE, accountId: "default", threadId: 42 },
-        }),
-      });
-      mockSuccessfulAttachmentDelivery();
+    await withSessionStore(
+      async ({ filePath, send }) => {
+        mockSuccessfulAttachmentDelivery();
 
-      const result = await send({
-        channelHints: { silent: true, parseMode: "HTML", threadId: "attachment-thread" },
-      });
+        const result = await send({
+          channelHints: { silent: true, parseMode: "HTML", threadId: "attachment-thread" },
+        });
 
-      expect(result).toEqual({ ok: true, channel: "telegram", deliveredTo: "12345", count: 1 });
-      expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
-      const sendParams = requireFirstSendMessageParams();
-      expect(sendParams).toMatchObject({
-        to: "12345",
-        channel: "telegram",
-        accountId: "default",
-        threadId: "attachment-thread",
-        mediaUrls: [filePath],
-        bestEffort: false,
-        silent: true,
-        parseMode: "HTML",
-      });
-    });
+        expect(result).toEqual({ ok: true, channel: "telegram", deliveredTo: "12345", count: 1 });
+        expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
+        const sendParams = requireFirstSendMessageParams();
+        expect(sendParams).toMatchObject({
+          to: "12345",
+          channel: "telegram",
+          accountId: "default",
+          threadId: "attachment-thread",
+          mediaUrls: [filePath],
+          bestEffort: false,
+          silent: true,
+          parseMode: "HTML",
+        });
+      },
+      { ...DEFAULT_TELEGRAM_ROUTE, accountId: "default", threadId: 42 },
+    );
   });
 
   it("does not use best-effort mode for attachment batches", async () => {
@@ -210,8 +191,7 @@ describe("plugin session attachments", () => {
   });
 
   it("keeps shipped Telegram hints compatible when escaping plain captions", async () => {
-    await withSessionStore(async ({ storePath, send }) => {
-      await writeSessionEntry(storePath);
+    await withSessionStore(async ({ send }) => {
       mockSuccessfulAttachmentDelivery();
 
       const result = await send({
@@ -221,23 +201,22 @@ describe("plugin session attachments", () => {
       });
       expectTelegramAttachmentResult(result, 1);
       const sendParams = requireFirstSendMessageParams();
-      expect(sendParams.content).toBe("1 &lt; 2 &amp; 3 &gt; 2");
-      expect(sendParams.parseMode).toBe("HTML");
+      expect(sendParams).toMatchObject({ content: "1 &lt; 2 &amp; 3 &gt; 2", parseMode: "HTML" });
     });
   });
 
   it("keeps shipped Slack thread hints compatible", async () => {
-    await withSessionStore(async ({ storePath, send }) => {
-      await writeSessionEntry(storePath, {
-        delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
-      });
-      mockSuccessfulAttachmentDelivery();
+    await withSessionStore(
+      async ({ send }) => {
+        mockSuccessfulAttachmentDelivery();
 
-      const result = await send({ channelHints: { slack: { threadTs: "171234.567" } } });
+        const result = await send({ channelHints: { slack: { threadTs: "171234.567" } } });
 
-      expect(result).toMatchObject({ ok: true, channel: "slack", deliveredTo: "C123" });
-      expect(requireFirstSendMessageParams().threadId).toBe("171234.567");
-    });
+        expect(result).toMatchObject({ ok: true, channel: "slack", deliveredTo: "C123" });
+        expect(requireFirstSendMessageParams().threadId).toBe("171234.567");
+      },
+      { channel: "slack", to: "C123" },
+    );
   });
 
   it("resolves relative attachment paths against the session agent workspace", async () => {
@@ -265,8 +244,7 @@ describe("plugin session attachments", () => {
   });
 
   it("reports attachment delivery as failed when no delivery result is returned", async () => {
-    await withSessionStore(async ({ storePath, reject }) => {
-      await writeSessionEntry(storePath);
+    await withSessionStore(async ({ reject }) => {
       workflowMocks.sendMessage.mockResolvedValue({
         channel: "telegram",
         to: "12345",
@@ -279,28 +257,17 @@ describe("plugin session attachments", () => {
   });
 
   it("rejects external plugins and sessions without delivery routes", async () => {
-    await withSessionStore(async ({ storePath, filePath, reject }) => {
-      await writeSessionEntry(storePath, {});
-
-      await expect(
-        sendPluginSessionAttachment({
-          origin: "workspace",
-          sessionKey: MAIN_SESSION_KEY,
-          files: [{ path: filePath }],
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: "session attachments are restricted to bundled plugins",
+    await withSessionStore(async ({ reject }) => {
+      await reject("session attachments are restricted to bundled plugins", {
+        origin: "workspace",
       });
       await reject("session has no active delivery route: agent:main:main");
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
-    });
+    }, null);
   });
 
   it("rejects malformed or oversized attachment inputs before delivery", async () => {
-    await withSessionStore(async ({ stateDir, storePath, filePath, reject }) => {
-      await writeSessionEntry(storePath);
-
+    await withSessionStore(async ({ stateDir, filePath, reject }) => {
       await reject("at most 10 attachment files are allowed", {
         files: Array.from({ length: 11 }, () => ({ path: path.join(stateDir, "missing.txt") })),
       });
@@ -335,13 +302,12 @@ describe("plugin session attachments", () => {
   });
 
   it("validates force-document MIME using only the configured sniff window", async () => {
-    await withSessionStore(async ({ stateDir, storePath, send }) => {
+    await withSessionStore(async ({ stateDir, send }) => {
       const pdfPath = path.join(stateDir, "large.pdf");
       await fs.writeFile(
         pdfPath,
         Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 32)]),
       );
-      await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
 
       const result = await send({
@@ -351,31 +317,19 @@ describe("plugin session attachments", () => {
       });
       expectTelegramAttachmentResult(result, 1);
       const sendParams = requireFirstSendMessageParams();
-      expect(sendParams.mediaUrls).toEqual([pdfPath]);
-      expect(sendParams.forceDocument).toBe(true);
+      expect(sendParams).toMatchObject({ mediaUrls: [pdfPath], forceDocument: true });
     });
   });
 
   it("rejects gateway-mode channels before attempting host-local attachment delivery", async () => {
-    await withSessionStore(async ({ storePath, reject }) => {
-      await writeSessionEntry(storePath);
-      workflowMocks.getChannelPlugin.mockReturnValue(
-        createOutboundTestPlugin({
-          id: "telegram",
-          outbound: { deliveryMode: "gateway" },
-        }),
-      );
+    await withSessionStore(async ({ reject }) => {
+      const plugin = createOutboundTestPlugin({
+        id: "telegram",
+        outbound: { deliveryMode: "gateway" },
+      });
+      workflowMocks.getChannelPlugin.mockReturnValue(plugin);
       setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "telegram",
-              outbound: { deliveryMode: "gateway" },
-            }),
-          },
-        ]),
+        createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
       );
 
       await reject(
@@ -416,8 +370,7 @@ describe("plugin session attachments", () => {
   });
 
   it("returns structured errors when channel delivery lookup fails", async () => {
-    await withSessionStore(async ({ storePath, reject }) => {
-      await writeSessionEntry(storePath);
+    await withSessionStore(async ({ reject }) => {
       workflowMocks.getChannelPlugin.mockImplementation(() => {
         throw new Error("channel registry unavailable");
       });
@@ -429,7 +382,6 @@ describe("plugin session attachments", () => {
 
   it("uses replacement runtime config when captured async session hooks resume", async () => {
     await withSessionStore(async ({ stateDir, storePath, filePath }) => {
-      await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
 
       const staleStorePath = path.join(stateDir, "stale-sessions.json");
@@ -455,8 +407,7 @@ describe("plugin session attachments", () => {
       });
       runtimeConfig = liveConfig;
 
-      const result = await attachment;
-      expectTelegramAttachmentResult(result, 1);
+      expectTelegramAttachmentResult(await attachment, 1);
       expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
       expect(requireFirstSendMessageParams().cfg).toBe(liveConfig);
       await expect(injection).resolves.toEqual({
@@ -482,9 +433,7 @@ describe("plugin session attachments", () => {
   });
 
   it("returns structured errors when the captured API cannot read the live runtime config", async () => {
-    await withSessionStore(async ({ stateDir, storePath, filePath }) => {
-      await writeSessionEntry(storePath);
-
+    await withSessionStore(async ({ stateDir, filePath }) => {
       const registrationConfig = { session: { store: path.join(stateDir, "stale-sessions.json") } };
       const capturedApi = captureAttachmentApi(
         registrationConfig,
