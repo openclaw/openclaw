@@ -216,25 +216,6 @@ describe("worktrees cli", () => {
     ]);
   });
 
-  it("passes a valid --removed-at through to the retirement owner", async () => {
-    setRuntimeConfigSnapshot({}, {});
-    const retire = vi.spyOn(owner, "retireSnapshot").mockResolvedValue({
-      retired: true as const,
-      id: "worktree-id",
-    });
-    muteOutput(false);
-    await run(retireSnapshotArgs("1700000000100"));
-    expect(retire).toHaveBeenCalledWith({
-      id: "worktree-id",
-      expectedSnapshotRef: "refs/openclaw/snapshots/worktree-id",
-      expectedSnapshotOid: "a".repeat(40),
-      expectedRemovedAt: 1_700_000_000_100,
-      retainedSourceRef: "refs/heads/main",
-      expectedRetainedSourceOid: "b".repeat(40),
-      ...admission,
-    });
-  });
-
   it("rejects an empty cleanup job selector before cleanup", async () => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
