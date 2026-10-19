@@ -232,6 +232,9 @@ if (values["active-work-diagnostics"]) {
 }
 if (soakScenario) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  if (cfg.plugins.allow?.length) {
+    cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "diagnostics-prometheus"])];
+  }
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
 let reloadPluginId: string | undefined;
@@ -1393,10 +1396,6 @@ try {
     );
   } while (performance.now() - warmupStartedAt < warmupMs);
   console.log("PHASE warmed");
-  const initialRetainedResources =
-    retentionScenario || soakScenario
-      ? await readGatewayResources(gateway, { collectGarbage: true })
-      : undefined;
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before fixture readiness and warmup");
@@ -1404,6 +1403,10 @@ try {
     await delay(startAt - Date.now());
   }
   const measurementStartedAt = Date.now();
+  const initialRetainedResources =
+    retentionScenario || soakScenario
+      ? await readGatewayResources(gateway, { collectGarbage: true })
+      : undefined;
   const measuredGateway = gateway;
   const samples = [];
   const memorySamples: Array<{
