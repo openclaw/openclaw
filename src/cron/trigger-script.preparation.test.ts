@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import {
@@ -153,165 +153,163 @@ async function executeProbe({ ctx }: HeadlessParams, condition = false) {
   } satisfies CodeModeHeadlessResult;
 }
 
-describe("cron preparation plugin ownership", () => {
-  it("borrows the current Gateway plugins for detached conditions before and after reload", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const loadGateway = async (cfg: OpenClawConfig) => {
-      const input = { config: cfg, workspaceDir: state.workspaceDir };
-      const metadata = loadPluginMetadataSnapshot(input);
-      setCurrentPluginMetadataSnapshot(metadata, { config: cfg });
-      const registry = await loadAndActivateRootPluginRegistry({
-        ...input,
-        manifestRegistry: metadata.manifestRegistry,
-        discovery: metadata.discovery,
-        runtimeOptions: { allowGatewaySubagentBinding: true },
-        preferBuiltPluginArtifacts: true,
-        cache: false,
-        throwOnLoadError: true,
-      });
-      prepareOwnedPluginLoadContext(input, process.env, registry, metadata, true);
-      return registry;
-    };
-    const owner = createPluginRegistryOwner(await loadGateway(config), state.workspaceDir);
-    const runScheduled = createScheduledGatewayRunner(undefined, () => owner.registry);
-    const createRuntime = (cfg: OpenClawConfig) =>
-      createCronScriptRuntime({
-        config: cfg,
-        loadPluginRegistry: loadPreparedInboundPluginRegistry,
-        runHeadless: (params) => executeProbe(params, true),
-      });
-    const expectGeneration = (runtime: Runtime, generation: number) =>
-      expect(
-        runInDetachedAsyncContext(() =>
-          runScheduled(() =>
-            runtime.evaluateTrigger({
-              ...invocation("detached-condition", "main", ["cold_probe"]),
-              script: "return { fire: true }",
-            }),
-          ),
+it("borrows the current Gateway plugins for detached conditions before and after reload", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  const loadGateway = async (cfg: OpenClawConfig) => {
+    const input = { config: cfg, workspaceDir: state.workspaceDir };
+    const metadata = loadPluginMetadataSnapshot(input);
+    setCurrentPluginMetadataSnapshot(metadata, { config: cfg });
+    const registry = await loadAndActivateRootPluginRegistry({
+      ...input,
+      manifestRegistry: metadata.manifestRegistry,
+      discovery: metadata.discovery,
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+      preferBuiltPluginArtifacts: true,
+      cache: false,
+      throwOnLoadError: true,
+    });
+    prepareOwnedPluginLoadContext(input, process.env, registry, metadata, true);
+    return registry;
+  };
+  const owner = createPluginRegistryOwner(await loadGateway(config), state.workspaceDir);
+  const runScheduled = createScheduledGatewayRunner(undefined, () => owner.registry);
+  const createRuntime = (cfg: OpenClawConfig) =>
+    createCronScriptRuntime({
+      config: cfg,
+      loadPluginRegistry: loadPreparedInboundPluginRegistry,
+      runHeadless: (params) => executeProbe(params, true),
+    });
+  const expectGeneration = (runtime: Runtime, generation: number) =>
+    expect(
+      runInDetachedAsyncContext(() =>
+        runScheduled(() =>
+          runtime.evaluateTrigger({
+            ...invocation("detached-condition", "main", ["cold_probe"]),
+            script: "return { fire: true }",
+          }),
         ),
-      ).resolves.toMatchObject({
-        kind: "evaluated",
-        fire: true,
-        state: { state: { artifact: "built", generation, calls: 1 } },
-      });
-    try {
-      const runtime = createRuntime(config);
-      await expectGeneration(runtime, 1);
-      expect(readRegistrations()).toEqual([registration("built", "full")]);
+      ),
+    ).resolves.toMatchObject({
+      kind: "evaluated",
+      fire: true,
+      state: { state: { artifact: "built", generation, calls: 1 } },
+    });
+  try {
+    const runtime = createRuntime(config);
+    await expectGeneration(runtime, 1);
+    expect(readRegistrations()).toEqual([registration("built", "full")]);
 
-      const nextConfig: OpenClawConfig = {
-        ...config,
-        plugins: {
-          ...config.plugins,
-          entries: { "cold-probe": { enabled: true, config: { generation: 2 } } },
-        },
-      };
-      owner.publish(await loadGateway(nextConfig));
-      setRuntimeConfigSnapshot(nextConfig, config);
-      // Both an existing watcher and a rebuilt cron service must use the new generation.
-      for (const nextRuntime of [runtime, createRuntime(nextConfig)]) {
-        await expectGeneration(nextRuntime, 2);
-      }
-      expect(readRegistrations()).toEqual(Array(2).fill(registration("built", "full")));
-    } finally {
-      await owner.close();
+    const nextConfig: OpenClawConfig = {
+      ...config,
+      plugins: {
+        ...config.plugins,
+        entries: { "cold-probe": { enabled: true, config: { generation: 2 } } },
+      },
+    };
+    owner.publish(await loadGateway(nextConfig));
+    setRuntimeConfigSnapshot(nextConfig, config);
+    // Both an existing watcher and a rebuilt cron service must use the new generation.
+    for (const nextRuntime of [runtime, createRuntime(nextConfig)]) {
+      await expectGeneration(nextRuntime, 2);
     }
-  });
-
-  it.each(["gateway", "standalone"] as const)(
-    "preserves %s artifact selection through both real preparation loads",
-    async (owner) => {
-      // Artifact selection must not depend on how long cold module loading takes.
-      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-      const metadataSnapshot = loadPluginMetadataSnapshot({
-        config,
-        workspaceDir: state.workspaceDir,
-      });
-      setCurrentPluginMetadataSnapshot(metadataSnapshot, { config });
-      const contexts: Array<ReturnType<typeof getPluginRuntimeLoadContext>> = [];
-      const runtime = createCronScriptRuntime({
-        config,
-        ...(owner === "gateway" ? { loadPluginRegistry: loadPreparedInboundPluginRegistry } : {}),
-        runHeadless: async (params: HeadlessParams) => {
-          contexts.push(
-            getPluginRuntimeLoadContext(getPluginRuntimeGatewayRequestScope()?.pluginRegistry),
-          );
-          return executeProbe(params);
-        },
-      });
-      const artifact = owner === "gateway" ? "built" : "source";
-      const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
-        runtime.executePayload({
-          ...invocation(jobId, agentId, toolsAllow),
-          timeoutSeconds: 5,
-        });
-      for (const [jobId, agentId] of [
-        ["first", "main"],
-        ["first", "main"],
-        ["second", "main"],
-        ["first", "other"],
-      ] as const) {
-        await expectPayload(run(jobId, agentId), {
-          artifact,
-          calls: 1,
-          agentId,
-          sessionKey: `agent:${agentId}:cron:${jobId}:trigger`,
-        });
-      }
-      expect(readRegistrations()).toEqual(
-        expect.arrayContaining([
-          registration(artifact, "discovery"),
-          registration(artifact, "tool-discovery"),
-        ]),
-      );
-      expect(readRegistrations().every((entry) => entry.artifact === artifact)).toBe(true);
-      if (owner === "gateway") {
-        expect(contexts[0]?.metadataSnapshot).toBe(metadataSnapshot);
-        expect(contexts[1]).toBe(contexts[0]);
-      }
-      await expectPayload(run("first", "other", []), null);
-      await expectPayload(run("first", "other", ["cold_probe"]), { calls: 1 });
-      const nextConfig = structuredClone(config);
-      nextConfig.tools = { deny: ["cold_probe"] };
-      setRuntimeConfigSnapshot(nextConfig, config);
-      await expectPayload(run("first", "other", ["cold_probe"]), null);
-    },
-  );
-
-  it.each(["scoped", "global"] as const)(
-    "uses only %s registry ownership during downstream loading without a model runtime",
-    async (owner) => {
-      const input = { config, workspaceDir: state.workspaceDir, agentDir: state.agentDir() };
-      const metadataSnapshot = loadPluginMetadataSnapshot(input);
-      const registry = createPreparedInboundRegistryLoader()(input, metadataSnapshot);
-      prepareOwnedPluginLoadContext(input, process.env, registry, metadataSnapshot, true);
-      if (owner === "global") {
-        setActivePluginRegistry(registry);
-      }
-      const tools = withPluginRuntimeRegistryScope(owner === "scoped" ? registry : undefined, () =>
-        resolveOpenClawPluginToolsForOptions({
-          options: {
-            config,
-            workspaceDir: state.workspaceDir,
-            agentSessionKey: "agent:main:cron:scoped:trigger",
-            pluginToolAllowlist: ["cold_probe"],
-          },
-          resolvedConfig: config,
-        }),
-      );
-      expect(tools.map((tool) => tool.name)).toEqual(["cold_probe"]);
-      await expect(tools[0]!.execute("scoped-call", {})).resolves.toMatchObject({
-        details: {
-          artifact: owner === "scoped" ? "built" : "source",
-          agentId: "main",
-          sessionKey: "agent:main:cron:scoped:trigger",
-        },
-      });
-      expect(readRegistrations()).toEqual([
-        registration("built", "discovery"),
-        registration(owner === "scoped" ? "built" : "source", "tool-discovery"),
-      ]);
-    },
-  );
+    expect(readRegistrations()).toEqual(Array(2).fill(registration("built", "full")));
+  } finally {
+    await owner.close();
+  }
 });
+
+it.each(["gateway", "standalone"] as const)(
+  "preserves %s artifact selection through both real preparation loads",
+  async (owner) => {
+    // Artifact selection must not depend on how long cold module loading takes.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      workspaceDir: state.workspaceDir,
+    });
+    setCurrentPluginMetadataSnapshot(metadataSnapshot, { config });
+    const contexts: Array<ReturnType<typeof getPluginRuntimeLoadContext>> = [];
+    const runtime = createCronScriptRuntime({
+      config,
+      ...(owner === "gateway" ? { loadPluginRegistry: loadPreparedInboundPluginRegistry } : {}),
+      runHeadless: async (params: HeadlessParams) => {
+        contexts.push(
+          getPluginRuntimeLoadContext(getPluginRuntimeGatewayRequestScope()?.pluginRegistry),
+        );
+        return executeProbe(params);
+      },
+    });
+    const artifact = owner === "gateway" ? "built" : "source";
+    const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
+      runtime.executePayload({
+        ...invocation(jobId, agentId, toolsAllow),
+        timeoutSeconds: 5,
+      });
+    for (const [jobId, agentId] of [
+      ["first", "main"],
+      ["first", "main"],
+      ["second", "main"],
+      ["first", "other"],
+    ] as const) {
+      await expectPayload(run(jobId, agentId), {
+        artifact,
+        calls: 1,
+        agentId,
+        sessionKey: `agent:${agentId}:cron:${jobId}:trigger`,
+      });
+    }
+    expect(readRegistrations()).toEqual(
+      expect.arrayContaining([
+        registration(artifact, "discovery"),
+        registration(artifact, "tool-discovery"),
+      ]),
+    );
+    expect(readRegistrations().every((entry) => entry.artifact === artifact)).toBe(true);
+    if (owner === "gateway") {
+      expect(contexts[0]?.metadataSnapshot).toBe(metadataSnapshot);
+      expect(contexts[1]).toBe(contexts[0]);
+    }
+    await expectPayload(run("first", "other", []), null);
+    await expectPayload(run("first", "other", ["cold_probe"]), { calls: 1 });
+    const nextConfig = structuredClone(config);
+    nextConfig.tools = { deny: ["cold_probe"] };
+    setRuntimeConfigSnapshot(nextConfig, config);
+    await expectPayload(run("first", "other", ["cold_probe"]), null);
+  },
+);
+
+it.each(["scoped", "global"] as const)(
+  "uses only %s registry ownership during downstream loading without a model runtime",
+  async (owner) => {
+    const input = { config, workspaceDir: state.workspaceDir, agentDir: state.agentDir() };
+    const metadataSnapshot = loadPluginMetadataSnapshot(input);
+    const registry = createPreparedInboundRegistryLoader()(input, metadataSnapshot);
+    prepareOwnedPluginLoadContext(input, process.env, registry, metadataSnapshot, true);
+    if (owner === "global") {
+      setActivePluginRegistry(registry);
+    }
+    const tools = withPluginRuntimeRegistryScope(owner === "scoped" ? registry : undefined, () =>
+      resolveOpenClawPluginToolsForOptions({
+        options: {
+          config,
+          workspaceDir: state.workspaceDir,
+          agentSessionKey: "agent:main:cron:scoped:trigger",
+          pluginToolAllowlist: ["cold_probe"],
+        },
+        resolvedConfig: config,
+      }),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(["cold_probe"]);
+    await expect(tools[0]!.execute("scoped-call", {})).resolves.toMatchObject({
+      details: {
+        artifact: owner === "scoped" ? "built" : "source",
+        agentId: "main",
+        sessionKey: "agent:main:cron:scoped:trigger",
+      },
+    });
+    expect(readRegistrations()).toEqual([
+      registration("built", "discovery"),
+      registration(owner === "scoped" ? "built" : "source", "tool-discovery"),
+    ]);
+  },
+);
