@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Writable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -29,11 +29,9 @@ import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 function captureOutput() {
   let output = "";
-  const stdout = new Writable({
-    write(chunk, _encoding, callback) {
-      output += chunk.toString();
-      callback();
-    },
+  const stdout = new PassThrough();
+  stdout.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
   });
   return { stdout, output: () => output };
 }
@@ -61,21 +59,25 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
   beforeEach(async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     dir = dirs.make("openclaw-systemctl-");
-    env = systemctlEnv(dir);
-    await managerProbe(dir);
+    env = {
+      HOME: dir,
+      PATH: dir,
+      XDG_RUNTIME_DIR: dir,
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(dir, "bus")}`,
+    };
+    await managerProbe();
   });
   afterEach(() => vi.restoreAllMocks());
-  async function commandFixture(root: string, command: "systemctl" | "busctl", script: string) {
-    await fs.writeFile(path.join(root, `${command}.sh`), script, { mode: 0o600 });
+  async function commandFixture(command: "systemctl" | "busctl", script: string) {
+    await fs.writeFile(path.join(dir, `${command}.sh`), script, { mode: 0o600 });
     // Execute an immutable launcher so a newly written script inode cannot be text-busy.
     await fs.symlink(
       fileURLToPath(new URL("../../test/fixtures/service-manager-command.sh", import.meta.url)),
-      path.join(root, command),
+      path.join(dir, command),
     );
   }
-  async function managerProbe(root: string) {
+  async function managerProbe() {
     await commandFixture(
-      root,
       "busctl",
       `#!/bin/sh
 [ "$*" = "--user --auto-start=no get-property org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager Version" ] || exit 91
@@ -83,27 +85,18 @@ printf 's "252.39"\\n'
 `,
     );
   }
-  function systemctlEnv(root: string) {
-    return {
-      HOME: root,
-      PATH: root,
-      XDG_RUNTIME_DIR: root,
-      DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(root, "bus")}`,
-    };
-  }
-  async function writeUnit(root: string, unitName: string, definition: string) {
-    const unitPath = path.join(root, ".config/systemd/user", unitName);
+  async function writeUnit(unitName: string, definition: string) {
+    const unitPath = path.join(dir, ".config/systemd/user", unitName);
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
     await fs.writeFile(unitPath, definition);
     return unitPath;
   }
-  const calls = async (root: string) =>
-    (await fs.readFile(path.join(root, "systemctl.calls"), "utf8")).trim().split("\n");
+  const calls = async () =>
+    (await fs.readFile(path.join(dir, "systemctl.calls"), "utf8")).trim().split("\n");
   const absent = (file: string) =>
     expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
-  async function cleanupCommand(root: string, disable: string, enabled = "") {
+  async function cleanupCommand(disable: string, enabled = "") {
     await commandFixture(
-      root,
       "systemctl",
       [
         "#!/bin/sh",
@@ -126,7 +119,6 @@ printf 's "252.39"\\n'
     "retains the failed native probe $scope $probe and sanitized stderr",
     async ({ probe, scope }) => {
       await commandFixture(
-        dir,
         "systemctl",
         "#!/bin/sh\nprintf '\\033[31mFailed to connect to user bus\\033[0m\\nPRIVATE_SECOND_LINE\\n' >&2\nexit 7\n",
       );
@@ -162,7 +154,7 @@ printf 's "252.39"\\n'
     { output: "degraded", code: 1, available: true },
     { output: "Failed to connect to bus: No medium found", code: 1, available: false },
   ])("preserves manager status $output", async ({ output, code, available }) => {
-    await commandFixture(dir, "systemctl", `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${code}\n`);
+    await commandFixture("systemctl", `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${code}\n`);
     await expect(execFileUtf8("systemctl", ["--user", "status"], { env })).resolves.toEqual({
       stdout: `${output}\n`,
       stderr: "",
@@ -182,7 +174,6 @@ printf 's "252.39"\\n'
 
   it.each(["timeout", "signal"])("rejects partial status after %s", async (termination) => {
     await commandFixture(
-      dir,
       "systemctl",
       `#!/bin/sh\nprintf 'Could not find service\\n'\n${termination === "timeout" ? "exec /bin/sleep 10" : "kill -TERM $$"}\n`,
     );
@@ -223,13 +214,13 @@ printf 's "252.39"\\n'
         await result.catch(() => undefined);
       }
     };
-    await runAfterOutput(async () => {
-      await expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
+    await runAfterOutput(() =>
+      expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
         termination === "timeout"
           ? "systemd manager inspection deadline expired"
           : "systemctl --user status: signal; Command was terminated by SIGTERM",
-      );
-    });
+      ),
+    );
     const result = await runAfterOutput(() =>
       execFileUtf8("systemctl", ["--user", "status"], {
         env,
@@ -237,11 +228,14 @@ printf 's "252.39"\\n'
         killSignal: "SIGKILL",
       }),
     );
-    expect(result).toMatchObject({ stdout: "Could not find service\n", termination });
+    expect(result).toMatchObject({
+      stdout: "Could not find service\n",
+      termination,
+      stderr: expect.stringContaining(
+        termination === "timeout" ? "Command timed out" : "Command was terminated by SIGTERM",
+      ),
+    });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain(
-      termination === "timeout" ? "Command timed out" : "Command was terminated by SIGTERM",
-    );
     expect(isLaunchctlNotLoaded(result)).toBe(false);
     if (termination === "signal") {
       await expect(isSystemctlAvailable(env)).resolves.toBe(true);
@@ -261,10 +255,9 @@ printf 's "252.39"\\n'
       "handles $availability status with disable failure $disableFails",
       async ({ availability, disableFails }) => {
         const definition = "[Unit]\nDescription=Gateway cleanup fixture\n";
-        const unitPath = await writeUnit(dir, unitName, definition);
+        const unitPath = await writeUnit(unitName, definition);
         if (availability !== "missing") {
           await cleanupCommand(
-            dir,
             `test -f "$HOME/.config/systemd/user/${unitName}" || exit 98\n${disableFails ? "kill -TERM $$" : "exit 0"}`,
             '*" is-enabled "*) printf "enabled\\n" ;;',
           );
@@ -283,7 +276,7 @@ printf 's "252.39"\\n'
           await absent(path.join(dir, "systemctl.calls"));
           expect(output()).toContain("systemctl unavailable");
         } else {
-          const recorded = await calls(dir);
+          const recorded = await calls();
           expect(recorded).toContain(`--user disable --now ${unitName}`);
           expect(recorded.includes("--user daemon-reload")).toBe(!disableFails);
           expect(output()).not.toContain("systemctl unavailable");
@@ -292,51 +285,40 @@ printf 's "252.39"\\n'
     );
   });
 
-  it("refuses cleanup when the inspected user unit is replaced by a leftover legacy unit", async () => {
-    env = { ...env, OPENCLAW_PROFILE: "lisa" };
-    const leftoverPath = await writeUnit(
-      dir,
-      "openclaw-lisa.service",
-      "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n",
-    );
-    const canonicalPath = path.join(path.dirname(leftoverPath), "openclaw-gateway-lisa.service");
-    const { stdout } = captureOutput();
-    await expect(
-      uninstallUserSystemdGatewayUnit({
+  it.each([false, true])(
+    "removes a profile unit only when discovery matches: %s",
+    async (matches) => {
+      env = { ...env, OPENCLAW_PROFILE: "lisa" };
+      const unitName = "openclaw-lisa.service";
+      const unitPath = await writeUnit(
+        unitName,
+        "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n",
+      );
+      if (matches) {
+        await cleanupCommand("exit 0");
+      }
+      const { stdout, output } = captureOutput();
+      const inspectedName = matches ? unitName : "openclaw-gateway-lisa.service";
+      const removal = uninstallUserSystemdGatewayUnit({
         env,
         stdout,
         target: {
           scope: "user",
-          unitName: "openclaw-gateway-lisa.service",
-          unitPath: canonicalPath,
+          unitName: inspectedName,
+          unitPath: path.join(path.dirname(unitPath), inspectedName),
         },
-      }),
-    ).rejects.toThrow(/openclaw-gateway-lisa\.service changed to openclaw-lisa\.service/);
-    await fs.access(leftoverPath);
-  });
-
-  it("still removes the inspected user unit when discovery still matches", async () => {
-    env = { ...env, OPENCLAW_PROFILE: "lisa" };
-    const unitPath = await writeUnit(
-      dir,
-      "openclaw-lisa.service",
-      "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n",
-    );
-    await cleanupCommand(dir, "exit 0");
-    const { stdout, output } = captureOutput();
-    const result = await uninstallUserSystemdGatewayUnit({
-      env,
-      stdout,
-      target: { scope: "user", unitName: "openclaw-lisa.service", unitPath },
-    });
-    expect(result).toMatchObject({
-      unitName: "openclaw-lisa.service",
-      unitPath,
-      removed: true,
-      disabled: true,
-    });
-    await absent(unitPath);
-    expect(await calls(dir)).toContain("--user disable --now openclaw-lisa.service");
-    expect(output()).toContain("Removed");
-  });
+      });
+      if (!matches) {
+        await expect(removal).rejects.toThrow(
+          /openclaw-gateway-lisa\.service changed to openclaw-lisa\.service/,
+        );
+        await fs.access(unitPath);
+        return;
+      }
+      expect(await removal).toMatchObject({ unitName, unitPath, removed: true, disabled: true });
+      await absent(unitPath);
+      expect(await calls()).toContain("--user disable --now openclaw-lisa.service");
+      expect(output()).toContain("Removed");
+    },
+  );
 });

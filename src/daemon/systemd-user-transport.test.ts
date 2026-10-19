@@ -16,6 +16,8 @@ import { readSystemdUserTransport, resolveSystemdUserTransport } from "./systemd
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-peer-native.js", () => ({ openSystemdUserManager: vi.fn() }));
+const exec = vi.mocked(execFileUtf8);
+const open = vi.mocked(openSystemdUserManager);
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const success = (stdout: string) => ({ code: 0, termination: "exit" as const, stdout, stderr: "" });
 const missing = {
@@ -85,26 +87,22 @@ it.each(["custom", "private", "unavailable"] as const)(
     };
     const selected = scenario === "custom" ? custom : undefined;
     const probes: string[] = [];
-    const children: Array<{
-      command: string;
-      bus: string | undefined;
-      runtime: string | undefined;
-    }> = [];
-    vi.mocked(execFileUtf8).mockImplementation(async (command, args, options) => {
+    const children: [string, string | undefined, string | undefined][] = [];
+    exec.mockImplementation(async (command, args, options) => {
       const bus = options?.env?.DBUS_SESSION_BUS_ADDRESS;
       if (args.includes("Version")) {
         expect(args).toContain("--auto-start=no");
         probes.push(args.includes("--machine") ? "machine" : (bus ?? ""));
         return !args.includes("--machine") && bus === selected ? success(version) : missing;
       }
-      children.push({ command, bus, runtime: options?.env?.XDG_RUNTIME_DIR });
+      children.push([command, bus, options?.env?.XDG_RUNTIME_DIR]);
       if (args.includes("LoadUnit")) {
         return { ...missing, stderr: "Call failed: Unit openclaw-gateway.service not found." };
       }
       return success("");
     });
     const close = vi.fn(async () => {});
-    vi.mocked(openSystemdUserManager).mockResolvedValue({
+    open.mockResolvedValue({
       close,
       verify: () => {},
       query: async (args) => (args.includes("Version") ? ["252.39"] : null),
@@ -123,19 +121,15 @@ it.each(["custom", "private", "unavailable"] as const)(
     expect(transport?.kind).toBe(scenario === "custom" ? "session-bus" : "private");
     if (scenario === "private") {
       expect(children).toEqual([
-        {
-          command: "systemctl",
-          bus: `unix:path=${runtimeDir}/systemd/private`,
-          runtime: runtimeDir,
-        },
+        ["systemctl", `unix:path=${runtimeDir}/systemd/private`, runtimeDir],
       ]);
       expect(close).toHaveBeenCalledTimes(2);
     } else {
       expect((await execBusctlUser(env, ["list"])).code).toBe(0);
       expect(children).toEqual([
-        { command: "busctl", bus: selected, runtime: runtimeDir },
-        { command: "systemctl", bus: selected, runtime: undefined },
-        { command: "busctl", bus: selected, runtime: runtimeDir },
+        ["busctl", selected, runtimeDir],
+        ["systemctl", selected, undefined],
+        ["busctl", selected, runtimeDir],
       ]);
       expect(openSystemdUserManager).not.toHaveBeenCalled();
     }
@@ -157,17 +151,30 @@ it.each(["custom", "private", "unavailable"] as const)(
   },
 );
 
-it("deduplicates concurrent discovery without retaining caller environment", async () => {
+it.each([false, true])("shares discovery without sharing retired custody: %s", async (retired) => {
   const held = createDeferredCore();
-  vi.mocked(execFileUtf8).mockImplementation(async () => {
-    await held.promise;
-    return success(version);
-  });
-  const first = resolveSystemdUserTransport(env);
+  let current = true;
+  exec
+    .mockImplementationOnce(async () => {
+      await held.promise;
+      current = !retired;
+      return retired ? missing : success(version);
+    })
+    .mockResolvedValue(success(version));
+  const first = resolveSystemdUserTransport(env, undefined, () => {
+    if (!current) {
+      throw new Error("original discovery retired");
+    }
+  }).catch((error: unknown) => error);
   const second = resolveSystemdUserTransport({ ...env, UNRELATED: "changed" });
   held.resolve();
-  expect(await first).toBe(await second);
-  expect(execFileUtf8).toHaveBeenCalledOnce();
+  if (retired) {
+    expect(await first).toMatchObject({ message: "original discovery retired" });
+    await expect(second).resolves.toMatchObject({ kind: "session-bus" });
+  } else {
+    expect(await first).toBe(await second);
+  }
+  expect(execFileUtf8).toHaveBeenCalledTimes(retired ? 2 : 1);
 });
 
 it.each([
@@ -176,7 +183,7 @@ it.each([
 ] as const)(
   "distinguishes missing native tools from $reason ($busctl, $systemctl)",
   async ({ busctl, systemctl, reason }) => {
-    vi.mocked(execFileUtf8).mockImplementation(async (command) => {
+    exec.mockImplementation(async (command) => {
       const errorCode = command === "busctl" ? busctl : systemctl;
       return errorCode
         ? { ...missing, termination: "error", errorCode }
@@ -191,7 +198,7 @@ it.each([
 it("retains the failed native probe when it exhausts the inspection deadline", async () => {
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.mocked(execFileUtf8).mockImplementation(async () => {
+  exec.mockImplementation(async () => {
     now = 1000;
     return { ...missing, code: 7 };
   });
@@ -207,7 +214,7 @@ it("retains the failed native probe when it exhausts the inspection deadline", a
 it("stops discovery when its caller retires between probes", async () => {
   await fs.writeFile(path.join(home, "bus"), "");
   let current = true;
-  vi.mocked(execFileUtf8).mockImplementation(async () => {
+  exec.mockImplementation(async () => {
     current = false;
     return missing;
   });
@@ -221,51 +228,45 @@ it("stops discovery when its caller retires between probes", async () => {
   expect(execFileUtf8).toHaveBeenCalledOnce();
 });
 
-it("reports a lost selected private socket without reselecting or blaming the definition", async () => {
-  await privateSocket(home);
-  env = transportEnv(home, "missing-bus");
-  vi.mocked(execFileUtf8).mockResolvedValue(missing);
-  const close = vi.fn(async () => {});
-  vi.mocked(openSystemdUserManager)
-    .mockResolvedValueOnce(connection(close))
-    .mockRejectedValue(new Error("Original systemd manager peer inspection is unavailable."));
-  await expect(resolveSystemdUserTransport(env)).resolves.toMatchObject({ kind: "private" });
-  const probes = vi.mocked(execFileUtf8).mock.calls.length;
-  await expect(readSelectedUserService(env)).rejects.toMatchObject({
-    reason: "systemd-user-bus-unavailable",
-  });
-  expect(execFileUtf8).toHaveBeenCalledTimes(probes);
-  expect(close).toHaveBeenCalledOnce();
-});
-
-it.each(["discovery", "connection", "query"])(
-  "preserves native ownership refusal during private %s without a fallback route",
+it.each(["discovery", "connection", "query", "lost-socket"])(
+  "preserves private %s failure without fallback or reselection",
   async (phase) => {
     await privateSocket(home);
     env = transportEnv(home, "missing-bus");
-    vi.mocked(execFileUtf8).mockResolvedValue(missing);
-    const refusal = new ServiceOwnershipRefusalError("systemd-manager-changed");
+    exec.mockResolvedValue(missing);
+    const refusal =
+      phase === "lost-socket"
+        ? new Error("Original systemd manager peer inspection is unavailable.")
+        : new ServiceOwnershipRefusalError("systemd-manager-changed");
     const close = vi.fn(async () => {});
     const peer = connection(close);
-    vi.mocked(openSystemdUserManager).mockRejectedValue(refusal);
+    open.mockRejectedValue(refusal);
     if (phase !== "discovery") {
-      vi.mocked(openSystemdUserManager).mockResolvedValueOnce(peer);
+      open.mockResolvedValueOnce(peer);
     }
     if (phase === "query") {
-      vi.mocked(openSystemdUserManager).mockResolvedValue({
+      open.mockResolvedValue({
         ...peer,
         query: async () => {
           throw refusal;
         },
       });
     }
+    let probes = 0;
+    if (phase === "lost-socket") {
+      await expect(resolveSystemdUserTransport(env)).resolves.toMatchObject({ kind: "private" });
+      probes = exec.mock.calls.length;
+    }
     const read =
       phase === "discovery" ? resolveSystemdUserTransport(env) : readSelectedUserService(env);
-    await expect(read).rejects.toBe(refusal);
-    expect(vi.mocked(execFileUtf8).mock.calls.some(([, args]) => args.includes("--machine"))).toBe(
-      false,
-    );
-    expect(close).toHaveBeenCalledTimes(phase === "discovery" ? 0 : phase === "connection" ? 1 : 2);
+    if (phase === "lost-socket") {
+      await expect(read).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
+      expect(execFileUtf8).toHaveBeenCalledTimes(probes);
+    } else {
+      await expect(read).rejects.toBe(refusal);
+    }
+    expect(exec.mock.calls.some(([, args]) => args.includes("--machine"))).toBe(false);
+    expect(close).toHaveBeenCalledTimes(phase === "discovery" ? 0 : phase === "query" ? 2 : 1);
   },
 );
 
@@ -278,7 +279,7 @@ it("retains direct-root machine routing at the selection owner", async () => {
     LOGNAME: "root",
     SUDO_USER: undefined,
   };
-  vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
+  exec.mockImplementation(async (command, args) => {
     if (!args.includes("--machine")) {
       return missing;
     }
@@ -298,7 +299,7 @@ it.each([true, false])(
     }
     env = transportEnv(home, "custom");
     const held = createDeferredCore();
-    vi.mocked(execFileUtf8)
+    exec
       .mockImplementationOnce(async () => {
         await held.promise;
         return { ...missing, termination: "timeout" };
@@ -306,7 +307,7 @@ it.each([true, false])(
       .mockImplementation(async (_command, args) =>
         args.includes("--machine") ? missing : success(version),
       );
-    vi.mocked(openSystemdUserManager).mockResolvedValue(connection());
+    open.mockResolvedValue(connection());
     const first = resolveSystemdUserTransport(env, performance.now() + 100).catch(
       (error: unknown) => error,
     );
@@ -322,25 +323,3 @@ it.each([true, false])(
     expect(openSystemdUserManager).toHaveBeenCalledTimes(privateAvailable ? 1 : 0);
   },
 );
-
-it("does not inherit another discovery caller's retired custody", async () => {
-  let current = true;
-  const held = createDeferredCore();
-  vi.mocked(execFileUtf8)
-    .mockImplementationOnce(async () => {
-      await held.promise;
-      current = false;
-      return missing;
-    })
-    .mockResolvedValue(success(version));
-  const first = resolveSystemdUserTransport(env, undefined, () => {
-    if (!current) {
-      throw new Error("original discovery retired");
-    }
-  }).catch((error: unknown) => error);
-  const waiting = resolveSystemdUserTransport(env, undefined, () => {});
-  held.resolve();
-  expect(await first).toMatchObject({ message: "original discovery retired" });
-  await expect(waiting).resolves.toMatchObject({ kind: "session-bus" });
-  expect(execFileUtf8).toHaveBeenCalledTimes(2);
-});
