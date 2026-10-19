@@ -1,4 +1,3 @@
-// Plugin MCP serve tests cover serving plugin tools over MCP.
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,12 +18,10 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
+import { acquirePluginToolsForMcp, servePluginToolsMcp } from "./plugin-tools-serve.js";
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
 const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
-const createToolsMcpServerMock = vi.hoisted(() =>
-  vi.fn<typeof import("./tools-stdio-server.js").createToolsMcpServer>(),
-);
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
 const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
@@ -61,7 +58,6 @@ vi.mock("../plugins/tools.js", async (importOriginal) => {
 
 vi.mock("./tools-stdio-server.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tools-stdio-server.js")>();
-  createToolsMcpServerMock.mockImplementation(actual.createToolsMcpServer);
   const serve: typeof actual.serveRegisteredToolsMcpServer = async (params) => {
     const { LegacyPluginSdkResourceHost } = await import("../plugins/legacy-sdk-resource-host.js");
     const host = new LegacyPluginSdkResourceHost();
@@ -77,7 +73,6 @@ vi.mock("./tools-stdio-server.js", async (importOriginal) => {
   };
   return {
     ...actual,
-    createToolsMcpServer: createToolsMcpServerMock,
     serveRegisteredToolsMcpServer: serve,
   };
 });
@@ -91,7 +86,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   callGatewayTool.mockReset();
   connectToolsMcpServerToStdioMock.mockReset();
-  createToolsMcpServerMock.mockClear();
   acquireStandalonePluginToolRegistryMock.mockReset().mockImplementation(async () => ({
     resolveTools: resolvePluginToolsMock,
     release: releasePluginToolsMock,
@@ -112,6 +106,41 @@ function createTool(
   description = name,
 ): AnyAgentTool {
   return { name, label: name, description, parameters, execute };
+}
+
+function approvalHook(context?: HookContext) {
+  const onResolution = vi.fn();
+  const handler = vi.fn(async (_event: unknown, ctx: unknown) => {
+    const hookContext = ctx as HookContext | undefined;
+    if (context && hookContext?.sessionKey !== context.sessionKey) {
+      return undefined;
+    }
+    return {
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Approval required",
+        description: "Approval required",
+        onResolution,
+      },
+    };
+  });
+  initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
+  return { handler, onResolution };
+}
+
+const stored = () => vi.fn().mockResolvedValue({ content: "Stored." });
+
+async function expectApprovalReported(tool: AnyAgentTool, execute: ReturnType<typeof vi.fn>) {
+  const result = await createPluginToolsMcpHandlers([tool]).callTool({
+    name: "memory_store",
+    arguments: { text: "remember this" },
+  });
+  expect(callGatewayTool).not.toHaveBeenCalled();
+  expect(execute).not.toHaveBeenCalled();
+  expect(result).toEqual({
+    isError: true,
+    content: [{ type: "text", text: "Tool error: Approval required" }],
+  });
 }
 
 function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
@@ -139,7 +168,6 @@ describe("plugin tools MCP server", () => {
   ])(
     "passes $agentSessionKey owner into plugin tool factories",
     async ({ agentSessionKey, agentId, owner }) => {
-      const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
       const runtimeRegistry = createMockPluginRegistry([]);
       acquireStandalonePluginToolRegistryMock.mockResolvedValue({
         registry: runtimeRegistry,
@@ -152,13 +180,8 @@ describe("plugin tools MCP server", () => {
       acquisition.resolveTools();
       await acquisition.release();
 
-      const expectedContext = {
-        config,
-        agentId: owner,
-        sessionKey: agentSessionKey,
-      };
       expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith({
-        context: expectedContext,
+        context: { config, agentId: owner, sessionKey: agentSessionKey },
         suppressNameConflicts: true,
       });
       expect(resolvePluginToolsMock).toHaveBeenCalledOnce();
@@ -166,8 +189,6 @@ describe("plugin tools MCP server", () => {
   );
 
   it("rejects a non-agent session identity from the managed bridge", async () => {
-    const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
-
     await expect(
       acquirePluginToolsForMcp({
         config: { plugins: { enabled: true } } as never,
@@ -184,7 +205,6 @@ describe("plugin tools MCP server", () => {
         deny: ["memory_forget"],
       },
     } as never);
-    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
 
     await servePluginToolsMcp();
 
@@ -204,7 +224,6 @@ describe("plugin tools MCP server", () => {
       createTool("plugin_allowed", allowedExecute),
       createTool("plugin_denied", deniedExecute),
     ]);
-    const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
 
     const acquisition = await acquirePluginToolsForMcp({
       config: {
@@ -251,7 +270,7 @@ describe("plugin tools MCP server", () => {
 
   it("uses unique ids and releases execution tracking through the scheduler alias", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
+    const executeSuccess = stored();
     const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
     const handlers = createPluginToolsMcpHandlers([
       createTool("automations", executeSuccess),
@@ -341,7 +360,7 @@ describe("plugin tools MCP server", () => {
 
   it("releases run-scoped adjusted arguments after a pre-wrapped direct MCP call", async () => {
     const runId = "run-direct-mcp";
-    const execute = vi.fn().mockResolvedValue({ content: "Stored." });
+    const execute = stored();
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -368,89 +387,28 @@ describe("plugin tools MCP server", () => {
   });
 
   it("reports approval requirements without opening plugin approvals on the MCP bridge", async () => {
-    let hookCalls = 0;
-    const onResolution = vi.fn();
-    const execute = vi.fn().mockResolvedValue({
-      content: "Stored.",
-    });
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: async () => {
-            hookCalls += 1;
-            return {
-              requireApproval: {
-                pluginId: "test-plugin",
-                title: "Approval required",
-                description: "Approval required",
-                onResolution,
-              },
-            };
-          },
-        },
-      ]),
-    );
+    const { handler, onResolution } = approvalHook();
+    const execute = stored();
     const tool = createTool("memory_store", execute);
-
-    const handlers = createPluginToolsMcpHandlers([tool]);
-    const result = await handlers.callTool({
-      name: "memory_store",
-      arguments: { text: "remember this" },
-    });
-    expect(hookCalls).toBe(1);
-    expect(callGatewayTool).not.toHaveBeenCalled();
-    expect(execute).not.toHaveBeenCalled();
-    expect(result.isError).toBe(true);
-    expect(result.content).toEqual([{ type: "text", text: "Tool error: Approval required" }]);
+    await expectApprovalReported(tool, execute);
+    expect(handler).toHaveBeenCalledTimes(1);
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
   });
 
   it("switches pre-wrapped plugin tools to approval report mode on the MCP bridge", async () => {
-    const onResolution = vi.fn();
-    const execute = vi.fn().mockResolvedValue({
-      content: "Stored.",
-    });
+    const execute = stored();
     const originalContext = {
       agentId: "agent-with-plugins",
       sessionKey: "session-with-plugins",
     } satisfies HookContext;
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: async (_event, ctx) => {
-            const hookContext = ctx as HookContext | undefined;
-            if (hookContext?.sessionKey !== originalContext.sessionKey) {
-              return undefined;
-            }
-            return {
-              requireApproval: {
-                pluginId: "test-plugin",
-                title: "Approval required",
-                description: "Approval required",
-                onResolution,
-              },
-            };
-          },
-        },
-      ]),
-    );
+    const { onResolution } = approvalHook(originalContext);
     callGatewayTool.mockRejectedValue(new Error("gateway unavailable"));
     const tool = wrapToolWithBeforeToolCallHook(
       createTool("memory_store", execute),
       originalContext,
     );
 
-    const handlers = createPluginToolsMcpHandlers([tool]);
-    const result = await handlers.callTool({
-      name: "memory_store",
-      arguments: { text: "remember this" },
-    });
-    expect(callGatewayTool).not.toHaveBeenCalled();
-    expect(execute).not.toHaveBeenCalled();
-    expect(result.isError).toBe(true);
-    expect(result.content).toEqual([{ type: "text", text: "Tool error: Approval required" }]);
+    await expectApprovalReported(tool, execute);
     expect(onResolution).toHaveBeenCalledTimes(1);
     expect(onResolution).toHaveBeenLastCalledWith(PluginApprovalResolutions.CANCELLED);
 
