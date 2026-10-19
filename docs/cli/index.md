@@ -123,6 +123,53 @@ OpenClaw uses a lobster palette for CLI output:
 
 Palette source of truth: `packages/terminal-core/src/palette.ts`.
 
+## Screen readers
+
+Interactive prompts, such as select menus and multi-select lists, mark the
+option under the cursor with `●` and the other options with `○`. Many screen
+readers announce both symbols the same way (for example, as "circle"), so the
+focused option can't be identified by ear.
+
+On Linux, set `TERM=linux` for the `openclaw` process to switch prompts to
+ASCII markers:
+
+| Prompt element                 | Default | With `TERM=linux` |
+| ------------------------------ | ------- | ----------------- |
+| Option under the cursor        | `●`     | `>`               |
+| Other options                  | `○`     | (blank)           |
+| Multi-select, cursor           | `◻`     | `[•]`             |
+| Multi-select, checked option   | `◼`     | `[+]`             |
+| Multi-select, unchecked option | `◻`     | `[ ]`             |
+
+Box-drawing lines around prompts also switch to plain ASCII characters.
+
+To apply this only to OpenClaw, without changing `TERM` for the rest of your
+terminal session, add a wrapper to your shell startup file.
+
+Bash (`~/.bashrc`) or zsh (`~/.zshrc`):
+
+```bash
+alias openclaw='TERM=linux openclaw'
+```
+
+fish:
+
+```fish
+function openclaw
+    env TERM=linux command openclaw $argv
+end
+funcsave openclaw
+```
+
+Open a new terminal, or reload the startup file, before running `openclaw`
+again.
+
+Notes:
+
+- Processes started by that `openclaw` command inherit `TERM=linux`, so some
+  colors or full-screen layouts may look simpler.
+- This setting has no effect on Windows.
+
 ## Command tree
 
 <Accordion title="Full command tree">
