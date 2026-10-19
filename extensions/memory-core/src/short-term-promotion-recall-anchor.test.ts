@@ -13,7 +13,8 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "./test-helpers.js";
 
-vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
+vi.mock("openclaw/plugin-sdk/memory-host-events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-host-events")>()),
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
 
