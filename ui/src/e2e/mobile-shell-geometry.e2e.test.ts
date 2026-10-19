@@ -116,7 +116,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   // Dense queue/context reachability belongs to chat-footer.e2e.test.ts; this tests the editor.
   await expect(
     page.locator(
-      ".chat-details:popover-open, .chat-footer__context .session-progress-card, .chat-footer__context .chat-prs",
+      ".chat-details:popover-open, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden]), .chat-footer__context .session-progress-card, .chat-footer__context .chat-prs",
     ),
   ).toHaveCount(0);
   const textarea = page.locator(".agent-chat__composer-combobox textarea");
@@ -182,7 +182,10 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
 }
 
 async function geometry(page: Page) {
-  await waitForLayoutSettled(page, ".shell, .agent-chat__composer-shell");
+  await waitForLayoutSettled(
+    page,
+    ".shell, .agent-chat__composer-shell, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden])",
+  );
   return page.evaluate(() => {
     const rect = (selector: string) => {
       const el = document.querySelector(selector);
@@ -197,7 +200,9 @@ async function geometry(page: Page) {
       composer: rect(".agent-chat__composer-shell")!,
       thread: rect(".chat-thread-inner"),
       footer: rect(".chat-footer"),
-      details: rect(".chat-details:popover-open"),
+      details: rect(
+        ".chat-details:popover-open, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden]):has(.chat-mobile-host__details:not([hidden]))",
+      ),
       conversation: rect(".chat-main__conversation-frame"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
@@ -374,6 +379,7 @@ suite.define(() => {
           { step: "Review the result", status: "completed" },
         ]);
         await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
+        await closeChatDetails(page);
         const chat = await geometry(page);
         await textarea.fill("Please continue the layout check.");
         const sendPoint = await reach("Send message", height - bottom);
@@ -390,8 +396,11 @@ suite.define(() => {
           { step: "Verify the controls", status: "in_progress" },
         ]);
         const progress = page.locator('[data-progress-card-placement="details"]');
-        // Sending is an outside click; updates must not reopen Details.
+        // A progress update must not reopen explicitly closed Details.
         await expect(progress).toBeHidden();
+        if (mobile) {
+          await expect(page.locator(".chat-mobile-host")).toBeHidden();
+        }
         await openChatDetails(page);
         await expect(progress).toBeVisible();
         const withProgress = await geometry(page);
@@ -501,7 +510,12 @@ suite.define(() => {
             withProgress.conversation!.left,
           );
           expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
-          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.footer!.top);
+          expect(withProgress.details!.top).toBeGreaterThanOrEqual(
+            withProgress.conversation!.bottom,
+          );
+          expect(withProgress.footer!.bottom).toBeLessThanOrEqual(withProgress.details!.top);
+          expect(withProgress.details!.top).toBeGreaterThanOrEqual(withProgress.shell.top);
+          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.shell.bottom);
         }
       },
     );
