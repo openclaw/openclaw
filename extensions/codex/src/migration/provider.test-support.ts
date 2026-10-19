@@ -28,6 +28,13 @@ const credentialStorage = vi.hoisted(() => ({
   accountType: "apiKey",
   accountReadFails: false,
 }));
+export {
+  closeCredentialReader,
+  nativeCredentialReaderStart,
+  appServerRequest,
+  sourceAppServerClientScope,
+  credentialStorage,
+};
 
 vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../app-server/managed-binary.js")>()),
@@ -85,50 +92,30 @@ const logger = {
   debug() {},
 };
 
-async function writeFile(filePath: string, content = ""): Promise<void> {
+export async function writeFile(filePath: string, content = ""): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
 }
 
-function makeContext(params: {
-  source: string;
-  stateDir: string;
-  workspaceDir: string;
-  overwrite?: boolean;
-  includeSecrets?: boolean;
-  targetAgentId?: string;
-  itemKinds?: readonly string[];
-  verifyPluginApps?: boolean;
-  providerOptions?: MigrationProviderContext["providerOptions"];
-  reportDir?: string;
-  config?: MigrationProviderContext["config"];
-  runtime?: MigrationProviderContext["runtime"];
-}): MigrationProviderContext {
+export function makeContext({
+  workspaceDir,
+  verifyPluginApps,
+  ...params
+}: Pick<MigrationProviderContext, "source" | "stateDir"> &
+  Partial<MigrationProviderContext> & {
+    workspaceDir: string;
+    verifyPluginApps?: boolean;
+  }): MigrationProviderContext {
   return {
-    config:
-      params.config ??
-      ({
-        agents: {
-          defaults: {
-            workspace: params.workspaceDir,
-          },
-        },
-      } as MigrationProviderContext["config"]),
-    runtime: params.runtime,
-    source: params.source,
-    stateDir: params.stateDir,
-    includeSecrets: params.includeSecrets,
-    targetAgentId: params.targetAgentId,
-    itemKinds: params.itemKinds,
-    overwrite: params.overwrite,
+    ...params,
+    config: params.config ?? { agents: { defaults: { workspace: workspaceDir } } },
     providerOptions:
-      params.providerOptions ?? (params.verifyPluginApps ? { verifyPluginApps: true } : undefined),
-    reportDir: params.reportDir,
+      params.providerOptions ?? (verifyPluginApps ? { verifyPluginApps: true } : undefined),
     logger,
   };
 }
 
-function findItem(items: readonly { id?: string }[], id: string) {
+export function findItem(items: readonly { id?: string }[], id: string) {
   const item = items.find((entry) => entry.id === id);
   if (!item) {
     throw new Error(`Expected migration item ${id}`);
@@ -136,7 +123,7 @@ function findItem(items: readonly { id?: string }[], id: string) {
   return item as Record<string, unknown>;
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -147,21 +134,21 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-function fakeJwt(payload: Record<string, unknown>): string {
+export function fakeJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${header}.${body}.signature`;
 }
 
-function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
+export function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
   return path.join(fixture.stateDir, "agents", agentId, "agent");
 }
 
-function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
+export function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
   return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture, agentId));
 }
 
-async function createCodexTestRoot(): Promise<string> {
+export async function createCodexTestRoot(): Promise<string> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-migrate-codex-",
@@ -170,13 +157,7 @@ async function createCodexTestRoot(): Promise<string> {
   return workspace.dir;
 }
 
-async function createCodexFixture(): Promise<{
-  root: string;
-  homeDir: string;
-  codexHome: string;
-  stateDir: string;
-  workspaceDir: string;
-}> {
+export async function createCodexFixture() {
   const root = await createCodexTestRoot();
   const homeDir = path.join(root, "home");
   const codexHome = path.join(root, ".codex");
@@ -191,13 +172,7 @@ async function createCodexFixture(): Promise<{
   await writeFile(
     path.join(
       codexHome,
-      "plugins",
-      "cache",
-      "openai-primary-runtime",
-      "documents",
-      "1.0.0",
-      ".codex-plugin",
-      "plugin.json",
+      "plugins/cache/openai-primary-runtime/documents/1.0.0/.codex-plugin/plugin.json",
     ),
     JSON.stringify({ name: "documents" }),
   );
@@ -206,8 +181,9 @@ async function createCodexFixture(): Promise<{
   return { root, homeDir, codexHome, stateDir, workspaceDir };
 }
 
-function createConfigRuntime(
+export function createConfigRuntime(
   configState: MigrationProviderContext["config"],
+  writeError?: Error,
 ): MigrationProviderContext["runtime"] {
   type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
   type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
@@ -216,6 +192,9 @@ function createConfigRuntime(
     config: {
       current: () => configState,
       mutateConfigFile: async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
+        if (writeError) {
+          throw writeError;
+        }
         const result = await params.mutate(configState, {
           snapshot: {} as never,
           previousHash: null,
@@ -235,19 +214,10 @@ function createConfigRuntime(
   } as unknown as MigrationProviderContext["runtime"];
 }
 
-function createFailingConfigRuntime(
+export function createFailingConfigRuntime(
   configState: MigrationProviderContext["config"],
 ): MigrationProviderContext["runtime"] {
-  type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
-  type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
-  return {
-    config: {
-      current: () => configState,
-      mutateConfigFile: async (_params: MutateConfigFileParams): Promise<never> => {
-        throw new Error("config write failed");
-      },
-    },
-  } as unknown as MigrationProviderContext["runtime"];
+  return createConfigRuntime(configState, new Error("config write failed"));
 }
 
 beforeEach(() => {
@@ -282,22 +252,3 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
-
-export {
-  writeFile,
-  makeContext,
-  findItem,
-  expectRecordFields,
-  fakeJwt,
-  targetAgentDir,
-  loadTargetAuthStore,
-  createCodexTestRoot,
-  createCodexFixture,
-  createConfigRuntime,
-  createFailingConfigRuntime,
-  closeCredentialReader,
-  nativeCredentialReaderStart,
-  appServerRequest,
-  sourceAppServerClientScope,
-  credentialStorage,
-};
