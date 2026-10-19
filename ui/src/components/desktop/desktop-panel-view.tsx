@@ -20,7 +20,7 @@ import { desktopSourceForEnvironment } from "./desktop-source.ts";
 import { hostDesktopSetupCopy, type DesktopHostSetup } from "./host-desktop-setup.ts";
 
 export { DesktopSizing } from "./desktop-panel-rail.tsx";
-export type { DesktopSizingOptions, DesktopSizingMenuMode } from "./desktop-panel-rail.tsx";
+export type { DesktopSizingOptions } from "./desktop-panel-rail.tsx";
 
 registerEnglishCatalog(registerDesktopEnglish);
 

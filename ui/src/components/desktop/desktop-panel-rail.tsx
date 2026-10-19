@@ -423,7 +423,7 @@ export type DesktopSizingOptions = {
   onChange: (mode: DesktopSizingMode) => void;
 };
 
-export type DesktopSizingMenuMode = {
+type DesktopSizingMenuMode = {
   mode: Exclude<DesktopSizingMode, "match">;
   label: string;
 };
