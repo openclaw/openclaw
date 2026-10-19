@@ -1,4 +1,3 @@
-// Test project script tests cover fixture project discovery and validation.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -243,6 +242,9 @@ describe("test-projects args", () => {
     ["extensions/workboard/browser/catalog.test.ts", "ui"],
     ["extensions/example/browser/page.e2e.test.ts", "ui-e2e"],
     ["extensions/example/index.test.ts", "extensions"],
+    ["src/plugins/contracts/memory-embedding-provider.contract.test.ts", "contracts-plugin"],
+    ["src/infra/migrations.test.ts", "infra"],
+    ["src/plugins/discovery.test.ts", "plugins"],
   ])("routes %s to %s", (target, config) => {
     expect(buildVitestRunPlans([target])).toEqual([expectedPlan(config, [target])]);
   });
@@ -266,23 +268,10 @@ describe("test-projects args", () => {
       expectedPlan("agents-core", ["src/agents/openai-transport-stream.base.test.ts"]),
     ]);
     for (const [target, config] of [
-      [
-        "src/auto-reply/reply/dispatch-from-config.test.ts",
-        "test/vitest/vitest.auto-reply.config.ts",
-      ],
-      [
-        "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
-        "test/vitest/vitest.infra.config.ts",
-      ],
+      ["src/auto-reply/reply/dispatch-from-config.test.ts", "auto-reply"],
+      ["src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts", "infra"],
     ] as const) {
-      expect(buildVitestRunPlans([target])).toEqual([
-        {
-          config,
-          forwardedArgs: [],
-          includePatterns: [target],
-          watchMode: false,
-        },
-      ]);
+      expect(buildVitestRunPlans([target])).toEqual([expectedPlan(config, [target])]);
     }
   });
 
@@ -297,22 +286,6 @@ describe("test-projects args", () => {
       expectedPlan("agents-core-isolated", [
         "src/agents/openai-transport-stream.streaming.test.ts",
       ]),
-    ]);
-  });
-
-  it("routes plugin contract tests to the plugin contracts config", () => {
-    expect(
-      buildVitestRunPlans(["src/plugins/contracts/memory-embedding-provider.contract.test.ts"]),
-    ).toEqual([
-      expectedPlan("contracts-plugin", [
-        "src/plugins/contracts/memory-embedding-provider.contract.test.ts",
-      ]),
-    ]);
-  });
-
-  it("routes infra targets to the infra config", () => {
-    expect(buildVitestRunPlans(["src/infra/migrations.test.ts"])).toEqual([
-      expectedPlan("infra", ["src/infra/migrations.test.ts"]),
     ]);
   });
 
@@ -408,12 +381,6 @@ describe("test-projects args", () => {
     }
   });
 
-  it("routes plugin targets to the plugins config", () => {
-    expect(buildVitestRunPlans(["src/plugins/discovery.test.ts"])).toEqual([
-      expectedPlan("plugins", ["src/plugins/discovery.test.ts"]),
-    ]);
-  });
-
   it("routes non-test helper file targets to importing tests inside the routed suites", () => {
     const tempDir = tempDirs.make("openclaw-helper-routing-");
     const helper = "src/gateway/gateway-connection.test-mocks.ts";
@@ -454,23 +421,16 @@ describe("test-projects args", () => {
   });
 
   it("routes top-level test helpers to importing repo tests", () => {
-    // The importer inventory of test/helpers/temp-dir.ts churns with every new
-    // test using the helper; frozen full lists broke main on unrelated test
-    // additions. Assert the routing structure instead of the inventory.
+    // Derive the importer inventory: frozen lists broke on unrelated test additions.
     const plans = buildVitestRunPlans(["test/helpers/temp-dir.ts"]);
     const planFiles = plans.map((plan) => plan.includePatterns ?? plan.forwardedArgs);
     const expandedFiles = planFiles.flat();
 
-    // Helper targets expand to importing test files; the helper itself never
-    // reaches Vitest as a raw target.
     expect(expandedFiles).toContain("test/helpers/temp-dir.test.ts");
     expect(expandedFiles).not.toContain("test/helpers/temp-dir.ts");
     expect(expandedFiles.filter((file) => !file.endsWith(".test.ts"))).toEqual([]);
 
-    // Lower bound derived from the repo itself: every tracked test file that
-    // directly imports the helper must be picked up by the expansion scan, so
-    // dropped importers still fail without freezing the full inventory. The
-    // independent AST reader excludes import text inside source fixtures.
+    // Independent AST parsing excludes import text inside source fixtures.
     const scanRoots = ["src", "test", "ui", "extensions", "packages"];
     const grep = spawnSync(
       "git",
@@ -505,16 +465,13 @@ describe("test-projects args", () => {
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
 
-    // Importers partition across configs: each file lands in exactly one plan,
-    // in deterministic sorted order.
     expect(plans.length).toBeGreaterThan(1);
     expect(new Set(expandedFiles).size).toBe(expandedFiles.length);
     for (const files of planFiles) {
       expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
     }
 
-    // Mixed selections coalesce package contracts and Gateway child tests
-    // into their aggregate owners. Singleton selection retains each leaf owner.
+    // Mixed selections coalesce owners; singleton selections retain leaf owners.
     for (const plan of plans) {
       expect(plan.watchMode).toBe(false);
       for (const file of plan.includePatterns ?? plan.forwardedArgs) {
@@ -779,22 +736,11 @@ describe("test-projects args", () => {
     expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
   });
 
-  it("rejects explicit test file targets that do not exist", () => {
-    expect(findUnmatchedExplicitTestTargets(["src/not-a-real-openclaw-test.test.ts"])).toEqual([
-      {
-        target: "src/not-a-real-openclaw-test.test.ts",
-        reason: "path-does-not-exist",
-      },
-    ]);
-  });
-
-  it("rejects explicit globs that match no files", () => {
-    expect(findUnmatchedExplicitTestTargets(["src/**/not-a-real-openclaw-test.test.ts"])).toEqual([
-      {
-        target: "src/**/not-a-real-openclaw-test.test.ts",
-        reason: "glob-matched-no-files",
-      },
-    ]);
+  it.each([
+    ["src/not-a-real-openclaw-test.test.ts", "path-does-not-exist"],
+    ["src/**/not-a-real-openclaw-test.test.ts", "glob-matched-no-files"],
+  ])("rejects unmatched target %s", (target, reason) => {
+    expect(findUnmatchedExplicitTestTargets([target])).toEqual([{ target, reason }]);
   });
 
   it("rejects explicit non-test file targets with no sibling tests", () => {

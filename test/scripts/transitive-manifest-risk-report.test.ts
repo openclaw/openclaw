@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createTransitiveManifestRiskReport,
@@ -7,17 +6,6 @@ import {
   readBoundedNpmRegistryText,
   renderTransitiveManifestRiskMarkdownReport,
 } from "../../scripts/transitive-manifest-risk-report.mts";
-
-function runCli(...args: string[]) {
-  return spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/transitive-manifest-risk-report.mts", ...args],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-    },
-  );
-}
 
 const now = new Date("2026-05-12T00:00:00Z");
 const publishedAt = "2026-05-11T23:00:00Z";
@@ -32,9 +20,12 @@ function recentFinding(packageName: string, workspaceExclusion?: string) {
 
 describe("transitive-manifest-risk-report", () => {
   it("reports CLI argument errors without a Node stack trace", () => {
-    const unknownArg = runCli("--wat");
-    expect(unknownArg.status).toBe(1);
-    expect(unknownArg.stdout).toBe("");
+    const unknownArg = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/transitive-manifest-risk-report.mts", "--wat"],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(unknownArg).toMatchObject({ status: 1, stdout: "" });
     expect(unknownArg.stderr.trim()).toBe("Unsupported argument: --wat");
     expect(unknownArg.stderr).not.toContain("Node.js");
     expect(unknownArg.stderr).not.toContain("\n    at ");
@@ -63,12 +54,8 @@ describe("transitive-manifest-risk-report", () => {
                 "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
               pinnedGit: "github:owner/repo#0123456789abcdef0123456789abcdef01234567",
             },
-            optionalDependencies: {
-              optionalFloating: "~3.0.0",
-            },
-            scripts: {
-              install: "node install.js",
-            },
+            optionalDependencies: { optionalFloating: "~3.0.0" },
+            scripts: { install: "node install.js" },
           },
         };
       },
@@ -180,19 +167,18 @@ describe("transitive-manifest-risk-report", () => {
       scripts: { install: "node install.js" },
     };
     const versionPublishedAt = "2026-05-12T00:00:00.000Z";
-    const fetchCalls: Array<{ url: string; accept: string | null; signal: AbortSignal | null }> =
-      [];
+    const fetchCalls: [string, string | null, AbortSignal | null][] = [];
     const manifest = await fetchNpmManifest({
       packageName: "@scope/package",
       version: "1.0.0",
       registryBaseUrl: "https://registry.example.test",
       fetchImpl: async (url, init) => {
         const requestUrl = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-        fetchCalls.push({
-          url: requestUrl,
-          accept: new Headers(init?.headers).get("accept"),
-          signal: init?.signal instanceof AbortSignal ? init.signal : null,
-        });
+        fetchCalls.push([
+          requestUrl,
+          new Headers(init?.headers).get("accept"),
+          init?.signal instanceof AbortSignal ? init.signal : null,
+        ]);
         return new Response(
           JSON.stringify({
             time: { "1.0.0": versionPublishedAt },
@@ -204,11 +190,11 @@ describe("transitive-manifest-risk-report", () => {
     });
 
     expect(fetchCalls).toEqual([
-      {
-        url: "https://registry.example.test/@scope%2Fpackage",
-        accept: "application/json",
-        signal: expect.any(AbortSignal),
-      },
+      [
+        "https://registry.example.test/@scope%2Fpackage",
+        "application/json",
+        expect.any(AbortSignal),
+      ],
     ]);
     expect(manifest).toEqual({ publishedAt: versionPublishedAt, manifest: versionManifest });
   });
