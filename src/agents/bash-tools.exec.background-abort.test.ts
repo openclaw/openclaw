@@ -31,43 +31,35 @@ vi.mock("../process/supervisor/index.js", async (importOriginal) => {
       spawn: async (input: { runId?: string; timeoutMs?: number }) => {
         supervisorMockState.onSpawn?.();
         const runId = input.runId ?? `mock-run-${++counter}`;
-        let settled = false;
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         const completion = createDeferredCore<RunExit>();
-        const settle = (
-          reason: "manual-cancel" | "overall-timeout" | "exit",
-          timedOut: boolean,
-        ) => {
-          if (settled) {
+        const settle = (reason: "manual-cancel" | "overall-timeout" | "exit") => {
+          if (activity.resultSettled) {
             return;
           }
-          settled = true;
+          activity.resultSettled = true;
           completion.resolve(
             createRunExit({
               reason,
               exitCode: reason === "exit" ? 0 : null,
               durationMs: input.timeoutMs ?? 0,
-              timedOut,
+              timedOut: reason === "overall-timeout",
             }),
           );
         };
-        supervisorMockState.finish.set(runId, () => settle("exit", false));
+        supervisorMockState.finish.set(runId, () => settle("exit"));
         if (input.timeoutMs !== undefined) {
-          setTimeout(() => settle("overall-timeout", true), Math.max(50, input.timeoutMs));
+          setTimeout(() => settle("overall-timeout"), Math.max(50, input.timeoutMs));
         }
         return {
-          activity: {
-            get resultSettled() {
-              return settled;
-            },
-            lastOutputAtMs: Date.now(),
-          },
+          activity,
           runId,
           startedAtMs: Date.now(),
           stdin: undefined,
           wait: () => completion.promise,
           cancel: () => {
             supervisorMockState.cancelled.push(runId);
-            settle("manual-cancel", false);
+            settle("manual-cancel");
           },
         };
       },
@@ -98,19 +90,16 @@ vi.mock("./bash-tools.exec-host-node.js", async (importOriginal) => ({
 const BACKGROUND_HOLD_CMD =
   process.platform === "win32" ? 'node -e "setTimeout(() => {}, 1000)"' : "exec sleep 1";
 const TEST_EXEC_DEFAULTS = {
-  host: "gateway" as const,
-  security: "full" as const,
-  ask: "off" as const,
+  host: "gateway",
+  security: "full",
+  ask: "off",
   allowBackground: true,
   notifyOnExit: false,
-};
+} as const;
 const command = { command: BACKGROUND_HOLD_CMD, timeoutSeconds: 60 };
-const identity = (runId: string, sessionKey: string, sessionId: string) => ({
-  runId,
-  sessionKey,
-  sessionId,
-  agentId: "main",
-});
+function identity(runId: string, sessionKey: string, sessionId: string) {
+  return { runId, sessionKey, sessionId, agentId: "main" };
+}
 const makeTool = (owner: Partial<ReturnType<typeof identity>>, scopeKey: string) =>
   createLazyExecTool({ ...TEST_EXEC_DEFAULTS, ...owner, scopeKey });
 

@@ -31,8 +31,8 @@ const isWin = process.platform === "win32";
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 // Commands settle before their fixture cwd is removed.
-const createPreflightTool = (ask: "on-miss" | "off" = "on-miss") =>
-  createExecTool({ host: "gateway", security: "full", ask, allowBackground: false });
+const createPreflightTool = () =>
+  createExecTool({ host: "gateway", security: "full", ask: "on-miss", allowBackground: false });
 const runExecPreflight = (command: string, workdir = process.cwd()) =>
   createPreflightTool().execute("call-script-preflight", { command, workdir });
 const injection = /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/;
@@ -103,7 +103,6 @@ describeNonWin("exec script preflight", () => {
         command: "sh script.sh",
         cwd: workdir,
       });
-      expect(prepared.ok).toBe(true);
       if (!prepared.ok) {
         throw new Error(prepared.message);
       }

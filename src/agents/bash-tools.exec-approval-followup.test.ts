@@ -71,7 +71,7 @@ function diagnostics(internal = false) {
   (internal ? onInternalDiagnosticEvent : onDiagnosticEvent)((event) => events.push(event));
   return events;
 }
-function terminalFailure(error = "provider failed") {
+function terminalFailure(error: string) {
   return { runId, status: "error", endedAt: Date.now(), error };
 }
 function expectCalls(gateway: number, deliveries: number) {
@@ -167,9 +167,9 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("keeps observing past the old ambiguity cap until terminal fallback", async () => {
+  it.each([4, 0])("delivers terminal fallback after %i ambiguous waits", async (waits) => {
     const gateway = acceptRun();
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < waits; i++) {
       gateway.mockResolvedValueOnce({
         runId,
         status: "timeout",
@@ -177,9 +177,27 @@ describe("exec approval followup", () => {
         providerStarted: false,
       });
     }
-    gateway.mockResolvedValueOnce(terminalFailure("provider failed after prolonged execution"));
-    await expect(send(pending)).resolves.toBe(true);
-    expectCalls(6, 1);
+    gateway.mockResolvedValueOnce(
+      terminalFailure(waits ? "provider failed after prolonged execution" : "provider failed"),
+    );
+    const clippedOutput = `Exec finished (gateway id=req-1, code 1)\nHEAD_SENTINEL_${"x".repeat(5_000)}TAIL_SENTINEL_🚀`;
+    await expect(
+      send({ ...pending, ...(waits ? {} : { resultText: clippedOutput }) }),
+    ).resolves.toBe(true);
+    expectCalls(waits + 2, 1);
+    if (!waits) {
+      const content = directArgs({ channel: "telegram", to: "123" }).content;
+      if (typeof content !== "string") {
+        throw new Error("expected fallback content");
+      }
+      expect(content).toHaveLength(4_000);
+      expect(content).toMatch(
+        /^Automatic session resume failed, so sending the status directly\.\n\n\[\.\.\. earlier command output omitted \.\.\.\]\n/,
+      );
+      expect(content).not.toContain("HEAD_SENTINEL");
+      expect(content).toContain("TAIL_SENTINEL_🚀");
+      expect(Buffer.from(content, "utf8").toString("utf8")).toBe(content);
+    }
   });
 
   it("retries observation after a transport error without competing direct delivery", async () => {
@@ -217,25 +235,6 @@ describe("exec approval followup", () => {
         },
       }),
     );
-  });
-
-  it("caps terminal-failure fallback to a UTF-16-safe tail", async () => {
-    acceptRun().mockResolvedValueOnce(terminalFailure());
-    await send({
-      ...pending,
-      resultText: `Exec finished (gateway id=req-1, code 1)\nHEAD_SENTINEL_${"x".repeat(5_000)}TAIL_SENTINEL_🚀`,
-    });
-    const content = directArgs({ channel: "telegram", to: "123" }).content;
-    if (typeof content !== "string") {
-      throw new Error("expected fallback content");
-    }
-    expect(content).toHaveLength(4_000);
-    expect(content).toMatch(
-      /^Automatic session resume failed, so sending the status directly\.\n\n\[\.\.\. earlier command output omitted \.\.\.\]\n/,
-    );
-    expect(content).not.toContain("HEAD_SENTINEL");
-    expect(content).toContain("TAIL_SENTINEL_🚀");
-    expect(Buffer.from(content, "utf8").toString("utf8")).toBe(content);
   });
 
   it.each([

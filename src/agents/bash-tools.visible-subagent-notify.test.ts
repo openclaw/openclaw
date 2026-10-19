@@ -54,18 +54,11 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-visible-owner-" });
   vi.mocked(enqueueSessionEvent).mockClear();
   sendTextMock.mockClear();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: { deliveryMode: "direct", sendText: sendTextMock },
-        }),
-      },
-    ]),
-  );
+  const plugin = createOutboundTestPlugin({
+    id: "telegram",
+    outbound: { deliveryMode: "direct", sendText: sendTextMock },
+  });
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
   dispatchMock.mockReset().mockImplementation(async ({ ctx, replyOptions, dispatcherOptions }) => {
     const operation = createReplyOperation({
       sessionKey: String(ctx.SessionKey),

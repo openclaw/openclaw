@@ -76,15 +76,14 @@ function prepare(
   return resolvePreparedExecEnvironment({
     execParams: { command: "gh api user" },
     host,
-    ...(host === "sandbox"
-      ? {
-          sandbox: {
+    sandbox:
+      host === "sandbox"
+        ? {
             containerName: "sandbox",
             workspaceDir: "/workspace",
             containerWorkdir: "/workspace",
-          },
-        }
-      : {}),
+          }
+        : undefined,
     defaultPathPrepend: [],
     storeSecretEnv: includeStoreSecrets
       ? { GH_TOKEN: "store-sentinel", GITHUB_TOKEN: "store-sentinel" }

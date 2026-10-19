@@ -4,14 +4,9 @@ import { deleteSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { coerceEnv } from "./bash-tools.shared.js";
 
 afterEach(resetProcessRegistryForTests);
-
-function currentEnv(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] != null),
-  );
-}
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
@@ -28,7 +23,7 @@ function startProcess(
 ) {
   return runExecProcess({
     workdir: process.cwd(),
-    env: currentEnv(),
+    env: coerceEnv(process.env),
     usePty: true,
     warnings: [],
     maxOutput: 20_000,
