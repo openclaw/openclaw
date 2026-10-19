@@ -108,17 +108,10 @@ function sanitizeTriageUpdateFailure(
   }
   const failure = parsed.data;
   type Excerpt = "head" | "tail" | "ends";
+  type OptionalText = string | null | undefined;
   function text(value: string, maxBytes: number, excerpt?: Excerpt): string;
-  function text(
-    value: string | null | undefined,
-    maxBytes: number,
-    excerpt?: Excerpt,
-  ): string | undefined;
-  function text(
-    value: string | null | undefined,
-    maxBytes: number,
-    excerpt: Excerpt = "head",
-  ): string | undefined {
+  function text(value: OptionalText, maxBytes: number, excerpt?: Excerpt): string | undefined;
+  function text(value: OptionalText, maxBytes: number, excerpt: Excerpt = "head") {
     if (value == null) {
       return undefined;
     }
@@ -172,19 +165,11 @@ function sanitizeTriageUpdateFailure(
     omittedDetails += (values?.length ?? 0) - (selected?.length ?? 0);
     const output = into ?? selected;
     if (into && selected) {
-      if (latest) {
-        into.unshift(...selected);
-      } else {
-        into.push(...selected);
-      }
+      into[latest ? "unshift" : "push"](...selected);
     }
     for (const _ of selected ?? []) {
       removePluginDetails.push(() => {
-        if (latest) {
-          output?.shift();
-        } else {
-          output?.pop();
-        }
+        output?.[latest ? "shift" : "pop"]();
       });
     }
     return output;
