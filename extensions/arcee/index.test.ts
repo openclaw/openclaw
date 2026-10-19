@@ -12,7 +12,7 @@ import {
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import { applyArceeConfig, applyArceeOpenRouterConfig } from "./api.js";
 import arceePlugin from "./index.js";
@@ -24,54 +24,38 @@ const unexpectedOAuth = () => {
 const modelRef = "arcee/trinity-large-thinking";
 const directUrl = "https://api.arcee.ai/api/v1";
 const routerUrl = "https://openrouter.ai/api/v1";
-const [mini, preview, thinking] = [
-  "trinity-mini",
-  "trinity-large-preview",
-  "trinity-large-thinking",
-] as const;
+const mini = "trinity-mini";
+const preview = "trinity-large-preview";
+const thinking = "trinity-large-thinking";
 const routerIds = [`arcee-ai/${preview}`, `arcee-ai/${thinking}`] as const;
 
 describe.each([
-  {
-    methodId: "arcee-platform",
-    choiceId: "arceeai-api-key",
-    optionKey: "arceeaiApiKey",
-    credentialProvider: "arcee",
-    baseUrl: directUrl,
-    alias: "Arcee AI",
-    catalogIds: [mini, preview, thinking],
-    applyPublicConfig: applyArceeConfig,
-  },
-  {
-    methodId: "openrouter",
-    choiceId: "arceeai-openrouter",
-    optionKey: "openrouterApiKey",
-    credentialProvider: "openrouter",
-    baseUrl: routerUrl,
-    alias: "Arcee AI (OpenRouter)",
-    catalogIds: routerIds,
-    applyPublicConfig: applyArceeOpenRouterConfig,
-  },
-])("arcee $methodId setup", (route) => {
-  const profileId = `${route.credentialProvider}:default`;
-  const collisionId = route.credentialProvider === "arcee" ? thinking : routerIds[1];
-  const catalogAdditions = route.catalogIds.slice(0, -1);
+  ["arcee-platform", "arceeai-api-key", "arceeaiApiKey"],
+  ["openrouter", "arceeai-openrouter", "openrouterApiKey"],
+])("arcee %s setup", (methodId, choiceId, optionKey) => {
+  const direct = methodId === "arcee-platform";
+  const credentialProvider = direct ? "arcee" : "openrouter";
+  const baseUrl = direct ? directUrl : routerUrl;
+  const alias = direct ? "Arcee AI" : "Arcee AI (OpenRouter)";
+  const catalogIds = direct ? [mini, preview, thinking] : routerIds;
+  const applyPublicConfig = direct ? applyArceeConfig : applyArceeOpenRouterConfig;
+  const profileId = `${credentialProvider}:default`;
+  const collisionId = direct ? thinking : routerIds[1];
+  const catalogAdditions = catalogIds.slice(0, -1);
 
   async function registeredMethod() {
     const provider = await registerSingleProviderPlugin(arceePlugin);
-    const choice = resolveProviderPluginChoice({ providers: [provider], choice: route.choiceId });
-    expect(choice).toMatchObject({ provider: { id: "arcee" }, method: { id: route.methodId } });
+    const choice = resolveProviderPluginChoice({ providers: [provider], choice: choiceId });
+    expect(choice).toMatchObject({ provider: { id: "arcee" }, method: { id: methodId } });
     const method = choice?.method;
-    if (!method?.runNonInteractive) {
-      throw new Error(`Missing registered auth method: ${route.methodId}`);
-    }
+    assert(method?.runNonInteractive, `Missing registered auth method: ${methodId}`);
     return { method, runNonInteractive: method.runNonInteractive };
   }
 
   async function onboard(config: OpenClawConfig) {
     const { runNonInteractive } = await registeredMethod();
     const result = await runNonInteractive({
-      authChoice: route.choiceId,
+      authChoice: choiceId,
       config,
       baseConfig: config,
       opts: {},
@@ -79,9 +63,7 @@ describe.each([
       resolveApiKey: async () => ({ key: "test-arcee-key", source: "profile" }),
       toApiKeyCredential: () => null,
     });
-    if (!result) {
-      throw new Error("Expected successful registered onboarding");
-    }
+    assert(result, "Expected successful registered onboarding");
     return result;
   }
 
@@ -89,7 +71,7 @@ describe.each([
     const { method } = await registeredMethod();
     return await method.run({
       config,
-      opts: { [route.optionKey]: key },
+      opts: { [optionKey]: key },
       env: {},
       runtime: createRuntimeEnv(),
       prompter: createTestWizardPrompter(),
@@ -107,48 +89,41 @@ describe.each([
       profiles: {
         "arcee:other": apiKey("arcee", "direct-account-key"),
         "openrouter:other": apiKey("openrouter", "router-account-key"),
-        ...Object.fromEntries(
-          result.profiles.map((profile) => [profile.profileId, profile.credential]),
-        ),
+        ...Object.fromEntries(result.profiles.map((item) => [item.profileId, item.credential])),
       },
     };
     const cfg = applyProviderAuthConfigPatch({}, result.configPatch, result);
     const order = resolveAuthProfileOrder({ cfg, store, provider: "arcee" });
-    expect(order).toContain(profileId);
-    expect(order).toContain(`${route.credentialProvider}:other`);
-    expect(order).not.toContain(
-      route.credentialProvider === "arcee" ? "openrouter:other" : "arcee:other",
-    );
-    expect(result.defaultModel).toBe(modelRef);
+    expect(order).toEqual(expect.arrayContaining([profileId, `${credentialProvider}:other`]));
+    expect(order).not.toContain(direct ? "openrouter:other" : "arcee:other");
   });
 
   it.each([
     { mode: undefined, expectedIds: [] },
-    { mode: "replace" as const, expectedIds: route.catalogIds },
+    { mode: "replace" as const, expectedIds: catalogIds },
   ])("keeps the registered row policy in $mode mode", async ({ mode, expectedIds }) => {
     const input: OpenClawConfig = { models: { mode } };
     const nonInteractive = await onboard(input);
     const interactive = await onboardInteractive(input);
-
     expect(interactive.profiles).toEqual([
-      { profileId, credential: apiKey(route.credentialProvider, "test-arcee-key") },
+      { profileId, credential: apiKey(credentialProvider, "test-arcee-key") },
     ]);
     expect(interactive.defaultModel).toBe(modelRef);
     expect(nonInteractive.auth?.profiles?.[profileId]).toEqual({
-      provider: route.credentialProvider,
+      provider: credentialProvider,
       mode: "api_key",
     });
     for (const output of [nonInteractive, interactive.configPatch, await onboard(nonInteractive)]) {
       const provider = output?.models?.providers?.arcee;
       const defaults = output?.agents?.defaults;
       expect(provider).toMatchObject({
-        baseUrl: route.baseUrl,
+        baseUrl,
         api: "openai-completions",
         models: expectedIds.map((id) => ({ id })),
       });
       expect({ model: defaults?.model, alias: defaults?.models?.[modelRef] }).toEqual({
         model: { primary: modelRef },
-        alias: { alias: route.alias },
+        alias: { alias },
       });
     }
     expect(input).toEqual({ models: { mode } });
@@ -179,7 +154,7 @@ describe.each([
       models: {
         mode,
         providers: {
-          arcee: { baseUrl: route.baseUrl, models: [collision, authoredOnly] },
+          arcee: { baseUrl, models: [collision, authoredOnly] },
           other: { baseUrl: "https://other.invalid/v1", models: [] },
         },
       },
@@ -203,7 +178,7 @@ describe.each([
     expectPreserved(output, addedIds, modelRef);
     expect(await onboard(output)).toEqual(output);
     expect(input).toEqual(before);
-    expectPreserved(route.applyPublicConfig(input), catalogAdditions, "arcee/operator-only");
+    expectPreserved(applyPublicConfig(input), catalogAdditions, "arcee/operator-only");
   });
 });
 
@@ -227,7 +202,6 @@ it("builds the direct Arcee AI model catalog", async () => {
     resolveProviderApiKey: (id?: string) =>
       id === "arcee" ? { apiKey: "test-key" } : { apiKey: undefined },
   });
-
   expect(catalogProvider).toMatchObject({
     api: "openai-completions",
     baseUrl: directUrl,
@@ -276,30 +250,21 @@ it("keeps the configured OpenRouter catalog when both credentials exist", async 
 
 it("canonicalizes stale OpenRouter /v1 config and transport metadata", async () => {
   const provider = await registerSingleProviderPlugin(arceePlugin);
-  const transport = {
+  const legacy = {
+    provider: "arcee",
     api: "openai-completions",
     baseUrl: "https://openrouter.ai/v1",
   };
-  const canonicalTransport = { api: transport.api, baseUrl: routerUrl };
+  const canonical = { api: legacy.api, baseUrl: routerUrl };
   const normalizedConfig = provider.normalizeConfig?.({
     provider: "arcee",
-    providerConfig: { ...transport, baseUrl: `${transport.baseUrl}/`, models: [] },
+    providerConfig: { api: legacy.api, baseUrl: `${legacy.baseUrl}/`, models: [] },
   } as never);
-  expect(normalizedConfig?.baseUrl).toBe(canonicalTransport.baseUrl);
+  expect(normalizedConfig?.baseUrl).toBe(routerUrl);
   const normalizedModel = provider.normalizeResolvedModel?.({
-    modelId: "arcee/trinity-large-thinking",
-    model: {
-      ...transport,
-      provider: "arcee",
-      id: thinking,
-      name: "Trinity Large Thinking",
-    },
+    modelId: modelRef,
+    model: { ...legacy, id: thinking },
   } as never);
-  expect(normalizedModel).toMatchObject({
-    id: routerIds[1],
-    baseUrl: canonicalTransport.baseUrl,
-  });
-  expect(provider.normalizeTransport?.({ ...transport, provider: "arcee" } as never)).toEqual(
-    canonicalTransport,
-  );
+  expect(normalizedModel).toMatchObject({ id: routerIds[1], baseUrl: routerUrl });
+  expect(provider.normalizeTransport?.(legacy as never)).toEqual(canonical);
 });
