@@ -1,6 +1,7 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CurrentInboundPromptContext } from "../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type {
@@ -10,6 +11,7 @@ import type {
 import type { OriginatingChannelType } from "../auto-reply/templating.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../llm/types.js";
@@ -56,6 +58,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Fresh requester authority checked by the host and never forwarded to the backend. */
+  requesterToolAuthority?: ReplyToolAuthorityRequester;
   /** Host admission after policy preparation; false leaves the input for follow-up. */
   canAdmit?: () => boolean;
   toolAuthorityPreparation?: ReplyToolAuthorityPreparation & {
@@ -68,6 +72,8 @@ export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   inboundAudio?: boolean;
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+  /** Normal human ingress may retain the incumbent's policy within the same conversation. */
+  allowCollaborativeSteering?: boolean;
   /** Accepted sender facts when the ingress owner already prepared route-specific authority. */
   personalToolParticipant?: ReplyTurnParticipantInput;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
@@ -81,6 +87,9 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  /** Internal admission decision; never used for explicit cross-session requests. */
+  allowCollaborativeSteering?: true;
+  sessionKey?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];
@@ -89,6 +98,8 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   chatType?: ChatType;
   agentAccountId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
+  conversationId?: string;
+  messageThreadId?: string | number;
   groupId?: string;
   groupChannel?: string;
   groupSpace?: string;
@@ -99,6 +110,8 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   senderUsername?: string;
   senderE164?: string;
   senderIsOwner: boolean;
+  /** Attribution carried by the originating request; grants no operator permission. */
+  gitContributorProfileId?: string;
   inputProvenance?: InputProvenance;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
@@ -114,12 +127,20 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
+/** Fresh delegation facts projected at its destination, separate from a source tool ceiling. */
+export type ReplyToolAuthorityRequester = Readonly<{
+  requesterOrigin: RequesterOrigin;
+  config: OpenClawConfig;
+}>;
+
 export type ReplyTurnParticipantInput = Pick<
   ReplyToolAuthorityOverlay,
   "operatorAuthority" | "senderId" | "senderName" | "gatewayUiCommandTarget"
->;
+> & { requesterOrigin?: RequesterOrigin };
 
 export type ReplyToolAuthoritySnapshot = Readonly<{
+  /** Authenticated requester identity, independent of permissions and client reconnections. */
+  requesterPrincipalKey?: string;
   close?(): void;
   personalToolOwner?: ReplyTurnParticipantInput;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */
@@ -133,6 +154,11 @@ export type ReplyToolAuthoritySnapshot = Readonly<{
     overlay: ReplyToolAuthorityOverlay,
     route: ReplyToolAuthorityRoute,
   ): Promise<string>;
+  projectRequester?(requester: ReplyToolAuthorityRequester, route: ReplyToolAuthorityRoute): string;
+  projectRequesterAsync?(
+    requester: ReplyToolAuthorityRequester,
+    route: ReplyToolAuthorityRoute,
+  ): Promise<string>;
 }>;
 
 export type ReplyTurnParticipant = Readonly<{
@@ -141,6 +167,7 @@ export type ReplyTurnParticipant = Readonly<{
   name: string;
   /** Host-issued source; independent children acquire their own custody before turn close. */
   operatorAuthority: AdmittedRunOperatorAuthority;
+  requesterOrigin?: RequesterOrigin;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   assertCurrent: () => void;
 }>;

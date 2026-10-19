@@ -9,7 +9,7 @@ import {
   resolveCliRuntimeExecutionProvider,
 } from "../../agents/model-runtime-aliases.js";
 import { supportsModelTools } from "../../agents/model-tool-support.js";
-import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";

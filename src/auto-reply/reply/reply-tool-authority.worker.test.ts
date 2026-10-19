@@ -42,12 +42,12 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
 } from "./reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 afterEach(() => {
@@ -218,11 +218,7 @@ it.each(["main", "policy", "borrowed"] as const)(
         }
         discovery.mockClear();
         await expect(
-          operation.projectToolAuthorityFingerprintAsync({
-            senderIsOwner: run.run.senderIsOwner === true,
-            disableTools: false,
-            traceAuthorized: false,
-          }),
+          operation.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay(run)),
         ).resolves.toBeUndefined();
         calls.expectIdle();
         expect(discovery).not.toHaveBeenCalled();
@@ -426,11 +422,7 @@ it.each([
             );
             const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
               isInboundUserMessage: true,
-              toolAuthorityOverlay: {
-                senderIsOwner: run.run.senderIsOwner === true,
-                disableTools: false,
-                traceAuthorized: false,
-              },
+              toolAuthorityOverlay: toolAuthorityOverlay(run),
             });
             expect(interleaved).toBe(true);
             if (change === "unrelated deletion") {

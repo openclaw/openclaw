@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
@@ -15,7 +15,6 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
-import { resolveVersionFromModuleUrl } from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import {
   GATEWAY_RESTART_TEST_KILL_MS,
@@ -281,17 +280,8 @@ it.skipIf(process.platform !== "linux")(
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();
         expect(serviceStop!.at).toBeLessThanOrEqual(exitedAt);
-        const entrypoint = expectDefined(
-          (await instance.entrypoint())[0] || undefined,
-          "Gateway artifact entrypoint",
-        );
-        const moduleUrl = pathToFileURL(path.resolve(entrypoint)).href;
-        const version = expectDefined(
-          resolveVersionFromModuleUrl(moduleUrl) || undefined,
-          "Gateway artifact version",
-        );
-        // The seal binds the running artifact's version to the production seal policy.
-        const artifactSchema = sqliteDatabaseSealSchemaFor("agent", version);
+        // The Gateway and test runner use the same runtime and storage policy.
+        const artifactSchema = sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity;
         const seal = readSqliteCleanCloseSeal(agentPath, statSync(agentPath, { bigint: true }));
         expect(seal).toMatchObject({ schemaIdentity: artifactSchema });
         const shared = openNodeSqliteDatabase(

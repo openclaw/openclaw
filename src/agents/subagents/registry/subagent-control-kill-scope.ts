@@ -69,6 +69,7 @@ export type KillTree = KillBinding & {
 export type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
+  exactRunSelection?: boolean;
   assertCurrent?: () => void;
   prepareRead?: () => Promise<void> | undefined;
   ownsRoot?: (entry: SubagentRunRecord) => boolean;
@@ -128,8 +129,7 @@ export async function withSubagentKillScope<T>(
       assertCurrent();
       if (
         parent &&
-        resolveSubagentChildAuthority(parent.entry).status === "legacy-unverified" &&
-        !isCurrentSubagentRun(parent.entry, params.cfg) &&
+        (params.exactRunSelection || !isCurrentSubagentRun(parent.entry, params.cfg)) &&
         snapshot.requesterTurnRunId !== parent.entry.runId
       ) {
         continue;
@@ -158,12 +158,12 @@ export async function withSubagentKillScope<T>(
         continue;
       }
       const childOwner = resolveSubagentChildAgentId(snapshot);
-      const legacy = authority.status === "legacy-unverified";
-      const entry = legacy
+      const exact = params.exactRunSelection || authority.status === "legacy-unverified";
+      const entry = exact
         ? subagentRuns.get(snapshot.runId)
         : getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
       const selectedForChild = selected.get(snapshot.childSessionKey) ?? new Set();
-      const selectedOwner = legacy ? `${childOwner}\0${snapshot.runId}` : childOwner;
+      const selectedOwner = exact ? `${childOwner}\0${snapshot.runId}` : childOwner;
       if (
         !entry ||
         !isSameSubagentRunOwner(entry, snapshot) ||
@@ -177,7 +177,7 @@ export async function withSubagentKillScope<T>(
         ownsRoot?.(candidate) !== false &&
         (!controller ||
           !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }));
-      if (!ownerCurrent(entry, false) || (!legacy && !isCurrentSubagentRun(entry, params.cfg))) {
+      if (!ownerCurrent(entry, false) || (!exact && !isCurrentSubagentRun(entry, params.cfg))) {
         continue;
       }
       selectedForChild.add(selectedOwner);
@@ -202,7 +202,7 @@ export async function withSubagentKillScope<T>(
       const { childSessionKey } = entry;
       const latest = () => getLatestOwnedSubagentRun(childSessionKey, childOwner, params.cfg);
       const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
-        isSameSubagentRunOwner(legacy ? subagentRuns.get(candidate.runId) : latest(), candidate),
+        isSameSubagentRunOwner(exact ? subagentRuns.get(candidate.runId) : latest(), candidate),
       );
       retirements.push(retirement);
       const selectedEntry = () => retirement.observation.entry;
@@ -225,7 +225,7 @@ export async function withSubagentKillScope<T>(
           isSameSubagentRunOwner(current, entry) &&
           ownsRun() &&
           ownerCurrent(current, requirePreparedSession) &&
-          (legacy || isCurrentSubagentRun(current, params.cfg)) &&
+          (exact || isCurrentSubagentRun(current, params.cfg)) &&
           (!requirePreparedSession || ownsSessionIncarnation())
         );
       };
@@ -236,7 +236,7 @@ export async function withSubagentKillScope<T>(
         }
         const replacement = latest();
         return (
-          (legacy ||
+          (exact ||
             isSameSubagentRunOwner(replacement, current) ||
             (retirement.observation.state === "retired" &&
               (!replacement || compareSubagentRunGeneration(replacement, current) < 0))) &&

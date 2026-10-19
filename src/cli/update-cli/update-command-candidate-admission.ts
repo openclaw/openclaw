@@ -20,6 +20,7 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
@@ -28,7 +29,6 @@ import type { UpdateAdmissionReportParams } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { UpdateCommandAbort } from "./update-command-windows-task.js";
 
 type Target = NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;

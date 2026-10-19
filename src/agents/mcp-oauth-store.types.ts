@@ -1,8 +1,8 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
+  OAuthDiscoveryState,
   OAuthClientInformationMixed,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/client";
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;

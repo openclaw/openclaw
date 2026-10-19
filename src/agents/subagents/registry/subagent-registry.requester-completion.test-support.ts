@@ -11,7 +11,16 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
+import {
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+  SharedGatewaySessionGenerationState,
+} from "../../../gateway/server-shared-auth-generation.js";
+import { resolveSharedGatewaySessionGeneration } from "../../../gateway/server/ws-shared-generation.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import { WorkerTaskError } from "../../../infra/worker-task-pool.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
@@ -26,8 +35,10 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { ensureGatewayOwnerProfile } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
 import * as delivery from "../announce/subagent-announce-delivery.js";
 import * as deliveryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -58,12 +69,19 @@ export function registerRequesterCompletionCustodyTests({
 }) {
   it.each([
     "current",
+    "owner current",
+    "owner nested password",
+    "owner rotated",
+    "current with child",
+    "owner current with child",
+    "owner revoked with child",
     "overloaded then current",
     "overloaded then revoked",
     "overloaded then retired",
     "unavailable policy then current",
     "revoked after restore",
     "missing source",
+    "missing source with unrelated requester claim",
     "missing parent source",
     "mismatched source",
     "revoked grant",
@@ -72,21 +90,43 @@ export function registerRequesterCompletionCustodyTests({
   ] as const)(
     "revalidates %s for a cold-loaded interrupted child batch without widening the parent",
     async (recovery) => {
+      const owner = recovery.startsWith("owner ");
+      const spawnsChild = recovery.endsWith(" with child");
+      const revokesChild = recovery === "owner revoked with child";
+      const nestedOwner = recovery === "owner nested password";
+      const ownerAuth = nestedOwner
+        ? { mode: "password" as const, password: "owner-password-fixture" }
+        : { mode: "token" as const, token: "owner-token-fixture" };
+      const ownerGeneration = resolveSharedGatewaySessionGeneration({
+        ...ownerAuth,
+        allowTailscale: false,
+      });
       const overloaded = recovery.startsWith("overloaded");
       const unavailablePolicy = recovery === "unavailable policy then current";
       const deferred = overloaded || unavailablePolicy;
+      const missingSource = recovery.startsWith("missing source");
       const terminalRecovery =
-        recovery === "missing source" ||
+        missingSource ||
         recovery === "missing parent source" ||
         recovery === "mismatched source" ||
         recovery === "revoked grant";
       const canDispatch =
-        recovery === "current" || recovery === "overloaded then current" || unavailablePolicy;
+        spawnsChild ||
+        recovery === "current" ||
+        recovery === "owner current" ||
+        nestedOwner ||
+        recovery === "overloaded then current" ||
+        unavailablePolicy;
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const cfg = { session: { store: state.path("sessions.json") } };
+        const cfg = {
+          session: { store: state.path("sessions.json") },
+          ...(owner ? { gateway: { auth: ownerAuth } } : {}),
+        };
         config.setRuntimeConfigSnapshot(cfg);
         vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
-        const requesterSessionKey = "agent:main:main";
+        const requesterSessionKey = nestedOwner
+          ? "agent:main:subagent:restart-lead"
+          : "agent:main:main";
         const sessionId = "restart-requester";
         const lifecycleRevision = "restart-requester-lifecycle";
         const requesterTurnRunId = "restart-parent-turn";
@@ -95,12 +135,40 @@ export function registerRequesterCompletionCustodyTests({
           expectDefined(subagentRuns.get(runId), "restored child");
         await upsertSessionEntryCore(
           { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
-          { sessionId, lifecycleRevision, updatedAt: 1 },
+          {
+            sessionId,
+            lifecycleRevision,
+            updatedAt: 1,
+            ...(nestedOwner ? { spawnDepth: 1 } : {}),
+            ...(recovery === "missing source with unrelated requester claim"
+              ? {
+                  abortedLastRun: true,
+                  restartRecoveryDeliveryRunId: "unrelated-recovery",
+                  restartRecoveryDeliverySourceRunId: "unrelated-requester-turn",
+                  restartRecoveryRequesterSource: expectDefined(
+                    createRestartRecoveryRequesterSource({
+                      agentId: "main",
+                      sessionKey: requesterSessionKey,
+                      entry: { sessionId, lifecycleRevision, updatedAt: 1 },
+                      sourceRunId: "unrelated-requester-turn",
+                      requesterOrigin: {
+                        sessionKey: requesterSessionKey,
+                        messageProvider: "telegram",
+                        senderId: "another-channel-requester",
+                      },
+                    }),
+                    "authenticated channel requester source",
+                  ),
+                }
+              : {}),
+          },
         );
         const context = createContext([], () => cfg);
         context.resolveGatewayContext = () => context;
         const client = createOperatorClient({
-          profileName: "restart-requester",
+          ...(owner
+            ? { profileId: ensureGatewayOwnerProfile("Owner").id }
+            : { profileName: "restart-requester" }),
           scopes: ["operator.admin"],
         });
         expectDefined(client.authenticatedUserProfile, "requester profile").displayName =
@@ -108,9 +176,23 @@ export function registerRequesterCompletionCustodyTests({
         client.connect.client.id = "openclaw-control-ui";
         client.connect.client.mode = "webchat";
         client.internal = { authenticatedOperator: true, controlUiAdmin: true };
+        if (owner) {
+          // The shared-secret CLI handshake attests the owner but omits display attribution.
+          delete client.authenticatedUserProfile;
+          delete client.authenticatedUserId;
+          client.connect.client.id = "gateway-client";
+          client.connect.client.mode = "backend";
+          client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+          client.usesSharedGatewayAuth = true;
+          client.sharedGatewaySessionGeneration = ownerGeneration;
+          context.sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+            current: client.sharedGatewaySessionGeneration,
+            required: null,
+          });
+        }
         client.authPolicy = captureGatewayAuthPolicy(cfg, {
           role: "operator",
-          authMethod: "token",
+          authMethod: owner ? ownerAuth.mode : "token",
         });
         const grantRef = { pluginId: "restart-access", grantId: "original-requester-grant" };
         let grantCurrent = true;
@@ -132,21 +214,25 @@ export function registerRequesterCompletionCustodyTests({
         });
         const registry = createEmptyPluginRegistry();
         registry.plugins.push(createPluginRecord({ id: grantRef.pluginId }));
-        registry.gatewayAccessPolicies.push({
-          pluginId: grantRef.pluginId,
-          source: "fixture",
-          policy: {
-            authorize: () => (grantCurrent ? grant : undefined),
-            resume: resumeGrant,
-          },
-        });
+        if (!owner) {
+          registry.gatewayAccessPolicies.push({
+            pluginId: grantRef.pluginId,
+            source: "fixture",
+            policy: {
+              authorize: () => (grantCurrent ? grant : undefined),
+              resume: resumeGrant,
+            },
+          });
+        }
         const previousRegistry = captureActivePluginRegistrySnapshot();
         stageActivePluginRegistry(registry, null, "default");
         const source = expectDefined(
           await operatorCapture.captureGatewayOperatorRunAuthority({
             client: expectDefined(captureAgentTurnPrincipal(client), "authenticated requester"),
             context,
-            sourceAuthority: { gatewayAccessGrant: grantRef, assertCurrent: grant.assertCurrent },
+            sourceAuthority: owner
+              ? null
+              : { gatewayAccessGrant: grantRef, assertCurrent: grant.assertCurrent },
           }),
           "restart requester source",
         );
@@ -165,6 +251,8 @@ export function registerRequesterCompletionCustodyTests({
             return captureRequester(...args);
           });
         let deliveredAuthority: ReturnType<typeof createAdmittedRunOperatorAuthority> | undefined;
+        let childAuthority: typeof deliveredAuthority;
+        const childRunId = "replacement-child";
         const deliver = vi
           .spyOn(delivery, "deliverSubagentAnnouncement")
           .mockImplementation(async (params) => {
@@ -172,6 +260,41 @@ export function registerRequesterCompletionCustodyTests({
             deliveredAuthority =
               getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
             expectDefined(deliveredAuthority, "restored requester authority").assertCurrent();
+            if (spawnsChild && !childAuthority) {
+              const gateway = expectDefined(
+                getPluginRuntimeGatewayRequestScope()?.context,
+                "recovered requester Gateway",
+              );
+              await upsertSessionEntryCore(
+                {
+                  storePath: cfg.session.store,
+                  sessionKey: `agent:main:subagent:${childRunId}`,
+                  agentId: "main",
+                },
+                { sessionId: `original-${childRunId}`, updatedAt: Date.now() },
+              );
+              registerAgentRunContext(childRunId, {
+                agentId: "main",
+                sessionKey: `agent:main:subagent:${childRunId}`,
+                sessionId: `original-${childRunId}`,
+              });
+              await registerSubagentRun(
+                registration(childRunId, {
+                  requesterSessionKey,
+                  requesterAgentId: "main",
+                  requesterTurnRunId: "recovered-requester-turn",
+                  completionTarget: "parent",
+                  completionRequesterSessionId: sessionId,
+                  completionRequesterLifecycleRevision: lifecycleRevision,
+                  gatewayContextResolver: () => gateway,
+                }),
+              );
+              childAuthority = subagentRuns.runWithCompletionAuthority(
+                currentChild(childRunId),
+                () => getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+              );
+              expectDefined(childAuthority, "replacement child authority").assertCurrent();
+            }
             params.onAccepted?.({ status: "accepted" });
             return { delivered: true, path: "direct" };
           });
@@ -191,7 +314,10 @@ export function registerRequesterCompletionCustodyTests({
                     requesterSessionKey,
                     requesterAgentId: "main",
                     requesterTurnRunId,
-                    completionTarget: "parent",
+                    completionTarget:
+                      recovery === "missing source with unrelated requester claim"
+                        ? undefined
+                        : "parent",
                     completionRequesterSessionId: sessionId,
                     completionRequesterLifecycleRevision: lifecycleRevision,
                     gatewayContextResolver: () => context,
@@ -208,8 +334,17 @@ export function registerRequesterCompletionCustodyTests({
               sessionId,
               lifecycleRevision,
               sourceRunId: requesterTurnRunId,
-              snapshot: { scopes: ["operator.write"], grant: grantRef },
+              snapshot: { scopes: ["operator.write"], grant: owner ? null : grantRef },
             });
+            if (owner) {
+              expect(admitted?.operatorRecoverySource?.snapshot).toMatchObject({
+                sharedGeneration: ownerGeneration,
+                authPolicy: { authMethod: ownerAuth.mode },
+              });
+              expect(JSON.stringify(admitted?.operatorRecoverySource)).not.toContain(
+                nestedOwner ? ownerAuth.password : ownerAuth.token,
+              );
+            }
             // Crash after interruption was recorded, before its parent continuation was dispatched.
             await updateRun(runId, (draft) => {
               const text = `${runId} interrupted by Gateway restart`;
@@ -234,7 +369,7 @@ export function registerRequesterCompletionCustodyTests({
                 batchRunIds: runIds,
                 nextAttemptAt: Date.now() + 60_000,
               };
-              if (recovery === "missing source") {
+              if (missingSource) {
                 delete draft.operatorRecoverySource;
               } else if (recovery === "mismatched source") {
                 expectDefined(draft.operatorRecoverySource, "admitted source").sessionId =
@@ -265,7 +400,23 @@ export function registerRequesterCompletionCustodyTests({
           }
           const replacement = createContext([], () => cfg);
           replacement.resolveGatewayContext = () => replacement;
-          replacement.recoveryRuntime = createMockGatewayRecoveryRuntime();
+          if (owner) {
+            replacement.sharedGatewaySessionGenerationState =
+              new SharedGatewaySessionGenerationState({
+                current:
+                  recovery === "owner rotated"
+                    ? resolveSharedGatewaySessionGeneration({
+                        mode: "token",
+                        token: "rotated-owner-fixture",
+                        allowTailscale: false,
+                      })
+                    : ownerGeneration,
+                required: null,
+              });
+          }
+          replacement.recoveryRuntime = createMockGatewayRecoveryRuntime({
+            waitForAgent: vi.fn().mockResolvedValue({ status: "pending" }),
+          });
           const recoveryTarget = {
             ...buildRequesterSettleWakeIdentity({
               requesterSessionKey,
@@ -298,7 +449,7 @@ export function registerRequesterCompletionCustodyTests({
           await activateSubagentRegistry(() => replacement);
           await replay?.();
           if (terminalRecovery) {
-            if (recovery === "missing source") {
+            if (missingSource) {
               // Registry binding already settled the unavailable continuation.
               await expect(prepareRecovery()).resolves.toBeUndefined();
             } else {
@@ -383,7 +534,7 @@ export function registerRequesterCompletionCustodyTests({
             await testing.sweepOnceForTests();
             expect(resumeGrant).toHaveBeenCalledTimes(resumedGrants);
           }
-          if (recovery !== "replaced requester") {
+          if (recovery !== "replaced requester" && !owner) {
             expect(resumeGrant).toHaveBeenCalledWith(
               expect.objectContaining({ grantId: grantRef.grantId }),
             );
@@ -424,12 +575,77 @@ export function registerRequesterCompletionCustodyTests({
             expect(deliver).toHaveResolvedTimes(1);
             expect(deliveredAuthority?.profileId).toBe(source.authority.profileId);
             expect(deliveredAuthority?.scopes).toEqual(["operator.write"]);
-            expect(deliveredAuthority?.gatewayAccessGrant).toEqual(grantRef);
-            // Committed batch settlement releases its restored completion custody.
-            expect(deliveredAuthority?.assertCurrent).toThrow(/authority/);
+            expect(deliveredAuthority?.gatewayAccessGrant).toEqual(owner ? null : grantRef);
+            if (!spawnsChild) {
+              // Committed batch settlement releases its restored completion custody.
+              expect(deliveredAuthority?.assertCurrent).toThrow(/authority/);
+            }
             const message = deliver.mock.calls[0]?.[0].triggerMessage;
             expect(message).toContain("restart-child-a interrupted by Gateway restart");
             expect(message).toContain("restart-child-b interrupted by Gateway restart");
+          }
+          if (spawnsChild) {
+            const child = currentChild(childRunId);
+            const retained = expectDefined(childAuthority, "retained replacement child authority");
+            expect(retained.assertCurrent).not.toThrow();
+            expect(retained.signal?.aborted).toBe(false);
+            expect(child.execution).toMatchObject({ status: "running" });
+            expect(retained.scopes).toEqual(["operator.write"]);
+            expect(() => subagentRuns.runWithCompletionAuthority(child, () => {})).not.toThrow();
+            expect(() => subagentRuns.runWithCompletionAuthority(currentChild(), () => {})).toThrow(
+              /authority/,
+            );
+            if (revokesChild) {
+              const generation = resolveSharedGatewaySessionGeneration({
+                mode: "token",
+                token: "rotated-owner-fixture",
+                allowTailscale: false,
+              });
+              const generationOwner = expectDefined(
+                replacement.sharedGatewaySessionGenerationState,
+                "shared authentication owner",
+              );
+              enforceSharedGatewaySessionGenerationForConfigWrite({
+                state: generationOwner,
+                nextConfig: cfg,
+                resolveRuntimeSnapshotGeneration: () => generation,
+                clients: [],
+              });
+              expect(retained.signal?.aborted).toBe(true);
+              expect(retained.assertCurrent).toThrow(/authority/);
+            }
+            await updateRun(childRunId, (draft) => {
+              draft.execution = {
+                ...draft.execution,
+                status: "terminal",
+                endedAt: Date.now(),
+                outcome: { status: "ok" },
+              };
+              draft.completion = {
+                required: true,
+                resultText: "replacement child completed",
+                terminalReply: { disposition: "visible", text: "replacement child completed" },
+              };
+              draft.delivery = { status: "pending" };
+              draft.cleanupCompletedAt = Date.now();
+              draft.requesterTurnRunId = undefined;
+              draft.requesterSettleWake = {
+                status: "pending",
+                attemptCount: 0,
+                rearmGeneration: 1,
+                batchRunIds: [childRunId],
+              };
+            });
+            clearAgentRunContext(childRunId);
+            await testing.sweepOnceForTests();
+            await join(true);
+            await settleSubagentRegistryPersistenceWork();
+            expect(deliver).toHaveBeenCalledTimes(revokesChild ? 1 : 2);
+            if (!revokesChild) {
+              expect(deliver.mock.calls[1]?.[0].triggerMessage).toContain(
+                "replacement child completed",
+              );
+            }
           }
           for (const runId of runIds) {
             const entry = settled.get(runId);
@@ -455,6 +671,7 @@ export function registerRequesterCompletionCustodyTests({
             expect(persisted.get("fresh-child-task")?.operatorRecoverySource).toBeUndefined();
           }
         } finally {
+          clearAgentRunContext(childRunId);
           resumeDelivery.resolve();
           await join();
           requesterRead.mockRestore();

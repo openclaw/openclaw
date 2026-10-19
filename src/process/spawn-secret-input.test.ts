@@ -34,11 +34,7 @@ class ControlledSecretStream extends EventEmitter {
   }
 }
 
-function childWithSecretStream(stream: ControlledSecretStream): ChildProcess {
-  return { stdio: [null, null, null, stream] } as unknown as ChildProcess;
-}
-
-function writeSecret(stream: ControlledSecretStream): Promise<void> {
+function writeSecret(stream: ControlledSecretStream, abortSignal?: AbortSignal): Promise<void> {
   const original = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
   try {
@@ -46,35 +42,52 @@ function writeSecret(stream: ControlledSecretStream): Promise<void> {
       fd: 3,
       createData: () => Buffer.from("selected-secret"),
     });
-    return prepared!.deliverTo(childWithSecretStream(stream));
+    const child = { stdio: [null, null, null, stream] } as unknown as ChildProcess;
+    return prepared!.deliverTo(child, { abortSignal });
   } finally {
     Object.defineProperty(process, "platform", original);
   }
 }
 
+function spawnSecret(script: string, createData: () => Buffer) {
+  const stdin = process.platform === "win32" ? "pipe" : "ignore";
+  const stdio: SpawnStdioEntry[] = [stdin, "pipe", "pipe"];
+  using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData })!;
+  const original = process.platform === "win32" ? undefined : fstatSync(stdio[3] as number);
+  const child = spawn(process.execPath, ["-e", script], { stdio, windowsHide: true });
+  const output = new Promise<string>((resolve, reject) => {
+    let text = "";
+    child.stdout!.on("data", (chunk) => {
+      text += chunk;
+    });
+    child.on("error", reject);
+    child.once("close", (code) =>
+      code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
+    );
+  });
+  return {
+    child,
+    output,
+    delivery: prepared.deliverTo(child),
+    assertReleased: () => expectDescriptorReleased(stdio[3] as number, original!),
+    [Symbol.dispose]() {
+      child.kill(process.platform === "win32" ? undefined : "SIGKILL");
+    },
+  };
+}
+
 describe("Windows secret input delivery", () => {
-  it("completes once the pipe accepts the bytes, even if the child never reads them", async () => {
+  it("completes on accepted bytes and consumes late errors until the pipe closes", async () => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);
-
     expect(stream.written?.toString()).toBe("selected-secret");
     stream.finishWrite();
     await expect(write).resolves.toBeUndefined();
     expect(stream.destroyed).toBe(true);
     expect(stream.written?.every((byte) => byte === 0)).toBe(true);
-  });
-
-  it("consumes pipe errors after delivery until the stream closes", async () => {
-    const stream = new ControlledSecretStream();
-    const write = writeSecret(stream);
-
-    stream.finishWrite();
-    await expect(write).resolves.toBeUndefined();
-
     const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
     expect(() => stream.emit("error", reset)).not.toThrow();
     expect(stream.listenerCount("error")).toBe(1);
-
     stream.emit("close");
     expect(stream.listenerCount("error")).toBe(0);
   });
@@ -82,21 +95,9 @@ describe("Windows secret input delivery", () => {
   it("rejects a blocked write when abortSignal fires", async () => {
     const stream = new ControlledSecretStream();
     const abort = new AbortController();
-    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-    try {
-      using prepared = prepareSecretInputStdio([], {
-        fd: 3,
-        createData: () => Buffer.from("selected-secret"),
-      });
-      const write = prepared!.deliverTo(childWithSecretStream(stream), {
-        abortSignal: abort.signal,
-      });
-      abort.abort();
-      await expect(write).rejects.toThrow("secret delivery aborted");
-    } finally {
-      Object.defineProperty(process, "platform", original);
-    }
+    const write = writeSecret(stream, abort.signal);
+    abort.abort();
+    await expect(write).rejects.toThrow("secret delivery aborted");
   });
 
   it("rejects delivery errors before consuming their later stream event", async () => {
@@ -122,25 +123,16 @@ function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatS
     return;
   }
   // Other Vitest workers can reuse the number after close; identity owns the pipe.
-  expect({ dev: current.dev, ino: current.ino }).not.toEqual({
-    dev: original.dev,
-    ino: original.ino,
-  });
+  expect([current.dev, current.ino]).not.toEqual([original.dev, original.ino]);
 }
 
 describe.skipIf(process.platform === "win32")("POSIX secret input ownership", () => {
   const descriptorPath = process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3";
 
   it("delivers once through a path reader without replay to descendants", async () => {
-    const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
     const data = Buffer.from("private-fixture");
-    using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData: () => data });
-    const original = fstatSync(stdio[3] as number);
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+    using test = spawnSecret(
+      `
       const fs = require("node:fs");
       const value = fs.readFileSync(${JSON.stringify(descriptorPath)}, "utf8");
       const descendant = require("node:child_process").spawnSync(process.execPath,
@@ -148,27 +140,12 @@ describe.skipIf(process.platform === "win32")("POSIX secret input ownership", ()
         {stdio: ["ignore", "pipe", "inherit", 3]});
       process.stdout.write(JSON.stringify({value, descendant: descendant.stdout.toString()}));
     `,
-      ],
-      { stdio },
+      () => data,
     );
-    const output = new Promise<string>((resolve, reject) => {
-      let text = "";
-      child.stdout!.on("data", (chunk) => {
-        text += chunk;
-      });
-      child.on("error", reject);
-      child.once("close", (code) =>
-        code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
-      );
-    });
-    try {
-      await prepared!.deliverTo(child);
-      expect(JSON.parse(await output)).toEqual({ value: "private-fixture", descendant: "0" });
-      expect(data.every((byte) => byte === 0)).toBe(true);
-      expectDescriptorReleased(stdio[3] as number, original);
-    } finally {
-      child.kill("SIGKILL");
-    }
+    await test.delivery;
+    expect(JSON.parse(await test.output)).toEqual({ value: "private-fixture", descendant: "0" });
+    expect(data.every((byte) => byte === 0)).toBe(true);
+    test.assertReleased();
   });
 
   it("closes both untransferred ends when spawning throws", () => {
@@ -185,88 +162,43 @@ describe.skipIf(process.platform === "win32")("POSIX secret input ownership", ()
     expectDescriptorReleased(stdio[3] as number, original!);
   });
   it("closes the writer without delivering bytes when credential creation throws", async () => {
-    const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
     const reason = new Error("credential unavailable");
-    using prepared = prepareSecretInputStdio(stdio, {
-      fd: 3,
-      createData: () => {
+    using test = spawnSecret(
+      'process.stdout.write(String(require("node:fs").readFileSync(3).length))',
+      () => {
         throw reason;
       },
-    });
-    const child = spawn(
-      process.execPath,
-      ["-e", 'process.stdout.write(String(require("node:fs").readFileSync(3).length))'],
-      { stdio },
     );
-    const output = new Promise<string>((resolve, reject) => {
-      let text = "";
-      child.stdout!.on("data", (chunk) => {
-        text += chunk;
-      });
-      child.on("error", reject);
-      child.once("close", (code) =>
-        code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
-      );
-    });
-    try {
-      await expect(prepared!.deliverTo(child)).rejects.toBe(reason);
-      await expect(output).resolves.toBe("0");
-    } finally {
-      child.kill("SIGKILL");
-    }
+    await expect(test.delivery).rejects.toBe(reason);
+    await expect(test.output).resolves.toBe("0");
   });
 });
 
 describe.runIf(process.platform === "win32")("Windows secret input pipes", () => {
-  function spawnWithSecret(script: string, data: Buffer) {
-    const stdio: SpawnStdioEntry[] = ["pipe", "pipe", "pipe"];
-    const prepared = prepareSecretInputStdio(stdio, { fd: 3, createData: () => data })!;
-    const child = spawn(process.execPath, ["-e", script], { stdio, windowsHide: true });
-    const output = new Promise<string>((resolve, reject) => {
-      let text = "";
-      child.stdout!.on("data", (chunk) => {
-        text += chunk;
-      });
-      child.on("error", reject);
-      child.once("close", (code) =>
-        code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
-      );
-    });
-    return { child, delivery: prepared.deliverTo(child), output };
-  }
-
   it("does not wait for a live child that never reads the descriptor", async () => {
-    const { child, delivery, output } = spawnWithSecret(
+    using test = spawnSecret(
       'process.stdin.resume(); process.stdin.on("end", () => process.stdout.write("done"))',
-      Buffer.from("private-fixture"),
+      () => Buffer.from("private-fixture"),
     );
-    try {
-      await delivery;
-      child.stdin!.end();
-      await expect(output).resolves.toBe("done");
-    } finally {
-      child.kill();
-    }
+    await test.delivery;
+    test.child.stdin!.end();
+    await expect(test.output).resolves.toBe("done");
   });
 
   it("keeps accepted bytes readable after closing the writer", async () => {
     // Larger than the pipe buffer, so delivery spans partial writes before close.
     const data = Buffer.alloc(1024 * 1024, "s");
-    const { child, delivery, output } = spawnWithSecret(
+    using test = spawnSecret(
       `
       let length = 0;
       const secret = new (require("node:net").Socket)({ fd: 3, readable: true, writable: false });
       secret.on("data", (chunk) => { length += chunk.length; });
       secret.on("end", () => process.stdout.write(String(length)));
     `,
-      data,
+      () => data,
     );
-    try {
-      await delivery;
-      await expect(output).resolves.toBe(String(1024 * 1024));
-      expect(data.every((byte) => byte === 0)).toBe(true);
-    } finally {
-      child.kill();
-    }
+    await test.delivery;
+    await expect(test.output).resolves.toBe(String(1024 * 1024));
+    expect(data.every((byte) => byte === 0)).toBe(true);
   });
 });

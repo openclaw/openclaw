@@ -461,6 +461,21 @@ async function runAction(action: Action, fixture: Fixture) {
 }
 
 describe("cold current transcript lifecycle", () => {
+  it("restores and compacts with ID-selected authority without search preparation", async () => {
+    const fixture = await createColdCurrentSession();
+    const current = await captureSessionEntryCurrentCheckAsyncInternal(fixture.scope);
+    try {
+      await expect(createCompactAuthority(fixture).trim(current.source)).resolves.toEqual({
+        compacted: true,
+        kept: 3,
+      });
+      expect(coldDescriptor(fixture)).toBeUndefined();
+      expect(loadTranscriptEventsSync(fixture.scope)).toHaveLength(3);
+    } finally {
+      current.release();
+    }
+  });
+
   it("refuses a denied manual compaction through SQL-free host preflight without restoring rows", async () => {
     const fixture = await createColdCurrentSession();
     const before = fixture.snapshot();
@@ -583,8 +598,8 @@ describe("cold current transcript lifecycle", () => {
           const prepared = await prepare();
           return {
             ...prepared,
-            assertCurrent() {
-              prepared.assertCurrent();
+            assertPreparedCurrent() {
+              (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
               if (inCommitGrant && !changed) {
                 revokeBinding();
               }

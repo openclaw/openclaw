@@ -56,51 +56,45 @@ it("settles accepted memory usage and trajectory work across the real close prel
       { assertCurrent() {}, assertReadable() {} },
     );
     const selected = actor;
-    expect(
-      (
-        await selected.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
+    const created = await selected.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
+      },
+      authority,
+    );
+    expect(created).toMatchObject({ kind: "committed" });
     for (const [index, content] of ["old branch", "accepted current branch"].entries()) {
-      expect(
-        (
-          await selected.appendToolResult(
-            {
-              commandId: `compute-message-${index}`,
-              phaseId: "compute-close",
-              turn: {
-                agentId: "main",
-                sessionKey: target.sessionKey,
-                options: {
-                  expectedSessionId: target.sessionId,
-                  sessionFile: formatSqliteSessionFileMarker(target),
-                  messages: [
-                    {
-                      eventId: `message-${index}`,
-                      parentId: null,
-                      message: {
-                        role: "assistant",
-                        content: [{ type: "text", text: content }],
-                        timestamp: 10_000,
-                        provider: "test",
-                        model: "test",
-                        usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-                      },
-                    },
-                  ],
+      const appended = await selected.appendToolResult(
+        {
+          commandId: `compute-message-${index}`,
+          phaseId: "compute-close",
+          turn: {
+            agentId: "main",
+            sessionKey: target.sessionKey,
+            options: {
+              expectedSessionId: target.sessionId,
+              sessionFile: formatSqliteSessionFileMarker(target),
+              messages: [
+                {
+                  eventId: `message-${index}`,
+                  parentId: null,
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: content }],
+                    timestamp: 10_000,
+                    provider: "test",
+                    model: "test",
+                    usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+                  },
                 },
-              },
+              ],
             },
-            authority,
-          )
-        ).kind,
-      ).toBe("committed");
+          },
+        },
+        authority,
+      );
+      expect(appended).toMatchObject({ kind: "committed" });
     }
     const database = { agentId: "main", path: owner.path, env: fixture.state.env };
     const sessionFile = formatSqliteSessionFileMarker(target);
@@ -148,30 +142,25 @@ it("settles accepted memory usage and trajectory work across the real close prel
           startSessionTranscriptIndexReconcile(database);
           await waitForSessionTranscriptIndexReconcile(database);
           expect(isSessionTranscriptIndexReconcileRunning(database)).toBe(false);
-          expect(
-            await selected.storage!.read(
-              {
-                type: "session.history.recent",
-                input: { sessionId: target.sessionId, options: { maxMessages: 10 } },
-              },
-              authority,
-            ),
-          ).toMatchObject({
+          const history = await selected.storage!.read(
+            {
+              type: "session.history.recent",
+              input: { sessionId: target.sessionId, options: { maxMessages: 10 } },
+            },
+            authority,
+          );
+          expect(history).toMatchObject({
             totalMessages: 1,
             messages: [{ content: [{ type: "text", text: "accepted current branch" }] }],
           });
           expect(refreshed).toBe("refreshed");
           await trajectory.flush();
           expect(trajectory.describeFlushState()).toBeUndefined();
-          expect(
-            await selected.storage!.read(
-              {
-                type: "session.trajectory.read",
-                input: { sessionId: target.sessionId },
-              },
-              authority,
-            ),
-          ).toEqual([event]);
+          const events = await selected.storage!.read(
+            { type: "session.trajectory.read", input: { sessionId: target.sessionId } },
+            authority,
+          );
+          expect(events).toEqual([event]);
           const usage = await selected.storage!.read(
             {
               type: "session.usage.snapshot",
@@ -182,8 +171,7 @@ it("settles accepted memory usage and trajectory work across the real close prel
           expect(usage).toMatchObject([
             { sessionId: target.sessionId, rollup: { valueJson: expect.any(String) } },
           ]);
-          expect(published).toHaveBeenCalledOnce();
-          expect(published).toHaveBeenCalledWith({
+          expect(published).toHaveBeenCalledExactlyOnceWith({
             agentId: "main",
             usageUpdatedAt: expect.any(Number),
           });

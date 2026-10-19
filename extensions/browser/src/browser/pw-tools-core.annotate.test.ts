@@ -70,18 +70,18 @@ describe("labeled screenshots", () => {
       .mockResolvedValueOnce({ x: 50, y: 60, width: 70, height: 80 });
     const result = await capture({
       refs: Object.fromEntries(
-        ["e1", "e2", "e3", "e4", "e5", "e6"].map((ref) => [ref, { role: "button" }]),
+        Array.from({ length: 154 }, (_, i) => [`e${i + 1}`, { role: "button" }]),
       ),
       fullPage: true,
-      maxLabels: 2,
     });
-    expect(result.annotations).toEqual([
+    expect(result.annotations.slice(0, 2)).toEqual([
       { ref: "e3", number: 3, role: "button", box: { x: 10, y: 1020, width: 30, height: 40 } },
       { ref: "e4", number: 4, role: "button", box: { x: 50, y: 1060, width: 70, height: 80 } },
     ]);
-    expect(result.labels).toBe(2);
+    expect(result.annotations).toHaveLength(150);
+    expect(result.labels).toBe(150);
     expect(result.skipped).toBe(4);
-    expect(boundingBox).toHaveBeenCalledTimes(4);
+    expect(boundingBox).toHaveBeenCalledTimes(152);
     expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
   });
 

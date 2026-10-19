@@ -97,7 +97,7 @@ it("shows connected review waits without changing delivery versions or crossing 
   const [viewProps, setViewProps] = createSignal(currentProps());
   const view = mountSolid(
     () => {
-      const frame = createMemo(() => createChatViewFrame(viewProps()));
+      const frame = createMemo(() => createChatViewFrame(viewProps(), () => undefined));
       return [
         createComponent(ChatThread, {
           get props() {

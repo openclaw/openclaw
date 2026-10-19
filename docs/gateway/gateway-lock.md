@@ -24,6 +24,8 @@ Every server start uses the same admission, including the temporary Gateway star
 
 During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It checks ordinary contention every 250 ms so a prolonged shutdown does not leave the replacement sleeping after ownership is released. Unverifiable process namespaces retain their separate heartbeat-expiry wait. It logs when waiting starts and when ownership is acquired or the wait expires.
 
+Startup's earlier shared-state discovery also waits up to five minutes for live offline maintenance to finish, including after an update or service restart. It reports the current maintenance PID and role every 30 seconds, then reports admission or failure. Cancellation still ends the wait. The wait never kills the maintenance process, reclaims its live lock, or repeats admitted discovery work; if it expires, let the recorded process finish before retrying startup.
+
 ### State and config locks
 
 - On Linux and macOS, the process owner lives at `$OPENCLAW_STATE_DIR/tmp/openclaw-<uid>/state.<hash>.lock`. It uses the selected state storage without requiring write access to its parent or depending on the system temporary directory. On Windows it lives beneath the user's `AppData/Local/OpenClaw/locks/openclaw-state-owners` directory. The hash identifies the resolved shared-state database path. `TMPDIR` does not change this namespace.

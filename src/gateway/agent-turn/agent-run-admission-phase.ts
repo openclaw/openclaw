@@ -55,12 +55,14 @@ import type {
   PreparedAgentRunModelRuntime,
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
+import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   prepareGatewaySubagentRun,
   resolveRegisteredSubagentTimeoutSeconds,
 } from "./agent-run-subagent.js";
 import {
+  AgentRunUserTurnCleanupError,
   prepareAgentRunUserTurn,
   recordAgentRunUserTurnParticipant,
   reconcileAgentRunUserTurnCompletion,
@@ -460,10 +462,11 @@ export async function prepareAgentRunDispatch(
   }
   let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let resumedTaskAdopted = false;
-  let userTurn: PreparedAgentRunUserTurn;
+  let userTurn: PreparedAgentRunUserTurn | undefined;
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
+    userTurn?.assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (!resumedTaskAdopted) {
       followupSuccessor?.assertCurrent();
@@ -503,13 +506,26 @@ export async function prepareAgentRunDispatch(
       freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
+    userTurn.assertRequesterCurrent?.();
     if (userTurn.recorder) {
       // Accepted input owns these media references before it enters the transcript.
       // Later admission rejection must preserve the files retained by that custody.
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {
-    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
+    const failure = userTurn
+      ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, "interrupted")
+      : err;
+    if (
+      !(failure instanceof AgentRunUserTurnCleanupError) &&
+      isGatewayAgentAbortRejection(failure, activeRunAbort.controller.signal)
+    ) {
+      const failedAdmission = revalidateAdmission();
+      if (failedAdmission !== true) {
+        return failedAdmission;
+      }
+    }
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
   }
   const inputAdmission = revalidateAdmission(userTurn);
   if (inputAdmission !== true) {

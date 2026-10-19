@@ -359,6 +359,24 @@ it.each(["started", "cancelled", "replaced"] as const)(
   },
 );
 
+it("keeps a detached followup behind a selected direct command without a reply operation", async ({
+  signal,
+}) => {
+  const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
+  const command = await f.claim();
+  const input = f.reserve();
+  const selected = vi.fn();
+  const pending = claimSessionControllerTask(input, selected, "queued_followup");
+  expect(input.phase).toBe("waiting");
+  expect(selected).not.toHaveBeenCalled();
+  expect(input.mailbox.owner.active).toBeUndefined();
+  releaseSessionControllerClaim(command);
+  const mailboxClaim = await withinTest(pending, signal);
+  expect(selected).toHaveBeenCalledExactlyOnceWith(mailboxClaim);
+  const result = await withinTest(f.admit({ mailboxClaim, kind: "queued_followup" }), signal);
+  expect(result).toMatchObject({ status: "owned" });
+});
+
 it("does not consume startup recovery's source while monitoring", async () => {
   const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
   const startup = f.reserve();

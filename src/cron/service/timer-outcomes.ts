@@ -1,6 +1,7 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -25,8 +26,12 @@ import {
   isJobEnabled,
   recordScheduleComputeError,
   resolveNextRunAtMsOrDisable,
+  resolveCronRestartRetryAtMs,
 } from "./jobs-scheduling.js";
-import { resolveManualOneShotOccurrenceAtMs } from "./one-shot-schedule.js";
+import {
+  isCronOneShotContinuationJob,
+  resolveManualOneShotOccurrenceAtMs,
+} from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 import { type CronJobRunResult, MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import {
@@ -120,7 +125,7 @@ export function applyJobResult(
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
-  job.state.lastError = result.error;
+  job.state.lastError = result.interruptedByRestart ? STARTUP_INTERRUPTED_ERROR : result.error;
   job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
@@ -168,7 +173,10 @@ export function applyJobResult(
 
   // Cancellations preserve the streak without counting as a job failure.
   // Skipped runs use a separate counter so skip alerts do not affect retries.
-  const runFailed = result.status === "error" && result.errorClassification?.kind !== "aborted";
+  const runFailed =
+    result.status === "error" &&
+    !result.interruptedByRestart &&
+    result.errorClassification?.kind !== "aborted";
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const computeNaturalNext = (restartInterval: boolean) => {
     try {
@@ -211,11 +219,24 @@ export function applyJobResult(
     opts.scheduleMode === "preserve" && oneShotOccurrenceAtMs !== undefined;
   const ownsSchedule = opts.scheduleOwnership !== "stale";
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
+  const oneShotNextCheck =
+    ownsSchedule &&
+    !preserveOneShotSchedule &&
+    !opts.replaySchedule &&
+    isJobEnabled(job) &&
+    isCronOneShotContinuationJob(job) &&
+    result.status === "ok"
+      ? result.nextCheck
+      : undefined;
+  const restartRetryAtMs = result.interruptedByRestart
+    ? resolveCronRestartRetryAtMs(job, result.startedAt, result.endedAt)
+    : undefined;
   // Authored completion includes intentional silence and the admitted best-effort policy.
   const shouldDelete =
     ownsSchedule &&
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
+    !oneShotNextCheck &&
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let terminalRecurring = false;
@@ -289,6 +310,15 @@ export function applyJobResult(
     } else if (opts.replaySchedule && job.schedule.kind === "at") {
       applyReplaySchedule();
       job.enabled = job.state.nextRunAtMs !== undefined;
+    } else if (restartRetryAtMs !== undefined) {
+      job.state.nextRunAtMs = restartRetryAtMs;
+      job.state.startupCatchupAtMs = job.state.nextRunAtMs;
+    } else if (oneShotNextCheck) {
+      // The same definition, tool cap, and private source own the next occurrence;
+      // only its runtime deadline changes. Existing cadence provenance survives restart.
+      job.state.pacedNextRunAtMs = scheduleNextRun(
+        result.endedAt + Math.max(MIN_REFIRE_GAP_MS, oneShotNextCheck.delayMs),
+      );
     } else if (job.schedule.kind === "at" && isJobEnabled(job)) {
       if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
@@ -722,7 +752,7 @@ export function applyOutcomeToAuthoritativeJob(
     if (job.schedule.kind === "stream") {
       job.state.nextRunAtMs = undefined;
     }
-  } else {
+  } else if (!result.interruptedByRestart) {
     job.state.startupCatchupAtMs = undefined;
   }
 

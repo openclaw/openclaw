@@ -75,6 +75,7 @@ it.each([false, true])(
       await waitForSolid(() => expect(image.getAttribute("src")).toBe("blob:solid-avatar"));
     }
     image.dispatchEvent(new Event("load"));
+    flush();
     expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
       "loaded",
     );
@@ -153,6 +154,7 @@ it("renders and retires a Solid agent's configured image without losing its fall
     ).unmount,
   );
   container.querySelector("img")!.dispatchEvent(new Event("error"));
+  flush();
   expect(
     container.querySelector(".identity-avatar--agent")?.classList.contains("is-fallback"),
   ).toBe(true);

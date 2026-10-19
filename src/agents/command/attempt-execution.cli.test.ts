@@ -61,7 +61,6 @@ import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
-import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
   createSubagentAnnounceConfig,
   createSubagentAnnounceHandoffOptions,
@@ -71,6 +70,7 @@ import {
 } from "./attempt-execution.announce.test-support.js";
 import {
   cliRuntimeConfig,
+  registerCommandCliAdmissionTests,
   createCliImageCapabilityPlugins,
   makeCliResult,
   makeRunAgentAttemptParams,
@@ -413,40 +413,13 @@ describe("CLI attempt execution", () => {
     return { sessionStore, runCli };
   }
 
-  it.each(["assistant_output_started"] as const)(
-    "keeps CLI admission separate from observed %s",
-    async (phase) => {
-      const sessionKey = "agent:main:direct:cli-execution-started";
-      const sessionEntry = makeSessionEntry("session-cli-execution-started");
-      const { runCli } = await createCliSession(sessionKey, sessionEntry);
-      const onExecutionStarted = vi.fn();
-      const onRuntimeTurnStarted = vi.fn();
-      const callbacks = createAgentAttemptLifecycleCallbacks(
-        {
-          currentTurnUserMessagePersisted: false,
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-        onRuntimeTurnStarted,
-      );
-      runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
-
-      await runCli({
-        onExecutionStarted,
-        onAgentEvent: callbacks.onAgentEvent,
-      });
-
-      expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
-      const observePhase = firstRunCliAgentArg().onExecutionPhase;
-      if (typeof observePhase !== "function") {
-        throw new Error("CLI execution phase observer is missing");
-      }
-      observePhase({ phase: "process_spawned" });
-      expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
-      observePhase({ phase });
-      expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
-    },
-  );
+  registerCommandCliAdmissionTests({
+    runStoredAttempt,
+    seedSessionStore,
+    runCliAgentMock,
+    createCliSession,
+    firstRunCliAgentArg,
+  });
 
   it.each(["updated", "replaced", "revised"])(
     "refreshes a %s session after CLI placement admission",

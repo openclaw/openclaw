@@ -146,6 +146,7 @@ export function registerQueuedStopControlTests({
           },
           controllerSessionKey: owner,
           requesterSessionKey: owner,
+          requesterTurnRunId: queued && kind === "admin tree" ? "running-collector" : undefined,
           collect: true,
           createdAt: 1,
           execution: queued ? { status: "queued" } : { status: "running", startedAt: 2 },

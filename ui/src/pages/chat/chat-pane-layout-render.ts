@@ -22,7 +22,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
@@ -51,6 +51,19 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  get composerReady(): boolean {
+    return getChatComposerState(this.presentationId).composerTextarea?.isConnected === true;
+  }
+
+  focusComposerInput(): boolean {
+    const composer = getChatComposerState(this.presentationId).composerTextarea;
+    if (!this.active || !composer?.isConnected || composer.disabled) {
+      return false;
+    }
+    composer.focus({ preventScroll: true });
+    return true;
+  }
+
   private toolIcons?: PluginToolIcons;
 
   mountToolIcons(readGateway: () => unknown): void {
@@ -363,6 +376,22 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           };
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      onRegionElementRef: (element) => {
+        this.sidebarRegionElement = element;
+        return () => {
+          if (this.sidebarRegionElement === element) {
+            this.sidebarRegionElement = null;
+          }
+        };
+      },
+      onRegionViewRef: (element) => {
+        this.sidebarRegionView = element;
+        return () => {
+          if (this.sidebarRegionView === element) {
+            this.sidebarRegionView = null;
+          }
+        };
+      },
       presentationId: this.presentationId,
       conversationTab: { label: chatProps.assistantName, avatar },
       availableWidth: this.paneWidth,

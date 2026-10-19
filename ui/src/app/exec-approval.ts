@@ -426,7 +426,9 @@ export async function refreshPendingApprovalQueue(
     for (const entry of refreshed) {
       scheduleApprovalExpiryPrune(state, entry);
     }
-    return true;
+    return [execResult, pluginResult, systemAgentResult].every(
+      (result) => result.status === "fulfilled",
+    );
   } finally {
     refreshes.delete(refresh);
     if (refreshes.size === 0) {

@@ -29,6 +29,11 @@ export async function withGatewayMaintenanceDrain<T>(
     state: GatewayServiceState;
     timeoutMs?: number;
     drainPolicy?: "interrupt-after-drain";
+    /** Installation owners can retain an exact trusted control client and supervisor binding. */
+    control?: {
+      call: <R>(method: string, args: unknown, beforeDispatch?: () => void) => Promise<R>;
+      stopTimeoutMs: number;
+    };
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
@@ -137,24 +142,26 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     return lastObservation;
   };
-  const connection = await (async () => {
-    const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
-    const port = await resolveUpdatedGatewayRestartPort({
-      config,
-      serviceEnv: params.state.env,
-      serviceCommand: params.state.command,
-    });
-    const target = await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(port);
-    const controlAuth = await resolveReadOnlyLocalGatewayAuth({
-      auth,
-      authNone: config.gateway?.auth?.mode === "none",
-      env: params.state.env,
-    });
-    return { config, controlAuth, port, target };
-  })().catch((error: unknown) => {
-    observationFailure = { error };
-    return undefined;
-  });
+  const connection = params.control
+    ? undefined
+    : await (async () => {
+        const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
+        const port = await resolveUpdatedGatewayRestartPort({
+          config,
+          serviceEnv: params.state.env,
+          serviceCommand: params.state.command,
+        });
+        const target = await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(port);
+        const controlAuth = await resolveReadOnlyLocalGatewayAuth({
+          auth,
+          authNone: config.gateway?.auth?.mode === "none",
+          env: params.state.env,
+        });
+        return { config, controlAuth, port, target };
+      })().catch((error: unknown) => {
+        observationFailure = { error };
+        return undefined;
+      });
   assertResidentCurrent();
   const ownsLegacyListener = async (pid: number) => {
     if (!connection?.target) {
@@ -171,6 +178,14 @@ export async function withGatewayMaintenanceDrain<T>(
     beforeDispatch?: () => void,
   ): Promise<R> => {
     assertResidentCurrent();
+    if (params.control) {
+      const result = await params.control.call<R>(method, args, () => {
+        assertResidentCurrent();
+        beforeDispatch?.();
+      });
+      assertResidentCurrent();
+      return result;
+    }
     if (!connection?.target) {
       throw observationFailure
         ? observationFailure.error
@@ -208,7 +223,8 @@ export async function withGatewayMaintenanceDrain<T>(
   let managerTimeout: number | undefined;
   let verifiedResident = false;
   try {
-    managerTimeout = await readSystemdGatewayStopTimeout(params.state);
+    managerTimeout =
+      params.control?.stopTimeoutMs ?? (await readSystemdGatewayStopTimeout(params.state));
     const resident = await call<{ pid?: number; shutdownBudget?: GatewayShutdownStatus }>(
       "status",
       { includeChannelSummary: false },

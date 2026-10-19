@@ -1,14 +1,16 @@
-import { createEffect, createMemo, createSignal, For, Show, onCleanup } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { CronJob } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isCronJobRunning, resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
-import { loadCronJobsPage } from "../lib/cron/jobs.ts";
+import { loadCronJobsPage } from "../lib/cron/jobs-full.ts";
 import { createInitialCronState } from "../lib/cron/state.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { createGatewayConnectionLifecycle } from "../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { formatCronPayload, formatCronSchedule } from "../lib/presenter.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
@@ -36,70 +38,72 @@ function instructions(job: CronJob): string {
 }
 
 export function SessionHovercardAutomations(props: { automation: SessionHovercardAutomation }) {
-  const [revision, publish] = createSignal(0);
   const [selectedId, select] = createSignal<string>();
-  let current = createInitialCronState();
-  const state = () => {
-    revision();
-    return current;
-  };
-  const selected = createMemo(
-    () => state().cronJobs.find((job) => job.id === selectedId()) ?? state().cronJobs[0],
-  );
-  let active = true;
-  onCleanup(() => {
-    active = false;
-  });
-
-  async function load(append = false) {
-    const scope = current;
-    const pending = loadCronJobsPage(scope, { append });
-    publish((value) => value + 1);
-    await pending;
-    if (active && current === scope) {
-      publish((value) => value + 1);
-    }
-  }
-
-  createEffect(
+  const scope = createMemo(
     () =>
       [props.automation.gateway, props.automation.sessionKey, props.automation.agentId] as const,
-    ([gateway, sessionKey, agentId]) => {
-      const reset = () => {
-        const next = createInitialCronState({
-          client: gateway?.snapshot.client ?? null,
-          connected: gateway?.snapshot.phase === "connected",
-        });
-        next.cronSessionFilter = { sessionKey, sessionAgentId: agentId };
-        next.cronJobsLimit = 20;
-        next.cronJobsSortBy = "name";
-        next.canRefresh = () => active && current === next;
-        current = next;
-        publish((value) => value + 1);
-      };
-      reset();
-      if (!gateway) {
-        return undefined;
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  const source = createMemo(() => {
+    let current = createInitialCronState();
+    let active = false;
+    let notify = () => {};
+    const load = async (append = false, event?: unknown) => {
+      const pendingState = current;
+      const pending = loadCronJobsPage(pendingState, { append, event });
+      notify();
+      await pending;
+      if (active && current === pendingState) {
+        notify();
       }
-      const lifecycle = createGatewayConnectionLifecycle(gateway.snapshot);
-      const stopConnection = gateway.subscribe((snapshot) => {
-        if (lifecycle.transition(snapshot)) {
-          reset();
-          void load();
-        }
-      });
-      const stopEvents = gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
-          void load();
-        }
-      });
-      void load();
-      return () => {
-        stopConnection();
-        stopEvents();
-        lifecycle.dispose();
-      };
-    },
+    };
+    const projection = projectSource(scope(), {
+      read: () => current,
+      equality: "revision",
+      subscribe: ([gateway, sessionKey, agentId], publish) => {
+        active = true;
+        notify = publish;
+        const reset = () => {
+          const next = createInitialCronState({
+            client: gateway?.snapshot.client ?? null,
+            connected: gateway?.snapshot.phase === "connected",
+          });
+          next.cronSessionFilter = { sessionKey, sessionAgentId: agentId };
+          next.cronJobsLimit = 20;
+          next.cronJobsSortBy = "name";
+          next.canRefresh = () => active && current === next;
+          current = next;
+          notify();
+        };
+        reset();
+        const lifecycle = gateway && createGatewayConnectionLifecycle(gateway.snapshot);
+        const stopConnection = gateway?.subscribe((snapshot) => {
+          if (lifecycle?.transition(snapshot)) {
+            reset();
+            void load();
+          }
+        });
+        const stopEvents = gateway?.subscribeEvents((event) => {
+          if (event.event === "cron") {
+            void load(false, event.payload);
+          }
+        });
+        void load();
+        return () => {
+          active = false;
+          notify = () => {};
+          stopConnection?.();
+          stopEvents?.();
+          lifecycle?.dispose();
+        };
+      },
+    });
+    return { read: projection.read, load };
+  });
+  const state = () => source().read();
+  const load = (append = false) => source().load(append);
+  const selected = createMemo(
+    () => state().cronJobs.find((job) => job.id === selectedId()) ?? state().cronJobs[0],
   );
 
   const rowLabel = () =>
@@ -141,6 +145,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
   };
   const OpenLink = (link: { job?: CronJob }) => (
     <a
+      ref={createHovercardControlRef()}
       class="session-hovercard__automation-open"
       href={link.job ? jobHref(link.job.id) : props.automation.href}
       onClick={(event) => {
@@ -167,6 +172,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
       open-on-click
     >
       <a
+        ref={createHovercardControlRef()}
         class="session-hovercard__context-row session-hovercard__automation-link"
         href={props.automation.href}
         onClick={(event) => {
@@ -202,6 +208,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
             <For each={state().cronJobs} keyed={(job) => job.id}>
               {(job) => (
                 <button
+                  ref={createHovercardControlRef()}
                   type="button"
                   class="session-hovercard__automation-choice"
                   aria-pressed={selected()?.id === job().id ? "true" : "false"}
@@ -258,7 +265,9 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
                 </div>
                 <p class="session-hovercard__automation-preview">{instructions(value())}</p>
                 <details>
-                  <summary>{t("sessionHovercard.automationFullInstructions")}</summary>
+                  <summary ref={createHovercardControlRef()}>
+                    {t("sessionHovercard.automationFullInstructions")}
+                  </summary>
                   <pre>{instructions(value())}</pre>
                 </details>
               </div>
@@ -273,6 +282,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         </Show>
         <Show when={state().cronJobsError}>
           <button
+            ref={createHovercardControlRef()}
             type="button"
             class="chip"
             disabled={loading() || !state().connected}
@@ -282,7 +292,13 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           </button>
         </Show>
         <Show when={state().cronJobsHasMore}>
-          <button type="button" class="chip" disabled={loading()} onClick={() => void load(true)}>
+          <button
+            ref={createHovercardControlRef()}
+            type="button"
+            class="chip"
+            disabled={loading()}
+            onClick={() => void load(true)}
+          >
             {t("chat.sessionDetails.automationMore")}
           </button>
         </Show>

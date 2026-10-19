@@ -1950,6 +1950,7 @@ export function prepareGatewaySuspension(
   const callPrepare = (params) =>
     JSON.parse(callGateway(checkout, "gateway.suspend.prepare", params, deployment));
   let result;
+  let controlledDrainSupported = true;
   try {
     try {
       result = callPrepare({ requestId, terminalPolicy: "terminate" });
@@ -1959,6 +1960,7 @@ export function prepareGatewaySuspension(
       }
       // Older closed schemas reject the new field before acquiring a lease.
       // Retry once with preserve semantics so mixed-version updates remain safe.
+      controlledDrainSupported = false;
       result = callPrepare({ requestId });
     }
   } catch (error) {
@@ -1973,11 +1975,119 @@ export function prepareGatewaySuspension(
     return result;
   }
   if (result?.status === "busy" && Array.isArray(result.blockers)) {
-    return result;
+    return controlledDrainSupported ? result : { ...result, controlledDrainSupported: false };
   }
   throw new UpdateInvariantError(
     "gateway_suspend_prepare_invalid",
     `Gateway returned an invalid suspension result: ${JSON.stringify(result)}`,
+  );
+}
+
+async function drainManagedGatewayForMaintenance(
+  checkout,
+  deployment,
+  controlDeployment,
+  stop,
+  assertAuthority,
+) {
+  if (!deployment) {
+    throw new UpdateInvariantError(
+      "gateway_suspend_prepare_failed",
+      "Managed Gateway inspection is required for controlled interruption",
+    );
+  }
+  const [{ withGatewayMaintenanceDrain }, { readGatewayServiceState }, { resolveGatewayService }] =
+    await Promise.all([
+      import("../../../../src/cli/update-cli/update-command-service-drain.js"),
+      import("../../../../src/daemon/service-state.js"),
+      import("../../../../src/daemon/service.js"),
+    ]);
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: deployment.stateDir,
+    OPENCLAW_CONFIG_PATH: deployment.configPath,
+    OPENCLAW_GATEWAY_PORT: String(deployment.port),
+  };
+  delete env.OPENCLAW_GATEWAY_URL;
+  delete env.OPENCLAW_GATEWAY_TOKEN;
+  delete env.OPENCLAW_GATEWAY_PASSWORD;
+  const state = await readGatewayServiceState(resolveGatewayService(), {
+    env,
+    requireEffective: true,
+    timeoutMs: GATEWAY_CLI_TIMEOUT_MS,
+  });
+  const commandEntrypoint = resolveManagedGatewayEntrypoint(
+    state.command?.programArguments,
+    process.env.HOME,
+    deployment.stateDir,
+  );
+  if (
+    !state.running ||
+    !Number.isInteger(state.runtime?.pid) ||
+    commandEntrypoint !== deployment.entrypoint ||
+    state.command?.sourcePath !== deployment.plistPath
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_runtime_mismatch",
+      "Managed Gateway changed before controlled maintenance",
+    );
+  }
+  const binding = JSON.stringify(deployment);
+  const envBytes = deployment.envFilePath ? readFileSync(deployment.envFilePath) : null;
+  let stopCommitted = false;
+  const assertCurrent = () => {
+    assertAuthority();
+    if (
+      JSON.stringify(readManagedGatewayLaunchAgent(checkout)) !== binding ||
+      (envBytes && !readFileSync(deployment.envFilePath).equals(envBytes))
+    ) {
+      throw new UpdateInvariantError(
+        "gateway_runtime_mismatch",
+        "Managed Gateway binding changed during maintenance drain",
+      );
+    }
+    if (!stopCommitted) {
+      const loaded = spawnSync(
+        "/bin/launchctl",
+        ["print", `gui/${process.getuid()}/${deployment.label}`],
+        boundedSyncOptions({ encoding: "utf8" }),
+      );
+      const pid = Number(
+        loaded.status === 0 ? loaded.stdout.match(/\bpid = (\d+)\b/u)?.[1] : Number.NaN,
+      );
+      if (pid !== state.runtime.pid) {
+        throw new UpdateInvariantError(
+          "gateway_runtime_mismatch",
+          "Managed Gateway process changed during maintenance drain",
+        );
+      }
+    }
+  };
+  assertCurrent();
+  return withGatewayMaintenanceDrain(
+    {
+      state,
+      drainPolicy: "interrupt-after-drain",
+      assertCurrent,
+      warn: (message) => process.stderr.write(`${message}\n`),
+      control: {
+        stopTimeoutMs: deployment.exitTimeoutSeconds * 1_000,
+        async call(method, params, beforeDispatch) {
+          assertCurrent();
+          beforeDispatch?.();
+          const result = JSON.parse(
+            runBuiltGatewayCall(checkout, method, params, controlDeployment),
+          );
+          if (method === "gateway.suspend.handoff" && result.status === "committed") {
+            // The serving owner has committed one-way shutdown; it may exit before bootout.
+            stopCommitted = true;
+          }
+          assertCurrent();
+          return result;
+        },
+      },
+    },
+    ({ prepareEffect }) => stop(() => prepareEffect(assertCurrent)),
   );
 }
 
@@ -3462,6 +3572,52 @@ export async function maintainMain(options, dependencies = {}) {
           }
         }
       }
+      if (
+        gatewaySuspension.status === "busy" &&
+        gatewaySuspension.controlledDrainSupported !== false &&
+        gatewayControlDeployment
+      ) {
+        const stopped = await drainManagedGatewayForMaintenance(
+          update.checkout,
+          gatewayDeploymentBefore,
+          gatewayControlDeployment,
+          async (commitStop) => {
+            if (gatewayDeploymentBefore) {
+              await assertSystemOwnership(gatewayDeploymentBefore.label);
+            }
+            if (gatewayRuntimeRepointRequired) {
+              preparedGatewayReplacement = prepareGatewayEntrypointReplacement(
+                gatewayDeploymentBefore,
+                path.join(update.checkout, "dist/index.js"),
+              );
+            }
+            await commitStop();
+            return stopManagedGatewayAndProve(
+              runCommand,
+              update.checkout,
+              gatewayDeploymentBefore,
+              proveGatewayStopped,
+              sleep,
+              now,
+            );
+          },
+          () => {
+            const owner = JSON.parse(readFileSync(path.join(lock.lockPath, "owner.json"), "utf8"));
+            if (
+              owner.pid !== process.pid ||
+              owner.startedAt !== lock.owner.startedAt ||
+              gitText(update.checkout, ["rev-parse", "HEAD"]) !== update.afterSha
+            ) {
+              throw new UpdateInvariantError(
+                "lock_owner_changed",
+                "Maintenance authority changed during Gateway drain",
+              );
+            }
+          },
+        );
+        gatewayTiming = stopped.timing;
+        gatewaySuspension = { status: "offline", proof: stopped.proof };
+      }
       if (gatewaySuspension.status === "busy") {
         return {
           schemaVersion: 1,
@@ -3726,8 +3882,8 @@ export async function maintainMain(options, dependencies = {}) {
           "mac.restart",
           "env",
           [
-            "SKIP_TSC=1",
-            "SKIP_UI_BUILD=1",
+            "OPENCLAW_MAC_REUSE_BUILD=1",
+            "SKIP_PNPM_INSTALL=1",
             "bash",
             "scripts/restart-mac.sh",
             "--sign",

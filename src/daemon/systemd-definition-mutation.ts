@@ -381,7 +381,6 @@ export async function withSystemdDefinitionMutation<T>(
       }
       try {
         await assertNoSystemGatewayOwnership(env, remainingTimeoutMs());
-        assertGatewayServiceUpdateCurrent();
         const result = await execSystemctlUser(
           env,
           ["daemon-reload"],

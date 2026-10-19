@@ -20,7 +20,6 @@ import {
 import { isLoopbackHost } from "./net.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
@@ -151,6 +150,7 @@ export async function startGatewayCoreRuntime(input: {
         import("./server-startup-early.js").then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
             scheduler: runtime.scheduler,
+            getCronStorePath: () => runtimeState.cronState.storePath,
             minimalTestGateway,
             isClosing: () => runtime.lifecycle.closePreludeStarted,
             updateCanary: runtime.opts.updateCanary,
@@ -164,7 +164,6 @@ export async function startGatewayCoreRuntime(input: {
             nodeRegistry,
             swapDiscovery: kernel.swapDiscovery,
             pluginRegistry: pluginRuntime.registry,
-            pluginRuntimeClaim: kernel.pluginRuntimeGeneration.currentClaim(),
             broadcast,
             maintenance: {
               nodeSendToAllSubscribed,
@@ -476,19 +475,14 @@ export async function startGatewayCoreRuntime(input: {
   };
   const refreshAttachedGatewayDiscovery = async (
     nextPluginRegistry: typeof pluginRuntime.registry,
-    claim: GatewayPluginRuntimeClaim,
   ) => {
     if (minimalTestGateway) {
       return;
     }
     try {
-      if (!(await claim.waitForUnblocked())) {
-        return;
-      }
-      await runtimeState.discovery?.update(
-        { gatewayDiscoveryServices: nextPluginRegistry.gatewayDiscoveryServices },
-        claim,
-      );
+      await runtimeState.discovery?.update({
+        gatewayDiscoveryServices: nextPluginRegistry.gatewayDiscoveryServices,
+      });
     } catch (err) {
       logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
     }

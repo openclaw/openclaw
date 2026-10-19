@@ -1,3 +1,4 @@
+import "./attempt-selectors.test-support.js";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
@@ -30,6 +31,9 @@ import {
 } from "./attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
+
+const { copilotAttemptOverrides, resetCopilotAttemptOverrides } =
+  await import("./attempt-selectors.test-support.js");
 
 const transcriptAppendControl = vi.hoisted(() => ({
   beforeAppend: undefined as (() => Promise<void>) | undefined,
@@ -67,6 +71,7 @@ describe("Copilot canonical session persistence", () => {
   afterEach(() => {
     transcriptAppendControl.beforeAppend = undefined;
     clearRuntimeConfigSnapshot();
+    resetCopilotAttemptOverrides();
   });
 
   it.each(["commit", "rollback"] as const)(
@@ -313,12 +318,12 @@ describe("Copilot canonical session persistence", () => {
       promptMode: "none" as const,
       disableTools: true,
     };
+    copilotAttemptOverrides.createToolBridge = async () => ({
+      sourceTools: [],
+      promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
+    });
     const deps = {
       pool,
-      createToolBridge: async () => ({
-        sourceTools: [],
-        promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
-      }),
     };
     const failed = (await runCopilotAttempt(params, deps)) as AttemptResultWithSdkSessionId;
     expect(failed.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });

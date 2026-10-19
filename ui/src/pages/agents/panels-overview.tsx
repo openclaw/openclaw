@@ -1,5 +1,4 @@
 import {
-  createEffect,
   createMemo,
   createSignal,
   createUniqueId,
@@ -16,19 +15,19 @@ import type {
   ModelCatalogEntry,
   ModelCatalogResult,
 } from "../../api/types.ts";
-import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
-import "../../components/tooltip.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
+import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
 import {
   type AgentContext,
@@ -44,12 +43,15 @@ import {
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { projectApplicationConfig } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { uploadsEnabled } from "../../lib/uploads.ts";
 import { AvatarPicker, type GeneratedAvatar } from "./avatar-picker.tsx";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -59,7 +61,6 @@ export type AgentIdentityDraft = {
 
 export function AgentOverview(
   params: AgentConfigActions & {
-    applicationConfig?: ApplicationConfigCapability;
     agent: AgentsListResult["agents"][number];
     defaultId: string | null;
     configForm: Record<string, unknown> | null;
@@ -87,6 +88,11 @@ export function AgentOverview(
     onSelectPanel: (panel: AgentsPanel) => void;
   },
 ) {
+  const applicationConfig = useOptionalApplication()?.config;
+  const configProjection = applicationConfig
+    ? projectApplicationConfig(applicationConfig)
+    : undefined;
+  const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
   const avatarLoader = createIdentityAvatars();
   onCleanup(avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
@@ -222,20 +228,10 @@ export function AgentOverview(
 
   const [avatarPickerOpen, setAvatarPickerOpen] = createSignal(false);
   const avatarPickerId = `agent-avatar-picker-${createUniqueId()}`;
-  const pickerContentVisible = createMemo(
-    () => avatarPickerOpen() && uploadsEnabled(params.applicationConfig),
-  );
+  const pickerContentVisible = createMemo(() => avatarPickerOpen() && uploadsEnabled());
   const avatarOverlay = createOverlay(avatarPickerId, undefined, {
     exclusiveGroup: "menu",
   });
-  createEffect(
-    () => uploadsEnabled(params.applicationConfig),
-    (enabled) => {
-      if (!enabled) {
-        avatarOverlay.request(false);
-      }
-    },
-  );
   let avatarTrigger: HTMLButtonElement | undefined;
   let avatarSurface: HTMLDivElement | undefined;
   onSettled(() => {
@@ -248,8 +244,14 @@ export function AgentOverview(
     const anchor = createOverlayAnchor(avatarSurface, { sameRoot: true });
     anchor.update(avatarTrigger, "right-start");
     const unsubscribe = avatarOverlay.subscribe(setAvatarPickerOpen);
+    const unsubscribeConfig = applicationConfig?.subscribe((nextConfig) => {
+      if (!nextConfig.uploadsEnabled) {
+        avatarOverlay.request(false);
+      }
+    });
     return () => {
       unsubscribe();
+      unsubscribeConfig?.();
       anchor.dispose();
       avatarOverlay.dispose();
     };
@@ -290,7 +292,7 @@ export function AgentOverview(
               aria-label={t("agents.identity.chooseAvatar")}
               aria-expanded={avatarPickerOpen() ? "true" : "false"}
               aria-controls={avatarPickerId}
-              disabled={identityBusy() || !uploadsEnabled(params.applicationConfig)}
+              disabled={identityBusy() || !uploadsEnabled()}
               onClick={() => avatarOverlay.request(!avatarOverlay.open)}
             >
               {renderIdentityAvatar()}

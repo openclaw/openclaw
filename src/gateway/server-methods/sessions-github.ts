@@ -14,7 +14,7 @@ import { GitHubIdentityError } from "../../agents/github-read-identity.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
-import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
 import { performSessionGitHubAction } from "../github-publication-actions.js";
 import {
   prepareCurrentGitHubPublicationIdentity,
@@ -131,7 +131,7 @@ async function isSessionPublicationSuperseded(
   if (!client || !prOwner) {
     return false;
   }
-  const readTarget = await prepareControlUiSessionPrRead({
+  const readTarget = createControlUiSessionPrRead({
     client,
     sessionKey: session.sessionKey,
     agentId: session.agentId,

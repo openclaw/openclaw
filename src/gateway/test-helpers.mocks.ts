@@ -292,8 +292,10 @@ vi.mock("./health/collector.js", () => ({
       sessions: { path: "/test/gateway/sessions", count: 0, recent: [] },
     })),
 }));
+// mock-isolation: Gateway fixtures own their status response and must not collect local state.
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+  prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,

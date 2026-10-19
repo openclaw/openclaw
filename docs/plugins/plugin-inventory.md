@@ -200,7 +200,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-97 plugins
+99 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -286,6 +286,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[kimi](/plugins/reference/kimi)** (`@openclaw/kimi-provider`) - npm or ClawHub: `@openclaw/kimi-provider`. Adds Kimi, Kimi Code, Kimi Coding model provider support to OpenClaw.
 
+- **[levanto](/plugins/reference/levanto)** (`@openclaw/levanto`) - npm or ClawHub: `@openclaw/levanto`. Native Yes/No, Choice, Scale, Sort, and Tags decisions with explicit abstention.
+
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm or ClawHub: `@openclaw/line`. OpenClaw LINE channel plugin for LINE Bot API chats.
 
 - **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm or ClawHub: `@openclaw/llama-cpp-provider`. Managed and external llama.cpp servers for GGUF chat, embeddings and local images.
@@ -351,6 +353,8 @@ Each entry lists the package, distribution route, and description.
 - **[sms](/plugins/reference/sms)** (`@openclaw/sms`) - npm or ClawHub: `@openclaw/sms`. Twilio SMS/MMS channel plugin for OpenClaw messages.
 
 - **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm or ClawHub: `@openclaw/stepfun-provider`. Adds StepFun, StepFun Plan model provider support to OpenClaw.
+
+- **[subq](/plugins/reference/subq)** (`@openclaw/subq`) - npm or ClawHub: `@openclaw/subq`. SubQ Snap typed decisions (not a conversational model).
 
 - **[synology-chat](/plugins/reference/synology-chat)** (`@openclaw/synology-chat`) - npm or ClawHub: `@openclaw/synology-chat`. Synology Chat channel plugin for OpenClaw channels and direct messages.
 

@@ -1210,25 +1210,25 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("queues completion until the requester's timeout recovery releases its turn", async () => {
+  it("queues completion until ordinary requester compaction releases its turn", async () => {
     const route = deliveryRoutes.telegram;
     const target = captureSessionTarget({
-      storeScope: "/synthetic/requester-timeout-recovery/sessions.db",
+      storeScope: "/synthetic/requester-compaction/sessions.db",
       sessionKey: route.key,
       incarnation: route.sessionId,
       agentId: "main",
     });
-    const recoveryEntered = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const recovery = withSessionTurn(
+    const compactionEntered = createDeferredCore();
+    const releaseCompaction = createDeferredCore();
+    const compaction = withSessionTurn(
       { target, sessionKey: route.key, sessionId: route.sessionId },
       async (operation) => {
         if (!operation) {
-          throw new Error("Timeout recovery requires its retained controller operation");
+          throw new Error("Requester compaction requires its retained controller operation");
         }
         operation.setPhase("preflight_compacting");
-        recoveryEntered.resolve();
-        await releaseRecovery.promise;
+        compactionEntered.resolve();
+        await releaseCompaction.promise;
       },
     );
     const callGateway = createPayloadGatewayMock({ text: "child completion output" });
@@ -1237,49 +1237,48 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
     try {
       await awaitGateBeforeSettlement(
-        recoveryEntered.promise,
-        recovery,
-        "Recovery exited before retaining its controller turn",
+        compactionEntered.promise,
+        compaction,
+        "Compaction exited before retaining its controller turn",
       );
       input = reserveSessionControllerSource(route.key, {
         target,
-        reservationId: "timeout-recovery-completion",
+        reservationId: "requester-compaction-completion",
         policy: { mode: "followup" },
       });
-      const recoveryClaim = input.mailbox.claim;
-      expect(recoveryClaim).toBeDefined();
+      const compactionClaim = input.mailbox.claim;
+      expect(compactionClaim).toBeDefined();
       delivery = deliverTelegramDirectMessageCompletion({
         callGateway,
         sendMessage,
         controllerInput: input,
-        requesterAbandonment: "recovering_timeout",
         isActive: false,
         internalEvents: taskCompletionEvents({
           childSessionId: "child-session-id",
-          taskLabel: "telegram recovering completion",
+          taskLabel: "telegram compacting completion",
         }),
       });
       await awaitGateBeforeSettlement(
         vi.waitFor(() => expect(input?.phase).toBe("waiting")),
         delivery,
-        "Completion settled before waiting behind timeout recovery",
+        "Completion settled before waiting behind requester compaction",
       );
-      expect(input.mailbox.claim).toBe(recoveryClaim);
+      expect(input.mailbox.claim).toBe(compactionClaim);
       expect(callGateway).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
-      releaseRecovery.resolve();
-      await recovery;
+      releaseCompaction.resolve();
+      await compaction;
       await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
       await input.settlement.promise;
       expect(callGateway).toHaveBeenCalledOnce();
       expect(sendMessage).not.toHaveBeenCalled();
       expect(input.mailbox.entries).toEqual([]);
     } finally {
-      releaseRecovery.resolve();
+      releaseCompaction.resolve();
       if (input) {
         retireSessionControllerInput(input);
       }
-      await Promise.allSettled([recovery, ...(delivery ? [delivery] : [])]);
+      await Promise.allSettled([compaction, ...(delivery ? [delivery] : [])]);
     }
   });
 

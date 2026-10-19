@@ -11,16 +11,16 @@ import * as permissions from "./openclaw-agent-db-permissions.js";
 import * as registry from "./openclaw-agent-db-registry.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPath as closeAgentDb,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-  withOpenClawAgentDatabaseAsync,
-  resolveOpenClawAgentSqlitePath,
+  openOpenClawAgentDatabase as openAgentDb,
+  withOpenClawAgentDatabaseAsync as withAgentDb,
+  resolveOpenClawAgentSqlitePath as agentDbPath,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const logger = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
+const logger = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
@@ -40,7 +40,6 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
   logger.warn.mockClear();
-  logger.info.mockClear();
 });
 
 function createTimedOpen(indexRepairMs = 0) {
@@ -48,10 +47,14 @@ function createTimedOpen(indexRepairMs = 0) {
     agentId: "timing-test",
     env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-agent-open-timing-") },
   };
-  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const pathname = agentDbPath(options);
   let elapsedMs = 0;
   const advance = (durationMs: number) => {
     elapsedMs += durationMs;
+  };
+  const after = <T>(result: T, durationMs: number): T => {
+    advance(durationMs);
+    return result;
   };
   const wallStartedAt = Date.now();
   vi.spyOn(Date, "now").mockImplementation(() => wallStartedAt + Math.floor(elapsedMs));
@@ -74,91 +77,78 @@ function createTimedOpen(indexRepairMs = 0) {
     return database;
   });
   const ensurePermissions = permissions.ensureOpenClawAgentDatabasePermissions;
-  vi.spyOn(permissions, "ensureOpenClawAgentDatabasePermissions").mockImplementation((...args) => {
-    ensurePermissions(...args);
-    advance(10);
-  });
+  vi.spyOn(permissions, "ensureOpenClawAgentDatabasePermissions").mockImplementation((...args) =>
+    after(ensurePermissions(...args), 10),
+  );
   const configure = wal.configureSqliteConnectionPragmas;
-  vi.spyOn(wal, "configureSqliteConnectionPragmas").mockImplementation((...args) => {
-    const result = configure(...args);
-    if (args[1]?.databasePath === pathname) {
-      advance(80);
-    }
-    return result;
-  });
+  vi.spyOn(wal, "configureSqliteConnectionPragmas").mockImplementation((...args) =>
+    after(configure(...args), args[1]?.databasePath === pathname ? 80 : 0),
+  );
   const ensureSchema = schema.ensureOpenClawAgentSchema;
-  vi.spyOn(schema, "ensureOpenClawAgentSchema").mockImplementation((...args) => {
-    ensureSchema(...args);
-    advance(90);
-  });
+  vi.spyOn(schema, "ensureOpenClawAgentSchema").mockImplementation((...args) =>
+    after(ensureSchema(...args), 90),
+  );
   const register = registry.registerOpenClawAgentDatabase;
-  vi.spyOn(registry, "registerOpenClawAgentDatabase").mockImplementation((...args) => {
-    const result = register(...args);
-    advance(70);
-    return result;
-  });
+  vi.spyOn(registry, "registerOpenClawAgentDatabase").mockImplementation((...args) =>
+    after(register(...args), 70),
+  );
   return { options, pathname, advance };
 }
 
 describe("agent database open timings", () => {
   it("reports canonical index repair separately from other open phases", () => {
     const { options, pathname } = createTimedOpen(1_000);
-    const database = openOpenClawAgentDatabase(options);
+    const database = openAgentDb(options);
     database.db.exec(`
     INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
     VALUES ('session-one', 'window-one', '{}', 1);
     DROP INDEX idx_agent_session_nodes_updated_at;
     CREATE INDEX idx_agent_session_nodes_updated_at ON session_nodes(session_key);
   `);
-    closeOpenClawAgentDatabaseByPath(pathname);
+    closeAgentDb(pathname);
     logger.warn.mockClear();
 
-    const reopened = openOpenClawAgentDatabase(options);
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT session_key FROM session_nodes INDEXED BY idx_agent_session_nodes_updated_at",
-        )
-        .all(),
-    ).toEqual([{ session_key: "session-one" }]);
+    const reopened = openAgentDb(options);
+    const sql =
+      "SELECT session_key FROM session_nodes INDEXED BY idx_agent_session_nodes_updated_at";
+    expect(reopened.db.prepare(sql).all()).toEqual([{ session_key: "session-one" }]);
     expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });
-    expect(logger.warn).toHaveBeenCalledTimes(2);
-    expect(logger.warn).toHaveBeenNthCalledWith(
-      1,
-      expect.stringContaining(
-        `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
-      ),
-      {
-        agentId: options.agentId,
-        path: pathname,
-        indexes: ["idx_agent_session_nodes_updated_at"],
-        elapsedMs: 1_000,
-      },
-    );
-    expect(logger.warn).toHaveBeenNthCalledWith(
-      2,
-      "slow OpenClaw agent database open",
-      expect.objectContaining({
-        elapsedMs: 1_150,
-        integrityGateOutcome: "cached",
-        canonicalIndexMs: 1_000,
-        repairedIndexCount: 1,
-        phaseDurationsMs: {
-          open: 60,
-          validation: 1_000,
-          configuration: 80,
-          schema: 0,
-          registration: 10,
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.stringContaining(
+          `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
+        ),
+        {
+          agentId: options.agentId,
+          path: pathname,
+          indexes: ["idx_agent_session_nodes_updated_at"],
+          elapsedMs: 1_000,
         },
-      }),
-    );
+      ],
+      [
+        "slow OpenClaw agent database open",
+        expect.objectContaining({
+          elapsedMs: 1_150,
+          integrityGateOutcome: "cached",
+          canonicalIndexMs: 1_000,
+          repairedIndexCount: 1,
+          phaseDurationsMs: {
+            open: 60,
+            validation: 1_000,
+            configuration: 80,
+            schema: 0,
+            registration: 10,
+          },
+        }),
+      ],
+    ]);
   });
 
   it("includes asynchronous admission waiting once for coalesced callers", async () => {
     const { options, pathname, advance } = createTimedOpen();
-    openOpenClawAgentDatabase(options);
+    openAgentDb(options);
     closeOpenClawAgentDatabasesForTest();
     revokeSqliteDatabaseAdmissionsForPath(pathname);
     logger.warn.mockClear();
@@ -177,13 +167,13 @@ describe("agent database open timings", () => {
         nativeFinished.resolve();
         await release.promise;
       });
-    const databases: Array<ReturnType<typeof openOpenClawAgentDatabase>> = [];
-    const collect = (database: ReturnType<typeof openOpenClawAgentDatabase>) => {
+    const databases: Array<ReturnType<typeof openAgentDb>> = [];
+    const collect = (database: ReturnType<typeof openAgentDb>) => {
       databases.push(database);
     };
     const outcomes = Promise.allSettled([
-      withOpenClawAgentDatabaseAsync(options, collect),
-      withOpenClawAgentDatabaseAsync(options, collect),
+      withAgentDb(options, collect),
+      withAgentDb(options, collect),
     ]);
     try {
       await nativeFinished.promise;

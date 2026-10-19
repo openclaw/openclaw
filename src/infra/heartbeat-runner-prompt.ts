@@ -35,12 +35,14 @@ import {
   resolveHeartbeatSessionSelection,
 } from "./heartbeat-runner-session.js";
 import {
+  isTargetedUnscheduledWake,
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
 import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatScheduledTask,
+  type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import { heartbeatExecRouteKey } from "./outbound/heartbeat-route-context.js";
@@ -104,6 +106,7 @@ export async function resolveHeartbeatPreflight(params: {
   sessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
@@ -154,15 +157,17 @@ export async function resolveHeartbeatPreflight(params: {
         false,
       )
     : heartbeatSession;
+  // Targeted system events keep their queue even when execution uses an isolated session.
+  session.inspectsRunQueue ||=
+    (params.source === "manual" || params.source === "notifications-event") &&
+    isTargetedUnscheduledWake(params);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
-  // The selected queue follows isolated execution into reply admission; the base queue does not.
-  const shouldInspectWakePendingEvents = wakeFlags.isWakePayload && session.inspectsRunQueue;
   const shouldInspectPendingEvents =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
-    shouldInspectWakePendingEvents ||
+    (wakeFlags.isWakePayload && session.inspectsRunQueue) ||
     hasTaggedCronEvents;
   const firstExec =
     !params.scheduledTasks?.length && shouldInspectPendingEvents

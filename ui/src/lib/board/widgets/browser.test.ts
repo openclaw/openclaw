@@ -59,7 +59,7 @@ function mount(
     },
     { sessionScoped: !scopes.includes("operator.admin") },
   );
-  const { gateway, publishEvent } = createApplicationGateway({
+  const { gateway, publish, publishEvent } = createApplicationGateway({
     phase: "connected",
     client,
     hello: gatewayHelloForMethods(methods, scopes),
@@ -80,7 +80,7 @@ function mount(
   element.active = active;
   provider.append(element);
   document.body.append(provider);
-  return { element, request, requests, publishEvent };
+  return { element, request, requests, gateway, publish, publishEvent };
 }
 afterEach(() => document.body.replaceChildren());
 
@@ -228,31 +228,88 @@ describe("Browser dashboard presentation", () => {
     expect(element.widget?.instanceId).toBe("first");
   });
 
-  it("stays passive until opened and ignores an old widget's materialization", async () => {
-    const old = createDeferred<ReturnType<typeof response>>();
-    const { element, request } = mount(async (envelope) => {
+  it.each(["widget", "client", "auth"] as const)(
+    "stays passive until opened and ignores materialization from a retired %s identity",
+    async (identity) => {
+      const old = createDeferred<ReturnType<typeof response>>();
+      const instanceId = identity === "widget" ? "current" : "first";
+      let initial = true;
+      const { element, request, gateway, publish } = mount(async (envelope) => {
+        if (envelope.path !== "/dashboard") {
+          return { running: false, tabs: [] };
+        }
+        if (initial) {
+          initial = false;
+          return old.promise;
+        }
+        return response(instanceId, false, "current");
+      }, false);
+      await element.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+      element.active = true;
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      if (identity === "widget") {
+        element.widget = widget("current");
+      } else if (identity === "client") {
+        const replacement = createBrowserClient(async (envelope) =>
+          envelope.path === "/dashboard"
+            ? response(instanceId, false, "current")
+            : { running: false, tabs: [] },
+        );
+        publish({ ...gateway.snapshot, client: replacement.client });
+      } else {
+        publish({
+          ...gateway.snapshot,
+          hello: gatewayHelloForMethods(
+            ["browser.request", "browser.dashboard.request"],
+            ["operator.admin", "operator.read"],
+          ),
+        });
+      }
+      await vi.waitFor(() =>
+        expect(element.querySelector("openclaw-browser-panel")?.fixedTab?.targetId).toBe("current"),
+      );
+      old.resolve(response("first", false, "retired"));
+      await old.promise;
+      await vi.dynamicImportSettled();
+      await element.updateComplete;
+      const panel = element.querySelector("openclaw-browser-panel")!;
+      expect(panel.fixedTab?.targetId).toBe("current");
+      expect(panel.dashboardTarget?.instanceId).toBe(instanceId);
+      await panel.updateComplete;
+      expect(panel.querySelector('[aria-label="New tab"]')).toBeNull();
+      expect(panel.querySelector('[aria-label^="Close tab"]')).toBeNull();
+    },
+  );
+
+  it("reopens a dashboard when inspection finds no live browser tab", async () => {
+    let opens = 0;
+    const { element, requests, publishEvent } = mount(async (envelope) => {
       if (envelope.path !== "/dashboard") {
         return { running: false, tabs: [] };
       }
-      return envelope.body?.instanceId === "first" ? old.promise : response("current");
-    }, false);
-    await element.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-    element.active = true;
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    element.widget = widget("current");
+      if (envelope.method === "GET") {
+        return { ...response("first", true), paused: false };
+      }
+      opens += 1;
+      return response("first", false, opens === 1 ? "initial" : "reopened");
+    });
     await vi.waitFor(() =>
-      expect(element.querySelector("openclaw-browser-panel")?.fixedTab?.targetId).toBe("current"),
+      expect(element.querySelector("openclaw-browser-panel")?.fixedTab?.targetId).toBe("initial"),
     );
-    old.resolve(response("first"));
-    await old.promise;
-    await element.updateComplete;
-    const panel = element.querySelector("openclaw-browser-panel")!;
-    expect(panel.fixedTab?.targetId).toBe("current");
-    expect(panel.dashboardTarget?.instanceId).toBe("current");
-    await panel.updateComplete;
-    expect(panel.querySelector('[aria-label="New tab"]')).toBeNull();
-    expect(panel.querySelector('[aria-label^="Close tab"]')).toBeNull();
+
+    publishEvent({
+      type: "event",
+      event: "plugin.browser.dashboard_changed",
+      payload: { sessionKey, name: "status", instanceId: "first" },
+    });
+
+    await vi.waitFor(() =>
+      expect(element.querySelector("openclaw-browser-panel")?.fixedTab?.targetId).toBe("reopened"),
+    );
+    expect(
+      requests.filter((entry) => entry.path === "/dashboard").map((entry) => entry.method),
+    ).toEqual(["POST", "GET", "POST"]);
   });
 
   it("hides without closing and stops/resumes through the dashboard owner", async () => {

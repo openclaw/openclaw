@@ -1,4 +1,4 @@
-import { onTestFinished } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -71,4 +71,48 @@ export async function detachActiveEmbeddedRun(
   const producer = producers.get(handle);
   producer?.finish();
   await producer?.settled;
+}
+
+/** Own a real producer so Stop joins its completion, not a fabricated abort receipt. */
+export function startControlProducer(
+  sessionKey: string,
+  sessionId: string,
+  storePath: string,
+  onCancel: () => void | Promise<void> = () => {},
+  runId?: string,
+) {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    agentId: "main",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionId,
+    }),
+  });
+  const cancelled = createDeferred();
+  const finished = createDeferred();
+  const cancel = vi.fn(() => cancelled.resolve());
+  operation.attachBackend({ kind: "embedded", runId, isStreaming: () => true, cancel });
+  const settled = (async () => {
+    try {
+      const wasCancelled = await Promise.race([
+        cancelled.promise.then(() => true),
+        finished.promise.then(() => false),
+      ]);
+      if (wasCancelled) {
+        await onCancel();
+      }
+    } finally {
+      operation.complete();
+    }
+  })();
+  onTestFinished(async () => {
+    finished.resolve();
+    await settled;
+  });
+  return { operation, cancel, settled };
 }

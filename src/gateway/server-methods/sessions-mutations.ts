@@ -423,7 +423,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session owner "${params.owner.id}"`),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unknown session owner "${params.owner.id}". ${
+              params.owner.type === "human"
+                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
+                : "Agent owners must name a configured agent."
+            }`,
+          ),
         );
         return;
       }

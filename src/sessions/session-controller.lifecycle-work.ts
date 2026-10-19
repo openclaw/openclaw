@@ -106,6 +106,7 @@ export function captureSessionWorkRunInterruptions(params: {
   });
 }
 
+/** @internal Exposed for unit tests only. */
 export function getSessionWorkAdmissionOwnerRelease(params: {
   scope: string;
   identities: Iterable<string | undefined>;

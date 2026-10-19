@@ -9,13 +9,12 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
-import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
 } from "../../../sessions/session-controller.steer.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
@@ -32,13 +31,12 @@ import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
 } from "../../internal-event-contract.js";
-import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
+import { buildAgentInternalEventContext } from "../../internal-events.js";
 import {
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
 } from "../../internal-runtime-context.js";
 import { resolveCommandReplyExpectation } from "../../reply-completion.js";
-import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -65,50 +63,11 @@ import { createDirectAnnounceResponseClassifier } from "./subagent-announce-dire
 import {
   sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import { resolveExactSubagentCompletionEvent } from "./subagent-announce-handoff.js";
-import {
-  resolveCompletionDeliveryOrigins,
-  type DeliveryContext,
-} from "./subagent-announce-origin.js";
+import { resolveCompletionDeliveryOrigins } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-
-export type SubagentAnnounceDirectParams = {
-  requesterSessionKey: string;
-  requesterAgentId?: string;
-  targetRequesterSessionKey: string;
-  triggerMessage: string;
-  internalEvents?: AgentInternalEvent[];
-  expectsCompletionMessage: boolean;
-  completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  completionRequesterLifecycleRevision?: string;
-  requireVisibleReply?: boolean;
-  requireDirectDelivery?: boolean;
-  bestEffortDeliver?: boolean;
-  directIdempotencyKey: string;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-  requesterSessionOrigin?: DeliveryContext;
-  sourceSessionKey?: string;
-  sourceTool?: string;
-  settleWakeSourceSessionKeys?: readonly string[];
-  isSourceSessionEffectsAllowed?: () => boolean;
-  sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
-  /** Additional source guard released by the accepting Gateway or injection owner. */
-  isSourceSessionAdmissionAllowed?: () => boolean;
-  isCompletionOwnedByRequesterYield?: () => boolean;
-  requesterIsSubagent: boolean;
-  createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
-  onDeliveryError?: (error: unknown) => void;
-  signal?: AbortSignal;
-  onAccepted?: (payload: unknown) => void;
-  onExecutionStarted?: () => void;
-  onBeforeDispatch?: () => void | Promise<void>;
-  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
-  controllerInput?: SessionControllerInput;
-};
 
 /** Another owner (a yielded requester or an idle cron turn) settles this completion. */
 function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
@@ -183,6 +142,15 @@ async function sendSubagentAnnounceDirectlyBound(
     const sourceToolId =
       normalizeOptionalLowercaseString(params.sourceTool) ??
       (params.expectsCompletionMessage ? "subagent_announce" : "");
+    if (
+      params.recoveryReceiptOnly &&
+      (parentOnly ||
+        params.expectsCompletionMessage ||
+        sourceToolId !== "subagent_settle" ||
+        !params.completionRequesterSessionId)
+    ) {
+      return sourceOwnerChangedResult();
+    }
     const isSubagentCompletion = sourceToolId === "subagent_announce";
     const trustedCompletionEvent = resolveExactSubagentCompletionEvent({
       inputProvenance: {
@@ -265,7 +233,6 @@ async function sendSubagentAnnounceDirectlyBound(
         error: "requester session abandoned after timeout",
       };
     }
-    // Recovery retains the controller turn; its mailbox holds this once-only completion.
     const isCompletionDeliveryAllowed = () =>
       params.isSourceSessionEffectsAllowed?.() !== false &&
       !(params.expectsCompletionMessage && params.isCompletionOwnedByRequesterYield?.());
@@ -286,11 +253,17 @@ async function sendSubagentAnnounceDirectlyBound(
       return recovery.delivery;
     }
     const recoveredResult = recovery?.result;
+    if (params.recoveryReceiptOnly && !recoveredResult) {
+      return sourceOwnerChangedResult();
+    }
     const tryTextCompletionDirectDelivery = (
       contentKind: "completed_result" | "failed_notice" = textCompletionDirectDeliveryKind,
       agentResult?: { payloads?: unknown },
-    ) =>
-      deliverCompletionDirect({
+    ) => {
+      if (params.recoveryReceiptOnly) {
+        return Promise.resolve(undefined);
+      }
+      return deliverCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
         requesterSessionId,
@@ -305,6 +278,7 @@ async function sendSubagentAnnounceDirectlyBound(
         onDeliveryError: params.onDeliveryError,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
+    };
     // A private settle turn never delivers; automatic only keeps a tool-only mode from
     // suppressing its internal final. A deliverable yielded turn omits the mode so the
     // conversation's configured reply policy decides, as for any other requester turn.
@@ -322,8 +296,8 @@ async function sendSubagentAnnounceDirectlyBound(
         params.directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
-    // A public completion steers once into the requester's running turn. A definite
-    // rejection, including compaction, leaves its input queued for the dispatch below.
+    // A public completion steers once into the requester's running turn. Ordinary
+    // rejection leaves its input queued for the dispatch below.
     if (
       !recoveredResult &&
       !parentOnly &&
@@ -395,6 +369,34 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       if (!isCompletionAdmissionAllowed()) {
         return sourceOwnerChangedResult();
+      }
+      if (
+        steer.reason === "injection_unavailable" &&
+        requesterAbandonment === "recovering_timeout" &&
+        !params.controllerInput.custody.rpcAdopted &&
+        resolveEmbeddedRunAbandonment({
+          sessionKey: canonicalRequesterSessionKey,
+          sessionId: requesterActivity.sessionId,
+          target: requesterActivity.target,
+        }) === "recovering_timeout"
+      ) {
+        // The recovery retry leases the durable outbox. Settle this rejected,
+        // unadopted reservation first so it cannot dispatch the completion again.
+        retireSessionControllerInput(params.controllerInput);
+        await params.controllerInput.settlement.promise;
+        if (!isCompletionDeliveryAllowed()) {
+          return sourceOwnerChangedResult();
+        }
+        if (params.signal?.aborted) {
+          return { delivered: false, path: "none" };
+        }
+        return {
+          delivered: false,
+          path: "none",
+          reason: "completion_handoff_pending",
+          error: "requester timeout recovery is still settling",
+          disposition: "retryable",
+        };
       }
     }
     if (

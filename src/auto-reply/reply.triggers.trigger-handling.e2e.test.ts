@@ -87,10 +87,6 @@ vi.mock("./reply/agent-runner-run.js", () => ({
   },
 }));
 
-vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./reply/commands-compact.runtime.js")>()),
-}));
-
 let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
   capturedGetReplyFromConfig = impl;

@@ -21,8 +21,8 @@ import { getSessionControllerEntryForOperation } from "../../sessions/session-co
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
-  captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyPayload } from "../types.js";
@@ -307,7 +307,7 @@ describe("queued turn steering", () => {
             profileId: "maintainer",
           }),
         }),
-      ).resolves.toMatchObject({ status: "accepted" });
+      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       await expect(
         inject("Change tool permissions", { ...overlay, disableTools: true }),
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
@@ -322,7 +322,7 @@ describe("queued turn steering", () => {
           }),
         ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       }
-      expect(queueMessage).toHaveBeenCalledTimes(2);
+      expect(queueMessage).toHaveBeenCalledOnce();
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     try {

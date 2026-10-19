@@ -40,7 +40,7 @@ export function resolveInFlightRunSnapshot(
       normalizeOptionalLowercaseString(params.defaultAgentId);
     return runAgentId === requestedAgentId;
   };
-  let best: { runId: string; startedAtMs: number } | undefined;
+  let best: { runId: string; startedAtMs: number | undefined } | undefined;
   for (const [runId, entry] of listRpcSourceEntries()) {
     if (
       !matchesScope(entry) ||
@@ -53,12 +53,12 @@ export function resolveInFlightRunSnapshot(
     ) {
       continue;
     }
-    const startedAtMs = getRpcSourceStartedAt(entry) ?? 0;
+    const startedAtMs = getRpcSourceStartedAt(entry);
     // Timestamp wins over insertion order; runId breaks ties deterministically.
     if (
       best === undefined ||
-      startedAtMs > best.startedAtMs ||
-      (startedAtMs === best.startedAtMs && runId > best.runId)
+      (startedAtMs ?? 0) > (best.startedAtMs ?? 0) ||
+      ((startedAtMs ?? 0) === (best.startedAtMs ?? 0) && runId > best.runId)
     ) {
       best = { runId, startedAtMs };
     }

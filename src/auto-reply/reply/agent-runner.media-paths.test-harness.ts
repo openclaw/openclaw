@@ -153,8 +153,8 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../../agents/sandbox.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/sandbox.js")>();
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/sandbox/context.js")>();
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,
@@ -208,8 +208,11 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => {
 
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
-function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0]) {
-  const followupRun = createMockFollowupRun(overrides);
+function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0] = {}) {
+  const followupRun = createMockFollowupRun({
+    ...overrides,
+    run: { senderId: "alice", ...overrides.run },
+  });
   followupRun.run.thinkingCatalog = [
     {
       provider: followupRun.run.provider,

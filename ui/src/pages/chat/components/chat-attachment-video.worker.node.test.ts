@@ -1,7 +1,7 @@
 // @vitest-environment node
 import type { StreamTargetChunk } from "mediabunny";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { VideoCompressionRequest, VideoCompressionResponse } from "./chat-attachment-video.ts";
+import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
 
 const encoder = vi.hoisted(() => ({
   attempts: [] as StreamTargetChunk[][],
@@ -87,10 +87,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 async function compress(): Promise<VideoCompressionResponse> {
-  let receive!: (event: MessageEvent<VideoCompressionRequest>) => void;
-  vi.stubGlobal("addEventListener", (_type: string, listener: typeof receive) => {
-    receive = listener;
-  });
+  const workerScope = new EventTarget();
+  vi.stubGlobal("addEventListener", workerScope.addEventListener.bind(workerScope));
+  vi.stubGlobal("removeEventListener", workerScope.removeEventListener.bind(workerScope));
   const result = new Promise<VideoCompressionResponse>((resolve) => {
     vi.stubGlobal("postMessage", (message: VideoCompressionResponse) => {
       if (message.type !== "progress") {
@@ -99,7 +98,7 @@ async function compress(): Promise<VideoCompressionResponse> {
     });
   });
   await import("./chat-attachment-video.worker.ts");
-  receive(
+  workerScope.dispatchEvent(
     new MessageEvent("message", {
       data: { file: new File(["source"], "screen.mp4"), maxBytes: 100_000 },
     }),

@@ -110,6 +110,7 @@ export function buildBootstrapInjectionStats(params: {
     return {
       name,
       path: pathValue || name,
+      origin: file.origin,
       missing: file.missing,
       rawChars,
       injectedChars,

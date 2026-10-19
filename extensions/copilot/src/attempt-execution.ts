@@ -46,6 +46,7 @@ import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createPromptError } from "./prompt-error.js";
 import { isMissingCopilotSessionError } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
+import { createCopilotToolBridge } from "./tool-bridge.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
   params: CopilotAttemptParams;
@@ -54,7 +55,6 @@ export async function runCopilotExecution(context: {
   attemptStartedAt: number;
   settledToolFinalization: boolean;
   input: AttemptParamsLike;
-  createToolBridge: NonNullable<CopilotAttemptDeps["createToolBridge"]>;
   ringZeroSystemAgentRun: boolean;
   messages: AgentMessage[];
   modelRef: ModelRef;
@@ -77,7 +77,6 @@ export async function runCopilotExecution(context: {
     attemptStartedAt,
     settledToolFinalization,
     input,
-    createToolBridge,
     ringZeroSystemAgentRun,
     messages,
     modelRef,
@@ -148,7 +147,6 @@ export async function runCopilotExecution(context: {
   if (resolvedWorkspaceForSandbox) {
     try {
       ({ sandbox, effectiveWorkspaceDir } = await resolveCopilotAttemptSandbox({
-        deps,
         input,
         resolvedWorkspaceForSandbox,
         sandboxSessionKey,
@@ -237,7 +235,7 @@ export async function runCopilotExecution(context: {
   } = { value: 0 };
   let codeModeEngaged: boolean | undefined;
   let promptToolPolicy:
-    | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
+    | Awaited<ReturnType<typeof createCopilotToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
     if (!settledToolFinalization && effectiveCwd && !sandbox?.enabled) {
@@ -255,7 +253,7 @@ export async function runCopilotExecution(context: {
     if (!settledToolFinalization) {
       try {
         assertCopilotAttemptHostCapabilities(input);
-        const toolBridge = await createToolBridge({
+        const toolBridge = await createCopilotToolBridge({
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
           modelId: modelRef.id,

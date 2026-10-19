@@ -44,6 +44,7 @@ import {
   assertBorrowedAgentDatabaseFileIdentity,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
@@ -245,16 +246,7 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ??
-          fileIdentity ??
-          (identity.key.startsWith("file:")
-            ? {
-                kind: "file",
-                physicalIdentity: identity.key.slice("file:".length),
-                birthtime: identity.birthtime,
-                nativeLocation: identity.canonicalPath,
-              }
-            : undefined),
+        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),

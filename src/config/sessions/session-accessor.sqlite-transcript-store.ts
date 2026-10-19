@@ -2,7 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
-import { projectSessionRowTranscriptFields } from "../../gateway/session-row-transcript-preview.js";
+import {
+  projectSessionRowTranscriptFields,
+  readStoredSessionRowTranscriptProjection,
+} from "../../gateway/session-row-transcript-preview.js";
 import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
@@ -65,7 +68,10 @@ import {
   sessionTranscriptIndexNeedsReconcile,
   shouldRebuildSessionTranscriptIndexSynchronously,
 } from "./session-transcript-index.js";
-import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
+import {
+  reconcileRewrittenTranscriptIndex,
+  scheduleTranscriptProjectionReconcile,
+} from "./session-transcript-reconcile.js";
 import {
   transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
@@ -106,10 +112,21 @@ export function appendTranscriptEventInTransaction(
         !cursor.initialized && !actor
           ? readTranscriptAppendStateInTransaction(database, scope)
           : undefined;
+      const window = initial?.roots[0];
+      const isCompaction = isRecord(persistedEvent) && persistedEvent.type === "compaction";
+      const previousCompactionDisplay = isCompaction
+        ? (cursor.rowTranscript ??
+          readStoredSessionRowTranscriptProjection({
+            json: window?.row_transcript_json,
+            updatedAt: window?.row_transcript_updated_at,
+            transcriptUpdatedAt: window?.transcript_updated_at,
+            indexedSeq: initial?.projection?.indexedSeq,
+          }))
+        : undefined;
       const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
       let windowUpdatedAt = createdAt;
       const windowExists = Boolean(
-        cursor.initialized || actor?.window || initial?.roots[0]?.persisted_session_key,
+        cursor.initialized || actor?.window || window?.persisted_session_key,
       );
       // The existing window can share the final watermark write. Rejected identities
       // still need their recency-only write, without advancing the transcript fence.
@@ -327,11 +344,7 @@ export function appendTranscriptEventInTransaction(
         });
       }
       advanceCliHistoryBoundaryInTransaction(database, scope, seq);
-      if (
-        isRecord(persistedEvent) &&
-        persistedEvent.type === "compaction" &&
-        parseCompactionDetails(persistedEvent.details)?.qualityDegraded
-      ) {
+      if (isCompaction && parseCompactionDetails(persistedEvent.details)?.qualityDegraded) {
         const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
         if (entry?.sessionId === scope.sessionId && !entry.compactionQualityDegraded) {
           // A later successful summary cannot recover facts already lost from this history.
@@ -345,7 +358,14 @@ export function appendTranscriptEventInTransaction(
       }
       cursor.rowTranscript = projectionNeedsRebuild
         ? undefined
-        : projectSessionRowTranscriptFields(persistedEvent, serializedBytes, seq, priorAssistant);
+        : (projectSessionRowTranscriptFields(
+            persistedEvent,
+            serializedBytes,
+            seq,
+            priorAssistant,
+          ) ??
+          // Forward compaction changes model context, not the visible message tail.
+          (previousCompactionDisplay && { ...previousCompactionDisplay, indexedSeq: seq }));
       if (windowExists || windowUpdatedAt !== createdAt) {
         cursor.windowUpdatedAt = windowUpdatedAt;
       }
@@ -665,20 +685,6 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         run,
       )
     : run();
-}
-
-function reconcileRewrittenTranscriptIndex(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  rebuildSynchronously: boolean,
-): void {
-  // Dirty state revokes prepared claims and hides old rows; reconcile alone owns their deletion.
-  markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
-  if (rebuildSynchronously) {
-    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
-  } else {
-    scheduleTranscriptProjectionReconcile(database, sessionId, true, {});
-  }
 }
 
 // Preserves seq, created_at, session_key, and session activity recency; rotates the transcript

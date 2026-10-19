@@ -45,10 +45,8 @@ import {
   completeUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
-import {
-  publishUpdateCommandTerminalResult,
-  withUpdateCommandTerminalResult,
-} from "./update-command-terminal.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 

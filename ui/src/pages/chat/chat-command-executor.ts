@@ -15,6 +15,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatCommandResultsEnglish } from "../../i18n/locales/en-chat-command-results.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
@@ -46,6 +47,8 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
+
+registerChatCommandResultsEnglish();
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */

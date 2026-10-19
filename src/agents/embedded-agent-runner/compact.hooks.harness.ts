@@ -744,7 +744,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
-  vi.doMock("../sandbox.js", () => ({
+  vi.doMock("../sandbox/context.js", async () => ({
+    ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
@@ -87,6 +88,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   private healthRefreshTimer?: ReturnType<typeof globalThis.setTimeout>;
   private loadedOwner: SidebarAttentionOwner | null = null;
   private loadedClient = this.sources.gateway.snapshot.client;
+  private presentationClient = this.sources.gateway.snapshot.client;
+  private presentationScope = gatewayPresentationScope(this.sources.gateway);
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   private dismissalKey: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
@@ -189,6 +192,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     if (
       this.disposed ||
       !isGatewayAvailable(this.sources.gateway.snapshot) ||
+      (this.sources.gateway.snapshot.selfUser === undefined && this.dismissalKey !== null) ||
       document.visibilityState === "hidden"
     ) {
       return;
@@ -269,9 +273,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
             severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
           }),
         ) ?? [];
-    if (gateway.phase !== "connected") {
-      return outbox;
-    }
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
     const scopeUpgrade = buildScopeUpgradeInboxEntry({
@@ -364,6 +365,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     if (
       !isGatewayAvailable(gateway) ||
       !client ||
+      (gateway.selfUser === undefined && this.dismissalKey !== null) ||
       !hasOperatorReadAccess(gateway.hello?.auth ?? null)
     ) {
       return;
@@ -417,6 +419,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
             const cron = createInitialCronState<CronCompactJob>({ client, connected: true });
             cron.canRefresh = canRefreshCron;
             cron.cronAgentId = agentScope.scopeId;
+            // The Inbox consumes the whole inventory, rather than one table page.
+            cron.cronJobsLimit = 200;
             await Promise.all([loadCompactCronJobsPage(cron), loadCronStatus(cron)]);
             while (
               canRefreshCron() &&
@@ -498,10 +502,10 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
             while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (currentAuth()) {
+              if (currentAuth() && status) {
                 this.modelAuthStatus = status;
                 this.modelAuthAgentId = agentId;
-                this.modelAuthRefreshAt = status ? nextModelAuthStatusRefreshAt(status) : undefined;
+                this.modelAuthRefreshAt = nextModelAuthStatusRefreshAt(status);
                 publishSource({ cronInventoryComplete: false, modelAuthAgentId: agentId });
               }
             }
@@ -521,10 +525,34 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
 
   private synchronizeGateway(): void {
     const snapshot = this.sources.gateway.snapshot;
-    const key = resolveSidebarAttentionKey(this.sources.gateway);
+    const scope = gatewayPresentationScope(this.sources.gateway);
+    const identityChanged =
+      this.presentationClient !== snapshot.client || this.presentationScope !== scope;
+    this.presentationClient = snapshot.client;
+    this.presentationScope = scope;
+    const identityPending =
+      snapshot.phase === "connected" &&
+      snapshot.selfUser === undefined &&
+      this.dismissalKey !== null &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    const key =
+      (snapshot.phase !== "connected" || identityPending) && !identityChanged
+        ? this.dismissalKey
+        : resolveSidebarAttentionKey(this.sources.gateway);
     if (key !== this.dismissalKey) {
       this.dismissalKey = key;
       this.dismissed = loadDismissals(key);
+    }
+    if (
+      (snapshot.phase !== "connected" || identityPending) &&
+      snapshot.client &&
+      !identityChanged
+    ) {
+      this.loadGeneration += 1;
+      this.loadedClient = null;
+      this.scheduleHealthRefresh();
+      this.onChange();
+      return;
     }
     if (
       snapshot.phase !== "connected" ||
@@ -546,7 +574,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     }
     const owner = this.owner();
     const agentScope = this.sources.agentSelection.state;
-    const ownerChanged = this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner);
+    const ownerChanged =
+      identityChanged || (this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner));
     if (ownerChanged) {
       this.clearHealth();
       this.onChange();

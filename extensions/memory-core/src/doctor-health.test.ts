@@ -19,24 +19,44 @@ type InspectManagedLocalEmbeddingSetup = Parameters<
 >[0]["inspectEmbeddingProviderSetup"];
 
 const roots = new Set<string>();
+const model = "embeddinggemma-300m";
+const setupFailure = {
+  reason: "Local embeddings need the managed llama.cpp server config.",
+  requirement: "managed-llama-cpp-setup",
+};
+
+async function createState(index: string | false = model) {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-"));
+  roots.add(stateDir);
+  if (index !== false) {
+    await createSemanticIndex(stateDir, index);
+  }
+  return stateDir;
+}
+
+function agentDatabasePath(stateDir: string, agentId = "main") {
+  return path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+}
+
+function expectedSetupFinding() {
+  return [
+    expect.objectContaining({ requirement: "managed-llama-cpp-setup", target: "main/local" }),
+  ];
+}
 
 afterEach(async () => {
   await Promise.all([...roots].map((root) => fs.rm(root, { recursive: true, force: true })));
   roots.clear();
 });
 
-async function createSemanticIndex(
-  stateDir: string,
-  model = "embeddinggemma-300m",
-  agentId = "main",
-) {
-  const databasePath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+async function createSemanticIndex(stateDir: string, indexModel = model, agentId = "main") {
+  const databasePath = agentDatabasePath(stateDir, agentId);
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
   db.exec("CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT");
   db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
     "memory_index_meta_v1",
-    JSON.stringify({ model, vectorDims: 768 }),
+    JSON.stringify({ model: indexModel, vectorDims: 768 }),
   );
   db.close();
   return databasePath;
@@ -66,23 +86,14 @@ function context(stateDir: string, provider: string): HealthCheckContext {
   return {
     mode: "lint",
     runtime: {} as HealthCheckContext["runtime"],
-    cfg: {
-      memory: {
-        search: {
-          provider,
-          fallback: "none",
-        },
-      },
-    },
+    cfg: { memory: { search: { provider, fallback: "none" } } },
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   };
 }
 
 describe("managed local embedding setup health check", () => {
   it("refreshes current host state and re-registers after a registry reset", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-registration-"));
-    roots.add(stateDir);
-    await createSemanticIndex(stateDir);
+    const stateDir = await createState();
     const checks = new Map<string, HealthCheck>();
     const registerHealthCheck = vi.fn((check: HealthCheck) => {
       if (checks.has(check.id)) {
@@ -94,52 +105,39 @@ describe("managed local embedding setup health check", () => {
     const staleInspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
     const currentInspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async (params) => ({
       provider: params.provider,
-      reason: "Local embeddings need the managed llama.cpp server config.",
-      requirement: "managed-llama-cpp-setup",
+      ...setupFailure,
     }));
 
-    registerMemoryCoreDoctorChecks({
-      registerHealthCheck,
-      getHealthCheck,
-      inspectEmbeddingProviderSetup: staleInspect,
-      memoryCoreActive: false,
-    });
+    const register = (
+      inspectEmbeddingProviderSetup: InspectManagedLocalEmbeddingSetup,
+      memoryCoreActive = true,
+    ) =>
+      registerMemoryCoreDoctorChecks({
+        registerHealthCheck,
+        getHealthCheck,
+        inspectEmbeddingProviderSetup,
+        memoryCoreActive,
+      });
+    register(staleInspect, false);
     const check = checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID);
     if (!check) {
       throw new Error("expected managed local embedding setup check");
     }
 
-    registerMemoryCoreDoctorChecks({
-      registerHealthCheck,
-      getHealthCheck,
-      inspectEmbeddingProviderSetup: currentInspect,
-      memoryCoreActive: true,
-    });
+    register(currentInspect);
     expect(registerHealthCheck).toHaveBeenCalledOnce();
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
-      expect.objectContaining({
-        requirement: "managed-llama-cpp-setup",
-        target: "main/local",
-      }),
-    ]);
+    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual(expectedSetupFinding());
     expect(staleInspect).not.toHaveBeenCalled();
     expect(currentInspect).toHaveBeenCalledOnce();
 
     checks.clear();
-    registerMemoryCoreDoctorChecks({
-      registerHealthCheck,
-      getHealthCheck,
-      inspectEmbeddingProviderSetup: currentInspect,
-      memoryCoreActive: true,
-    });
+    register(currentInspect);
     expect(checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID)).toBe(check);
     expect(registerHealthCheck).toHaveBeenCalledTimes(2);
   });
 
   it("passes configured local setup and ignores non-local providers", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-controls-"));
-    roots.add(stateDir);
-    await createSemanticIndex(stateDir);
+    const stateDir = await createState();
     const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
     const check = captureCheck(inspect);
 
@@ -186,9 +184,7 @@ describe("managed local embedding setup health check", () => {
   });
 
   it("reports a structured blocker when the local provider plugin is unavailable", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-plugin-missing-"));
-    roots.add(stateDir);
-    await createSemanticIndex(stateDir);
+    const stateDir = await createState();
     const check = captureCheck();
 
     await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
@@ -203,12 +199,10 @@ describe("managed local embedding setup health check", () => {
   });
 
   it("ignores stale built-in indexes when another plugin owns the memory slot", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-alternate-slot-"));
-    roots.add(stateDir);
-    await createSemanticIndex(stateDir);
+    const stateDir = await createState();
     const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => ({
       provider: "local",
-      reason: "Local embeddings need the managed llama.cpp server config.",
+      reason: setupFailure.reason,
     }));
     const check = captureCheck(inspect, false);
 
@@ -219,11 +213,7 @@ describe("managed local embedding setup health check", () => {
   it.each(["missing", "fts-only"] as const)(
     "does not inspect a provider for a %s vector index",
     async (indexMode) => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-negative-"));
-      roots.add(stateDir);
-      if (indexMode === "fts-only") {
-        await createSemanticIndex(stateDir, "fts-only");
-      }
+      const stateDir = await createState(indexMode === "fts-only" ? "fts-only" : false);
       const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
       const check = captureCheck(inspect);
 
@@ -233,9 +223,8 @@ describe("managed local embedding setup health check", () => {
   );
 
   it("reads an active WAL index without changing committed database or WAL bytes", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-live-wal-"));
-    roots.add(stateDir);
-    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const stateDir = await createState(false);
+    const databasePath = agentDatabasePath(stateDir);
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     const writer = new DatabaseSync(databasePath);
     try {
@@ -247,25 +236,18 @@ describe("managed local embedding setup health check", () => {
       `);
       writer
         .prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)")
-        .run(
-          "memory_index_meta_v1",
-          JSON.stringify({ model: "embeddinggemma-300m", vectorDims: 768 }),
-        );
+        .run("memory_index_meta_v1", JSON.stringify({ model, vectorDims: 768 }));
       // Ordinary SQLite readers may update read marks in the shared-memory sidecar.
       const familyPaths = ["", "-wal"].map((suffix) => `${databasePath}${suffix}`);
       const before = await Promise.all(familyPaths.map(async (file) => await fs.readFile(file)));
       const check = captureCheck(async (params) => ({
         provider: params.provider,
-        reason: "Local embeddings need the managed llama.cpp server config.",
-        requirement: "managed-llama-cpp-setup",
+        ...setupFailure,
       }));
 
-      await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
-        expect.objectContaining({
-          requirement: "managed-llama-cpp-setup",
-          target: "main/local",
-        }),
-      ]);
+      await expect(check.detect(context(stateDir, "local"))).resolves.toEqual(
+        expectedSetupFinding(),
+      );
       const after = await Promise.all(familyPaths.map(async (file) => await fs.readFile(file)));
       expect(after).toEqual(before);
     } finally {
@@ -274,10 +256,8 @@ describe("managed local embedding setup health check", () => {
   });
 
   it("verifies the stored vector model while the live agent database receives continuous commits", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-readiness-writer-"));
-    roots.add(stateDir);
-    const model = "embeddinggemma-300m";
-    const databasePath = await createSemanticIndex(stateDir, model);
+    const stateDir = await createState();
+    const databasePath = agentDatabasePath(stateDir);
     const seed = openNodeSqliteDatabase(databasePath);
     try {
       // A 64 MiB main file makes a raw copy overlap many real WAL commits.
@@ -360,9 +340,8 @@ describe("managed local embedding setup health check", () => {
   }, 30_000);
 
   it("returns a structured non-ready result when an agent database cannot be inspected", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-unreadable-"));
-    roots.add(stateDir);
-    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const stateDir = await createState(false);
+    const databasePath = agentDatabasePath(stateDir);
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, "not a sqlite database");
     const check = captureCheck(async () => null);

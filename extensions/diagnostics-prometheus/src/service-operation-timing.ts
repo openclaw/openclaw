@@ -184,6 +184,12 @@ export function recordOperationTimingEvent(
           "Authenticated Gateway WebSocket requests received.",
           labels,
         );
+        // One extra sample per observed kind/method, without multiplying histogram buckets.
+        store.counter(
+          "openclaw_gateway_rpc_client_requests_total",
+          "Gateway RPC requests by bounded handshake client kind.",
+          { method: evt.method, client_kind: evt.clientKind ?? "other" },
+        );
         if (evt.method === "models.list" && evt.modelsList) {
           const catalog = evt.modelsList;
           store.counter(

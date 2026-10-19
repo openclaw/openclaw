@@ -157,6 +157,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",

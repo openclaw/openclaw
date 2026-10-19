@@ -633,6 +633,10 @@ each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
 
+`applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
+policy with pass-through adapters through that private seam. Callers qualify
+the endpoint and normalize vendor-prefixed model IDs before applying it.
+
 Injected-client adapters also reuse the Anthropic thinking and output-cap owners
 through the private `provider-transport-runtime` seam. Client creation and
 provider-specific defaults stay with the adapter; the shared request builder

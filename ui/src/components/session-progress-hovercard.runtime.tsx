@@ -1,6 +1,6 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { render } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, runWithOwner } from "solid-js";
+import { createMemo, createSignal, onSettled, runWithOwner, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -18,8 +18,10 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import type { AppSidebarElement } from "./app-sidebar.tsx";
+import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
+import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
+import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 import { SessionLinkTitler } from "./session-link-titling.ts";
@@ -36,23 +38,44 @@ const CLOSE_DELAY_MS = 100;
 const EXIT_DURATION_MS = 100;
 let nextHovercardId = 0;
 
-function sessionHovercardMenuOpen(owner: ParentNode): boolean {
-  return owner.querySelector("openclaw-session-menu, openclaw-catalog-session-menu") !== null;
+function sessionHovercardMenuOpen(owner: HTMLElement): boolean {
+  return [...registryFor(owner.ownerDocument).members.keys()].some(
+    (overlay) =>
+      overlay.open &&
+      owner.contains(overlay.surface) &&
+      overlay.surface.closest("openclaw-session-menu, openclaw-catalog-session-menu") !== null,
+  );
 }
 
 type SessionProgressHovercardProps = {
   client: GatewayBrowserClient | null;
   context: ApplicationContext | null;
   gateway: ApplicationGateway | null;
+  lookupSidebarRow: AppSidebarMethods["findSidebarHovercardRowByKey"] | null;
 };
 
-export type SessionProgressHovercardProvider = SolidBridgeElement<SessionProgressHovercardProps>;
+type SessionProgressHovercardMethods = {
+  registerSessionTitleTarget: (target: HTMLElement, label: HTMLElement) => () => void;
+};
 
-function createSessionProgressHovercard(props: SessionProgressHovercardProps, host: HTMLElement) {
-  const sessionLinkTitler = new SessionLinkTitler(host);
+export type SessionProgressHovercardProvider = SolidBridgeElement<
+  SessionProgressHovercardProps,
+  SessionProgressHovercardMethods
+>;
+const sessionLinkTitlers = new WeakMap<HTMLElement, SessionLinkTitler>();
+
+function createSessionProgressHovercard(
+  props: SessionProgressHovercardProps,
+  host: SessionProgressHovercardProvider,
+) {
+  const sessionLinkTitler = sessionLinkTitlers.get(host) ?? new SessionLinkTitler();
+  sessionLinkTitlers.set(host, sessionLinkTitler);
   const applicationContext = createMemo(() => props.context);
   const applicationGateway = createMemo(() => props.gateway);
-  const [ready, setReady] = createSignal(false);
+  const titlerSource = createMemo(() => ({ client: props.client, context: applicationContext() }), {
+    equals: (previous, next) =>
+      previous.client === next.client && previous.context === next.context,
+  });
   const watchOwner = {};
 
   const cardUpdates = new WeakMap<
@@ -277,9 +300,7 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
     if (!target || !session || !sessionKey || !artifactKey || !open) {
       return;
     }
-    const sidebarRow = host
-      .querySelector<AppSidebarElement>("openclaw-app-sidebar")
-      ?.findSidebarHovercardRowByKey(sessionKey);
+    const sidebarRow = host.lookupSidebarRow?.(sessionKey);
     const pullRequests = pullRequestStore?.get(artifactKey);
     const currentProgressCard = progressCards?.get(session);
     if (currentProgressCard !== undefined) {
@@ -297,6 +318,9 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
         ? {
             branch: pullRequests.branch,
             pullRequests: pullRequests.pullRequests,
+            taskPullRequests: pullRequests.taskPullRequests,
+            taskPullRequestCount: pullRequests.taskPullRequestCount,
+            pullRequestCount: pullRequests.pullRequestCount,
             status: pullRequests.status,
           }
         : null,
@@ -435,15 +459,27 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
     }
     dispose = runWithOwner(null, () =>
       render(() => {
-        const [snapshot, setSnapshot] = createSignal({ input, afterCommit });
-        cardUpdates.set(card, (next, committed) =>
-          setSnapshot({ input: next, afterCommit: committed }),
+        const [snapshot, setSnapshot] = createSignal(input);
+        let pendingCommit: (() => void) | undefined = afterCommit;
+        const commit = () => {
+          const callback = pendingCommit;
+          pendingCommit = undefined;
+          if (!retired) {
+            callback?.();
+          }
+        };
+        cardUpdates.set(card, (next, committed) => {
+          setSnapshot(next);
+          pendingCommit = committed;
+          onSettled(() => onSettled(commit));
+        });
+        // A second settle follows the Markdown islands' DOM-writing effects.
+        onSettled(() => onSettled(commit));
+        return (
+          <HovercardControlsContext value={controlsForHovercard(card)}>
+            <SessionHovercard {...snapshot()} />
+          </HovercardControlsContext>
         );
-        createEffect(
-          () => snapshot(),
-          (value) => onSettled(value.afterCommit),
-        );
-        return <SessionHovercard {...snapshot().input} />;
       }, card),
     );
     // An empty initial render can retire its portal before render() returns its disposer.
@@ -494,52 +530,8 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
       skipDelayTimer = null;
     }
   }
-  createEffect(
-    () => [props.client, applicationContext()] as const,
-    ([client, context]) => {
-      sessionLinkTitler.client = client;
-      sessionLinkTitler.context = context;
-      if (host.isConnected) {
-        sessionLinkTitler.refresh();
-      }
-    },
-  );
-  createEffect(
-    () => (ready() ? applicationContext() : null),
-    (context) => {
-      if (!context) {
-        return undefined;
-      }
-      const stopSessions = context.sessions.subscribe(handleSessionUpdate);
-      // A retained global row can keep its DOM/key while its selected owner changes.
-      const stopSelection = context.agentSelection.subscribe(() => close());
-      return () => {
-        stopSessions();
-        stopSelection();
-      };
-    },
-  );
-  createEffect(
-    () => (ready() ? applicationGateway() : null),
-    (gateway) => {
-      close();
-      if (!gateway) {
-        return undefined;
-      }
-      const store = sessionProgressCardsForGateway(gateway);
-      progressCards = store;
-      const stop = store.subscribe(handleCardUpdate);
-      return () => {
-        close();
-        stop();
-        progressCards = null;
-      };
-    },
-  );
   onSettled(() => {
     host.style.display = "contents";
-    sessionLinkTitler.connect();
-    setReady(true);
     const stops = [
       listen(host, "pointerover", { handleEvent: handlePointerOver }),
       listen(host, "pointerout", { handleEvent: handlePointerOut }),
@@ -558,19 +550,77 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
       clearSkipDelayTimer();
     };
   });
+  return (
+    <>
+      <Show when={titlerSource()} keyed>
+        {(source) => {
+          onSettled(() => {
+            sessionLinkTitler.client = source.client;
+            sessionLinkTitler.context = source.context;
+            if (host.isConnected) {
+              sessionLinkTitler.refresh();
+            }
+          });
+          return null;
+        }}
+      </Show>
+      <Show when={applicationContext()} keyed>
+        {(context) => {
+          onSettled(() => {
+            const stopSessions = context.sessions.subscribe(handleSessionUpdate);
+            // A retained global row can keep its DOM/key while its selected owner changes.
+            const stopSelection = context.agentSelection.subscribe(() => close());
+            return () => {
+              stopSessions();
+              stopSelection();
+            };
+          });
+          return null;
+        }}
+      </Show>
+      <Show when={applicationGateway()} keyed>
+        {(gateway) => {
+          onSettled(() => {
+            close();
+            progressCards = sessionProgressCardsForGateway(gateway);
+            const stop = progressCards.subscribe(handleCardUpdate);
+            return () => {
+              close();
+              stop();
+              progressCards = null;
+            };
+          });
+          return null;
+        }}
+      </Show>
+    </>
+  );
 }
 
-export const SessionProgressHovercard = defineSolidBridge<SessionProgressHovercardProps>(
+export const SessionProgressHovercard = defineSolidBridge<
+  SessionProgressHovercardProps,
+  SessionProgressHovercardMethods
+>(
   "openclaw-session-progress-hovercard-provider",
   (props, host) => {
-    createSessionProgressHovercard(props, host);
-    return props.children;
+    const bindings = createSessionProgressHovercard(props, host);
+    return (
+      <>
+        {bindings}
+        {props.children}
+      </>
+    );
   },
   {
     properties: {
       client: { default: null, attribute: false },
       context: { default: null, attribute: false },
       gateway: { default: null, attribute: false },
+      lookupSidebarRow: { default: null, attribute: false },
+    },
+    methods: {
+      registerSessionTitleTarget: (host, target, label) =>
+        sessionLinkTitlers.get(host)?.register(target, label) ?? (() => {}),
     },
   },
 );

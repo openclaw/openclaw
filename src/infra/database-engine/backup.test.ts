@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import "./backup-worker.test-support.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
@@ -48,36 +48,34 @@ import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { createUpdateRun } from "../update-run-ledger.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { workboardPortFixture, writePortAnchor } from "./port-backup.test-support.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
-import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
-import { expectedPostgresCatalog } from "./postgres-catalog.js";
+import { materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
-import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const canonicalText = ' {"first":1,"first":2,"escaped":"\\u0000"} \n';
+const queryRows = async (client: Client, sql: string) => (await client.query(sql)).rows;
 
 async function expectRestored(client: Client, namespace: string) {
+  const rows = (sql: string) => queryRows(client, sql);
   expect(
-    (
-      await client.query(
-        `SELECT title, automation_json, created_at FROM "${namespace}".workboard_cards`,
-      )
-    ).rows,
+    await rows(`SELECT title, automation_json, created_at FROM "${namespace}".workboard_cards`),
   ).toEqual([
     { title: "Retained 🦞", automation_json: canonicalText, created_at: "9007199254740993" },
   ]);
-  expect(
-    (await client.query(`SELECT sequence FROM "${namespace}".workboard_card_notifications`)).rows,
-  ).toEqual([{ sequence: "9007199254740995" }]);
-  expect(
-    (await client.query(`SELECT content FROM "${namespace}".workboard_attachment_blobs`)).rows,
-  ).toEqual([{ content: Buffer.from([0, 255, 128, 1]) }]);
+  expect(await rows(`SELECT sequence FROM "${namespace}".workboard_card_notifications`)).toEqual([
+    { sequence: "9007199254740995" },
+  ]);
+  expect(await rows(`SELECT content FROM "${namespace}".workboard_attachment_blobs`)).toEqual([
+    { content: Buffer.from([0, 255, 128, 1]) },
+  ]);
 }
 
-describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", () => {
-  it("restores user and Git exports and exact updater state while preserving source data and sidecars", async () => {
+it.skipIf(!connection)(
+  "restores user and Git exports and exact updater state while preserving source data and sidecars",
+  async () => {
     assert(connection);
     await withOpenClawTestState({ scenario: "minimal", prefix: "pg-backup-" }, async (state) => {
       const client = new Client({ connectionString: connection });
@@ -89,23 +87,28 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
         database: { families: { workboard: { engine: "postgres" } }, postgres: { connection } },
         plugins: { entries: { workboard: { enabled: true } } },
       };
+      const restore = (directory: string, target: string, selected = config) =>
+        preparePostgresRestore({
+          directory,
+          anchorPath: target,
+          config: selected,
+          profile: "user-backup",
+          assertCurrent() {},
+        });
+      const verifyRestored = async (restored: { namespace: string }) => {
+        namespaces.add(restored.namespace);
+        expect(restored.namespace).not.toBe(namespace);
+        await expectRestored(client, restored.namespace);
+      };
+      const row = (file: string, sql: string) => {
+        using db = openNodeSqliteDatabase(file, { readOnly: true });
+        return db.prepare(sql).get();
+      };
       await state.writeConfig(config);
       await fs.mkdir(path.dirname(anchorPath), { recursive: true });
       await client.connect();
       try {
-        const postgres = await fs.readFile(
-          new URL(
-            "../../../extensions/workboard/src/workboard-schema.postgres.sql",
-            import.meta.url,
-          ),
-          "utf8",
-        );
-        const descriptor: PortDescriptor = {
-          ...metadata,
-          preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
-          postData: postgres.slice(metadata.postData[0], metadata.postData[1]),
-          expectedCatalog: expectedPostgresCatalog(metadata),
-        };
+        const { descriptor } = await workboardPortFixture();
         {
           using source = openNodeSqliteDatabase(":memory:", { readBigInts: true });
           source.exec(descriptor.sqlite);
@@ -130,15 +133,7 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             assertCurrent() {},
           });
         }
-        {
-          using anchor = openNodeSqliteDatabase(anchorPath);
-          anchor.exec(
-            "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
-          );
-          anchor
-            .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-            .run(storeId, namespace);
-        }
+        writePortAnchor(anchorPath, storeId, namespace, true);
         openOpenClawStateDatabase({ env: state.env });
         await closeOpenClawStateDatabaseAsync();
         const credentialsPath = resolveClientCredentialStorePath(state.env);
@@ -146,22 +141,17 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
         {
           using credentials = openNodeSqliteDatabase(credentialsPath);
           credentials.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
-          credentials.exec("PRAGMA user_version = 1");
-          credentials
-            .prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)")
-            .run("synthetic-device", "operator", "synthetic-token", "[]", 1);
-          credentials
-            .prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)")
-            .run("current", "/synthetic/native.sock", "synthetic-socket-token", 1);
+          credentials.exec(`PRAGMA user_version = 1;
+            INSERT INTO device_auth_tokens VALUES ('synthetic-device', 'operator', 'synthetic-token', '[]', 1);
+            INSERT INTO native_exec_socket_credentials VALUES ('current', '/synthetic/native.sock', 'synthetic-socket-token', 1);`);
         }
         const inventory = resolveActivatedPluginBackupInventory({
           config,
           env: state.env,
           stateDir: state.stateDir,
         });
-        {
-          const originalAnchor = await fs.readFile(anchorPath);
-          const resources = await createBackupResourcePlan({
+        const resources = () =>
+          createBackupResourcePlan({
             stateDir: state.stateDir,
             configPaths: [],
             oauthDirs: [],
@@ -171,41 +161,40 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             pluginResources: inventory.resources,
             pluginRoots: inventory.pluginRoots,
           });
-          const tempDir = state.path("archive-staging");
+        const snapshotPlan = async (name: string, selected = resources()) => {
+          const selectedResources = await selected;
+          const tempDir = state.path(name);
           await fs.mkdir(tempDir);
-          const plan = await createBackupSqliteSnapshotPlan({
-            resources,
+          return createBackupSqliteSnapshotPlan({
+            resources: selectedResources,
             tempDir,
             legacyAuditSnapshots: [],
           });
+        };
+        const assetPath = (plan: Awaited<ReturnType<typeof snapshotPlan>>, archivePath: string) => {
+          const found = plan.snapshots.find((item) => item.archiveSourcePath === archivePath);
+          assert(found);
+          return found.sourcePath;
+        };
+        {
+          const originalAnchor = await fs.readFile(anchorPath);
+          const plan = await snapshotPlan("archive-staging");
           expect(plan.inventory.resolveSqliteSource(credentialsPath)?.role).toBe("client");
-          const credentialsAsset = plan.snapshots.find(
-            (asset) => asset.archiveSourcePath === credentialsPath,
-          );
-          expect(credentialsAsset).toBeDefined();
-          expect(readBackupEngine(credentialsAsset!.sourcePath)).toEqual({ engine: "sqlite" });
+          const credentialsAsset = assetPath(plan, credentialsPath);
+          expect(readBackupEngine(credentialsAsset)).toEqual({ engine: "sqlite" });
           expect(
             plan.snapshots.some((asset) =>
               asset.archiveSourcePath.startsWith(`${credentialsPath}.postgres/`),
             ),
           ).toBe(false);
-          {
-            using credentials = openNodeSqliteDatabase(credentialsAsset!.sourcePath, {
-              readOnly: true,
-            });
-            expect(credentials.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-              token: "synthetic-token",
-            });
-            expect(
-              credentials.prepare("SELECT socket_token FROM native_exec_socket_credentials").get(),
-            ).toEqual({ socket_token: null });
-          }
-          {
-            using original = openNodeSqliteDatabase(credentialsPath, { readOnly: true });
-            expect(
-              original.prepare("SELECT socket_token FROM native_exec_socket_credentials").get(),
-            ).toEqual({ socket_token: "synthetic-socket-token" });
-          }
+          expect(row(credentialsAsset, "SELECT token FROM device_auth_tokens")).toEqual({
+            token: "synthetic-token",
+          });
+          const socketSql = "SELECT socket_token FROM native_exec_socket_credentials";
+          expect(row(credentialsAsset, socketSql)).toEqual({ socket_token: null });
+          expect(row(credentialsPath, socketSql)).toEqual({
+            socket_token: "synthetic-socket-token",
+          });
           const capsule = plan.snapshots.filter((asset) =>
             asset.archiveSourcePath.startsWith(`${anchorPath}.postgres/`),
           );
@@ -231,21 +220,13 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             manifest,
           );
           const restoredAnchor = state.path("restored.sqlite");
-          const restored = await preparePostgresRestore({
-            directory,
-            anchorPath: restoredAnchor,
-            config,
-            profile: "user-backup",
-            assertCurrent() {},
-          });
-          namespaces.add(restored.namespace);
-          expect(restored.namespace).not.toBe(namespace);
+          const restored = await restore(directory, restoredAnchor);
+          await verifyRestored(restored);
           expect(readBackupEngine(restoredAnchor)).toEqual({
             engine: "postgres",
             namespace: restored.namespace,
             storeId,
           });
-          await expectRestored(client, restored.namespace);
           await expectRestored(client, namespace);
           {
             using wrong = openNodeSqliteDatabase(path.join(directory, "anchor.sqlite"));
@@ -255,17 +236,16 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
         }
         {
           const capturedSelection = await resolveDatabaseEngineSelection(config);
+          const unavailableConnection = {
+            source: "env" as const,
+            provider: "default",
+            id: `OPENCLAW_UNAVAILABLE_BACKUP_${randomUUID().replaceAll("-", "").toUpperCase()}`,
+          };
           const unavailableConfig: OpenClawConfig = {
             ...config,
             database: {
               ...config.database,
-              postgres: {
-                connection: {
-                  source: "env",
-                  provider: "default",
-                  id: `OPENCLAW_UNAVAILABLE_BACKUP_${randomUUID().replaceAll("-", "").toUpperCase()}`,
-                },
-              },
+              postgres: { connection: unavailableConnection },
             },
           };
           await expect(resolveDatabaseEngineSelection(unavailableConfig)).rejects.toThrow(
@@ -291,16 +271,12 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             ).toHaveLength(0);
             reacquire.mockRestore();
             isolatePrivate.mockRestore();
-            const restored = await preparePostgresRestore({
+            const restored = await restore(
               directory,
-              anchorPath: state.path("captured-selection-restored.sqlite"),
-              config: unavailableConfig,
-              profile: "user-backup",
-              assertCurrent() {},
-            });
-            namespaces.add(restored.namespace);
-            expect(restored.namespace).not.toBe(namespace);
-            await expectRestored(client, restored.namespace);
+              state.path("captured-selection-restored.sqlite"),
+              unavailableConfig,
+            );
+            await verifyRestored(restored);
           });
         }
         {
@@ -320,10 +296,8 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
           });
           const gitAnchor = readBackupEngine(gitTarget);
           assert(gitAnchor.engine === "postgres");
-          namespaces.add(gitAnchor.namespace);
+          await verifyRestored(gitAnchor);
           expect(gitAnchor.storeId).toBe(storeId);
-          expect(gitAnchor.namespace).not.toBe(namespace);
-          await expectRestored(client, gitAnchor.namespace);
         }
         {
           // The later exact-update recovery exercises the homogeneous PostgreSQL selection.
@@ -351,14 +325,13 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             const before = capture();
             expect(before[1]?.size).toBeGreaterThan(0n);
             expect(before[2]).not.toBeNull();
+            const root = fileURLToPath(
+              new URL("../../../extensions/team-reports", import.meta.url),
+            );
             await withPluginCache(createPluginCache(), () =>
               loadDatabasePortDescriptor("team-reports", {
                 plugins: {
-                  load: {
-                    paths: [
-                      fileURLToPath(new URL("../../../extensions/team-reports", import.meta.url)),
-                    ],
-                  },
+                  load: { paths: [root] },
                   entries: { "team-reports": { enabled: true } },
                 },
               }),
@@ -383,15 +356,7 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             });
           }
           await fs.rename(sharedPath, state.path("source-state.sqlite"));
-          {
-            using anchor = openNodeSqliteDatabase(sharedPath);
-            anchor.exec(
-              "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-            );
-            anchor
-              .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-              .run(sharedStoreId, sharedNamespace);
-          }
+          writePortAnchor(sharedPath, sharedStoreId, sharedNamespace);
           // Reverse the mixture: state is PostgreSQL while the plugin remains SQLite.
           const retainedAnchor = state.path("workboard-pg.sqlite");
           await fs.rename(anchorPath, retainedAnchor);
@@ -404,71 +369,28 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             postgres: { connection },
           };
           await state.writeConfig(config);
-          const stateStaging = state.path("state-archive-staging");
-          await fs.mkdir(stateStaging);
-          const stateResources = await createBackupResourcePlan({
-            stateDir: state.stateDir,
-            configPaths: [],
-            oauthDirs: [],
-            workspaceDirs: [],
-            excludedWorkspaceDirs: [],
-            agentRoots: [],
-            pluginResources: inventory.resources,
-            pluginRoots: inventory.pluginRoots,
-          });
-          const statePlan = await createBackupSqliteSnapshotPlan({
-            resources: stateResources,
-            tempDir: stateStaging,
-            legacyAuditSnapshots: [],
-          });
-          const stateCredentials = statePlan.snapshots.find(
-            (asset) => asset.archiveSourcePath === credentialsPath,
-          );
-          assert(stateCredentials);
+          const stateResources = resources();
+          const statePlan = await snapshotPlan("state-archive-staging", stateResources);
           expect(statePlan.inventory.resolveSqliteSource(credentialsPath)?.role).toBe("client");
-          expect(readBackupEngine(stateCredentials.sourcePath)).toEqual({ engine: "sqlite" });
-          const stateCapsule = statePlan.snapshots.find(
-            (asset) => asset.archiveSourcePath === `${sharedPath}.postgres/manifest.json`,
-          );
-          assert(stateCapsule);
-          const workboardImage = statePlan.snapshots.find(
-            (asset) => asset.archiveSourcePath === anchorPath,
-          );
-          assert(workboardImage);
-          expect(readBackupEngine(workboardImage.sourcePath)).toEqual({ engine: "sqlite" });
-          const stateRestore = await preparePostgresRestore({
-            directory: path.dirname(stateCapsule.sourcePath),
-            anchorPath: state.path("restored-state.sqlite"),
-            config,
-            profile: "user-backup",
-            assertCurrent() {},
+          expect(readBackupEngine(assetPath(statePlan, credentialsPath))).toEqual({
+            engine: "sqlite",
           });
+          const stateCapsule = assetPath(statePlan, `${sharedPath}.postgres/manifest.json`);
+          expect(readBackupEngine(assetPath(statePlan, anchorPath))).toEqual({ engine: "sqlite" });
+          const stateRestore = await restore(
+            path.dirname(stateCapsule),
+            state.path("restored-state.sqlite"),
+          );
           namespaces.add(stateRestore.namespace);
           expect(stateRestore.namespace).not.toBe(sharedNamespace);
-          expect(
-            (
-              await client.query(
-                `SELECT COUNT(*) AS count FROM "${stateRestore.namespace}".config_machine_state`,
-              )
-            ).rows,
-          ).toEqual(
-            (
-              await client.query(
-                `SELECT COUNT(*) AS count FROM "${sharedNamespace}".config_machine_state`,
-              )
-            ).rows,
-          );
+          const stateRows = (ns: string) =>
+            queryRows(client, `SELECT COUNT(*) AS count FROM "${ns}".config_machine_state`);
+          expect(await stateRows(stateRestore.namespace)).toEqual(await stateRows(sharedNamespace));
           await fs.unlink(anchorPath);
           await fs.rename(retainedAnchor, anchorPath);
           config.database = { engine: "postgres", postgres: { connection } };
           await state.writeConfig(config);
-          const homogeneousStaging = state.path("homogeneous-archive-staging");
-          await fs.mkdir(homogeneousStaging);
-          const homogeneousPlan = await createBackupSqliteSnapshotPlan({
-            resources: stateResources,
-            tempDir: homogeneousStaging,
-            legacyAuditSnapshots: [],
-          });
+          const homogeneousPlan = await snapshotPlan("homogeneous-archive-staging", stateResources);
           expect(
             homogeneousPlan.snapshots.some(
               (asset) => asset.archiveSourcePath === `${sharedPath}.postgres/manifest.json`,
@@ -543,10 +465,8 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
           namespaces.add(restoredShared.namespace);
           const restored = readBackupEngine(anchorPath);
           assert(restored.engine === "postgres");
-          namespaces.add(restored.namespace);
-          expect(restored.namespace).not.toBe(namespace);
+          await verifyRestored(restored);
           expect(restored.storeId).toBe(storeId);
-          await expectRestored(client, restored.namespace);
           expect(
             (await client.query(`SELECT title FROM "${namespace}".workboard_cards`)).rows,
           ).toEqual([{ title: "Migrated" }]);
@@ -564,5 +484,5 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
         await client.end();
       }
     });
-  });
-});
+  },
+);

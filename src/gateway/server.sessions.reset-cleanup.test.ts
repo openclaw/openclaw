@@ -41,6 +41,7 @@ import {
   expectResetAcpState,
   resolvedAcpMeta,
 } from "./server.sessions.reset-cleanup.test-support.js";
+import { loadTranscriptRows } from "./server.sessions.store-rpc.test-helpers.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -108,6 +109,130 @@ async function resetMainSession() {
     key: "main",
   });
 }
+
+type ArchivedMainResetCase = {
+  label: string;
+  key: string;
+  mainKey?: string;
+  reason: InternalSessionEntry["archiveReason"];
+  tombstone: boolean;
+  allowed: boolean;
+  locked?: boolean;
+  staleIdentity?: boolean;
+};
+
+test.each<ArchivedMainResetCase>([
+  {
+    label: "default Main",
+    key: "agent:main:main",
+    mainKey: undefined,
+    reason: "restart-recovery",
+    tombstone: true,
+    allowed: true,
+  },
+  {
+    label: "configured Main",
+    key: "agent:main:inbox",
+    mainKey: "inbox",
+    reason: "restart-recovery",
+    tombstone: true,
+    allowed: true,
+  },
+  {
+    label: "manually archived Main",
+    key: "agent:main:main",
+    mainKey: undefined,
+    reason: "manual",
+    tombstone: true,
+    allowed: false,
+  },
+  {
+    label: "archived peer",
+    key: "agent:main:dashboard:peer",
+    mainKey: undefined,
+    reason: "restart-recovery",
+    tombstone: true,
+    allowed: false,
+  },
+  {
+    label: "archive without tombstone",
+    key: "agent:main:main",
+    mainKey: undefined,
+    reason: "restart-recovery",
+    tombstone: false,
+    allowed: false,
+  },
+  {
+    label: "model-locked recovered Main",
+    key: "agent:main:main",
+    reason: "restart-recovery",
+    tombstone: true,
+    allowed: false,
+    locked: true,
+  },
+  {
+    label: "stale expected Main identity",
+    key: "agent:main:main",
+    reason: "restart-recovery",
+    tombstone: true,
+    allowed: false,
+    staleIdentity: true,
+  },
+])(
+  "sessions.reset preserves history when restoring $label",
+  async ({ key, mainKey, reason, tombstone, allowed, locked, staleIdentity }) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.sessionConfig = mainKey ? { mainKey } : undefined;
+    const sessionId = "synthetic-archived-main";
+    await writeSingleLineSession(dir, sessionId, "synthetic retained transcript");
+    await writeSessionStore({
+      entries: {
+        [key]: {
+          ...sessionStoreEntry(sessionId),
+          archivedAt: 100,
+          archiveReason: reason,
+          ...(locked ? { modelSelectionLocked: true } : {}),
+          ...(tombstone
+            ? {
+                mainRestartRecovery: {
+                  cycleId: "synthetic-recovery",
+                  revision: 1,
+                  chargedAttempts: 3,
+                  tombstone: {
+                    reason: "synthetic exhausted restart recovery",
+                    recoveredSessionKey: "agent:main:dashboard:old-successor",
+                    recoveredSessionId: "synthetic-successor",
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    });
+    const before = await loadTranscriptRows({ storePath, sessionKey: key, sessionId });
+    const result = await directSessionReq("sessions.reset", {
+      key,
+      expectedSessionId: staleIdentity ? "stale-session" : sessionId,
+    });
+    expect(result.ok).toBe(allowed);
+    const entry = loadSessionEntry({ storePath, sessionKey: key });
+    expect(entry?.sessionId).toBe(sessionId);
+    const after = await loadTranscriptRows({ storePath, sessionKey: key, sessionId });
+    expect(after.slice(0, before.length)).toEqual(before);
+    if (allowed) {
+      expect(entry?.archivedAt).toBeUndefined();
+      expect(entry?.archiveReason).toBeUndefined();
+      expect(entry?.mainRestartRecovery).toBeUndefined();
+      expect(after.slice(before.length)).toContainEqual(
+        expect.objectContaining({ type: "reset", reason: "reset" }),
+      );
+    } else {
+      expect(entry?.archivedAt).toBe(100);
+      expect(entry?.archiveReason).toBe(reason);
+      expect(after).toEqual(before);
+    }
+  },
+);
 
 function installAcpRuntimeBackendWithFreshSession() {
   const prepareFreshSession = vi.fn(async () => {});

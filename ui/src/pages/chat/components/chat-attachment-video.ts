@@ -21,6 +21,7 @@ export function compressChatAttachmentVideo(
       const worker = new Worker(new URL("./chat-attachment-video.worker.ts", import.meta.url), {
         type: "module",
       });
+      const listeners = new AbortController();
       let timer: ReturnType<typeof setTimeout>;
       let settled = false;
       const finish = (prepared?: File, reason: VideoCompressionError = "failed") => {
@@ -29,6 +30,7 @@ export function compressChatAttachmentVideo(
         }
         settled = true;
         clearTimeout(timer);
+        listeners.abort();
         worker.terminate();
         signal.removeEventListener("abort", abort);
         if (prepared && !signal.aborted) {
@@ -45,24 +47,32 @@ export function compressChatAttachmentVideo(
         timer = setTimeout(() => finish(), 120_000);
       };
       signal.addEventListener("abort", abort, { once: true });
-      worker.addEventListener("message", ({ data }: MessageEvent<VideoCompressionResponse>) => {
-        if (settled) {
-          return;
-        }
-        if (data.type === "progress") {
-          armWatchdog();
-          onProgress(data.progress);
-        } else if (data.type === "ready") {
-          finish(data.file);
-        } else {
-          finish(undefined, data.reason);
-        }
-      });
-      worker.addEventListener("error", (event) => {
-        event.preventDefault();
-        finish();
-      });
-      worker.addEventListener("messageerror", () => finish());
+      worker.addEventListener(
+        "message",
+        ({ data }: MessageEvent<VideoCompressionResponse>) => {
+          if (settled) {
+            return;
+          }
+          if (data.type === "progress") {
+            armWatchdog();
+            onProgress(data.progress);
+          } else if (data.type === "ready") {
+            finish(data.file);
+          } else {
+            finish(undefined, data.reason);
+          }
+        },
+        { signal: listeners.signal },
+      );
+      worker.addEventListener(
+        "error",
+        (event) => {
+          event.preventDefault();
+          finish();
+        },
+        { signal: listeners.signal },
+      );
+      worker.addEventListener("messageerror", () => finish(), { signal: listeners.signal });
       armWatchdog();
       try {
         worker.postMessage({ file, maxBytes } satisfies VideoCompressionRequest, []);

@@ -52,6 +52,12 @@ import {
   writeUpdateCompatibilityBuildFixture,
 } from "./update-compat-chunks.test-support.js";
 
+const maintenanceReadState = vi.hoisted(() => vi.fn());
+vi.mock("../../src/daemon/service-state.js", async (original) => ({
+  ...(await original<typeof import("../../src/daemon/service-state.js")>()),
+  readGatewayServiceState: maintenanceReadState,
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
@@ -81,7 +87,7 @@ const gatewayChecks = [
   "pnpm openclaw health --verbose --json",
 ];
 const rebuildMac =
-  "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only";
+  "env OPENCLAW_MAC_REUSE_BUILD=1 SKIP_PNPM_INSTALL=1 bash scripts/restart-mac.sh --sign --wait --target-only";
 const uid = process.getuid?.() ?? 501;
 const bootout = `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`;
 const traceOn = "/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1";
@@ -1089,6 +1095,143 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     },
   );
 
+  test.skipIf(process.platform !== "darwin").each([false, true])(
+    "bounds updater interruption behind the serving Gateway fence (write custody=%s)",
+    async (heldCustody) => {
+      const fixture = makeFixture({ dependencies: true, built: true });
+      const { root, mirror } = fixture;
+      const home = path.join(root, "home");
+      const stateDir = path.join(home, ".openclaw");
+      const entrypoint = path.join(mirror, "dist/index.js");
+      const plistPath = path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const calls = path.join(root, "resident-calls.jsonl");
+      const expiresAtMs = Date.now() + 45_000;
+      mkdirSync(path.dirname(plistPath), { recursive: true });
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(configPath, "{}\n");
+      const programArguments = [
+        process.execPath,
+        "--max-old-space-size=128",
+        entrypoint,
+        "gateway",
+        "--port",
+        "18789",
+      ];
+      writeFileSync(
+        plistPath,
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments,
+          workingDirectory: stateDir,
+          stdoutPath: path.join(stateDir, "gateway.log"),
+          stderrPath: path.join(stateDir, "gateway.log"),
+        }),
+      );
+      // Fixed replies from the old 5b29 serving Gateway's suspend protocol. The real
+      // maintenance owner must decide whether these facts permit native stop.
+      writeFileSync(
+        entrypoint,
+        `import fs from "node:fs";
+const args = process.argv.slice(2);
+const method = args[2];
+const params = JSON.parse(args[args.indexOf("--params") + 1]);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({method,params}) + "\\n");
+let result;
+if (method === "status") result = {pid:42};
+else if (method === "system.info") result = {pid:42,processInstanceId:"resident-instance"};
+else if (method === "gateway.suspend.prepare") result = params.drain ? {
+  status:"draining",suspensionId:"resident-lease",expiresAtMs:${expiresAtMs},
+  retryAfterMs:30000,activeCount:1,blockers:[{kind:"agent-run",count:1,message:"resident turn"}],
+  writeCustody:${JSON.stringify(heldCustody ? [{ phase: "session-write", count: 1 }] : [])}
+} : ${JSON.stringify(busySuspension("agent-run", "resident turn"))};
+else if (method === "gateway.suspend.handoff") result = {status:"committed",suspensionId:"resident-lease",expiresAtMs:${expiresAtMs}};
+else if (method === "gateway.suspend.resume") result = {ok:true};
+else throw new Error("Unexpected resident method: " + method);
+console.log(JSON.stringify(result));
+`,
+      );
+      // The resident build is stale, making this the actual retry/update path.
+      writeJson(path.join(mirror, "dist/build-info.json"), { commit: "0".repeat(40) });
+      maintenanceReadState.mockResolvedValue({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        command: { programArguments, sourcePath: plistPath },
+        runtime: { status: "running", pid: 42 },
+      });
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+        command === "/bin/launchctl"
+          ? {
+              status: 0,
+              signal: null,
+              pid: 1,
+              output: [null, "pid = 42", ""],
+              stdout: "pid = 42",
+              stderr: "",
+            }
+          : actual.spawnSync(command, args, options),
+      );
+      const commands = fakeCommands(mirror);
+      await Promise.all([
+        import("../../src/cli/update-cli/update-command-service-drain.js"),
+        import("../../src/daemon/service-state.js"),
+        import("../../src/daemon/service.js"),
+      ]);
+      vi.stubEnv("HOME", home);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+      try {
+        const running = fixture.run({
+          inspectGatewayDeployment: undefined,
+          prepareGatewaySuspension: undefined,
+          runCommand: commands.runCommand,
+          verifyAndAuditGateway: passGatewayRestartVerification,
+        });
+        const outcome = running.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.runAllTimersAsync();
+        const result = await outcome;
+        const requests = readJsonLines(calls) as Array<{
+          method: string;
+          params: Record<string, unknown>;
+        }>;
+        if (heldCustody) {
+          expect(result).toHaveProperty("error");
+          expect("error" in result && result.error).toMatchObject({
+            message: expect.stringContaining("data at risk in owner phase session-write (1)"),
+          });
+          expect(commands.calls).not.toContain(bootout);
+          expect(commands.calls).not.toContain("pnpm build");
+          expect(requests.some(({ method }) => method === "gateway.suspend.handoff")).toBe(false);
+          expect(requests.at(-1)?.method).toBe("gateway.suspend.resume");
+        } else {
+          expect(result).toHaveProperty("value.ok", true);
+          expect(commands.calls).toContain(bootout);
+          expect(commands.calls.indexOf(bootout)).toBeLessThan(
+            commands.calls.indexOf("pnpm build"),
+          );
+          expect(
+            requests.find(({ method }) => method === "gateway.suspend.handoff")?.params,
+          ).toEqual({
+            suspensionId: "resident-lease",
+            target: { pid: 42, processInstanceId: "resident-instance" },
+            commit: true,
+          });
+        }
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+        vi.mocked(spawnSync).mockImplementation(actual.spawnSync);
+        maintenanceReadState.mockReset();
+      }
+    },
+  );
+
   test("accepts supported LaunchAgent layouts and rejects foreign commands", () => {
     const home = "/Users/test";
     const entrypoint = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
@@ -1585,7 +1728,10 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
     const deferred = await fixture.run({
       inspectGatewayDeployment,
-      prepareGatewaySuspension: () => busySuspension("agent-run", "busy"),
+      prepareGatewaySuspension: () => ({
+        ...busySuspension("agent-run", "busy"),
+        controlledDrainSupported: false,
+      }),
     });
     expect(deferred).toMatchObject({ deferred: true, reason: "gateway_active_work" });
     expect(commands.calls).toEqual([]);

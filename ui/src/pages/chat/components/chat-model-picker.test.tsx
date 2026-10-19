@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 afterEach(() => document.body.replaceChildren());
@@ -51,6 +51,9 @@ it.each(["open", "closed", "removed", "focus moved"])(
       trigger.focus();
       trigger.click();
       expect(picker.open).toBe(true);
+      await waitForSolid(() =>
+        expect(picker.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
       for (const callback of frames.splice(0)) {
         callback(0);
       }
@@ -116,10 +119,13 @@ it("mounts model choices on first open and retains them across dismissal", async
   );
   flush();
   expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+  expect(container.querySelector(".chat-controls__model-menu")).toBeNull();
   const details = container.querySelector("details")!;
   details.querySelector("summary")!.click();
   flush();
-  await Promise.resolve();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   const choice = container.querySelector<HTMLButtonElement>("[data-chat-model-option]")!;
   expect(choice.hidden).toBe(false);
   details.open = false;
@@ -127,7 +133,9 @@ it("mounts model choices on first open and retains them across dismissal", async
   flush();
   details.querySelector("summary")!.click();
   flush();
-  await Promise.resolve();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   expect(container.querySelector("[data-chat-model-option]")).toBe(choice);
   choice.click();
   expect(onModelSelect).toHaveBeenCalledWith("fixture/current", "main", undefined);
@@ -176,7 +184,9 @@ it.each([false, true])(
       { container },
     );
     flush();
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     const details = container.querySelector<HTMLDetailsElement>("details")!;
     const selected = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="selected/current"]',
@@ -199,7 +209,9 @@ it.each([false, true])(
     details.dispatchEvent(new Event("toggle"));
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(selected.hidden).toBe(true);
     expect(other.hidden).toBe(true);
@@ -209,7 +221,9 @@ it.each([false, true])(
     details.dispatchEvent(new Event("toggle"));
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     expect(other.hidden).toBe(false);
     expect(selected.hidden).toBe(true);
   },
@@ -244,7 +258,9 @@ it.each([false, true])(
       { container },
     );
     flush();
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
     expect(rows).toHaveLength(300);
     expect(rows.filter((row) => !row.hidden)).toHaveLength(9);
@@ -312,12 +328,16 @@ it.each([false, true])(
       { container },
     );
     flush();
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
     const details = container.querySelector("details")!;
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     const rest = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="fixture/rest"]',
     )!;
@@ -346,7 +366,7 @@ it.each([false, true])(
   },
 );
 
-it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
+it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
   const container = document.body.appendChild(document.createElement("div"));
   const option = (provider: string, id: string, agentRuntimeId?: string) => ({
     provider,
@@ -382,6 +402,9 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
     { container },
   );
   flush();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   const groups = Object.fromEntries(
     Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]")).map(
       (group) => [

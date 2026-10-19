@@ -12,7 +12,7 @@ import {
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
@@ -386,7 +386,7 @@ export function inspectProfileAvatarInDatabase(
   db: EngineConnection,
   profileId: string,
 ): UserProfileAvatarInspection {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const profile = selectProfileAvatarMetadata(db, profileId);
     const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
     const avatar =
@@ -412,7 +412,7 @@ function readProfileAvatarInDatabase(
   profileId: string,
   expected: UserProfileAvatarRepresentation,
 ): UserProfileAvatar | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const profile = selectProfileAvatarMetadata(db, profileId);
     const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
     if (

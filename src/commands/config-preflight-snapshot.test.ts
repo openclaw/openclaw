@@ -37,6 +37,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createConfigPreflightSnapshotReader,
   readAdmittedConfigSnapshot,
@@ -69,6 +70,37 @@ function databaseFamily(databasePath: string) {
     return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
   });
 }
+
+it("reports completed plugin metadata work in startup admission traces", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    writeConfig(home);
+    await withEnvAsync({ OPENCLAW_GATEWAY_STARTUP_TRACE: "1" }, async () => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await using snapshots = createConfigPreflightSnapshotReader();
+        const result = await readAdmittedConfigSnapshot({
+          env: process.env,
+          readSnapshot: () =>
+            snapshots.read({
+              purpose: "startup",
+              allowCurrentPluginMetadata: false,
+              includePluginMetadata: true,
+              skipPluginValidation: false,
+              observe: false,
+            }),
+        });
+        expect(result.snapshot.valid).toBe(true);
+        const trace = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(trace).toMatch(/cli\.bootstrap\.admission\.plugin-metadata-completion [\d.]+ms/);
+        expect(trace).toMatch(
+          /cli\.bootstrap\.admission\.plugin-config [^\n]+ registrySnapshotMs=[\d.]+[^\n]+ indexPluginCount=\d+ manifestPluginCount=\d+/,
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+  });
+});
 
 it("preserves a proven schema failure while completing plugin metadata", async () => {
   await withDoctorConfigPreflightHome(async (home) => {

@@ -19,15 +19,13 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  getSessionControllerOperation,
-  waitForReplyRunSuccessorAdmission,
-} from "../../sessions/session-controller.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";

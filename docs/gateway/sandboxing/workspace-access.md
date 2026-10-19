@@ -63,9 +63,11 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
-At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`,
+At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
 `.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
-that produced them, along with `.artifacts/vitest-workers/` compiler outputs and
+that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
+`.artifacts/vitest-worker-cache/` retained compiler outputs,
+`.artifacts/vitest-shard-timings.json` scheduling samples, and
 `.artifacts/dist-artifacts.lock/` ownership files.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
@@ -135,8 +137,12 @@ filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
 during preparation prevents those effects rather than rejecting only afterward.
 Stopping a run blocks new commands and file operations while allowing its accepted
-workspace changes to finish checkpointing. Accepted command cleanup retains the
-workspace owner until finalization finishes, even after the parent exits.
+workspace changes to finish checkpointing. Accepted command cleanup waits for an active checkpoint to resume the runtime
+before reaping its processes. Its reap budget starts after admission; the command's
+original exit and timeout results remain unchanged. Termination checkpoints any
+final writes from signal handlers before returning, including when an earlier
+finalization already checkpointed the command. Cleanup retains the workspace owner
+until termination and finalization finish, even after the parent exits.
 Settlement still requires the original
 session and worktree binding and live Gateway ownership; a replacement session or
 unresolved checkpoint failure cannot be reported as a clean stop.

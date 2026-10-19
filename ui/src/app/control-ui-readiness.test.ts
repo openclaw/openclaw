@@ -1,9 +1,10 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
 import { createComponent, createRoot, Show } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import type { SolidRouteProps } from "../app-route-types.ts";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -61,6 +62,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
     teardown: () => teardown.promise,
     restartAfterTeardown: () => {},
   });
+  onTestFinished(registerMcpAppUnmountTarget(previousView));
   const destination = document.createElement("div");
   destination.dataset.destination = "";
   destination.textContent = "Debug";

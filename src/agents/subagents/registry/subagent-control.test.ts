@@ -3,7 +3,7 @@
 import { mockSessionReplacementForStore } from "./subagent-control.leaf-mocks.test-support.js";
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture, useSubagentControlSessionStores } from "./subagent-control.test-support.js";
-import { onTestFinished, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -26,10 +26,8 @@ import {
   consumeSessionEffectHandoff,
   getSessionMutationCount,
   isSessionMutationActive,
-  captureSessionTarget,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-controller.lifecycle.js";
-import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   createSubagentRunRecord,
@@ -37,6 +35,7 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { startControlProducer as startProducer } from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
@@ -223,50 +222,6 @@ function publishRun(runId: string, update: (current: SubagentRunRecord) => Subag
   }));
 }
 
-/** Own a real producer so Stop joins its completion, not a fabricated abort receipt. */
-function startProducer(
-  sessionKey: string,
-  sessionId: string,
-  storePath: string,
-  onCancel: () => void | Promise<void> = () => {},
-  runId?: string,
-) {
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    agentId: "main",
-    resetTriggered: false,
-    target: captureSessionTarget({
-      storeScope: storePath,
-      sessionKey,
-      agentId: "main",
-      incarnation: sessionId,
-    }),
-  });
-  const cancelled = createDeferred();
-  const finished = createDeferred();
-  const cancel = vi.fn(() => cancelled.resolve());
-  operation.attachBackend({ kind: "embedded", runId, isStreaming: () => true, cancel });
-  const settled = (async () => {
-    try {
-      const wasCancelled = await Promise.race([
-        cancelled.promise.then(() => true),
-        finished.promise.then(() => false),
-      ]);
-      if (wasCancelled) {
-        await onCancel();
-      }
-    } finally {
-      operation.complete();
-    }
-  })();
-  onTestFinished(async () => {
-    finished.resolve();
-    await settled;
-  });
-  return { operation, cancel, settled };
-}
-
 function runFixture(suffix: string, overrides: Partial<SubagentRunRecordOverrides> = {}) {
   return createSubagentRunRecord({
     runId: `run-${suffix}`,
@@ -427,6 +382,8 @@ describe("killSubagentRunAdmin", () => {
       childSessionKey,
       "sess-fenced-same-id-successor",
       cfg.session!.store!,
+      undefined,
+      runId,
     );
 
     const replacementReady = createDeferred();
@@ -1229,7 +1186,7 @@ describe("controlled subagent cancellation races", () => {
   );
 
   it.each(["exact admin", "controlled"] as const)(
-    "interrupts recovery admission without retargeting an exact admin kill (%s)",
+    "interrupts selected admission without retargeting an exact admin kill (%s)",
     async (mode) => {
       const exact = mode === "exact admin";
       const sessionId = "sess-recovery-admission";
@@ -1271,15 +1228,19 @@ describe("controlled subagent cancellation races", () => {
       const admission = await beginSessionEffect({
         scope: storePath,
         identities: [childSessionKey, sessionId],
-        ...(!exact
-          ? { run: { runId: entry.runId, sessionKey: childSessionKey, sessionId, agentId: "main" } }
-          : {}),
+        run: { runId: entry.runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
         assertAllowed: () => {},
-        onInterrupt: () => interrupted.resolve(),
+        onInterrupt: () => {
+          interrupted.resolve();
+          return { runId: entry.runId };
+        },
       });
       const handoffId = admission.createHandoff();
       const recoveryInterrupted = vi.fn();
-      const abort = exact ? startProducer(childSessionKey, sessionId, storePath).cancel : undefined;
+      const abort = exact
+        ? startProducer(childSessionKey, sessionId, storePath, undefined, "recovery-successor")
+            .cancel
+        : undefined;
       const pendingKill = exact
         ? adminKill(childSessionKey, storePath, { expectedRunId: entry.runId })
         : controlledKill([entry], storePath);
@@ -1549,6 +1510,7 @@ describe("killAllControlledSubagentRuns", () => {
       const admission = await beginSessionEffect({
         scope: storePath,
         identities: [childSessionKey, sessionId],
+        run: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
         assertAllowed: () => {},
       });
       const response = createDeferred();
@@ -1558,7 +1520,10 @@ describe("killAllControlledSubagentRuns", () => {
         handoffId: admission.createHandoff(),
         scope: storePath,
         identities: [childSessionKey, sessionId],
-        onInterrupt: () => response.resolve(),
+        onInterrupt: () => {
+          response.resolve();
+          return { runId };
+        },
       });
       enqueueSwarmRun({
         groupId: "remapping",

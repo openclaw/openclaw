@@ -8,18 +8,18 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { UserMessage } from "../../../llm/types.js";
-import {
-  captureCurrentReplyMessageInjectionTarget,
-  findSessionControllerOperationByRunId,
-  submitSessionControllerSteer,
-  type ReplyOperation,
-  type SessionControllerSteerResult,
-} from "../../../sessions/session-controller.js";
+import type { ReplyOperation } from "../../../sessions/session-controller.js";
 import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
   type SessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../../sessions/session-controller.message-injection.js";
+import { findSessionControllerOperationByRunId } from "../../../sessions/session-controller.queries.js";
+import {
+  submitSessionControllerSteer,
+  type SessionControllerSteerResult,
+} from "../../../sessions/session-controller.steer.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";

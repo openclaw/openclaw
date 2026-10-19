@@ -55,6 +55,7 @@ async function seed() {
       childAgentId: "main",
       sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
       requesterSessionKey: id === "root" ? owner : key("root"),
+      requesterTurnRunId: id === "root" ? undefined : "root",
       requesterAgentId: "main",
       requesterDisplayKey: owner,
       task: "shared label",
@@ -78,8 +79,17 @@ it.each(
     const admission = await beginSessionEffect({
       scope: storePath,
       identities: [key("child"), "child-session"],
+      run: {
+        runId: "child",
+        sessionKey: key("child"),
+        sessionId: "child-session",
+        agentId: "main",
+      },
       assertAllowed: () => {},
-      onInterrupt: () => entered.resolve(),
+      onInterrupt: () => {
+        entered.resolve();
+        return { runId: "child" };
+      },
     });
     const failure = "root identity unavailable after cancellation";
     let armed = false;

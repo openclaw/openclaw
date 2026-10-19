@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { CommandRunner } from "./update-runner-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -196,4 +197,33 @@ child.on('close', code => { process.exitCode = interrupt ? 1 : code; });
   await fs.rm(current, { recursive: true });
   await fs.rm(generation, { recursive: true });
   expect(await git(second, "fsck", "--full")).not.toContain("missing");
+});
+
+it("refuses root before acquiring source or running candidate scripts", async () => {
+  mocks.command.mockClear();
+  mocks.preflight.mockClear();
+  vi.spyOn(process, "geteuid").mockReturnValue(0);
+  const reported = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  const argv = process.argv;
+  const exitCode = process.exitCode;
+  process.argv = [
+    process.execPath,
+    "worker",
+    "/private-stage",
+    "b".repeat(40),
+    "1000",
+    "0",
+    "/current",
+    "a".repeat(40),
+  ];
+  try {
+    vi.resetModules();
+    await import("./update-immutable-build.worker.js");
+    expect(reported).toHaveBeenCalledWith(expect.stringContaining("non-root"));
+    expect(mocks.command).not.toHaveBeenCalled();
+    expect(mocks.preflight).not.toHaveBeenCalled();
+  } finally {
+    process.argv = argv;
+    process.exitCode = exitCode;
+  }
 });

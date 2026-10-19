@@ -14,7 +14,11 @@ type ChatSessionActivityProps = {
   renderEntry: (
     item: Accessor<MessageGroup["messages"][number]>,
     index: Accessor<number>,
-  ) => { content: JSX.Element; actions: JSX.Element };
+  ) => {
+    content: JSX.Element;
+    actions: JSX.Element;
+    actionsRef?: (element: HTMLDivElement) => void;
+  };
 };
 
 export function ChatSessionActivity(props: ChatSessionActivityProps) {
@@ -88,6 +92,7 @@ export function ChatSessionActivity(props: ChatSessionActivityProps) {
                           timestamp={rawMessageTimestamp(item().message) ?? props.group.timestamp}
                         />
                         <div
+                          ref={(element) => entry.actionsRef?.(element)}
                           class="chat-group-footer-actions"
                           data-message-actions-for={item().key}
                         >

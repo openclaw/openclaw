@@ -263,3 +263,23 @@ it.each([
 ])("resolves state paths literally: %j", (env, expected) => {
   expect(resolveGatewayStateDir(env)).toBe(expected);
 });
+
+describe("process-owned egress trust", () => {
+  it.each(["darwin", "linux", "win32"] as const)(
+    "does not persist a Gateway CA on %s",
+    (platform) => {
+      const env = {
+        HOME: home,
+        NODE_EXTRA_CA_CERTS: "/state/a/secret-egress-proxy/gateway-expired/trust-bundle.pem",
+      };
+      for (const environment of [
+        buildServiceEnvironment({ env, platform, port: 18789 }),
+        buildNodeServiceEnvironment({ env, platform }),
+      ]) {
+        expect(environment.NODE_EXTRA_CA_CERTS).not.toEqual(
+          expect.stringContaining("secret-egress-proxy"),
+        );
+      }
+    },
+  );
+});

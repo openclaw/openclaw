@@ -25,7 +25,7 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
@@ -162,13 +162,13 @@ export function createSubagentRegistrySweeper(params: {
     scheduled = { timer, at: nextAt };
   }
 
-  async function runTick(recoveryOnly = false) {
+  async function runTick() {
     if (sweepInProgress) {
       rerunRequested = true;
       return;
     }
     try {
-      await runWithGatewayDetachedWorkAdmission(() => sweepOnce(recoveryOnly), "subagents:sweeper");
+      await runWithGatewayDetachedWorkAdmission(() => sweepOnce(), "subagents:sweeper");
     } catch (error) {
       if (isGatewayRestartDrainError(error)) {
         return params.warn("subagent run sweep skipped: gateway is draining for restart");
@@ -206,7 +206,7 @@ export function createSubagentRegistrySweeper(params: {
     );
   }
 
-  async function sweepOnce(recoveryOnly = false) {
+  async function sweepOnce() {
     if (sweepInProgress) {
       return;
     }
@@ -215,17 +215,15 @@ export function createSubagentRegistrySweeper(params: {
       const now = Date.now();
       const readScope = createSubagentSweepReadScope(runs, params.getGatewayRecoveryRuntime);
       const deleteSession = (entry: SubagentRunRecord, identity: FrozenSessionIdentity) =>
-        deleteSweptSession(entry, identity, runs, params.callGateway, () =>
-          readScope.assertRunCurrent(entry),
+        deleteSweptSession(
+          entry,
+          identity,
+          runs,
+          params.callGateway,
+          () => readScope.assertRunCurrent(entry),
+          readScope.gatewayResolver,
         );
       recovery.prune();
-      if (recoveryOnly) {
-        const restoredRuns = [...runs];
-        for (const [runId, entry] of restoredRuns) {
-          await recovery.recover(runId, entry);
-        }
-        return;
-      }
       const collectorArchiveCandidates = new Map<
         string,
         { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
@@ -665,7 +663,16 @@ export function createSubagentRegistrySweeper(params: {
     schedule,
     sweepOnce: () => trackWork(sweepOnce),
     runTick: () => trackWork(runTick),
-    recoverInterruptedRuns: () => trackWork(() => runTick(true)),
+    recoverInterruptedRuns: (
+      entries: readonly SubagentRunRecord[] = [...getSubagentActivationRuns(runs)],
+    ) =>
+      trackWork(() =>
+        runWithGatewayDetachedWorkAdmission(async () => {
+          for (const entry of entries) {
+            await recovery.recover(entry.runId, entry);
+          }
+        }, "subagents:restart-recovery"),
+      ),
     async reset() {
       stop();
       lastWarnedSuspendedCount = undefined;

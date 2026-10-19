@@ -3,11 +3,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveActiveReplyRunOwnerForSignal } from "../../sessions/session-controller.barriers.js";
 import {
   ReplyRunSuccessorAdmissionBlockedError,
-  waitForReplyRunSuccessorAdmission,
   createReplyOperation,
   getSessionControllerOperation,
-  captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { SESSION_WATCHDOG_CLEANUP_MS } from "../../sessions/session-controller.watchdog-state.js";
 import {
   createTestReplyOperation,

@@ -31,6 +31,7 @@ import {
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
+import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.metadata.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
@@ -246,7 +247,11 @@ async function resumeMainSessionWithinAdmission(
       (run) => run.runId === claimedRunId && run.lifecycleGeneration !== lifecycleGeneration,
     ) === true;
   const recoveryRunId =
-    claimedRunId && claimedRunId !== sourceRunId && !claimedRunWasAdmittedBeforeRestart
+    claimedRunId &&
+    claimedRunId !== sourceRunId &&
+    // Queued input keeps its transcript key as the source, not a new recovery reservation.
+    buildRunUserTurnIdempotencyKey(claimedRunId) !== sourceRunId &&
+    !claimedRunWasAdmittedBeforeRestart
       ? claimedRunId
       : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
@@ -497,20 +502,19 @@ async function resumeMainSessionWithinAdmission(
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
+    const recoverySourceTarget = sourceRunId
+      ? { ...target, sessionId: params.entry.sessionId, sourceRunId, recoveryRunId }
+      : undefined;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
       controllerInput,
       gatewayRuntime: params.gatewayRuntime,
-      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
-        ? {
-            restartRecoveryOperatorTarget: {
-              ...target,
-              sessionId: params.entry.sessionId,
-              sourceRunId,
-              recoveryRunId,
-            },
-          }
-        : {}),
+      restartRecoveryRequesterTarget: params.entry.restartRecoveryRequesterSource
+        ? recoverySourceTarget
+        : undefined,
+      restartRecoveryOperatorTarget: params.entry.restartRecoveryOperatorSource
+        ? recoverySourceTarget
+        : undefined,
       assertAdmissionCurrent: () => {
         if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
           throw new Error("Restart recovery admission is no longer current.");

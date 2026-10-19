@@ -134,5 +134,6 @@ export function createConfigCapabilityHarness(
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
   const { gateway, publish } = createGatewayHarness(client);
-  return { runtimeConfig: createRuntimeConfigCapability(gateway), publish };
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  return { client, runtimeConfig, publish, state: runtimeConfig.state };
 }

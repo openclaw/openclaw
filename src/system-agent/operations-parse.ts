@@ -11,7 +11,7 @@ import {
   redactSystemAgentConfigPath,
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
-import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
+import { INVALID_CONFIG_SET_MESSAGE, isInvalidConfigSetOperation } from "./operations-internal.js";
 import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
@@ -512,4 +512,28 @@ export function formatSystemAgentPersistentPlan(
   return operatorApprovalOnly
     ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
     : `Plan: ${description}. Say yes to apply.`;
+}
+
+export function redactSensitiveCommandText(text: string): string {
+  const operation = parseSystemAgentOperation(text);
+  if (isInvalidConfigSetOperation(operation)) {
+    return "config set <invalid path> <redacted secret>";
+  }
+  if (operation.kind === "config-set") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    if (
+      displayPath !== operation.path ||
+      isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+    ) {
+      return `config set ${displayPath} <redacted secret>`;
+    }
+  }
+  if (operation.kind === "config-unset") {
+    return `config unset ${redactSystemAgentConfigPath(operation.path)}`;
+  }
+  if (operation.kind === "config-set-ref") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    return `config set-ref ${displayPath} <redacted reference>`;
+  }
+  return text;
 }

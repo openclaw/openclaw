@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import {
@@ -39,8 +40,7 @@ describe("update run response races", () => {
     const run = finishedRun({ status: "failed", reason: "build-failed" });
     const request = updateStatusRequest(() => ({ lastRun: run }));
     const { harness, overlays, expectState } = runTest(request);
-    await flushMicrotasks();
-    expect(overlays.snapshot.updateRun).toEqual(run);
+    await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(run));
     expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
     harness.update({ phase: "reconnecting", hello: null });
     expect(overlays.snapshot.updateRun).toEqual(run);

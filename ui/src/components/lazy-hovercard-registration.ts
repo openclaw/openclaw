@@ -11,7 +11,6 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement> {
     private readonly params: {
       tag: string;
       load: () => Promise<CustomElementConstructor>;
-      onDefined?: () => void;
     },
   ) {}
 
@@ -43,7 +42,6 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement> {
     });
     this.stopListeners?.();
     this.stopListeners = null;
-    this.params.onDefined?.();
   }
 }
 

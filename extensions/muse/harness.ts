@@ -171,7 +171,6 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         : security === "full" && ask === "off"
           ? "allowAll"
           : "promptUnmatched";
-      params.hostCapabilities.assertActive();
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: workspace });
       const lease = await pool.acquire(workspace, apiKey, readOnly);
       const { runtime } = lease;

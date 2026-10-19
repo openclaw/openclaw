@@ -25,7 +25,7 @@ import { readSessionEntrySummariesInWorker } from "./session-entry-read-runtime.
 import { readSessionSendRecoveryPage } from "./session-pending-input-history.js";
 import type { InternalSessionEntry } from "./types.js";
 
-it("selects unarchived recovery custody including completed rows that still need settlement", async () => {
+it("selects recovery custody and startup orphans without settled or non-main sessions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const recovery = { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 };
@@ -49,6 +49,20 @@ it("selects unarchived recovery custody including completed rows that still need
         restartRecoveryRuns: runs,
         restartRecoveryTerminalRunIds: ["interrupted-run"],
       },
+      "orphan-aborted": { abortedLastRun: true },
+      "orphan-interrupted": { status: "interrupted" },
+      "settled-aborted": { abortedLastRun: false },
+      "settled-interruption": {
+        status: "interrupted",
+        abortedLastRun: false,
+        lastRunId: "interrupted-run",
+        restartRecoveryTerminalRunIds: ["interrupted-run"],
+      },
+      "archived-orphan": { archivedAt: 1, abortedLastRun: true },
+      "subagent:orphan": { abortedLastRun: true },
+      "cron:orphan": { abortedLastRun: true },
+      "acp:orphan": { abortedLastRun: true },
+      "spawned-orphan": { abortedLastRun: true, spawnDepth: 1 },
     };
     for (const [name, entry] of Object.entries(entries)) {
       replaceSessionEntrySync(
@@ -61,9 +75,24 @@ it("selects unarchived recovery custody including completed rows that still need
       agentId: "main",
       storePath: database.path,
       env,
-      mainSessionRecovery: true,
+      mainSessionRecovery: "claims",
     });
     expect(selected.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:pending-cycle",
+      "agent:main:pending-delivery",
+      "agent:main:pending-execution",
+      "agent:main:pending-final",
+      "agent:main:pending-residue",
+    ]);
+    const orphans = await readSessionEntrySummariesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+      mainSessionRecovery: "orphans",
+    });
+    expect(orphans.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:orphan-aborted",
+      "agent:main:orphan-interrupted",
       "agent:main:pending-cycle",
       "agent:main:pending-delivery",
       "agent:main:pending-execution",

@@ -59,6 +59,7 @@ import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import type { MountedApplicationShell } from "./context-types.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
@@ -68,7 +69,7 @@ import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
-import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { prepareNativeUpdateFallback, startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
@@ -110,6 +111,7 @@ export type ApplicationRuntime = {
   } | null;
   readonly confirmPendingGatewayConnection: () => void;
   readonly cancelPendingGatewayConnection: () => void;
+  readonly setShell: (shell: MountedApplicationShell | undefined) => void;
   start: () => Promise<void>;
   stop: () => void;
 };
@@ -381,6 +383,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
   const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
+  let shell: MountedApplicationShell | undefined;
   const shouldOpenExternally = () => theme.settings.openLinksExternally === true;
   const mcpAppRouting = startMcpAppRouting({
     navigate: (route, options) => context.navigate(route, options),
@@ -392,30 +395,16 @@ export function bootstrapApplication(): ApplicationRuntime {
     shouldOpenExternally,
     signal: startupLifecycle.signal,
     canPresentBrowserPanel: () => {
-      const shell = document.querySelector("openclaw-app-shell");
       return (
-        shell?.isConnected === true &&
+        shell?.element.isConnected === true &&
         !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
       );
     },
-    prepareNativeUpdateFallback: () => ({
-      isCurrent: overlays.captureUpdateTarget(),
-      run: () => {
-        const snapshot = overlays.snapshot;
-        const campaign = snapshot.updateSchedule?.campaign;
-        const busy =
-          snapshot.updateRunning ||
-          snapshot.updateReconciliationPending ||
-          campaign?.state === "applying";
-        if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
-          void overlays.runUpdate();
-        }
-      },
-    }),
+    prepareNativeUpdateFallback: () => prepareNativeUpdateFallback(overlays),
     shouldOpenInControlUiBrowser: () =>
       loadSettings().openLinksInControlUiBrowser === true &&
       isBrowserPanelAvailable(gateway.snapshot) &&
-      document.querySelector("openclaw-app-shell")?.isConnected === true,
+      shell?.element.isConnected === true,
   });
   let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
@@ -565,6 +554,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     resourceBasePath,
     lifecycleAbortSignal: startupLifecycle.signal,
     router,
+    get routeOutlet() {
+      return shell?.routeOutlet;
+    },
     gateway,
     connectionBootstrap,
     agents,
@@ -624,6 +616,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
+    setShell: (owner) => {
+      shell = owner;
+    },
     start: () => {
       if (!startupLifecycle.signal.aborted) {
         void config.refresh({ ifNeeded: true });

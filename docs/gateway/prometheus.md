@@ -102,6 +102,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
+| `openclaw_gateway_rpc_client_requests_total`              | counter   | `method`, `client_kind`                                                                   |
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
 | `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
@@ -116,6 +117,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_ws_session_event_frames_total`          | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_session_event_bytes_total`           | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_event_bytes_total`                   | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_wire_bytes_total`              | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_frame_bytes`                   | counter   | `event`, `le`                                                                             |
 | `openclaw_gateway_ws_presence_frames_total`               | counter   | `mode`                                                                                    |
 | `openclaw_gateway_ws_presence_bytes_total`                | counter   | `mode`                                                                                    |
 | `openclaw_gateway_ws_operator_connections`                | gauge     | none                                                                                      |
@@ -186,6 +189,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_total`                            | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_payload_large_bytes`                            | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
+| `openclaw_process_anonymous_memory_bytes`                 | gauge     | `kind` (`rss`, `swap`)                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                                   | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
@@ -209,6 +213,15 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_prometheus_series_dropped_total`                | counter   | none                                                                                      |
 | `openclaw_diagnostic_async_queue_dropped_total`           | counter   | `drop_class`                                                                              |
 | `openclaw_diagnostic_async_queue_length`                  | gauge     | none                                                                                      |
+
+On Linux, `openclaw_process_anonymous_memory_bytes` reports `RssAnon` as `kind="rss"`
+and `VmSwap` as `kind="swap"` from `/proc/self/status`, converted to bytes. The
+existing diagnostic heartbeat reads these counters asynchronously. They include
+managed heaps and buffers; they do not measure total native or allocator memory.
+`VmSwap` excludes shared-memory swap. Unavailable counters are omitted, including
+when a later read fails, rather than reported as zero or retained from an older
+sample. Other platforms do not expose these gauges. OpenClaw does not currently
+expose a total SQLite or jemalloc allocation counter.
 
 Worker message counters describe posts and receives on Gateway main-thread worker transports,
 with `direction="to_worker"` or `direction="from_worker"`. The fixed `kind` labels
@@ -264,6 +277,19 @@ byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or
 dropped snapshot can recover.
 
+`openclaw_gateway_ws_event_wire_bytes_total{event}` sums payload bytes actually
+handed to the socket after the codec: deflated payload length when compressed,
+raw length otherwise. It excludes WebSocket, TLS, and TCP headers and does not
+prove client receipt. The codec can report completion after raw-frame acceptance;
+direct local delivery contributes its raw payload size. Manual diagnostic
+observations without a wire size do not fabricate a wire-byte measurement.
+
+`openclaw_gateway_ws_event_frame_bytes{event,le}` contains cumulative counts of
+accepted raw event frames, with byte-size upper bounds `256`, `512`, `1024`,
+`2048`, `4096`, `8192`, `16384`, `65536`, and `+Inf`. Each frame increments all
+matching bounds. This is a bounded bucket counter, not a histogram family: use
+the metric name directly with `histogram_quantile`, without a `_bucket` suffix.
+
 `openclaw_gateway_ws_presence_frames_total{mode}` and
 `openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic by
 `delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
@@ -310,6 +336,32 @@ for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
 Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
 
+`openclaw_gateway_rpc_client_requests_total` attributes all RPC methods using a
+coarse handshake `client_kind`: `control-ui` (Control UI, WebChat UI, browser
+copilot), `macos`, `ios` (including watchOS), `android`, `cli` (including TUI),
+`node` (node hosts and workers), or `other`. The eighth bucket, `plugin`, is
+reserved: generic `gateway-client` connections cannot reliably identify plugins,
+and in-process plugin dispatch inherits its authenticated caller's identity.
+Pre-authentication `connect` requests and other missing identities use `other`. This is diagnostic self-identification, never authorization.
+
+The counter includes server-dispatched requests on behalf of a connection, such
+as its initial model snapshot; use the dedicated list counters' `source` label
+below to separate those from wire requests. No device IDs, display names,
+platform strings, or request values become labels. There is no generic request
+reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
+`trigger` parameter filters job types and does not identify why a client fetched.
+
+The budget is at most **8 additional samples and scrape series per method**,
+created only for observed kinds and subject to the shared 2,048-sample cap.
+Existing method-only counters and timing histograms keep their labels and bucket
+counts. To attribute polling, use:
+
+```promql
+sum by (method, client_kind) (
+  rate(openclaw_gateway_rpc_client_requests_total{method=~"cron.list|models.list"}[5m])
+)
+```
+
 `openclaw_models_list_requests_total` separately attributes catalog reads to the
 handshake's canonical client kind, such as `openclaw-control-ui`, `openclaw-macos`,
 or `gateway-client`. `source="wire"` identifies client request frames;
@@ -339,10 +391,11 @@ tokens. Each observed combination uses one sample in the existing shared cap.
 
 `openclaw_sessions_list_response_bytes_total` reuses these labels and adds
 `rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`,
-`full-no-base` for full sidebar replies when the request omits `ifRowsRevision`,
-or `full-with-base` when it supplies a revision. `full-with-base` includes
+`full-no-base` for conditional replies when the request omits `ifRowsRevision`
+or supplies an empty opt-in token, or `full-with-base` when it supplies a revision.
+`full-with-base` includes
 stale or evicted bases and the rare case where every row changed.
-Non-sidebar row modes use `not-sidebar`. Diagnostics derives these labels from
+Non-sidebar row modes without the opt-in use `not-sidebar`. Diagnostics derives these labels from
 the request and existing response fields without changing the protocol payload.
 
 `openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
@@ -350,14 +403,14 @@ events, not rows or the number of views cleared. Causes are `projection-revision
 `config`, `identity`, `selection-reset`, `view-evicted` (the 512-slot or 32 MiB
 estimated-retention limit), and
 `history-evicted` (the 32-generation limit). Only clears or evictions retaining
-sidebar rows or history count, including empty sidebar row lists. Selection-only
-and non-sidebar views do not count. When a read observes multiple invalidations,
+conditional rows or history count, including empty row lists. Selection-only
+and non-conditional views do not count. When a read observes multiple invalidations,
 `config` takes precedence
 over `identity`, then `projection-revision`; an earlier selection reset already
 clears the cache and is counted separately at that point.
 
-`openclaw_sessions_list_base_misses_total{reason}` counts successful full sidebar
-replies with a supplied `ifRowsRevision`. `unknown-base` means no eligible history
+`openclaw_sessions_list_base_misses_total{reason}` counts successful full conditional
+replies with a nonempty `ifRowsRevision`. `unknown-base` means no eligible history
 base was found, including after restart, eviction, or a non-delta revision token.
 `all-rows-changed` means the base was found but the delta was not smaller than the
 full row list (also possible for an empty list). The existing `full-with-base`
@@ -927,8 +980,15 @@ attributes.
 # Gateway RPC requests per second by method
 sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
 
-# Outbound WebSocket event bytes per second by event, including fan-out
+# Raw outbound WebSocket event bytes per second by event, including fan-out
 sum by (event) (rate(openclaw_gateway_ws_event_bytes_total[5m]))
+
+# Post-codec outbound payload bytes per second by event
+sum by (event) (rate(openclaw_gateway_ws_event_wire_bytes_total[5m]))
+
+# p50 raw event frame size by event; use 0.90 for p90
+histogram_quantile(0.50,
+  sum by (event, le) (rate(openclaw_gateway_ws_event_frame_bytes[5m])))
 
 # Model catalog calls per minute by caller and request shape over ten minutes
 60 * sum by (client_kind, source, view, scope, refresh, prepared_only)

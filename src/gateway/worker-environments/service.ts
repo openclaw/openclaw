@@ -301,9 +301,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (active) {
       return await active;
     }
-    const operation = guard(environmentId, async (signal, retainProviderSettlement) => {
-      await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement);
-    });
+    const reconcile = reconcileEnvironmentCore.bind(null, environmentId);
+    const operation = guard(environmentId, reconcile, scope.signal);
     guardedReconcileInFlight.set(environmentId, operation);
     try {
       await operation;
@@ -438,6 +437,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     stopping = true;
+    options.nodeTunnelManager?.beginClose();
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
     providerLifecycle.clearMachineShapeListeners();

@@ -2,7 +2,7 @@
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type { TerminationReason } from "../process/supervisor/types.js";
 
 export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
@@ -56,12 +56,9 @@ export function normalizeNotifyOutput(value: string) {
 }
 
 export function compactNotifyOutput(value: string) {
-  const normalized = normalizeNotifyOutput(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= DEFAULT_NOTIFY_SNIPPET_CHARS) {
-    return normalized;
-  }
-  return `${truncateUtf16Safe(normalized, DEFAULT_NOTIFY_SNIPPET_CHARS - 1)}…`;
+  return truncateWithMarker(normalizeNotifyOutput(value), DEFAULT_NOTIFY_SNIPPET_CHARS, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: false,
+  });
 }

@@ -8,8 +8,6 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
-import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
@@ -57,6 +55,8 @@ export function resolveThinkingProfileForSession(
     target?.model ?? null,
     session?.agentRuntime?.id,
   );
+  const sessionRuntime = session?.agentRuntime?.id?.trim();
+  const defaultRuntime = defaults?.agentRuntime?.id?.trim();
   const candidates: Array<
     | Pick<
         ChatThinkingTarget,
@@ -65,7 +65,11 @@ export function resolveThinkingProfileForSession(
     | undefined
   > = [
     session,
-    sessionModelMatchesDefaults(session, defaults) ? defaults : undefined,
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model) &&
+    (!sessionRuntime || !defaultRuntime || sessionRuntime === defaultRuntime)
+      ? defaults
+      : undefined,
     catalogEntry,
   ];
   const profile = candidates.find(
@@ -174,10 +178,12 @@ function buildThinkingOptions(
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
   for (const level of levels) {
-    const normalizedValue = normalizeThinkingOptionValue(level.id);
-    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
-      formatThinkingOverrideLabel(normalizedValue, level.label),
-    );
+    const value = normalizeThinkingOptionValue(level.id);
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    options.push({ value, label: formatThinkingOverrideLabel(value, level.label) });
   }
   return options;
 }

@@ -11,8 +11,6 @@ export const LEASE_CONTENTION_RETRY_TIMEOUT_MS = 2_000;
 
 export const leaseHeartbeatState = {
   status: 0,
-  request: 1,
-  ack: 2,
   expiresAt: 3,
   lastRenewedAt: 4,
   startupPhase: 5,
@@ -59,10 +57,8 @@ export type LeaseHeartbeatWorkerData = {
   heartbeatMs: number;
   processOwner?: { identity: StateLeaseProcessOwner; env: NodeJS.ProcessEnv };
   shared: SharedArrayBuffer;
-  /** Odd while native renewal is in flight; progress is never lease authority. */
+  /** Odd while a native renewal must settle before worker termination. */
   renewalProgress: SharedArrayBuffer;
-  /** Latest completed asynchronous request; completion is never lease authority. */
-  completedRequest: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {
@@ -70,7 +66,7 @@ export type LeaseHeartbeatRequest = {
   operation: "verify" | "renew";
 };
 
-export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "activate" } | null;
+export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "activate" };
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure

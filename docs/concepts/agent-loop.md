@@ -51,6 +51,13 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
+Recovery history stays available across attempts within the same run. The run
+releases message payloads from replaced recovery envelopes and when it ends,
+including envelopes retained by copied attempt parameters. Each accepted
+transcript write keeps its original attempt's persistence callbacks until it
+finishes, even after a reused manager binds a newer attempt or the bounded
+teardown wait expires.
+
 ## Queueing and concurrency
 
 The session controller serializes turns by physical session identity before global capacity admission. Messaging channels choose a queue mode (steer/followup/collect/interrupt) over the same ordered inputs; direct native producers use that selector too. Nested compaction borrows the exact admitted turn rather than queuing behind itself. See [Command Queue](/concepts/queue).
@@ -203,6 +210,12 @@ The abort owner reserves that terminal before invoking cancellation listeners.
 The same publication decision covers agent frames, chat finals, progress snapshots,
 and session lifecycle notifications. Execution settlement and cleanup continue
 independently of event publication.
+
+Transport lease cleanup after connection recovery is best effort. Disposal errors
+are logged without changing the turn result, and cleanup waits use the existing
+agent cleanup budget (10 seconds by default). A discarded refresh candidate's
+cleanup failure leaves the previous transport available for the retry. A timeout
+does not certify that the underlying resources have closed.
 
 For completed `chat.send` turns, clients may request compaction, fork, or rewind
 as soon as they receive chat `final`. These requests join the published turn's

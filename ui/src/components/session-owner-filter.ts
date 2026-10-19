@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -125,15 +125,12 @@ export function createSessionOwnerFilterQuery(
       const prior = previous;
       previous = current;
       if (prior !== current) {
-        // Query dependencies are captured above; imperative admission rereads the current host.
-        const request = untrack(() => {
-          if (prior) {
-            host.sessionData.resetSessionList();
-          }
-          return userIntent
-            ? host.sessionData.refreshSidebarSessions()
-            : host.sessionData.scheduleSidebarSessions();
-        });
+        if (prior) {
+          host.sessionData.resetSessionList();
+        }
+        const request = userIntent
+          ? host.sessionData.refreshSidebarSessions()
+          : host.sessionData.scheduleSidebarSessions();
         pending = request;
         void request.finally(() => {
           if (pending === request) {
