@@ -64,6 +64,7 @@ it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
       sessionKey: sessionRouteKey,
       sessionResolutionFromCache: true,
     });
+    expect(result).not.toHaveProperty("canonicalLocation");
     expect(request).not.toHaveBeenCalled();
     expect(await new SessionSnapshotStore().read(prefix + sessionRouteKey)).toEqual(snapshot);
   },
