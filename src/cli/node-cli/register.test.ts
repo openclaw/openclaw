@@ -24,9 +24,17 @@ vi.mock("./daemon.js", () => daemonMocks);
 vi.mock("../../node-host/config.js", () => ({
   loadNodeHostConfig: daemonMocks.loadNodeHostConfig,
 }));
-vi.mock("../../node-host/runner.js", () => ({ runNodeHost: daemonMocks.runNodeHost }));
-vi.mock("../../node-host/worker.js", () => ({ runNodeHostWorker: daemonMocks.runNodeHostWorker }));
-vi.mock("../../runtime.js", () => ({ defaultRuntime: daemonMocks.defaultRuntime }));
+vi.mock("../../node-host/runner.js", () => ({
+  runNodeHost: daemonMocks.runNodeHost,
+}));
+
+vi.mock("../../node-host/worker.js", () => ({
+  runNodeHostWorker: daemonMocks.runNodeHostWorker,
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: daemonMocks.defaultRuntime,
+}));
 
 function createProgram(): Command {
   const program = new Command().exitOverride().configureOutput({
