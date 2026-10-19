@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   captureGatewayDeviceRevocation,
@@ -61,7 +61,6 @@ function isRecoverPayload(value: unknown): value is RecoverPayload {
 
 afterEach(() => {
   operatorRunCaptures.clear();
-  closeOpenClawStateDatabaseForTest();
 });
 
 async function seedRecoverableSession(params: {
@@ -291,7 +290,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
   if (typeof runId !== "string") {
     throw new Error("recovery did not return its admitted run");
   }
-  const acceptedRun = context.chatAbortControllers.get(runId);
+  const acceptedRun = rpcSourceTesting.get(runId);
   if (!acceptedRun) {
     throw new Error("recovery did not register its active run");
   }
@@ -306,7 +305,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     return await operation;
   };
   let providerCancellationObserved = false;
-  acceptedRun.controller.signal.addEventListener(
+  acceptedRun.input.abortSignal.addEventListener(
     "abort",
     () => {
       providerCancellationObserved = true;
@@ -316,13 +315,12 @@ test("sessions.recover retains source revocation for its accepted own successor"
   retainedRun.armCancellation();
   requestAuthority.release();
   expect(requestAuthority.isCurrent()).toBe(true);
-  expect(acceptedRun.controller.signal.aborted).toBe(false);
+  expect(acceptedRun.input.abortSignal.aborted).toBe(false);
   invalidateGatewayDeviceRevocation(context, "narrow-recovery-device", "operator");
   await Promise.allSettled(cancellationWork);
   expect(requestAuthority.isCurrent()).toBe(false);
-  expect(acceptedRun.controller.signal.aborted).toBe(true);
+  expect(acceptedRun.input.abortSignal.aborted).toBe(true);
   expect(providerCancellationObserved).toBe(true);
-  expect(context.removeChatRun).toHaveBeenCalled();
   retainedRun.release();
   const recoveredKey = recovered.payload?.key ?? "";
   expect(

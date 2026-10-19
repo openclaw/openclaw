@@ -39,6 +39,7 @@ import {
 } from "./chat-pane-session-controls.ts";
 import { resolveChatPaneUserPresentation } from "./chat-pane-session-presentation.ts";
 import {
+  chatWidgetRenderOptions,
   createSidebarFullMessageLoader,
   resolveSidebarLayoutForBoard,
 } from "./chat-pane-sidebar-layout.ts";
@@ -648,7 +649,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
-      ...this.widgetRenderOptions(state, board.provider),
+      ...chatWidgetRenderOptions(state, board.provider),
       onOpenSidebar: state.handleOpenSidebar,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,

@@ -5,11 +5,11 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
-import { mutateRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import {
   armRequesterWake,
   failedRecords,
   records,
+  settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
 
@@ -77,9 +77,9 @@ export function registerRequesterWakeOwnershipTests({
       persistOwner(input);
 
       await expect(
-        mutateRequesterCompletionBatch({
+        settleRequesterCompletionBatch({
           entries: [input.subagent],
-          operation: { kind: "complete" },
+
           context: captureOpenClawStateWorkerContext(),
           assertCurrent: () => {},
           onCommitted: () => {},

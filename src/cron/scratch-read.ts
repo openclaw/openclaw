@@ -42,7 +42,7 @@ export async function readCronScratchSnapshot(
     { context, current: true, signal },
   );
   assertCurrent();
-  if (!reply?.ok || reply.type !== command.type) {
+  if (!reply) {
     throw new Error("Cron scratch read did not return its admitted snapshot");
   }
   return reply.snapshot;

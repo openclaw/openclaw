@@ -138,7 +138,9 @@ call. The execution-start event still waits for complete arguments; input
 progress does not mean the tool has begun executing. If input generation is
 interrupted, a later text block does not mark the abandoned tool as started.
 
-Direct agent calls and child-completion updates share the same session reply policy.
+Direct agent calls, child-completion updates, and cron wakes targeting an existing
+chat share the same session reply policy. Announce wakes still require an explicit
+message target for that turn; isolated cron runs keep their own delivery policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
 authentication, workspace, and tool compatibility checks still apply.
 Each turn receives delivery instructions for its current mode and available tools,
@@ -440,6 +442,13 @@ The notice prefixes only that native user turn. OpenClaw keeps the original user
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes. A changed auth profile id, static API key, static token, or OAuth account identity all count, when the CLI exposes one. OAuth access and refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
+When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
+and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
+the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+The OpenClaw chat remains intact, and saved-history recovery follows the
+[history account boundaries](#history-account-boundaries) above. System-prompt-only
+changes continue to reuse the native session when the backend can resend the prompt.
+
 ## Fallback prelude from claude-cli sessions
 
 A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover). OpenClaw then seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript. That transcript lives under `~/.claude/projects/`, keyed per workspace. This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
@@ -459,6 +468,8 @@ imageMode: "repeat"
 ```
 
 OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths are passed as CLI args. If not, OpenClaw appends the file paths to the prompt (path injection), which works for CLIs that auto-load local files from plain paths.
+
+Images come from the current turn's attachments and explicit image references, including reply-to media supplied by the channel. Image paths in injected conversation history or runtime context do not become new attachments on later text-only turns. Starting a new session with `/new` still clears the native conversation binding.
 
 ## Inputs and outputs
 

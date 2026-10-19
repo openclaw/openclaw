@@ -5,11 +5,13 @@ import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 /** Projects CLI facts from the status owner's existing config and agent roster. */
 export function buildStatusCliProjection(
   cfg: OpenClawConfig,
-  agentList: Awaited<ReturnType<typeof listGatewayAgentsBasic>>,
+  agentList: Omit<Awaited<ReturnType<typeof listGatewayAgentsBasic>>, "defaultId"> & {
+    defaultId?: string;
+  },
 ) {
   return {
     agents: {
-      defaultId: agentList.selectionRequired ? null : agentList.defaultId,
+      defaultId: agentList.selectionRequired ? null : (agentList.defaultId ?? null),
       ownership: agentList.ownership,
       selectionRequired: agentList.selectionRequired,
       rows: agentList.agents.map(({ id, name }) => ({ id, ...(name ? { name } : {}) })),

@@ -141,9 +141,6 @@ export async function readWorkspaceStateSnapshot(
     });
     options.assertCurrent?.();
     assertFilesystem();
-    if (reply && (!reply.ok || reply.type !== "workspace.snapshot")) {
-      throw new Error("Unexpected workspace state snapshot result");
-    }
     return (
       reply?.snapshot ?? {
         identity: resolveWorkspaceStateIdentity(capturedWorkspaceDir),

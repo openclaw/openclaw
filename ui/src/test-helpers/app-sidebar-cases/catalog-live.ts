@@ -150,7 +150,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
     expect(local?.textContent).not.toContain("Gateway Mac");
     expect(local?.textContent).toContain("Local plan");
-    expectPullRequest(local, "#111751, #111772 · Merged");
+    expectPullRequest(local, "2 pull requests · #111751, #111772 · Merged");
     expect(local?.textContent).not.toContain("Remote review");
     expect(remote?.textContent).toContain("Build Node");
     expect(remote?.textContent).toContain("Remote review");

@@ -16,17 +16,14 @@ import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
-import {
-  agentDiscoveryMock,
-  embeddedRunMock,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   createCompactedSessionFixture,
   sessionStoreEntry,
@@ -472,7 +469,19 @@ test.each([undefined, "last-completed"] as const)(
         },
       ],
     });
-    embeddedRunMock.activeIds.add(parentSessionId);
+    const parentOperation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: "agent:main:main",
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
     try {
       const created = await directSessionReq<{ key: string; sessionId: string }>(
         "sessions.create",
@@ -514,7 +523,7 @@ test.each([undefined, "last-completed"] as const)(
         expect.objectContaining({ role: "assistant", stopReason: "stop" }),
       ]);
     } finally {
-      embeddedRunMock.activeIds.delete(parentSessionId);
+      parentOperation.complete();
       testState.sessionConfig = undefined;
     }
   },

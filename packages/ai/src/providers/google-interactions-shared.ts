@@ -37,6 +37,8 @@ import {
 } from "./google-interactions-request.js";
 import type { GoogleApiType, GoogleProviderOptions } from "./google-shared.js";
 
+let toolCallCounter = 0;
+
 export function resolveGoogleInteractionsApiKey<T extends GoogleApiType>(
   model: Model<T>,
   options?: GoogleProviderOptions,
@@ -79,9 +81,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   output: AssistantMessage;
   options?: GoogleProviderOptions;
   context: Context;
-  nextToolCallId: (name: string) => string;
 }): Promise<void> {
-  const { stream, model, output, options, context, nextToolCallId } = params;
+  const { stream, model, output, options, context } = params;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   try {
@@ -110,7 +111,6 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
 
     const googleClientHeaders = resolveGoogleApiClientHeaders({
       baseUrl,
-      api: "google-generative-ai",
       model,
     });
 
@@ -261,7 +261,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       const name = readStringField(source, "name") ?? "tool";
       const toolCall: ToolCall = {
         type: "toolCall",
-        id: readStringField(source, "id") ?? nextToolCallId(name),
+        id: readStringField(source, "id") ?? `${name}_${Date.now()}_${++toolCallCounter}`,
         name,
         arguments: args,
         partialJson: Object.keys(args).length > 0 ? JSON.stringify(args) : "",

@@ -99,9 +99,10 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                       |
 | Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search`, `tool_describe`, `dispatch_action`                                                   | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
 
-Session tools and `sessions_spawn` accept `user` (the requester's verified `requester_profile.id`) and
-act with that person's authority. It is required when several people have steered
-the turn. See [Session tools](/concepts/session-tool) and [Sub-agent tool reference](/tools/subagents/tool-reference).
+Session tools and `sessions_spawn` accept optional `user` (an admitted participant's
+verified `requester_profile.id`) and act with that person's authority. Omitting it
+keeps the execution's original requester, including after collaborative steering.
+Selection does not establish that the person requested or approved the action. See [Session tools](/concepts/session-tool) and [Sub-agent tool reference](/tools/subagents/tool-reference).
 
 On multi-user Gateways, `personal_instructions` reads and updates
 the authenticated requester’s personal `USER.md` through the Gateway, even when

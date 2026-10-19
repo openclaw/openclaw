@@ -4,6 +4,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,7 +128,7 @@ describe("opencode-go provider plugin", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it.each(["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3"] as const)(
+  it.each(["deepseek-v4-pro", "deepseek-v4.1-flash", "kimi-k3"] as const)(
     "keeps %s thinking per invocation on one standalone completion wrapper",
     async (modelId) => {
       const provider = await registerSingleProviderPlugin(plugin);
@@ -199,14 +200,14 @@ describe("opencode-go provider plugin", () => {
         provider: "opencode-go",
       });
     }
-    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+    expect(requireCatalogEntry(supplemental, "deepseek-v4-flash").status).toBe("deprecated");
     expect(provider.resolveDynamicModel?.({ modelId: "kimi-k2.6" } as never)).toMatchObject({
       id: "kimi-k2.6",
       input: ["text", "image"],
     });
     expect(provider.resolveDynamicModel?.({ modelId: "qwen3.8-max" } as never)).toMatchObject({
       api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen/go",
+      baseUrl: "https://opencode.ai/inference/go/anthropic",
       compat: { thinkingFormat: "qwen" },
     });
     expect(
@@ -269,7 +270,7 @@ describe("opencode-go provider plugin", () => {
       id: "ox-alpha-free",
       name: "Ox Alpha Free (Unlimited)",
       api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/go/v1",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
       input: ["text", "image"],
       contextWindow: 1_000_000,
       maxTokens: 131_072,
@@ -277,17 +278,17 @@ describe("opencode-go provider plugin", () => {
     });
     expect(result.models[1]).toMatchObject({
       api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen/go",
+      baseUrl: "https://opencode.ai/inference/go/anthropic",
       cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
     });
     expect(result.models[2]).toMatchObject({
       provider: "opencode-go",
       api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/go/v1",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
       input: ["text"],
     });
     const listingRequest = fetchGuard.mock.calls.find(
-      ([request]) => request.url === "https://opencode.ai/zen/go/v1/models",
+      ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
     )?.[0];
     expect(new Headers(listingRequest?.init?.headers).get("user-agent")).toMatch(/^openclaw\//);
 
@@ -295,7 +296,7 @@ describe("opencode-go provider plugin", () => {
     expect(provider.resolveDynamicModel?.({ modelId: "legacy-model" } as never)).toBeUndefined();
     const supplemental = await provider.augmentModelCatalog?.({ entries: [] } as never);
     expect(requireCatalogEntry(supplemental, "legacy-model").status).toBe("deprecated");
-    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+    expect(requireCatalogEntry(supplemental, "deepseek-v4-flash").status).toBe("deprecated");
   });
 
   it("never resolves another account's upstream-only Go model outside its authenticated catalog", async () => {
@@ -362,7 +363,10 @@ describe("opencode-go provider plugin", () => {
     ).resolves.toMatchObject({
       models: [
         expect.objectContaining({ id: "replacement-model" }),
-        expect.objectContaining({ id: "unsafe-model", baseUrl: "https://opencode.ai/zen/go/v1" }),
+        expect.objectContaining({
+          id: "unsafe-model",
+          baseUrl: "https://opencode.ai/inference/go/openai/v1",
+        }),
       ],
     });
 
@@ -370,7 +374,7 @@ describe("opencode-go provider plugin", () => {
     const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
     expect(entries?.some((entry) => entry.id === "withdrawn-model")).toBe(false);
     expect(entries?.some((entry) => entry.id === "unsafe-model")).toBe(false);
-    expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
+    expect(requireCatalogEntry(entries, "kimi-k2.6").status).toBe("deprecated");
   });
 
   it("exposes only trusted offline starter models through provider discovery", async () => {
@@ -381,7 +385,9 @@ describe("opencode-go provider plugin", () => {
       throw new Error("expected OpenCode Go static provider");
     }
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
-    const deepSeekFlash = result.provider.models.find((model) => model.id === "deepseek-v4-flash");
+    const deepSeekFlash = result.provider.models.find(
+      (model) => model.id === "deepseek-v4.1-flash",
+    );
     const modelIds = result.provider.models.map((model) => model.id);
     expect(new Set(modelIds).size).toBe(modelIds.length);
     expect(modelIds.toSorted()).toEqual(ACTIVE_MODEL_IDS.toSorted());
@@ -398,6 +404,8 @@ describe("opencode-go provider plugin", () => {
       compat: { supportedReasoningEfforts: ["low", "high", "max"] },
     });
     expect(modelIds).not.toContain("hy3-preview");
+    expect(modelIds).not.toContain("deepseek-v4-flash");
+    expect(modelIds).not.toContain("kimi-k2.6");
   });
 
   it("skips unrelated scoped discovery even when OpenCode credentials are configured", async () => {
@@ -510,6 +518,42 @@ describe("opencode-go provider plugin", () => {
 
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
   });
+
+  it.each([
+    ["openai-completions", "https://opencode.ai/inference/go/openai/v1"],
+    ["openai-responses", "https://opencode.ai/inference/go/openai/v1"],
+    ["anthropic-messages", "https://opencode.ai/inference/go/anthropic/v1"],
+    ["google-generative-ai", "https://opencode.ai/inference/go/google/v1beta"],
+  ] as const)(
+    "keeps Go client and conversation identity on migrated %s routes",
+    async (api, baseUrl) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const model = { provider: "opencode-go", id: "fixture-model", api, baseUrl };
+      for (const turnId of ["turn-1", "turn-2"]) {
+        const turnState = provider.resolveTransportTurnState?.({
+          provider: model.provider,
+          modelId: model.id,
+          model,
+          sessionId: "conversation-123",
+          turnId,
+          attempt: 1,
+          transport: "stream",
+        } as never);
+        expect(turnState?.headers).toEqual({ "x-opencode-session": "conversation-123" });
+        expect(
+          resolveProviderRequestHeaders({
+            provider: model.provider,
+            api,
+            baseUrl,
+            callerHeaders: turnState?.headers,
+          }),
+        ).toMatchObject({
+          "User-Agent": expect.stringMatching("^openclaw/"),
+          "x-opencode-session": "conversation-123",
+        });
+      }
+    },
+  );
 
   it("attaches a stable conversation id only to native OpenCode Go requests", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
@@ -628,6 +672,9 @@ describe("opencode-go provider plugin", () => {
     ["deepseek-v4-flash", "low", "low"],
     ["deepseek-v4-flash", "high", "high"],
     ["deepseek-v4-flash", "max", "max"],
+    ["deepseek-v4.1-flash", "low", "low"],
+    ["deepseek-v4.1-flash", "high", "high"],
+    ["deepseek-v4.1-flash", "max", "max"],
   ] as const)(
     "maps OpenCode Go %s thinking %s to %s reasoning effort",
     async (modelId, thinkingLevel, reasoningEffort) => {
@@ -709,7 +756,7 @@ describe("opencode-go provider plugin", () => {
       } as never),
       "normalized config",
     );
-    expect(normalizedConfig.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(normalizedConfig.baseUrl).toBe("https://opencode.ai/inference/go/openai/v1");
 
     const normalizedModel = requireRecord(
       provider.normalizeResolvedModel?.({
@@ -729,7 +776,7 @@ describe("opencode-go provider plugin", () => {
       } as never),
       "normalized model",
     );
-    expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(normalizedModel.baseUrl).toBe("https://opencode.ai/inference/go/openai/v1");
 
     const normalizedKimi = requireRecord(
       provider.normalizeResolvedModel?.({
@@ -762,7 +809,7 @@ describe("opencode-go provider plugin", () => {
       } as never),
     ).toEqual({
       api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/go/v1",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
     });
 
     expect(
@@ -773,7 +820,7 @@ describe("opencode-go provider plugin", () => {
       } as never),
     ).toEqual({
       api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen/go",
+      baseUrl: "https://opencode.ai/inference/go/anthropic",
     });
   });
 });

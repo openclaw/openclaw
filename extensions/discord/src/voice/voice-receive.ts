@@ -57,11 +57,11 @@ export class DiscordVoiceReceive {
       bindCaptureReceipts: (entry: VoiceSessionEntry) => DiscordCaptureReceiptReader;
       accountId: string;
       admissionAllowFrom?: string[];
-      botUserId: () => string | undefined;
+      botUserId?: string;
       cfg: OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
-      getSession: (guildId: string) => VoiceSessionEntry | undefined;
+      sessions: ReadonlyMap<string, VoiceSessionEntry>;
       isEntryCurrent: (entry: VoiceSessionEntry) => boolean;
       isFollowOwnedGuild: (guildId: string) => boolean;
       join: (
@@ -100,7 +100,7 @@ export class DiscordVoiceReceive {
       return;
     }
 
-    if (userId === this.params.botUserId()) {
+    if (userId === this.params.botUserId) {
       return;
     }
     this.params.membership.notePresent(entry, userId);
@@ -478,7 +478,6 @@ export class DiscordVoiceReceive {
       ...this.params,
       entry,
       userId,
-      botUserId: this.params.botUserId(),
     });
   }
 
@@ -525,7 +524,7 @@ export class DiscordVoiceReceive {
     let recovery: Promise<unknown>;
     if (force) {
       if (
-        this.params.getSession(entry.guildId) !== entry ||
+        this.params.sessions.get(entry.guildId) !== entry ||
         entry.sessionLifecycle.status === "stopped" ||
         entry.receiveRecovery.decryptRecoveryInFlight
       ) {
@@ -573,7 +572,7 @@ export class DiscordVoiceReceive {
   }
 
   private async recoverFromDecryptFailures(entry: VoiceSessionEntry): Promise<void> {
-    const active = this.params.getSession(entry.guildId);
+    const active = this.params.sessions.get(entry.guildId);
     if (!active || active.audio !== entry.audio) {
       return;
     }

@@ -4,9 +4,7 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
-import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
   isSessionWorkStartInvalidatedError,
@@ -20,11 +18,11 @@ import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/ses
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
-  isCompetingSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  captureSessionTarget,
+  runSessionMutation,
+  SessionMutationPreemptTimeoutError,
+} from "../../sessions/session-controller.lifecycle.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { hasPreparedGatewayDeviceAuthority } from "../device-revocation.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -153,11 +151,25 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         agentId: requestedAgentId,
         defaultAgentId: compatibilityDefaultAgentId,
         signal: abortSignal,
+        liveRuns: "preempt",
       });
-      await runExclusiveSessionLifecycleMutation("compact", {
-        scope: storePath,
-        identities: lifecycleIdentities,
+      await runSessionMutation({
+        diagnosticLabel: "compact",
+        target: captureSessionTarget({
+          storeScope: storePath,
+          sessionKey: target.canonicalKey,
+          aliases: lifecycleIdentities,
+          incarnation: sessionId,
+          agentId: target.agentId,
+        }),
         kind: "compaction",
+        policy: "preempt",
+        preempt: {
+          activeRun: "abort-if-abortable",
+          waitingInputs: "keep",
+          shouldPreempt: () => admissionError === undefined && compactionNoopReason === undefined,
+        },
+        assertCurrent: assertRequestCurrent,
         signal: abortSignal,
         prepare: async () => {
           assertRequestCurrent();
@@ -190,36 +202,38 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           }
           const blockedByActiveRun =
             !terminalSettled ||
-            isCompetingSessionWorkAdmissionActive(storePath, lifecycleIdentities) ||
             (getWorkerInferenceSessionControl(context.workerEnvironmentService)?.hasSession(
               sessionId,
             ) ??
-              false) ||
-            resolveVisibleActiveSessionRunState({
-              context,
-              requestedKey: key,
-              canonicalKey: target.canonicalKey,
-              sessionId,
-              agentId: requestedAgentId,
-              defaultAgentId: compatibilityDefaultAgentId,
-            }).active;
-          // Accepted work can live only in its command lane; waiting behind it
-          // while holding the lifecycle fence would deadlock or drop that turn.
-          const blockedByQueuedWork =
-            hasPendingFollowupQueueWork(queueIdentities) ||
-            queueIdentities.some(
-              (identity) =>
-                getCommandLaneSnapshot(resolveEmbeddedSessionLane(identity)).queuedCount > 0,
-            );
-          if (blockedByQueuedWork || blockedByActiveRun) {
+              false);
+          if (blockedByActiveRun) {
             admissionError = errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `Session ${key} has ${blockedByQueuedWork ? "queued work" : "an active run"}; retry after it finishes.`,
+              `Session ${key} has an active run; retry after it finishes.`,
             );
           }
         },
         run: async () => {
           assertRequestCurrent();
+          // The controller has settled its captured competitors; remote projections still block.
+          if (
+            !admissionError &&
+            !compactionNoopReason &&
+            resolveVisibleActiveSessionRunState({
+              storePath,
+              resolveGatewayContext: context.resolveGatewayContext,
+              requestedKey: key,
+              canonicalKey: target.canonicalKey,
+              sessionId,
+              agentId: requestedAgentId,
+              defaultAgentId: compatibilityDefaultAgentId,
+            }).active
+          ) {
+            admissionError = errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session ${key} has an active run; retry after it finishes.`,
+            );
+          }
           if (admissionError) {
             respond(false, undefined, admissionError);
             return;
@@ -427,6 +441,17 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         },
       });
     } catch (err) {
+      if (err instanceof SessionMutationPreemptTimeoutError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Session ${key} has an active run; retry after it finishes.`,
+          ),
+        );
+        return;
+      }
       respond(
         false,
         undefined,

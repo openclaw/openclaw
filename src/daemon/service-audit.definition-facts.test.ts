@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildLaunchAgentEnvironmentWrapper } from "./launchd-env-wrapper.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import "./test-helpers/service-audit-mocks.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
-  buildLaunchAgentEnvironmentWrapper,
   resolveLaunchAgentPlistPath,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,

@@ -1,4 +1,7 @@
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../../gateway/server-methods/types.js";
 import {
   getGatewayContextBindingSlot,
   prepareGatewayContextBindingOwner,
@@ -116,10 +119,8 @@ export function hasGatewayContextOwner(
   gatewayOwner: GatewayContextResolver,
 ): boolean {
   const resolver = getGatewayContextResolver(owner);
-  // A lifetime wrapper records one canonical host owner; it remains the execution binding.
-  return (
-    resolver !== undefined && (getGatewayContextResolver(resolver) ?? resolver) === gatewayOwner
-  );
+  // Nested lifetime wrappers retain their execution binding but share one canonical host.
+  return resolver !== undefined && getCanonicalGatewayContextResolver(resolver) === gatewayOwner;
 }
 
 export function clearGatewayContextResolver(owner: object): boolean {
@@ -166,4 +167,32 @@ export function getSharedGatewayContextResolver(
     bindGatewayContextResolver(shared, owner);
   }
   return shared;
+}
+
+// Freeze the admitted instance: a later resolver result is a replacement,
+// which retires this caller's routing authority instead of transferring it.
+export function captureGatewayContextResolver(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+): GatewayContextResolver | undefined {
+  if (!resolveGatewayContext) {
+    return undefined;
+  }
+  let admittedContext: GatewayRequestContext | undefined;
+  try {
+    admittedContext = resolveGatewayContext();
+  } catch {
+    return () => undefined;
+  }
+  if (!admittedContext) {
+    return () => undefined;
+  }
+  const resolveAdmittedContext = () => {
+    try {
+      return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
+  return resolveAdmittedContext;
 }

@@ -24,7 +24,8 @@ vi.mock("../../logging/subsystem.js", async () => {
 });
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
@@ -470,7 +471,7 @@ describe("SQLite historical session disk budget", () => {
     ]);
     await reset(sessionKey, "live-history", Date.now());
     addRouteReference("route-only", "route-history");
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: ["admitted-history"],
       assertAllowed: () => {},
@@ -498,12 +499,12 @@ describe("SQLite historical session disk budget", () => {
     const owner = database();
     const archive = await import("./session-accessor.sqlite-archive.js");
     const materialize = archive.materializeSessionHistoryEvictionPlan;
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     vi.spyOn(archive, "materializeSessionHistoryEvictionPlan").mockImplementationOnce(
       async (input) => {
         const prepared = await materialize(input);
         expect(prepared?.archive?.bytes.byteLength).toBeGreaterThan(0);
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey],
           assertAllowed: () => {},
@@ -719,6 +720,51 @@ describe("SQLite historical session disk budget", () => {
         expect.objectContaining({ storePath }),
       );
     });
+  });
+
+  it("finishes a budget sweep kicked inside a turn after that turn is stopped", async () => {
+    // Entry writes kick the store-wide sweep from inside turns; stopping the turn must not
+    // cancel the sweep's eviction mutation through the turn's controller context.
+    await createHistoricalTranscript({
+      content: "kicked " + "x".repeat(64 * 1024),
+      nextSessionId: "kicked-live",
+      sessionId: "kicked-old",
+      sessionKey: "agent:main:kicked-history",
+      updatedAt: 10,
+    });
+    settlePhysicalUsage();
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+    const maintenanceConfig = resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxDiskBytes: before.totalBytes - 1,
+      highWaterBytes: before.totalBytes - 1,
+    });
+    evictionWarnSpy.mockClear();
+    const stop = new AbortController();
+    await withSessionTurn(
+      {
+        storePath,
+        sessionKey: "agent:main:kicking-turn",
+        sessionId: "kicking-turn-session",
+        abortSignal: stop.signal,
+      },
+      async () => {
+        kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
+        stop.abort(new Error("turn stopped"));
+      },
+    );
+    await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+    });
+
+    expect(evictionWarnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("disk-budget sweep failed"),
+      expect.anything(),
+    );
+    expect(sessionExists("kicked-old")).toBe(false);
+    expect(readArchiveNames("kicked-old")).toHaveLength(1);
   });
 
   it("inspects history after the archive probe loses its cached handle", async () => {

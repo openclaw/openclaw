@@ -6,7 +6,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -25,14 +25,14 @@ export async function prepareCronSessionWorkspace(params: {
   sessionKey: string;
   cronSession: MutableCronSession;
   defaultWorkspaceDir: string;
-  sessionWorkAdmission: SessionWorkAdmissionLease;
+  sessionPreparationEffect: SessionEffectRef;
   isFastTestEnv: boolean;
 }) {
-  const { sessionWorkAdmission, sessionKey } = params;
+  const { sessionKey } = params;
   const abortSignal = params.input.abortSignal ?? params.input.signal;
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
-    if (!sessionWorkAdmission.isActive()) {
+    if (!params.sessionPreparationEffect.isActive()) {
       throw new CronSessionLifecycleClaimError(sessionKey);
     }
   };

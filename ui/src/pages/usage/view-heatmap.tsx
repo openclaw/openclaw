@@ -63,7 +63,9 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
               }
               const tooltip = () =>
                 `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
-                  tokens: numberFormat.format(day.tokens),
+                  tokens: day.partial
+                    ? t("usage.common.atLeast", { value: numberFormat.format(day.tokens) })
+                    : numberFormat.format(day.tokens),
                 })}`;
               return (
                 <rect

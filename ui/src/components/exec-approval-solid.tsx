@@ -20,6 +20,7 @@ import "./modal-dialog.ts";
 export type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   errors: ReadonlyMap<string, string>;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
@@ -126,7 +127,14 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
     const handleKeydown = (event: KeyboardEvent) => {
       const props = bridgeProps.props;
       const request = active();
-      if (!request || event.defaultPrevented || event.repeat || props?.busy || !props?.canGrant) {
+      if (
+        !request ||
+        event.defaultPrevented ||
+        event.repeat ||
+        props?.busy ||
+        !props?.connected ||
+        !props?.canGrant
+      ) {
         return;
       }
       const decision = shortcutDecision(event);
@@ -158,6 +166,7 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
                 props={{
                   approval: active()!,
                   busy: bridgeProps.props!.busy,
+                  connected: bridgeProps.props!.connected,
                   canGrant: bridgeProps.props!.canGrant,
                   error: bridgeProps.props!.errors.get(active()!.id) ?? null,
                   variant: "modal",

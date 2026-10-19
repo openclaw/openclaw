@@ -21,7 +21,3 @@ export function openAiPluginPersonalityConfig(personality: "friendly" | "off"): 
     },
   } satisfies OpenClawConfig;
 }
-
-export function sharedGpt5PersonalityConfig(_personality: "friendly" | "off"): OpenClawConfig {
-  return {};
-}

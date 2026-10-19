@@ -6,13 +6,12 @@ import {
   For,
   onSettled,
   Show,
-  untrack,
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { projectGatewayEventLog } from "../../lib/reactive/application.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
@@ -28,9 +27,7 @@ import {
 
 type SectionState = { status: "loading" | "unavailable" } | { status: "ready"; value: unknown };
 
-function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
-  // The keyed parent gives each Gateway source its own request lifetime.
-  const source = untrack(() => props.gateway);
+function Content(source: ApplicationGateway, props: { minimized: boolean }) {
   const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
   const [sections, setSections] = createStore<Record<string, SectionState>>({});
@@ -240,10 +237,10 @@ export const DebugOverlayContent = defineSolidBridge<Props>(
   "openclaw-debug-overlay-content",
   (props) => {
     // A bridge's provider ancestry is fixed for this renderer lifetime.
-    const inherited = untrack(() => props.context) ? undefined : useApplication();
+    const inherited = useOptionalApplication();
     return (
       <Show when={(props.context ?? inherited)?.gateway} keyed>
-        {(gateway) => <Content gateway={gateway} minimized={props.minimized} />}
+        {(gateway) => Content(gateway, props)}
       </Show>
     );
   },

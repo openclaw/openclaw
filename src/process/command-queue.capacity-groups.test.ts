@@ -6,7 +6,6 @@ import {
   getCommandLaneSnapshot,
   publishLaneConfiguration,
   resetAllLanes,
-  resetCommandLane,
   setCommandLaneConcurrency,
 } from "./command-queue.js";
 import { CommandLane } from "./lanes.js";
@@ -169,7 +168,7 @@ describe("command lane capacity groups", () => {
     await newerHook;
   });
 
-  test("multi-slot reset re-arbitrates before stale completions arrive", async () => {
+  test("multi-slot restart re-arbitrates before stale completions arrive", async () => {
     configure(2);
     const staleGates = [createDeferred(), createDeferred()];
     const staleHooks = staleGates.map((g) =>
@@ -180,7 +179,7 @@ describe("command lane capacity groups", () => {
     const queuedHooks = queuedHookGates.map((g) =>
       enqueueCommandInLane(HOOK, async () => await g.promise, { priority: "background" }),
     );
-    expect(resetCommandLane(HOOK)).toBe(2);
+    resetAllLanes();
     expectCounts(CRON, 1, 0);
     expectCounts(HOOK, 1, 1);
     expect(getCommandLaneSnapshot(HOOK).groupActive).toBe(2);
@@ -289,7 +288,7 @@ describe("command lane capacity groups", () => {
     // `cron` awaits `cron-nested`; grouping them turns a wait into a deadlock.
     for (const lane of [
       "cron",
-      "session:abc",
+      "session:probe-setup-inference:openai",
       "subagent:agent:main:parent",
       "main",
       CommandLane.SystemAgent,

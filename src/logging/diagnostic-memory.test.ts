@@ -1,5 +1,6 @@
 // Diagnostic memory tests cover pressure events and diagnostic log output.
 import { channel } from "node:diagnostics_channel";
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -10,7 +11,11 @@ import {
 import * as workerMemory from "../infra/worker-cpu.js";
 import * as workerMessages from "../infra/worker-message-metrics.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  emitDiagnosticMemorySample,
+  createDiagnosticMemorySampler,
+  resetDiagnosticMemoryForTest,
+} from "./diagnostic-memory.js";
 import {
   readLatestDiagnosticStabilityBundleSync,
   uninstallDiagnosticStabilityFatalHook,
@@ -72,6 +77,7 @@ describe("diagnostic memory", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     stopDiagnosticStabilityRecorder();
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
@@ -80,6 +86,66 @@ describe("diagnostic memory", () => {
     resetDiagnosticStabilityRecorderForTest();
     setLoggerOverride(null);
     resetLogger();
+  });
+
+  it("publishes Linux anonymous pages in bytes and omits unavailable later samples", async () => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    const readFile = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue("Name:\topenclaw\nVmRSS:\t9000 kB\nRssAnon:\t1234 kB\nVmSwap:\t0 kB\n");
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const sampleMemory = createDiagnosticMemorySampler(() => true);
+    try {
+      sampleMemory(true);
+      await flushDiagnosticEvents();
+      expect(events[0]).toMatchObject({
+        type: "diagnostic.memory.sample",
+        memory: { anonymousRssBytes: 1_263_616, anonymousSwapBytes: 0 },
+      });
+
+      for (const result of ["unreadable", "Name:\topenclaw\nRssAnon:\tunknown kB\n"]) {
+        if (result === "unreadable") {
+          readFile.mockRejectedValueOnce(new Error("proc unavailable"));
+        } else {
+          readFile.mockResolvedValueOnce(result);
+        }
+        events.length = 0;
+        sampleMemory(true);
+        await flushDiagnosticEvents();
+        const sample = events.find((event) => event.type === "diagnostic.memory.sample");
+        expect(sample).toBeDefined();
+        expect(sample?.memory).not.toHaveProperty("anonymousRssBytes");
+        expect(sample?.memory).not.toHaveProperty("anonymousSwapBytes");
+      }
+    } finally {
+      stop();
+    }
+  });
+
+  it("skips proc off Linux and discards a sample after its heartbeat retires", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const readFile = vi.spyOn(fs, "readFile").mockResolvedValue("RssAnon:\t1234 kB\n");
+    let current = true;
+    const sampleMemory = createDiagnosticMemorySampler(() => current);
+    try {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
+      sampleMemory(true);
+      expect(readFile).not.toHaveBeenCalled();
+      expect(events[0]).toMatchObject({ type: "diagnostic.memory.sample" });
+
+      vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+      events.length = 0;
+      sampleMemory(false);
+      expect(readFile).not.toHaveBeenCalled();
+      sampleMemory(true);
+      current = false;
+      await flushDiagnosticEvents();
+      expect(events).toEqual([]);
+    } finally {
+      stop();
+    }
   });
 
   it("defers the default heap probe until a sample needs it and then reuses it", async () => {

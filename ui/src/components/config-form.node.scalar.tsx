@@ -1,7 +1,7 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createMemo, untrack } from "solid-js";
+import { For, createEffect, createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
@@ -29,6 +29,7 @@ import {
 } from "./config-form.numeric.ts";
 import {
   beginScalarEdit,
+  bindControlError,
   finishScalarEdit,
   scalarEditHintForInput,
   scalarValueBranch,
@@ -140,6 +141,7 @@ function ScalarInput(props: {
   stepped: boolean;
 }): JSX.Element {
   let input!: HTMLInputElement | HTMLTextAreaElement;
+  let error: HTMLSpanElement | undefined;
   let initialized = false;
   const state = createMemo(() => {
     const params = props.params;
@@ -271,8 +273,8 @@ function ScalarInput(props: {
       current.revalidate,
     );
   });
-  let patchSource = untrack(() => props.params.value);
-  let patchedValue = patchSource;
+  let patchSource: unknown;
+  let patchedValue: unknown;
   const commitScalarValue = (
     target: HTMLInputElement | HTMLTextAreaElement,
     candidate: unknown,
@@ -359,6 +361,9 @@ function ScalarInput(props: {
   const controlProps = {
     ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
       input = element;
+      if (error) {
+        bindControlError(element, error);
+      }
     },
     get class() {
       return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
@@ -489,6 +494,12 @@ function ScalarInput(props: {
     <FieldRow
       {...state().field}
       errorId={state().errorId}
+      errorRef={(element) => {
+        error = element;
+        if (input) {
+          bindControlError(input, element);
+        }
+      }}
       defaultDescription={
         state().effectiveRedacted || state().masked
           ? undefined

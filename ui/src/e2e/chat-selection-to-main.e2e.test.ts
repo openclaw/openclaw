@@ -552,6 +552,8 @@ suite.define(() => {
             await addComment(page, "Review before deployment.");
             await pin.waitFor({ state: "visible" });
           };
+          await selectedSource(page).waitFor({ state: "visible" });
+          await waitForChatScrollIdle(page);
           await saveComment();
           await pin.click();
           await submitComment(comment, "Check rollback first.", "Save");

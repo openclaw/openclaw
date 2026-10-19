@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as cliCredentials from "../agents/cli-credentials.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import * as probes from "./probes.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
@@ -165,15 +167,14 @@ it.each([
     const snapshot = await readSnapshot();
     expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
 
+    vi.spyOn(probes, "probeLocalCommand").mockImplementation(async (command) => ({
+      found: false,
+      command,
+    }));
+    vi.spyOn(cliCredentials, "hasCodexCliAuthFile").mockReturnValue(false);
     const candidates = await detectInferenceBackends({
       config: snapshot.runtimeConfig,
       agentId: "main",
-      env: {},
-      platform: "linux",
-      deps: {
-        probeLocalCommand: async (command) => ({ found: false, command }),
-        hasCodexCliAuthFile: () => false,
-      },
     });
     const discovered = candidates.find((candidate) => candidate.kind === "existing-model");
     expect(discovered?.modelRef).toBe(expected);

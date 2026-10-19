@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configIO from "../../config/io.factory.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -159,7 +160,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   const currentConfig = { plugins: { enabled: false } };
   await state.writeConfig(currentConfig);
-  await seedInstalledPluginIndex({}, { config: currentConfig, env: state.env });
+  const installRecords: Record<string, PluginInstallRecord> =
+    scenario === "host-link-recovery"
+      ? { "peer-plugin": { source: "npm", installPath: peerPackageDir } }
+      : {};
+  await seedInstalledPluginIndex(installRecords, { config: currentConfig, env: state.env });
   const readConfig = () => fs.readFile(state.configPath, "utf8");
   const originalConfig = await readConfig();
   const diagnosticPath = await state.writeText("retained-diagnostic.json", "retained diagnostic\n");
@@ -174,7 +179,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   };
   let created = createUpdateRun({ trigger: "cli" }, { env: state.env });
   const readRun = (runId = created.runId) => getUpdateRun(runId, { env: state.env });
-  let preUpdatePluginInstallRecords = {};
+  let preUpdatePluginInstallRecords = installRecords;
   const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
   let indexAtConvergence: ReturnType<typeof readIndex>;
   let indexAtRevocation: ReturnType<typeof readIndex>;

@@ -20,6 +20,9 @@ retry it.
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
+For turn ownership, queueing, stopping, and lifecycle mutation rules, see
+[Session controller](/concepts/session-controller).
+
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
@@ -323,16 +326,22 @@ available for a fresh authenticated message; recovery never substitutes system
 authority. Temporary startup, binding, or access-policy availability failures keep
 their recovery claims and retry.
 
-If a delegated turn's sender authority cannot be reconstructed, automatic recovery
-stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice offers **Resume** in WebChat. The click supplies current operator
-authority and continues the saved task in the same session. A saved
-delegation alone does not authorize replay after restart.
+If a delegated turn's sender authority cannot be reconstructed and no pending
+reply, harness completion, or independent run remains owed, recovery ends only that
+turn. One local interruption notice and terminal source receipt prevent replay;
+the same session and transcript remain available for a fresh authenticated message.
+Recovery does not send the notice to an external channel. Saved delegation alone
+does not authorize replay after restart.
+
+Turns with remaining custody retain the existing recovery block. **Resume** in
+WebChat supplies current operator authority to continue the saved task in the same
+session after its outstanding delivery settles.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.
-Stopping or replacing the session still cancels pending work.
+Stopping or replacing the session still cancels pending work. A recovery resend
+stopped during preparation stays canceled and is not replayed on the next startup.
 
 If subagent recovery changes session-protection facts while an incoming turn is
 being prepared, reply initialization refreshes those facts and retries within its

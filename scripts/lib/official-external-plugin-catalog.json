@@ -801,6 +801,24 @@
       }
     },
     {
+      "name": "@openclaw/subq",
+      "description": "OpenClaw SubQ Snap decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "subq",
+          "label": "SubQ"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/subq",
+          "npmSpec": "@openclaw/subq",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",

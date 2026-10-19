@@ -16,6 +16,12 @@ session operation does not initialize unrelated cron, secrets, transcript, or
 update handlers. The worker backend still owns database handles, write admission,
 and cleanup; lazy loading changes code residency, not database ownership.
 
+On Windows, path casing and extended-length prefixes do not create separate
+maintenance owners. An "undergoing offline maintenance" error identifies another
+process holding state. An "Internal state ownership error" instead means the
+current command lost its maintenance scope; retry the command and report the
+error if it persists.
+
 ## Integrity checks
 
 Admission validates SQLite format, schema, required indexes, and required
@@ -597,6 +603,17 @@ agent restoration owner revalidates the selected configured paths before
 releasing their holds; normal migrations then prepare them for Gateway startup.
 Repeating Doctor after successful restoration does not restore or back up these stores again.
 
+Reserved system agents (`openclaw` and `crestodian`) cannot be deleted, so journal
+reconstruction no longer creates deletion-recovery holds for them. `doctor --fix`
+reconciles existing reserved holds, including the quarantine receipts left by
+2026.10.5, only when the canonical store's path and internal agent identity match,
+its integrity is healthy, and no deletion row remains. It first preserves verified
+full backups of the agent store and shared recovery records, releases only that
+hold, and lets normal migrations advance the store. Other holds retain their
+existing restoration rules. Until repair succeeds, startup degrades an unmigrated
+held store with a warning naming `openclaw doctor --fix` instead of failing the
+whole Gateway.
+
 This policy accepts the small risk of resurrecting data from a lost pending
 deletion when the entire journal disappeared. A missing-table observation is
 not proof that no journal ever existed. Present-but-incomplete journals,
@@ -663,6 +680,12 @@ remain separate, with no cached readiness result shared between them.
 
 ### Startup on multi-agent hosts
 
+Startup and Gateway agent listing share the configured-plus-reserved agent roster.
+Existing native databases for reserved system agents (`openclaw` and `crestodian`)
+receive inspection and deferred session preparation without an `agents.entries`
+entry. Registered databases that no configured or reserved agent owns remain
+skipped; use Doctor to inspect their retained data.
+
 Foreground startup agent-database checks and session startup maintenance are
 limited to two databases at a time. Each inspection's
 size-derived foreground allowance starts when its scheduled inspection begins, so waiting for a
@@ -693,6 +716,11 @@ and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Operator `send` requests check admission before delivery even when they specify
+only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
+startup refusal. Failed inspection keeps refusing delivery with the recorded
+repair guidance after startup work settles.
 
 Startup deletion-journal checks use at most eight concurrent reads, so releasing
 more than 128 agents from preparation readiness does not exhaust the shared
@@ -799,12 +827,12 @@ uninstalled copies from its identity-marked staging directories, retains any
 exchanged originals, and skips files that already have NOCOW. Unmarked backups
 from older or unknown operations are never deleted automatically.
 
-The official Debian bookworm Docker image cannot perform this optional repair:
-its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
-`fuser` (the `psmisc` package) or `getfacl`/`setfacl` (the `acl` package).
-A derived image needs those tools and an exchange-capable GNU `mv`, as well as
-kernel/filesystem support on the mounted state volume. Updates still proceed
-with the existing stores.
+The official Debian trixie Docker image includes an exchange-capable GNU `mv`,
+`fuser` (`psmisc`), `getfacl`/`setfacl` (`acl`), and `lsattr`/`chattr`
+(`e2fsprogs`). The mounted state volume still needs kernel/filesystem support.
+Older bookworm-based images lack the required tools; recreate the container
+with a current image before retrying. Unsupported hosts still proceed with
+updates using the existing stores.
 
 After publication, Doctor re-records the identity of each destination database
 it rewrites so `update cleanup` eligibility survives the rewrite. Recorded
@@ -1117,6 +1145,29 @@ are preserved. Page or b-tree damage, unreadable table data, and other integrity
 failures remain a refusal: preserve the database and its WAL, then restore a
 verified backup or use SQLite recovery. Runtime and startup never perform this
 repair automatically.
+
+FTS5-only `malformed inverted index` findings on canonical agent search tables
+are also repairable. A Node upgrade or downgrade can change SQLite's `unicode61`
+tokenization (for example, U+FFFE in SQLite 3.54), leaving intact content with an
+incompatible derived index. Doctor preserves a backup and rebuilds only the
+affected, schema-validated FTS tables in one
+transaction. It verifies integrity and foreign keys before clearing quarantine;
+session recovery uses this same repair instead of moving the database aside.
+Unknown or changed FTS definitions and findings mixed with structural damage
+are not eligible for this repair.
+
+Gateway startup makes one automatic repair attempt per database per process when
+every finding names a canonical, schema-validated FTS table. Under exclusive
+writer custody, it uses the same pre-repair backup and transactional rebuild as
+Doctor, then requires clean integrity and foreign-key checks before admission.
+One warning names the agent, affected tables and row counts, SQLite version, and
+backup. Status and Doctor retain this startup outcome. A failed backup or rebuild,
+live foreign writer, unknown FTS definition, or mixed damage keeps the database
+quarantined with the precise Doctor command. Ordinary runtime opens do not attempt
+this repair. If startup cannot repair the indexes, stop the Gateway and run
+`openclaw doctor --fix` with the Node version that will run the Gateway, then
+restart it. Switching SQLite versions again may require another rebuild,
+without changing stored content or the database schema.
 
 <a id="downgrades-are-unsupported" />
 

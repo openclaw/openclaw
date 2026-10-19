@@ -6,6 +6,7 @@ import {
   type PluginInstallSourceInfo,
 } from "./install-source-info.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index.js";
+import { isPluginManifestOnboardingScope } from "./manifest-capability-normalizers.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -170,19 +171,13 @@ function resolvePreferredInstallsByPluginId(
   return { installedPluginIds, installsByPluginId: preferredByPluginId };
 }
 
-function isProviderFlowScope(
-  value: unknown,
-): value is "text-inference" | "image-generation" | "music-generation" {
-  return value === "text-inference" || value === "image-generation" || value === "music-generation";
-}
-
 function normalizeProviderAuthChoiceScopes(
   scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
 ): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
   if (!Array.isArray(scopes)) {
     return undefined;
   }
-  const normalized = scopes.filter(isProviderFlowScope);
+  const normalized = scopes.filter(isPluginManifestOnboardingScope);
   return normalized.length > 0 ? normalized : undefined;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.4",
+  "version": "2026.10.5",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -15,7 +15,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 27,
+      "state": 28,
       "agent": 31
     }
   },
@@ -373,6 +373,7 @@
     "!dist/extensions/slack-huddles/**",
     "!dist/extensions/sms/**",
     "!dist/extensions/stepfun/**",
+    "!dist/extensions/subq/**",
     "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tavily/**",
@@ -481,7 +482,8 @@
     "!dist/plugin-sdk/http-response-runtime.d.ts",
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
-    "!dist/plugin-sdk/provider-auth-markers.d.ts"
+    "!dist/plugin-sdk/provider-auth-markers.d.ts",
+    "!dist/plugin-sdk/terminal-safe-text.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -843,6 +845,9 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/terminal-safe-text": {
+      "default": "./dist/plugin-sdk/terminal-safe-text.js"
     },
     "./plugin-sdk/agent-scope-runtime": {
       "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",
@@ -1764,6 +1769,7 @@
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import ./scripts/tsx.mjs scripts/check.mts",
+    "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
@@ -1871,13 +1877,13 @@
     "dup:check": "node scripts/check-duplicates.mjs",
     "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
     "dup:check:json": "node scripts/check-duplicates.mjs --json",
-    "format": "oxfmt --write --threads=1",
+    "format": "node scripts/run-format.mts --write",
     "format:all": "pnpm format && pnpm format:swift",
-    "format:check": "oxfmt --check",
-    "format:diff": "oxfmt --write --threads=1 && git --no-pager diff",
+    "format:check": "node scripts/run-format.mts --check",
+    "format:diff": "pnpm format && git --no-pager diff",
     "format:docs": "node --import ./scripts/tsx.mjs scripts/format-docs.mts",
     "format:docs:check": "node --import ./scripts/tsx.mjs scripts/format-docs.mts --check",
-    "format:fix": "oxfmt --write --threads=1",
+    "format:fix": "pnpm format",
     "format:swift": "./scripts/format-swift.sh",
     "gateway:dev": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway --reset",
@@ -1948,7 +1954,6 @@
     "lint:tmp:no-raw-http2-imports": "node --import ./scripts/tsx.mjs scripts/check-no-raw-http2-imports.mts",
     "lint:tmp:session-accessor-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts",
     "lint:tmp:session-accessor-boundary:gen": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts --update-debt-baseline",
-    "lint:tmp:session-transcript-reader-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-transcript-reader-boundary.mts",
     "lint:tmp:sqlite-transaction-boundary": "node --import ./scripts/tsx.mjs scripts/check-sqlite-transaction-boundary.mts",
     "lint:tmp:tsgo-core-boundary": "node --import ./scripts/tsx.mjs scripts/check-tsgo-core-boundary.mts",
     "lint:ui:i18n": "pnpm ui:i18n:verify",
@@ -2121,6 +2126,7 @@
     "test:docker:local:all": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LIVE_MODE=skip -- node scripts/test-docker-all.mjs",
     "test:docker:cli-installer-distribution": "bash scripts/e2e/cli-installer-distribution-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
+    "test:docker:mcp-docker-custody": "bash scripts/e2e/mcp-docker-custody-docker.sh",
     "test:docker:mcp-code-mode-gateway": "bash scripts/e2e/mcp-code-mode-gateway-docker.sh",
     "test:docker:multi-node-update": "bash scripts/e2e/multi-node-update-docker.sh",
     "test:docker:codex-on-demand": "bash scripts/e2e/codex-on-demand-docker.sh",
@@ -2343,8 +2349,8 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.7",
-    "@openclaw/proc-safe": "0.3.0",
+    "@openclaw/fs-safe": "0.26.8",
+    "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",
@@ -2362,6 +2368,7 @@
     "esbuild": "0.28.2",
     "execa": "10.1.0",
     "express": "5.3.0",
+    "fast-uri": "4.2.1",
     "file-type": "22.1.1",
     "grammy": "1.46.0",
     "highlight.js": "11.12.0",
@@ -2453,6 +2460,7 @@
     "tinyglobby": "0.2.17",
     "tree-sitter-bash": "0.25.1",
     "tsdown": "0.23.0",
+    "tsrs": "0.16.0-ts7.1.0-dev.20260929",
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260928.1",
     "unrun": "0.3.1",

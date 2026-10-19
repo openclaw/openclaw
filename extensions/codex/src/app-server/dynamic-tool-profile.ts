@@ -5,7 +5,7 @@ import type {
 } from "./config-contracts.js";
 
 /** Replacement policy for tools owned by Codex app-server. */
-const CODEX_NATIVE_TOOLS = new Map<string, "workspace" | "shell" | "goal" | "always">([
+const CODEX_NATIVE_TOOLS = new Map<string, "workspace" | "shell" | "always">([
   ["read", "workspace"],
   ["write", "workspace"],
   ["edit", "workspace"],
@@ -17,9 +17,6 @@ const CODEX_NATIVE_TOOLS = new Map<string, "workspace" | "shell" | "goal" | "alw
   ["dispatch_action", "always"],
   ["tool_describe", "always"],
   ["tool_search", "always"],
-  ["get_goal", "goal"],
-  ["create_goal", "goal"],
-  ["update_goal", "goal"],
 ]);
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
@@ -115,12 +112,6 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   const excludes = new Set<string>();
   const privateQa = isForcedPrivateQaCodexRuntime(options.env ?? process.env);
   for (const [name, replacement] of CODEX_NATIVE_TOOLS) {
-    if (replacement === "goal") {
-      if (!disabledNativeSurface) {
-        excludes.add(name);
-      }
-      continue;
-    }
     if (privateQa) {
       // Native apply_patch must never collide with a second QA handler.
       if (name === "apply_patch") {

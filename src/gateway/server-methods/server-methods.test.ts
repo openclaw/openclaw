@@ -77,8 +77,10 @@ function waitForFast<T>(
 
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
+// mock-isolation: Method dispatch tests use fixture status without opening session databases.
 vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+  prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -2180,7 +2182,7 @@ describe("gateway healthHandlers.status scope handling", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(statusModule.getStatusSummary).mockClear();
+    vi.mocked(statusModule.prepareStatusSummary).mockClear();
   });
 
   async function runHealthStatus(
@@ -2209,7 +2211,7 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      expect(vi.mocked(statusModule.prepareStatusSummary)).toHaveBeenCalledWith({
         includeSensitive,
         includeChannelSummary: true,
         includeCliProjection: false,

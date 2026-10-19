@@ -17,6 +17,7 @@ import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plug
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import {
   onGatewayDeviceSourceRevoked,
@@ -36,7 +37,7 @@ import {
 import {
   normalizeGatewayOperatorRecoverySnapshot,
   type OperatorRunRecoverySnapshot,
-} from "./operator-run-recovery-source.js";
+} from "./operator-run-recovery-source.codec.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
 type OperatorSource = {
@@ -170,6 +171,7 @@ function prepareRunModelPolicy(params: {
 /** Bridge a prepared linked principal while retaining its exact channel admission capability. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
+  recoveryReference?: UserChannelAuthorizationReference;
   assignedRole: string | null;
   githubLogin?: string | null;
   scopes: readonly string[];
@@ -199,6 +201,9 @@ export function captureChannelOperatorRunAuthority(input: {
   });
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
+    channelRecoverySource: params.recoveryReference
+      ? { reference: params.recoveryReference, modelPolicy: modelPolicy.original }
+      : undefined,
     scopes: params.scopes,
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
@@ -274,6 +279,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const ingressPrincipal = client?.internal?.remoteIngressPrincipal;
   // An owner subject requires a real socket or the host-bound ingress grant.
   // Autonomous/synthetic system callers must not acquire the owner profile.
+  // Ephemeral shared-secret sockets attest the owner without display attribution.
   const isAuthenticatedOwner = (currentActor: typeof actor) =>
     client?.internal?.authenticatedOperator === true &&
     (currentActor === undefined || currentActor.kind === "system") &&
@@ -288,7 +294,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
     !client.internal.syntheticClient &&
     !client.internal.agentRuntimeIdentity &&
     !client.internal.agentToolCaller &&
-    client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID;
+    (client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+      (currentActor?.kind === "system" &&
+        !client.authenticatedUserProfile &&
+        !client.authenticatedUserId &&
+        client.usesSharedGatewayAuth === true &&
+        Boolean(client.sharedGatewaySessionGeneration) &&
+        (client.authPolicy?.authMethod === "token" ||
+          client.authPolicy?.authMethod === "password")));
   const authenticatedOwner = isAuthenticatedOwner(actor);
   if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;

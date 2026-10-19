@@ -1,4 +1,3 @@
-/** Native systemd environment-file serialization, reading, and effective file overlays. */
 import fs from "node:fs/promises";
 import { Minimatch } from "minimatch";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";

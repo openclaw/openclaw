@@ -11,7 +11,7 @@ import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capab
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import {
@@ -144,7 +144,11 @@ export async function runTalkCallerReplay({
       throw error;
     });
   const settled = () =>
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+    captureSessionControllerSettlement({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      agentId: "main",
+    });
   const replies = new Map<string, unknown>();
   gatewayReplyMock.mockImplementation(async (...args) => {
     const result = await getReplyFromConfig(...args);

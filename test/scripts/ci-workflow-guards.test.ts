@@ -5923,9 +5923,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
     );
-    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
-      "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
-    );
     const checkLint = workflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
     );

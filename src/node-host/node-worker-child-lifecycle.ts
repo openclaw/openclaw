@@ -315,6 +315,7 @@ export class NodeWorkerChildLifecycle {
           params.descriptor,
           params.idleRetention === true,
           Boolean(params.assertWorkspaceCurrent),
+          true,
         ),
       );
     } catch (error) {
@@ -397,7 +398,12 @@ export class NodeWorkerChildLifecycle {
       assertWorkspaceCurrent?.();
       await sendNodeWorkerInput(
         active.adapter,
-        buildWorkerProcessTurn(descriptor, active.idleRetention, Boolean(assertWorkspaceCurrent)),
+        buildWorkerProcessTurn(
+          descriptor,
+          active.idleRetention,
+          Boolean(assertWorkspaceCurrent),
+          true,
+        ),
       );
       if (signal.aborted) {
         await this.options.cancelTurn(claim);
@@ -535,6 +541,17 @@ export class NodeWorkerChildLifecycle {
     active: NodeWorkerRunningChild,
     frame: WorkerProcessMessage,
   ): Promise<void> {
+    if (frame.type === "processes-changed") {
+      if (
+        !active.stopState &&
+        !active.retiring &&
+        !this.options.isClosed() &&
+        this.owners.get(active.launchId) === active
+      ) {
+        this.publishProcessesChanged(active);
+      }
+      return;
+    }
     if (frame.type === "process-result") {
       this.processObservations.accept(active, frame);
       return;
@@ -623,6 +640,8 @@ export class NodeWorkerChildLifecycle {
       return;
     }
     this.owners.set(active.launchId, observed);
+    // A child can exit before its coalesced final registry notification is written.
+    this.publishProcessesChanged(active);
     clearNodeWorkerRetention(active);
     if (active.idleRetention) {
       this.publishIdle();
@@ -634,6 +653,12 @@ export class NodeWorkerChildLifecycle {
       return;
     }
     active.turn = undefined;
+  }
+
+  private publishProcessesChanged(active: NodeWorkerRunningChild): void {
+    const { environmentId, sessionId, ownerEpoch, placementGeneration } = active.binding;
+    const change = { environmentId, sessionId, ownerEpoch, placementGeneration };
+    this.options.onProcessesChanged?.(change);
   }
 
   private async reconcileDeferredOutcome(active: NodeWorkerRunningChild): Promise<void> {

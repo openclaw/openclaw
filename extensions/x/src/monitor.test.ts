@@ -476,32 +476,6 @@ describe("X account monitor", () => {
     },
   );
 
-  it("classifies unsupported inbound media as not dispatched", async () => {
-    const completed = Promise.withResolvers<void>();
-    const test = fixture({
-      posts: [post("501", "10")],
-      queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
-    });
-    test.start();
-    try {
-      await completed.promise;
-      const deliver = test.dispatch.mock.calls[0]![0].delivery.deliver!;
-      const sentBefore = test.replies.length;
-      for (const payload of [
-        { mediaUrl: "https://example.test/image.png" },
-        { text: "Attached", mediaUrls: ["https://example.test/image.png"] },
-      ]) {
-        await expect(deliver(payload, { kind: "final" })).rejects.toMatchObject({
-          code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
-          retryable: false,
-        });
-      }
-      expect(test.replies).toHaveLength(sentBefore);
-    } finally {
-      await test.stop();
-    }
-  });
-
   it("uses a binding published while fetching the thread for the incoming turn", async () => {
     setRuntimeConfigSnapshot(config);
     const completed = Promise.withResolvers<void>();

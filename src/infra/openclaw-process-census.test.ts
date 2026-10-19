@@ -50,9 +50,9 @@ vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 // mock-isolation: the real detector reads and caches the test host's CPU brand.
 vi.mock("../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
-// mock-isolation: Enumerate only fixture PIDs, including when Bun selects native libproc.
-vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
-  readDarwinBunProcessCensus: nativeDarwinCensus,
+// mock-isolation: Enumerate only the synthetic process table.
+vi.mock("../process/darwin-process-inspection.js", () => ({
+  readDarwinProcessCensus: nativeDarwinCensus,
 }));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
@@ -104,7 +104,7 @@ beforeEach(() => {
       ppid: row.ppid,
       pgid: self,
       state: row.state ?? "S",
-      uid: row.uid ?? 1000,
+      owner: row.uid === undefined || row.uid === 1000 ? "same" : "different",
     })),
   );
   rosetta.mockReset().mockReturnValue(false);
@@ -710,9 +710,9 @@ it.each(["linux", "darwin"] as const)(
           .join("");
         return { status: 1, stdout };
       });
-      darwinCommand.mockImplementation((pid: number, uid: number) =>
+      darwinCommand.mockImplementation((pid: number, owner: "different") =>
         rows.get(pid)?.commandError
-          ? { argvUnavailable: true, uid }
+          ? { argvUnavailable: true, owner }
           : { argv: rows.get(pid)!.argv },
       );
     }

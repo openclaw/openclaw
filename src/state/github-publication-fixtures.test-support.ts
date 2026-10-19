@@ -67,6 +67,7 @@ export function publicationRowDefaults(requestId: string) {
     identity_login: "fixture-bot",
     title: null,
     body: null,
+    draft: null,
     status: "requested",
     gateway_instance_id: null,
     execution_id: null,

@@ -23,12 +23,13 @@ vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
 
 type Effect = { mock: { calls: unknown[][] } };
 
-function deferTranscriptWrite() {
+function deferTranscriptWrite(beforeWrite?: () => Promise<unknown>) {
   const entered = createDeferred();
   const release = createDeferred();
   vi.mocked(withSessionManagerWrite).mockImplementation(async (_manager, write) => {
     entered.resolve();
     await release.promise;
+    await beforeWrite?.();
     return write();
   });
   return {
@@ -82,7 +83,10 @@ describe("cloud transcript write admission", () => {
         expectedWriterRunId: input.runId,
         expectedLifecycleRevision: entry.lifecycleRevision,
       };
-      const gate = deferTranscriptWrite();
+      // Delete inside the admitted writer context; unrelated callers cannot delete an active turn.
+      const gate = deferTranscriptWrite(
+        change === "missing" ? () => deleteEntry(entry.sessionId) : undefined,
+      );
       const notified = vi.fn();
       const launch = vi
         .fn<() => Promise<never>>()
@@ -125,12 +129,15 @@ describe("cloud transcript write admission", () => {
             await placements.releaseTurn(claim);
           },
           environment: () => environment.ownerEpoch++,
-          missing: () => deleteEntry(entry.sessionId),
+          missing: () => {},
           writer: () => patchEntry({ activeWriterRunId: "replacement-run" }),
           lifecycle: () => patchEntry({ lifecycleRevision: "replacement-lifecycle" }),
         }[change]();
         gate.release.resolve();
         const outcome = await operation;
+        if (change === "missing") {
+          expect(sessionAccess.loadSessionEntry(sessionTarget)).toBeUndefined();
+        }
         if (change === "current") {
           expect(outcome).toMatchObject({ message: "fixture reached worker launch" });
           expect(SessionManager.open(sessionTarget).getBranch()).toMatchObject([

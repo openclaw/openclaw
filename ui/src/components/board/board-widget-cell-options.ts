@@ -62,6 +62,7 @@ export type BoardWidgetCellProps = {
 };
 export type BoardWidgetCellHandle = {
   readonly presentationReady: boolean;
+  focusWidget(): void;
   selectMenuItem(value: string | undefined): void;
   teardown(): Promise<void>;
   restartAfterTeardown(): void;

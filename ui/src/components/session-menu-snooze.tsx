@@ -23,6 +23,8 @@ export function useSessionSnoozeEntries(
   const [error, setError] = createSignal(false);
   let anchor!: HTMLSpanElement;
   let input!: HTMLInputElement;
+  let cancelButton!: HTMLButtonElement;
+  let submitButton!: HTMLButtonElement;
   let popover: PopoverHandle | undefined;
   const labels = {
     hour: "sessionsView.snoozeHour",
@@ -47,9 +49,7 @@ export function useSessionSnoozeEntries(
     }
     // Keep focus inside this child dialog while the parent menu stays open.
     if (event.key === "Tab") {
-      const controls = Array.from(
-        popover.overlay.surface.querySelectorAll<HTMLElement>("input, button:not(:disabled)"),
-      );
+      const controls = [input, cancelButton, submitButton].filter((control) => !control.disabled);
       const index = controls.findIndex((control) => control === document.activeElement);
       const next = (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
       event.preventDefault();
@@ -102,10 +102,7 @@ export function useSessionSnoozeEntries(
     >
       <form
         novalidate
-        ref={(form) => {
-          stopClick(form);
-          stopKeydown(form);
-        }}
+        ref={[stopClick, stopKeydown]}
         onSubmit={(event) => {
           event.preventDefault();
           const snoozedUntil = parseCustomSnooze(input.value);
@@ -144,10 +141,15 @@ export function useSessionSnoozeEntries(
           <p role="alert">{t("sessionsView.snoozeFutureRequired")}</p>
         </Show>
         <div class="session-menu__snooze-buttons">
-          <button type="button" class="btn" ref={cancel}>
+          <button type="button" class="btn" ref={[(node) => (cancelButton = node), cancel]}>
             {t("common.cancel")}
           </button>
-          <button type="submit" class="btn primary" disabled={disabled()}>
+          <button
+            type="submit"
+            class="btn primary"
+            ref={(node) => (submitButton = node)}
+            disabled={disabled()}
+          >
             {t("sessionsView.snooze")}
           </button>
         </div>

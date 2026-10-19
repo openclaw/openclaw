@@ -2,6 +2,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -42,6 +45,47 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("reuses writable admission without entry reads while observing committed corpus changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:corpus-admission";
+      const scope = { sessionKey, storePath: path.join(state.sessionsDir(), "sessions.json") };
+      await upsertSessionEntryCore(scope, { sessionId: "corpus-admission", updatedAt: 1 });
+
+      const commands: string[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- call preserves the intercepted worker receiver.
+      const nativePost = Worker.prototype.postMessage;
+      using _ = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        request,
+        transferList,
+      ) {
+        if (
+          isRecord(request) &&
+          request.type === "execute" &&
+          request.input instanceof Uint8Array
+        ) {
+          const command: unknown = deserialize(request.input);
+          if (isRecord(command) && typeof command.type === "string") {
+            commands.push(command.type);
+          }
+        }
+        nativePost.call(this, request, transferList);
+      });
+      const options = { includeContentRevision: false };
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
+        expect.objectContaining({ sessionKey, sessionKind: "interactive" }),
+      ]);
+
+      await upsertSessionEntryCore(scope, { heartbeatIsolatedBaseSessionKey: "agent:main:main" });
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
+        expect.objectContaining({ sessionKey, sessionKind: "heartbeat" }),
+      ]);
+      expect(commands).toContain("session.entry.patch.commit");
+      expect(commands.filter((command) => command === "session.entry.read")).toEqual([]);
+    });
+  });
+
   it("discovers the caller's configured store without a global runtime snapshot", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.statePath("memory-session-corpus", "sessions.json");

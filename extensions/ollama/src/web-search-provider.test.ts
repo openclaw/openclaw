@@ -223,6 +223,9 @@ describe("ollama web search provider", () => {
     expect(fetchRequest().init.signal).toBeUndefined();
   });
 
+  // Between attempts, the first response finishes and the next response stays
+  // valid, so only the cancellation can stop the fallback: no further request
+  // may start.
   it.each(["before dispatch", "between attempts"] as const)(
     "does not start requests after caller cancellation: %s",
     async (phase) => {

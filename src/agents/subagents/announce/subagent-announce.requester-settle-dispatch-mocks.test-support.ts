@@ -25,8 +25,8 @@ const loadRequester = vi.hoisted(() =>
       ...args: Parameters<
         typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
       >
-    ) => Awaited<
-      ReturnType<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>
+    ) => ReturnType<
+      typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
     >
   >(),
 );

@@ -217,7 +217,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
             expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
           }
         } else {
-          vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+          vi.useFakeTimers({ toFake: ["setTimeout", "Date", "performance"] });
           try {
             owner.terminate();
             const completion = owner.settle();
@@ -245,7 +245,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         return 123;
       }
       // A synchronous identity probe can consume the remaining observation budget.
-      vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+      vi.advanceTimersByTime(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
       finalIdentityRead = true;
       return reused ? 124 : null;
     });
@@ -269,6 +269,26 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       [-child.pid, "SIGKILL"],
     ]);
     expect(signals.mock.calls.every(([pid]) => pid === -child.pid)).toBe(true);
+  });
+
+  it("keeps kill grace and exit confirmation bounded when the wall clock rewinds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    const signals = vi.spyOn(process, "kill").mockReturnValue(true);
+    const owner = terminationOwner(mockTerminatingChild().child, { isChildExited: () => false });
+    const rewindWallClock = () => vi.setSystemTime(Date.now() - 60_000);
+    owner.terminate();
+    rewindWallClock();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(signals.mock.calls.filter(([, signal]) => isForceSignal(signal))).toHaveLength(1);
+    let settled = false;
+    const completion = owner.settle().finally(() => {
+      settled = true;
+    });
+    rewindWallClock();
+    await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+    expect(settled).toBe(true);
+    await expect(completion).resolves.toBe("uncertain");
   });
 
   it("preserves normal cleanup for a retired group", async () => {

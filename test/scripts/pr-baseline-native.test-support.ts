@@ -6,6 +6,8 @@ import { expect } from "vitest";
 import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
+export const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
+
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
 export function createBaselineFixture(root: string, productCount = 16) {
@@ -47,6 +49,12 @@ export function createBaselineFixture(root: string, productCount = 16) {
     expect(result.status, result.stderr).toBe(0);
     return result.stdout.trim();
   };
+  const commit = (cwd: string, message: string) => git(cwd, "commit", "-qam", message);
+  const writeProduct = (cwd: string, paths: string[], content: string) => {
+    for (const path of paths) {
+      writeFileSync(join(cwd, path), content);
+    }
+  };
   const key = join(root, "key");
   expect(
     spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key], { env }).status,
@@ -68,18 +76,14 @@ export function createBaselineFixture(root: string, productCount = 16) {
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n.local/\nnode_modules/\n");
   mkdirSync(join(repo, "docs"), { recursive: true });
   const product = Array.from({ length: productCount }, (_, i) => `docs/fix-${i}.md`);
-  for (const path of product) {
-    writeFileSync(join(repo, path), "base\n");
-  }
+  writeProduct(repo, product, "base\n");
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "test: canonical fixture");
   const base = git(repo, "rev-parse", "HEAD");
   git(repo, "remote", "add", "origin", repo);
   git(repo, "switch", "-qc", "topic");
-  for (const path of product) {
-    writeFileSync(join(repo, path), "broken\n");
-  }
-  git(repo, "commit", "-qam", "test: incoming fixture");
+  writeProduct(repo, product, "broken\n");
+  commit(repo, "test: incoming fixture");
   const incoming = git(repo, "rev-parse", "HEAD");
   git(repo, "switch", "-q", "main");
   const worktree = join(repo, ".worktrees", "pr-42");
@@ -108,6 +112,11 @@ if (args[0] === 'api' && args[1] === 'user') {
 `,
     { mode: 0o755 },
   );
+  const repository = {
+    id: "R_fixture",
+    nameWithOwner: "fixture/repo",
+    url: "https://github.com/fixture/repo",
+  };
   const meta = {
     number: 42,
     headRefOid: incoming,
@@ -117,28 +126,29 @@ if (args[0] === 'api' && args[1] === 'user') {
     url: "https://github.com/fixture/repo/pull/42",
     state: "OPEN",
     isCrossRepository: false,
-    baseRepository: {
-      id: "R_fixture",
-      databaseId: 1,
-      nameWithOwner: "fixture/repo",
-      url: "https://github.com/fixture/repo",
-    },
-    headRepository: {
-      id: "R_fixture",
-      name: "repo",
-      nameWithOwner: "fixture/repo",
-      url: "https://github.com/fixture/repo",
-    },
+    baseRepository: { ...repository, databaseId: 1 },
+    headRepository: { ...repository, name: "repo" },
     headRepositoryOwner: { login: "fixture", is_bot: false },
     files: product.map((path) => ({ path })),
   };
   const local = (name: string) => join(worktree, ".local", name);
-  writeFileSync(local("pr-meta.json"), JSON.stringify(meta));
-  writeFileSync(
-    local("pr-meta.env"),
+  const prepGit = (...args: string[]) => git(worktree, ...args);
+  const readLocal = (name: string) => readFileSync(local(name));
+  const writeLocal = (name: string, bytes: string | Uint8Array) =>
+    writeFileSync(local(name), bytes);
+  const snapshot = (names: string[]) =>
+    Object.fromEntries(names.map((name) => [name, readLocal(name)]));
+  const expectSnapshot = (files: Record<string, Buffer>) => {
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(readLocal(name)).toEqual(bytes);
+    }
+  };
+  writeLocal("pr-meta.json", JSON.stringify(meta));
+  writeLocal(
+    "pr-meta.env",
     `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\nPR_HEAD_REPO_URL=https://github.com/fixture/repo\n`,
   );
-  writeFileSync(local("review-mode.env"), "REVIEW_MODE=pr\n");
+  writeLocal("review-mode.env", "REVIEW_MODE=pr\n");
   const review = validReview(incoming);
   review.recommendation = "NEEDS WORK";
   review.issueValidation.status = "valid";
@@ -149,7 +159,7 @@ if (args[0] === 'api' && args[1] === 'user') {
     area: product[0]!,
     fix: "Repair behavior",
   });
-  writeFileSync(local("review.json"), JSON.stringify(review));
+  writeLocal("review.json", JSON.stringify(review));
   const run = (command: string, args: string[] = [], extra: NodeJS.ProcessEnv = {}) =>
     spawnSync(join(repo, "scripts/pr"), [command, "42", ...args], {
       cwd: repo,
@@ -162,10 +172,8 @@ if (args[0] === 'api' && args[1] === 'user') {
     return result;
   };
   pass("prepare-correction-init");
-  for (const path of product) {
-    writeFileSync(join(worktree, path), "corrected\n");
-  }
-  git(worktree, "commit", "-qam", "fix: fixture correction");
+  writeProduct(worktree, product, "corrected\n");
+  commit(worktree, "fix: fixture correction");
   const approve = () => {
     pass("prepare-correction-review-init");
     const file = local("correction-review.json");
@@ -179,10 +187,8 @@ if (args[0] === 'api' && args[1] === 'user') {
   };
   approve();
   const advanceMain = (label: string, changed = product) => {
-    for (const path of changed) {
-      writeFileSync(join(repo, path), `${label}\n`);
-    }
-    git(repo, "commit", "-qam", `test: ${label}`);
+    writeProduct(repo, changed, `${label}\n`);
+    commit(repo, `test: ${label}`);
     return git(repo, "rev-parse", "HEAD");
   };
   const preparePublication = () => {
@@ -215,14 +221,14 @@ if (args[0] === 'api' && args[1] === 'user') {
   const manifest = (baseline: string, changed = product) => {
     const source = git(worktree, "rev-parse", "HEAD");
     const fork = git(worktree, "merge-base", source, baseline);
-    const entry = (commit: string, path: string) => {
-      const [mode, , oid] = git(worktree, "ls-tree", commit, "--", path).split(/\s/u);
+    const entry = (revision: string, path: string) => {
+      const [mode, , oid] = git(worktree, "ls-tree", revision, "--", path).split(/\s/u);
       return { mode, oid };
     };
     const bytes = Buffer.from(`resolved against ${baseline}\n`);
-    writeFileSync(local("resolution.txt"), bytes);
-    writeFileSync(
-      local("resolutions.json"),
+    writeLocal("resolution.txt", bytes);
+    writeLocal(
+      "resolutions.json",
       JSON.stringify({
         version: 1,
         pr: 42,
@@ -242,27 +248,26 @@ if (args[0] === 'api' && args[1] === 'user') {
         })),
       }),
     );
-    return [
-      "--expected-head",
-      source,
-      "--baseline",
-      baseline,
-      "--resolutions",
-      local("resolutions.json"),
-    ];
+    return cliFlags({
+      "--expected-head": source,
+      "--baseline": baseline,
+      "--resolutions": local("resolutions.json"),
+    });
   };
   const successor = (baseline: string) => [
     ...manifest(baseline, [product[0]!]),
-    "--expected-tree",
-    git(worktree, "rev-parse", "HEAD^{tree}"),
-    "--expected-review",
-    git(worktree, "hash-object", "--no-filters", local("correction-review.json")),
-    "--predecessor-head",
-    /^PREP_BASELINE_REFRESH_HEAD=([a-f0-9]{40})$/mu.exec(
-      readFileSync(local("prep-context.env"), "utf8"),
-    )![1]!,
-    "--predecessor-binding",
-    git(worktree, "hash-object", "--no-filters", local("prepare-baseline.json")),
+    ...cliFlags({
+      "--expected-tree": prepGit("rev-parse", "HEAD^{tree}"),
+      "--expected-review": prepGit("hash-object", "--no-filters", local("correction-review.json")),
+      "--predecessor-head": /^PREP_BASELINE_REFRESH_HEAD=([a-f0-9]{40})$/mu.exec(
+        readLocal("prep-context.env").toString(),
+      )![1]!,
+      "--predecessor-binding": prepGit(
+        "hash-object",
+        "--no-filters",
+        local("prepare-baseline.json"),
+      ),
+    }),
   ];
   return {
     root,
@@ -272,6 +277,11 @@ if (args[0] === 'api' && args[1] === 'user') {
     repo,
     worktree,
     local,
+    prepGit,
+    readLocal,
+    writeLocal,
+    snapshot,
+    expectSnapshot,
     git,
     pass,
     run,

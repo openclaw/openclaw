@@ -193,6 +193,13 @@ it("retains published memory facts across session and embedding-cache writes", a
   await withPublishedIndex(async (database) => {
     await database.writeMetadata(metadata);
     const facts = database.facts;
+    const identities = [{ provider: "test", model: "test", providerKey: "test" }];
+    const readCache = () =>
+      database.read(
+        { type: "cache.read", input: { providerIdentities: identities, hashes: ["test"] } },
+        () => {},
+      );
+    expect(await readCache()).toEqual(new Map());
     const messages = recordIndexCommands("messagePort");
     try {
       await upsertSessionEntry({
@@ -216,6 +223,13 @@ it("retains published memory facts across session and embedding-cache writes", a
         () => {},
         () => true,
       );
+      expect(await readCache()).toEqual(new Map([["test", [1]]]));
+      await database.mutateEmbeddingCache(
+        { kind: "clear", identities },
+        () => {},
+        () => true,
+      );
+      expect(await readCache()).toEqual(new Map());
       await database.refreshFacts();
       expect(database.facts).toBe(facts);
       expect(messages.commands).not.toContain("index.facts");

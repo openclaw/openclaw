@@ -11,6 +11,10 @@ import type {
   CodexCatalogDecodeResult,
   CodexClientRequestAttempt,
 } from "./client-catalog-response.js";
+import {
+  readCodexCatalogDecodeRoute,
+  type CodexCatalogDecodeRoute,
+} from "./client-catalog-route.js";
 import { CodexCatalogWorker, codexCatalogRequestId } from "./client-catalog-worker.js";
 import {
   appendBoundedTail,
@@ -28,8 +32,6 @@ import { parseCodexAppServerMessage } from "./client-message-decoder.js";
 import {
   listenCodexAppServerLines,
   createCodexAppServerMessageWriter,
-  readCodexCatalogDecodeRoute,
-  type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
 import {
   CodexAppServerNotifications,

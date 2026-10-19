@@ -8,7 +8,7 @@ import {
 import { createSessionActivity } from "./session-activity-owner.ts";
 
 const result = sessionActivityListing([]);
-const { setup } = useSessionActivityControllerFixture();
+const { active, setup } = useSessionActivityControllerFixture();
 let client: ReturnType<typeof setup>["client"];
 let controller: ReturnType<typeof createSessionActivity>;
 const dayAt = (month: number, day: number, hour = 0, minute = 0, year = 2026) =>
@@ -31,6 +31,36 @@ afterEach(() => {
   held.resolve(result);
   controller.dispose();
   vi.unstubAllGlobals();
+});
+
+it("reconstructs conditional Activity rows before reconciling fresh metadata", async () => {
+  const filters = { personId: null, time: "all" as const, query: "" };
+  request.mockResolvedValueOnce(sessionActivityListing([active], { rowsRevision: "first" }));
+  await controller.load(client, filters);
+  request.mockResolvedValueOnce(
+    sessionActivityListing([], {
+      rowsRevision: "first",
+      rowsUnchanged: true,
+      count: 1,
+      totalCount: 20,
+    }),
+  );
+  await controller.load(client, filters, "refresh");
+  expect(request).toHaveBeenLastCalledWith(
+    "sessions.list",
+    expect.objectContaining({ ifRowsRevision: "delta:first" }),
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
+  expect(controller.result).toMatchObject({ sessions: [active], totalCount: 20 });
+  const renamed = { ...active, label: "Renamed" };
+  request.mockResolvedValueOnce(
+    sessionActivityListing([renamed], {
+      rowsRevision: "next",
+      rowsDelta: { baseRevision: "first", order: [1] },
+    }),
+  );
+  await controller.load(client, filters, "refresh");
+  expect(controller.result?.sessions).toEqual([renamed]);
 });
 
 it("requests calendar-aligned pulse windows, including clock-change dates", async () => {

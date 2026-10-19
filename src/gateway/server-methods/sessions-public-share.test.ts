@@ -15,7 +15,7 @@ import { projectPublicSessionEntry } from "../../config/sessions/session-entry-p
 import * as sharingStore from "../../config/sessions/session-sharing-store.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
+import * as sharingLifecycle from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -64,13 +64,11 @@ async function call(
 }
 
 function beforeWrite(change: () => unknown) {
-  const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
-  vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-    async (operation, params) => {
-      await change();
-      return run(operation, params);
-    },
-  );
+  const run = sharingLifecycle.runSessionMutation;
+  vi.spyOn(sharingLifecycle, "runSessionMutation").mockImplementationOnce(async (params) => {
+    await change();
+    return run(params);
+  });
 }
 
 async function expectToken(share: { token: string } | undefined, shareId: string) {

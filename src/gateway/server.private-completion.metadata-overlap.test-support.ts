@@ -16,6 +16,7 @@ export function holdMetadataThroughSubagentStop(target: {
   sessionId: string;
   storePath: string;
   signal: AbortSignal;
+  beforeMetadata?: () => void;
 }) {
   const producerScope = new AsyncLocalStorage<boolean>();
   const markerScope = new AsyncLocalStorage<boolean>();
@@ -136,6 +137,7 @@ export function holdMetadataThroughSubagentStop(target: {
         return completeBookkeeping(context, params);
       }
       intercepted = true;
+      target.beforeMetadata?.();
       // A new root alone retains the RPC's AsyncWorkScope. This producer must not block
       // that scope while waiting for the mandatory marker which the RPC has yet to enqueue.
       producer = runOutsideAsyncWorkScope(() =>

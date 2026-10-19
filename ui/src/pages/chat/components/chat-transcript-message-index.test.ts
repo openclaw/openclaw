@@ -767,9 +767,9 @@ describe("system event presentation", () => {
       "group",
       "system-event-group",
       "agent-run-frame",
-      "system-event-group",
+      "notice",
       "group",
-      "system-event-group",
+      "notice",
     ]);
     expect(chain.transcriptItems[1]).toMatchObject({
       events: [expect.anything(), expect.anything()],
@@ -798,11 +798,7 @@ describe("system event presentation", () => {
       timestamp: 25,
     } as const;
     const chain = chainFor([events[0]!, pending, events[1]!], chainOptions);
-    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
-      "system-event-group",
-      "notice",
-      "system-event-group",
-    ]);
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual(["notice", "notice", "notice"]);
     expect(chain.transcriptItems[1]).toBe(pending);
   });
 });

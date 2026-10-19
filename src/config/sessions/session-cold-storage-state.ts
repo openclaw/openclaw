@@ -17,7 +17,7 @@ import {
 } from "../../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -171,7 +171,7 @@ export function readHotSessionTranscriptSnapshot<T>(
     assertTransactionUsable(db);
     return result;
   }
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       assertSessionTranscriptHot(db, sessionId);

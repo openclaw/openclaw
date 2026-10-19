@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodProfileAccess,
@@ -22,6 +23,10 @@ import type {
   PluginRecord,
 } from "./registry-types.js";
 import {
+  PluginCapabilityRemovedError,
+  removedPluginCapabilityDescriptor,
+} from "./removed-capability-error.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
@@ -35,12 +40,23 @@ import type {
 } from "./types.js";
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+const REMOVED_SESSION_CONTEXT_CAPABILITIES = Object.fromEntries(
+  ["chatAbortControllers", "chatQueuedTurns"].map((name) => [
+    name,
+    removedPluginCapabilityDescriptor(
+      `context.${name}`,
+      'Use dispatchGatewayMethod from openclaw/plugin-sdk/gateway-method-runtime with chat.send, chat.abort, sessions.abort, or agent.wait; declare contracts.gatewayMethodDispatch: ["authenticated-request"].',
+    ),
+  ]),
+);
 
 function adaptPluginGatewayMethodHandler(
   handler: GatewayRequestHandler,
   mayDispatch: boolean,
 ): GatewayRequestHandler {
   return async (opts) => {
+    // Preserve the real context identity; these accessors expose no mutable state.
+    Object.defineProperties(opts.context, REMOVED_SESSION_CONTEXT_CAPABILITIES);
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
       responded = true;
@@ -50,16 +66,30 @@ function adaptPluginGatewayMethodHandler(
     const invoke = () => handler({ ...opts, respond });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
-    const result = (
-      scope
-        ? await withPluginRuntimeGatewayRequestScope(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
-            invoke,
-          )
-        : await invoke()
-    ) as unknown;
-    if (!responded && result !== undefined) {
-      respond(true, result);
+    try {
+      const result = (
+        scope
+          ? await withPluginRuntimeGatewayRequestScope(
+              { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+              invoke,
+            )
+          : await invoke()
+      ) as unknown;
+      if (!responded && result !== undefined) {
+        respond(true, result);
+      }
+    } catch (error) {
+      if (!(error instanceof PluginCapabilityRemovedError) || responded) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+          retryable: false,
+          details: { code: error.code, capability: error.capability },
+        }),
+      );
     }
   };
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -33,7 +34,8 @@ vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: vi.fn(async () => true),
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
   resetGatewayWorkAdmission();
   vi.mocked(persistSubagentSessionTiming).mockResolvedValue(undefined);
   vi.mocked(retireSessionMcpRuntime).mockClear();
@@ -313,7 +315,9 @@ it.for(["queued", "pre-commit"] as const)(
       await withinTest(loaderEntered.promise, signal);
       holdNextWrite = true;
       if (barrier === "queued") {
-        pendingWrite = mutateLifecycleRun(entry, () => {});
+        pendingWrite = mutateLifecycleRun(entry, (row) => {
+          row.label = "preceding durable write";
+        });
         await withinTest(writeEntered.promise, signal);
       }
       releaseLoader.resolve();

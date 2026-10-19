@@ -19,7 +19,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
@@ -54,6 +57,7 @@ import {
   hasSessionControlAuthority,
   hasSessionWriteAuthority,
 } from "./sessions-operator-authority.js";
+import { listSessionOwnerProfiles } from "./sessions-owner-profiles.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
 import {
   callSessionToolControl,
@@ -215,7 +219,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     // offers the same tool; per-turn authority is enforced when it runs.
     description: sandboxRenameOnly
       ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. Archive and restore are unavailable in this authority context. No other session actions or settings."
-      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions. Turns without owner authority are limited when the action runs.`,
+      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. owner_profiles lists canonical human profile IDs; optional githubAccountIds resolves verified account mappings. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent, not access. Report unresolved ownership separately and continue independently authorized work. reset/delete visible sessions. Turns without owner authority are limited when the action runs.`,
     parameters: sandboxRenameOnly
       ? SessionRenameToolSchema
       : resolveSessionsToolSchema(stopAllowed),
@@ -377,6 +381,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         });
         return jsonResult(result);
       }
+      if (action === "owner_profiles") {
+        return await listSessionOwnerProfiles(params, gatewayRequest);
+      }
       if (action === "cloud_profiles") {
         return await listSessionCloudProfiles(params, gatewayRequest);
       }
@@ -527,9 +534,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             sessionKey: key,
             storePath,
           });
-          const released = getSessionWorkAdmissionRelease({
-            scope: storePath,
-            identities: [key, currentEntry?.sessionId],
+          const released = captureSessionControllerSettlement({
+            target: captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: key,
+              incarnation: currentEntry?.sessionId,
+              agentId,
+            }),
           });
 
           if (
@@ -566,7 +577,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             void runWithGatewayToolContinuationContext(() =>
               released
                 .then(async () => {
-                  const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
+                  const archiveTarget = captureSessionTarget({
+                    storeScope: storePath,
+                    sessionKey: key,
+                    incarnation: expectedSessionIdentity.expectedSessionId,
+                    agentId,
+                  });
                   const archivePatch = {
                     key,
                     ...agentScope,
@@ -574,9 +590,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                     ...expectedSessionIdentity,
                   };
                   while (true) {
-                    const competingRelease = getSessionWorkAdmissionRelease({
-                      scope: storePath,
-                      identities: archiveIdentities,
+                    const competingRelease = captureSessionControllerSettlement({
+                      target: archiveTarget,
                     });
                     if (competingRelease) {
                       await competingRelease;
@@ -601,9 +616,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                       if (!retryableGatewayFailure) {
                         throw error;
                       }
-                      const retryAfterRelease = getSessionWorkAdmissionRelease({
-                        scope: storePath,
-                        identities: archiveIdentities,
+                      const retryAfterRelease = captureSessionControllerSettlement({
+                        target: archiveTarget,
                       });
                       if (!retryAfterRelease) {
                         throw error;

@@ -136,7 +136,7 @@ it.each(["configured-owner", "profile"] as const)(
         try {
           if (source === "profile") {
             // The live owner grants storage access only inside its retained closure.
-            expect(assertCurrent).toThrow("undergoing offline maintenance");
+            expect(assertCurrent).toThrow("without an active schema lease or maintenance scope");
           }
           await maintenance!.run(async () => {
             expect(foreignRequester.isCurrent()).toBe(true);

@@ -438,6 +438,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     stopping = true;
+    options.nodeTunnelManager?.beginClose();
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
     providerLifecycle.clearMachineShapeListeners();

@@ -72,7 +72,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
     /** Await the existing workspace owner while preserving this run's authority. */
     waitUntilReady: () => Promise<void>;
   }>;
-  /** Native delegation without person selection must remain unambiguous at admission. */
+  /** Native delegation retains the incumbent execution and requires its current authority. */
   assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;

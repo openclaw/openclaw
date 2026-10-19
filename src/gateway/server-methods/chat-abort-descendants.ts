@@ -27,6 +27,8 @@ export async function abortControlledSubagents(params: {
   sessionOrigin?: SubagentRequestSessionOrigin;
   assertCurrent?: () => void;
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
+  /** Accepted parent effects retain cleanup reporting after a later guard rejects. */
+  parentStopAccepted?: () => boolean;
   prepareSelection?: {
     acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"];
     prepare: () => Promise<{
@@ -211,7 +213,7 @@ export async function abortControlledSubagents(params: {
     (settledNative?.status === "fulfilled" ? settledNative.value.killed : 0);
   const cancelledRequesters =
     settledNative?.status === "fulfilled" ? settledNative.value.cancelledRequesters : [];
-  if (failure && !settledNative && !descendants && !execAborted) {
+  if (failure && !settledNative && !descendants && !execAborted && !params.parentStopAccepted?.()) {
     throw commandErrors.length > 0
       ? new AggregateError([failure.error, ...commandErrors], "Request cancellation was incomplete")
       : failure.error;
@@ -225,6 +227,7 @@ export async function abortControlledSubagents(params: {
       killed,
       cancelledRequesters,
       status: "error" as const,
+      failed: (descendants?.status === "error" ? descendants.failed : 0) + commandErrors.length,
       error: [
         ...(descendants && descendants.status !== "ok" ? [descendants.error] : []),
         ...commandErrors.map(formatErrorMessage),

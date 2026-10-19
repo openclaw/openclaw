@@ -171,6 +171,30 @@ function pairingFixture(request: RequestFn, scopes?: string[] | null) {
 }
 
 export function registerOverlayPairingAccessTests() {
+  it.each(["reconnect", "replacement", "access revocation", "dispose"] as const)(
+    "does not open pairing when %s retires the pending interaction",
+    async (boundary) => {
+      const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+      const { harness, overlays } = createOverlayHarness(request, ["operator.admin"]);
+      const opening = overlays.openDevicePairSetup();
+      if (boundary === "reconnect") {
+        harness.update({ phase: "reconnecting" });
+        harness.update({ phase: "connected" });
+      } else if (boundary === "replacement") {
+        harness.update({ client: client(request) });
+      } else if (boundary === "access revocation") {
+        harness.setScopes(["operator.read"]);
+      } else {
+        overlays.dispose();
+      }
+
+      expect(await opening).toBe(false);
+      expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+      overlays.dispose();
+    },
+  );
+
   it.each(["to-legacy", "to-scoped", "event"] as const)(
     "refreshes current pairing counts on %s",
     async (trigger) => {

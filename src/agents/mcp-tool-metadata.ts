@@ -1,13 +1,11 @@
 import {
-  ErrorCode,
-  McpError,
+  ProtocolErrorCode,
+  ProtocolError,
   type CallToolResult,
   type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
-import type {
-  JsonSchemaValidator,
-  jsonSchemaValidator,
-} from "@modelcontextprotocol/sdk/validation/types.js";
+  type JsonSchemaValidator,
+  type jsonSchemaValidator,
+} from "@modelcontextprotocol/client";
 
 type McpToolResultValidator = (result: CallToolResult) => void;
 
@@ -65,8 +63,8 @@ export function normalizeMcpToolCatalog(
         );
         resultValidators.set(toolName, (result) => {
           if (result.structuredContent === undefined && result.isError !== true) {
-            throw new McpError(
-              ErrorCode.InvalidRequest,
+            throw new ProtocolError(
+              ProtocolErrorCode.InvalidRequest,
               `Tool ${toolName} has an output schema but did not return structured content`,
             );
           }
@@ -75,8 +73,8 @@ export function normalizeMcpToolCatalog(
           }
           const validation = validator(result.structuredContent);
           if (!validation.valid) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
+            throw new ProtocolError(
+              ProtocolErrorCode.InvalidParams,
               `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
             );
           }

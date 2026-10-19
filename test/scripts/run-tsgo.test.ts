@@ -2,13 +2,17 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  resolveRepoToolBinPath,
+  resolveTypeCheckTool,
+} from "../../scripts/lib/local-check-runtime.mts";
 import {
   createSparseTsgoSkipEnv,
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
-import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
+import { prepareTsgoCommand, resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -27,7 +31,10 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const fixture = createFixtureLifetime();
-afterEach(() => fixture.cleanup());
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await fixture.cleanup();
+});
 
 function sparseGuard(
   options: Parameters<typeof getSparseTsgoGuardError>[1] = {},
@@ -40,6 +47,29 @@ function sparseGuard(
   });
 }
 
+it("selects the compiler from the supplied environment instead of the ambient environment", () => {
+  vi.stubEnv("OPENCLAW_TYPECHECKER", "invalid-ambient-compiler");
+  const command = prepareTsgoCommand(["--version"], {
+    ...process.env,
+    OPENCLAW_TYPECHECKER: "tsgo",
+  });
+  expect(command?.bin).toBe(resolveRepoToolBinPath("tsgo"));
+});
+
+it.each([false, true])(
+  "keeps Go profiling requests on tsgo (environment=%s)",
+  (fromEnvironment) => {
+    const args = fromEnvironment ? ["--version"] : ["--version", "--pprofDir", "profiles"];
+    const command = prepareTsgoCommand(args, {
+      ...process.env,
+      OPENCLAW_LOCAL_CHECK: "1",
+      OPENCLAW_TYPECHECKER: undefined,
+      OPENCLAW_TSGO_PPROF_DIR: fromEnvironment ? "profiles" : undefined,
+    });
+    expect(command?.bin).toBe(resolveRepoToolBinPath("tsgo"));
+  },
+);
+
 it("refuses a shared install without creating dependency links", () => {
   const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
   const root = path.join(primary, ".claude/worktrees/validation");
@@ -48,7 +78,11 @@ it("refuses a shared install without creating dependency links", () => {
   write(root, "package.json", '{"private":true}\n');
   write(root, "pnpm-workspace.yaml", "packages: []\n");
   const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
-  const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
+  const nativeRoot = path.join(
+    sharedInstall,
+    "node_modules",
+    resolveTypeCheckTool() === "tsrs" ? "tsrs" : "typescript",
+  );
   const resolverExecuted = path.join(primary, "resolver-executed");
   write(nativeRoot, "package.json", '{"type":"module"}\n');
   write(
@@ -179,6 +213,11 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
   });
 
   function writeFakeTsgo(body: string, cwd = createTempDir("openclaw-run-tsgo-watchdog-")) {
+    // Nested temp roots must not borrow the enclosing checkout's compiler install.
+    if (!fs.existsSync(path.join(cwd, "package.json"))) {
+      write(cwd, "package.json", '{"private":true}\n');
+    }
+    write(cwd, "pnpm-workspace.yaml", "packages: []\n");
     const fakeTsgo = write(cwd, "node_modules/.bin/tsgo", body);
     fs.chmodSync(fakeTsgo, 0o755);
     overrideNativeFixtureExecutable(cwd, fakeTsgo);
@@ -372,7 +411,6 @@ child.once("message", () => process.exit(0));
           const pidFile = path.join(cwd, "fake-tsgo.pid");
           // Own the artifact lock rather than borrowing the enclosing checkout's.
           write(cwd, "package.json", '{"private":true,"type":"module"}\n');
-          write(cwd, "pnpm-workspace.yaml", "packages: []\n");
           write(cwd, "tsconfig.extensions.json", "{}\n");
           const readyPipe = path.join(cwd, "compiler-ready.pipe");
           if (phase === "spawn") {

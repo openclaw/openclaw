@@ -50,6 +50,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       hasLoaded: page.cron().cronJobsSnapshotRevision !== null,
       listError: page.cron().cronJobsError,
       canManage,
+      connected: page.cron().connected,
       status: page.cron().cronStatus,
       jobs: page.cron().cronJobs,
       jobsLoadingMore: page.cron().cronJobsLoadingMore,

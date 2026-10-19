@@ -29,6 +29,12 @@ import {
 
 export const localResult = async () => ({ meta: { durationMs: 1 } });
 
+export const completedWorkerMessage = () =>
+  makeAgentAssistantMessage({
+    content: [{ type: "text", text: "Remote work completed" }],
+    timestamp: 21,
+  });
+
 export function createLauncher(
   options: Partial<Parameters<typeof createWorkerSessionTurnPlacementProvider>[0]> = {},
 ) {

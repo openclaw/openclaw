@@ -93,7 +93,6 @@ async function createFixture(
         deps: {
           telegram: sendTelegram,
           getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
           // Storage retention uses wall time, so isolated sessions must share that clock.
           nowMs: Date.now,
         },

@@ -520,6 +520,54 @@ describe("getReplyFromConfig message hooks", () => {
     },
   );
 
+  it("stops a canceled status reply while thinking catalog discovery is pending", async () => {
+    const catalog = createDeferred<[]>();
+    const entered = createDeferred();
+    const controller = new AbortController();
+    const directives = createGetReplyContinueDirectivesResult({
+      body: "/status",
+      abortKey: "agent:main:telegram:-100123",
+      from: "telegram:user:42",
+      to: "telegram:-100123",
+      senderId: "42",
+      commandSource: "message",
+      senderIsOwner: true,
+      resetHookTriggered: false,
+    });
+    directives.result.inlineStatusRequested = true;
+    directives.result.modelState.resolveThinkingCatalog = async () => {
+      entered.resolve();
+      return catalog.promise;
+    };
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(directives);
+
+    const pending = getReplyFromConfig(
+      buildTextCtx("/status"),
+      { abortSignal: controller.signal },
+      withFastReplyConfig({}),
+    );
+    await entered.promise;
+    const outcome = pending.then(
+      () => "completed",
+      (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+    );
+    controller.abort();
+    try {
+      expect(
+        await Promise.race([
+          outcome,
+          new Promise<string>((resolve) => {
+            setImmediate(() => resolve("pending"));
+          }),
+        ]),
+      ).toBe("AbortError");
+      expect(mocks.handleInlineActions).not.toHaveBeenCalled();
+    } finally {
+      catalog.resolve([]);
+      await Promise.allSettled([pending]);
+    }
+  });
+
   it("keeps literal URL input after link failure", async () => {
     const ctx = buildTextCtx("read https://example.test/page", {
       CommandInterpretationSuppressed: true,

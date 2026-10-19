@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
@@ -1034,7 +1034,7 @@ describe("worker placement dispatch reclaim", () => {
       reconcileCommitsManifest: false,
       runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
         queued.resolve();
-        return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+        return await runSessionMutation({
           scope,
           identities,
           run: async () => {
@@ -1049,7 +1049,7 @@ describe("worker placement dispatch reclaim", () => {
       },
     });
     await harness.service.dispatch(REQUEST);
-    const owner = runExclusiveSessionLifecycleMutation("placement-reclaim", {
+    const owner = runSessionMutation({
       scope,
       identities,
       run: async () => {

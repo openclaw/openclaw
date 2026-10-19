@@ -37,7 +37,7 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -64,7 +64,7 @@ type RenderedPane = HTMLElement & {
 };
 
 const paneTag = "openclaw-chat-pane";
-const paneIn = (page: ChatPage) =>
+const paneIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) =>
   expectDefined(page.querySelector<RenderedPane>(paneTag), paneTag);
 function command(detail: UiCommandDetail) {
   const event = new CustomEvent(UI_COMMAND_EVENT, { detail, cancelable: true });
@@ -121,14 +121,17 @@ function expectPresentation(
   }).toMatchObject(expected);
 }
 
-async function showSession(page: ChatPage, sessionKey: string): Promise<void> {
+async function showSession(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+  sessionKey: string,
+): Promise<void> {
   page.data = { sessionKey };
   await settleChatPage(page);
   await settleChatPage(page);
 }
 
 async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[]) {
-  const page = new ChatPage();
+  const page = document.createElement("openclaw-chat-page");
   const navigation = setNavigationContext(page);
   page.data = { sessionKey };
   document.body.append(page);
@@ -177,7 +180,7 @@ describe("chat page retained sessions", () => {
       formFactor: "desktop",
       surface: "conversation",
     });
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     const presentation = { visible: true, active: false };
     let notify = () => {};
@@ -216,7 +219,7 @@ describe("chat page retained sessions", () => {
 
   it("keeps route ownership on the selected split pane while dock input is active", async () => {
     const workSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const { context } = setNavigationContext(page);
     page.data = { sessionKey: workSessionKey, agentId: "main" };
     document.body.append(page);
@@ -253,7 +256,7 @@ describe("chat page retained sessions", () => {
       const previousHref = window.location.href;
       registerTestCleanup(() => window.history.replaceState({}, "", previousHref));
       window.history.replaceState({}, "", "/chat/main?draft=What+can+you+do%3F");
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context, navigate, replace } = setNavigationContext(page);
       page.data = { sessionKey: routeKey };
       document.body.append(page);
@@ -441,14 +444,14 @@ describe("chat page retained sessions", () => {
   it.each(["persistent focus", "transient focus", "pointer intent"] as const)(
     "hands route-owned focus to the final page across pane replacement (%s)",
     async (intent) => {
-      const sourcePage = new ChatPage();
+      const sourcePage = document.createElement("openclaw-chat-page");
       setNavigationContext(sourcePage);
       sourcePage.data = {
         sessionKey: "main",
         draft: "What can you do?",
         focusComposer: true,
       };
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       setNavigationContext(page);
       page.data = { sessionKey: "main" };
 
@@ -737,7 +740,7 @@ describe("chat page retained sessions", () => {
     "preserves captured global ownership when creating a split via $entry ($scope)",
     async ({ entry, scope }) => {
       const workSessionKey = "agent:main:work";
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context } = setNavigationContext(page);
       context.agents.state.agentsList = {
         defaultId: "main",
@@ -790,7 +793,7 @@ describe("chat page retained sessions", () => {
   it.each(["canonical replacement", "explicit command"] as const)(
     "distinguishes an %s from implicit pane recovery",
     async (reason) => {
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       setNavigationContext(page);
       const key = "agent:main:12345678-90ab-cdef-1234-567890abcdef";
       const route = (title: string) =>
@@ -829,7 +832,7 @@ describe("chat page retained sessions", () => {
   it.each([false, true])(
     "fences the router read already pending when an unknown pane is focused (new choice: %s)",
     async (chooseAgain) => {
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context } = setNavigationContext(page);
       const initial: SessionChatRouteData = { sessionKey: "agent:main:a" };
       const destination: SessionChatRouteData = { sessionKey: "agent:main:b" };

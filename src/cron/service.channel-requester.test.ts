@@ -120,8 +120,9 @@ const requesterDeclaration = (overrides: Partial<CronJobCreate> = {}): CronJobCr
 
 it("rejects a minted requester token at commit after its MCP capture is deactivated", async () => {
   const runId = "cron-requester-mcp-commit";
+  const config = {};
   const admission = prepareAgentRunAdmission({
-    cfg: {},
+    cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     facts: {
       runId,
@@ -158,6 +159,7 @@ it("rejects a minted requester token at commit after its MCP capture is deactiva
         },
         runtimeOwnerToken: "cron-requester-mcp-commit-runtime",
         admittedRunContext: admitted,
+        toolPolicyConfig: config,
         cronRequesterGrantIssuer: expectDefined(
           captureCronRequesterGrantIssuer(runId),
           "native requester issuer",

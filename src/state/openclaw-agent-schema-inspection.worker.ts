@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   withDatabaseEngineSelection,
@@ -94,6 +95,9 @@ process.on(
         return;
       }
       const { input, snapshot } = request;
+      if (input.env) {
+        input.env = cloneEnvWithPlatformSemantics(input.env);
+      }
       if (request.databaseEngineSelection) {
         const agentId = input.agentId;
         if (!agentId) {

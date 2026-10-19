@@ -1,10 +1,17 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
+import {
+  getCurrentSessionControllerOwner,
+  captureSessionTarget,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { getRpcSourceIdentity } from "../../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
@@ -12,6 +19,7 @@ import type {
   RealtimeVoiceGatewayControl,
 } from "../../../talk/provider-types.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import { prepareTalkSessionTarget } from "../session-target.js";
 
 type NativeControlHarness = {
   getConfig: () => OpenClawConfig;
@@ -59,7 +67,18 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             isCompacting: () => false,
             abort: abortOwned,
           };
-          setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+          const operation = getCurrentSessionControllerOwner();
+          if (!operation) {
+            throw new Error("Talk consult has no controller-owned turn");
+          }
+          setActiveEmbeddedRun(
+            params.sessionId,
+            handle,
+            params.sessionKey,
+            undefined,
+            params.agentId,
+            operation,
+          );
           started.resolve(params);
           try {
             await finish.promise;
@@ -89,6 +108,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           replacement === "same call" ||
           (replacement === "other call" && surface === "browser-rpc");
         const consult = harness.getCallback()({ prompt: "Keep working" });
+        let foreignOperation: ReturnType<typeof createReplyOperation> | undefined;
         try {
           const active = await Promise.race([
             started.promise,
@@ -96,7 +116,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
               throw new Error("consult ended before model dispatch");
             }),
           ]);
-          expect(harness.context.chatAbortControllers.get(active.runId)).toMatchObject({
+          expect(getRpcSourceIdentity(rpcSourceTesting.get(active.runId)!)).toMatchObject({
             agentId: "voice",
             sessionKey: "global",
             sessionId: active.sessionId,
@@ -114,6 +134,24 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             ).toBe(replacement === "same call");
             controlSessionId = call.sessionId;
           } else {
+            if (replacement !== "replaced run") {
+              const foreignTarget = await prepareTalkSessionTarget(
+                harness.getConfig(),
+                "agent:primary:main",
+              );
+              foreignOperation = createReplyOperation({
+                sessionKey: "global",
+                sessionId: "other-agent-session",
+                agentId: "primary",
+                resetTriggered: false,
+                target: captureSessionTarget({
+                  storeScope: foreignTarget.storePath,
+                  sessionKey: "global",
+                  incarnation: "other-agent-session",
+                  agentId: "primary",
+                }),
+              });
+            }
             setActiveEmbeddedRun(
               replacement === "replaced run" ? active.sessionId : "other-agent-session",
               {
@@ -124,6 +162,9 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
                 abort: abortOther,
               },
               "global",
+              undefined,
+              foreignOperation ? "primary" : "voice",
+              foreignOperation,
             );
           }
           expect(
@@ -183,6 +224,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
         } finally {
           finish.resolve();
           await Promise.allSettled([consult]);
+          foreignOperation?.complete();
         }
       });
     },

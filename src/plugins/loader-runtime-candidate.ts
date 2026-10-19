@@ -484,6 +484,7 @@ export function* loadRuntimePluginCandidate(params: {
   }
 
   let moduleLoadMs = 0;
+  let modulePreparationMs = 0;
   let beforeRegister: number | undefined;
   let failurePhase: "load" | "register" = "load";
   let failed = false;
@@ -500,13 +501,19 @@ export function* loadRuntimePluginCandidate(params: {
     if (!recovery && candidate.origin !== "bundled") {
       // Host callers await acquisition after selection and policy checks. Synchronous
       // CLI consumers skip this step and use the same loader's inline acquisition.
-      yield () =>
-        params.loadPluginModule.prepare(safeSource, {
-          record,
-          rootDir: moduleRoot,
-          registry,
-          standalone: manifestRecord.manifestPath === candidate.source,
-        });
+      yield async () => {
+        const started = performance.now();
+        try {
+          await params.loadPluginModule.prepare(safeSource, {
+            record,
+            rootDir: moduleRoot,
+            registry,
+            standalone: manifestRecord.manifestPath === candidate.source,
+          });
+        } finally {
+          modulePreparationMs = performance.now() - started;
+        }
+      };
     }
     const loadPluginModule = (source: string) => {
       if (recovery) {
@@ -688,6 +695,7 @@ export function* loadRuntimePluginCandidate(params: {
       ["configValidationMs", configValidationMs],
       ["artifactPreparationMs", artifactPreparationMs],
       ["loadMs", moduleLoadMs || elapsed],
+      ["modulePreparationMs", modulePreparationMs],
       ["loadFailedCount", failed && failurePhase === "load" ? 1 : 0],
       ...(registerMs === undefined
         ? []

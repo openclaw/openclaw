@@ -176,6 +176,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
+      includeSessionMessageBodies: true,
     });
 
     const { connectFrame } = await startConnect(client);
@@ -184,6 +185,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.client.buildId).toBe("build-a");
+    expect(connectFrame.params?.includeSessionMessageBodies).toBe(true);
     expect(connectFrame.params?.caps).toEqual([
       GATEWAY_CLIENT_CAPS.AGENT_KIND,
       GATEWAY_CLIENT_CAPS.APPROVALS,
@@ -197,6 +199,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
       GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS,
       GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
@@ -210,6 +213,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   it("leaves the native-auth capability list unchanged", async () => {
     client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
+      includeSessionMessageBodies: true,
       nativeConnectAuth: async ({ nonce, signedAt }) => ({
         client: { id: "openclaw-macos", mode: "ui", platform: "darwin", version: "test" },
         scopes: ["operator.read"],
@@ -219,6 +223,10 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     const { connectFrame } = await startConnect(client);
     expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS);
+    expect(connectFrame.params.caps).not.toContain(
+      GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+    );
+    expect(connectFrame.params).not.toHaveProperty("includeSessionMessageBodies");
     expect(connectFrame.params.client.id).toBe("openclaw-macos");
     expect(connectFrame.params.auth).toEqual({ deviceToken: "native-device-token" });
   });

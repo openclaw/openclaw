@@ -3,7 +3,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -116,7 +116,7 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
   };
   return database.db.isTransaction
     ? read()
-    : runSqliteDeferredTransactionSync(database.db, read, {
+    : runSqliteReadSnapshotSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "board.read",
       });

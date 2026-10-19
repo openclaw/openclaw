@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -155,14 +155,6 @@ defineSolidBridge<AgentSelectProps>(
           ]
         : []),
     ]);
-    createEffect(
-      () => props.disabled,
-      (disabled) => {
-        if (disabled) {
-          menu?.close();
-        }
-      },
-    );
     return (
       <Menu
         id={id}
@@ -182,8 +174,10 @@ defineSolidBridge<AgentSelectProps>(
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
-          const option = surface?.querySelector<HTMLElement>(":focus");
-          if (surface && option) {
+          const root = surface?.getRootNode();
+          const option =
+            root instanceof ShadowRoot ? root.activeElement : surface?.ownerDocument.activeElement;
+          if (surface && option instanceof HTMLElement && surface.contains(option)) {
             revealInScrollRegion(surface, option);
           }
         }}

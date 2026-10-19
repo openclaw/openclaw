@@ -262,7 +262,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     });
     const sourceReplyFinal =
       deliveredCurrentSourceReply || sourceReplyPayload
-        ? resolveMessageToolSourceReplyFinal(toolArgs)
+        ? resolveMessageToolSourceReplyFinal(toolArgs, context.params.messageToolFinalByDefault)
         : undefined;
     // WebChat sends every targetless message through the internal sink while the run's
     // own reply mode stays automatic; a final send there is still this turn's answer.

@@ -40,6 +40,10 @@ import {
 } from "../operator-approval-standing-grants.js";
 import { listCronStandingGrants, revokeCronStandingGrant } from "../operator-approval-store.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
+import {
+  captureApprovalWorkerOwner,
+  registerPendingApprovalRecord,
+} from "./approval-registration.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
@@ -48,7 +52,6 @@ import {
   bindApprovalReviewerDeviceIds,
   handleApprovalResolve,
   listVisiblePendingApprovalRequests,
-  registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
@@ -150,6 +153,7 @@ export function createExecApprovalHandlers(
         rejectRequest("agent runtime approval authority is no longer active");
         return;
       }
+      const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
       const approvalContext = resolveSystemRunApprovalRequestContext({
         host,
         command: p.command,
@@ -384,6 +388,7 @@ export function createExecApprovalHandlers(
         timeoutMs,
         respond,
         context,
+        workerOwner,
       });
       if (!registration) {
         return;

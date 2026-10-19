@@ -520,6 +520,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         expected,
         undefined,
         expect.any(Function),
+        undefined,
       );
       expectReply(respond, { subscribed });
       finishHydration();

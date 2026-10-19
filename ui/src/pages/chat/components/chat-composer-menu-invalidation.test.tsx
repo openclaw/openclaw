@@ -18,6 +18,7 @@ it.each<ChatComposerPlusMenuView>([
 ])(
   "retains %s menu content on unrelated publications and admits in-place display changes",
   async (view) => {
+    const skillName = vi.fn(() => "Focused skill");
     const menu: ChatComposerPlusMenuProps = {
       attachments: {},
       disabled: false,
@@ -31,7 +32,19 @@ it.each<ChatComposerPlusMenuView>([
       onViewChange: vi.fn(),
       capabilityMenu: {
         basePath: "/control",
-        skills: [{ key: "focused", name: "Focused skill", enabled: true, baseEnabled: true }],
+        skills: [
+          {
+            key: "focused",
+            get name() {
+              return skillName();
+            },
+            set name(value: string) {
+              skillName.mockImplementation(() => value);
+            },
+            enabled: true,
+            baseEnabled: true,
+          },
+        ],
         skillsLoading: false,
         skillsError: false,
         mcpServers: [
@@ -97,6 +110,7 @@ it.each<ChatComposerPlusMenuView>([
     const [props, setProps] = createSignal(snapshot());
     const mounted = mountSolid(() => <ChatComposerPlusMenu menu={props()} />);
     flush();
+    expect(skillName).not.toHaveBeenCalled();
     mounted.container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!.click();
     await waitForSolid(() =>
       expect(

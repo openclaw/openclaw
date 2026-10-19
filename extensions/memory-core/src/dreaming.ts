@@ -15,11 +15,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import {
-  type CronServiceLike,
-  reconcileShortTermDreamingCronJob,
-  resolveCronServiceFromGatewayContext,
-} from "./dreaming-cron.js";
+import { type CronServiceLike, reconcileShortTermDreamingCronJob } from "./dreaming-cron.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { DreamNarrativeRequest, NarrativePhaseData } from "./dreaming-narrative.js";
 import {
@@ -541,7 +537,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
       serviceStartedAtMs = Date.now();
       disposed = false;
-      resolveServiceCron = () => resolveCronServiceFromGatewayContext(ctx);
+      resolveServiceCron = () => ctx.getCron?.() ?? null;
       void trackDreamingTask(async () => {
         try {
           await reconcileManagedDreamingCron({

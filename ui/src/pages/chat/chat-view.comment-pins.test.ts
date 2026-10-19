@@ -3,8 +3,10 @@ import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
@@ -25,6 +27,55 @@ function comment(id: string): ChatAttachment {
 }
 
 describe("chat comment pins", () => {
+  it("exposes only connected pins fully inside the transcript and viewport, then retires its handle", async () => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const container = createComposerContainer();
+    document.body.append(container);
+    const props = createChatProps({ attachments: [comment("visible")], loading: true });
+    renderChatPropsInto(container, props);
+    const state = getTranscriptState(props.paneId);
+    await waitForSolid(() => expect(state.commentPins).toBeDefined());
+    const handle = state.commentPins!;
+    const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+    const pin = container.querySelector<HTMLButtonElement>(".chat-comment-pin")!;
+    const threadBounds = vi
+      .spyOn(thread, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 200, 200));
+    const pinBounds = vi
+      .spyOn(pin, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(10, 10, 24, 24));
+    pin.hidden = false;
+
+    expect(handle.visiblePin("visible")).toBe(pin);
+    expect(handle.visiblePin("missing")).toBeUndefined();
+    pin.hidden = true;
+    expect(handle.visiblePin("visible")).toBeUndefined();
+    pin.hidden = false;
+    pinBounds.mockReturnValue(new DOMRect(190, 10, 24, 24));
+    expect(handle.visiblePin("visible")).toBeUndefined();
+    threadBounds.mockReturnValue(new DOMRect(0, 0, window.innerWidth + 100, 200));
+    pinBounds.mockReturnValue(new DOMRect(window.innerWidth - 5, 10, 24, 24));
+    expect(handle.visiblePin("visible")).toBeUndefined();
+    pinBounds.mockReturnValue(new DOMRect(10, 10, 0, 0));
+    expect(handle.visiblePin("visible")).toBeUndefined();
+    pinBounds.mockReturnValue(new DOMRect(10, 10, 24, 24));
+    container.remove();
+    expect(handle.visiblePin("visible")).toBeUndefined();
+    document.body.append(container);
+
+    renderChatPropsInto(container, { ...props, attachments: [] });
+    await waitForSolid(() => expect(state.commentPins).toBeUndefined());
+  });
+
   it("relayouts for pin and geometry changes but not unrelated pane renders", async () => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>

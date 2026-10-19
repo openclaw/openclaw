@@ -1,6 +1,6 @@
 import { CANCEL_SYMBOL } from "@clack/prompts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
+import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox/manage.js";
 
 const mocks = vi.hoisted(() => ({
   listSandboxContainers: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 const { clackConfirm } = vi.hoisted(() => ({ clackConfirm: vi.fn() }));
 // mock-isolation: CLI decisions must not inspect or mutate real sandbox containers.
-vi.mock("../agents/sandbox.js", () => mocks);
+vi.mock("../agents/sandbox/manage.js", () => mocks);
 
 vi.mock("../cli/local-state-owner.js", () => ({
   runWithLocalStateOwner: async ({

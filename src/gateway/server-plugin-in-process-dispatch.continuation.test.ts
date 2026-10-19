@@ -10,13 +10,13 @@ import {
   runWithGatewayToolContinuationContext,
 } from "../agents/tools/in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
-import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {

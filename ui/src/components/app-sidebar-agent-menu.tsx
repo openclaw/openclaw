@@ -15,7 +15,7 @@ import {
   type SidebarAgentMenuSwitcherParams,
 } from "./sidebar-agent-menu-switcher.tsx";
 import { Icon } from "./solid/icon.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import type { MenuEntry, MenuHandle, MenuItem } from "./solid/menu.tsx";
 
 // External rows of the footer identity menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -56,6 +56,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   onAskCapabilities: (agentId: string) => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+  ref?: (handle: MenuHandle) => void;
 };
 
 export function renderSidebarHelpMenu(): MenuItem | undefined {
@@ -104,6 +105,7 @@ export function selectSidebarHelpLink(value: string): boolean {
 }
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Element {
+  const pinButtons = new Map<string, HTMLButtonElement>();
   const position = params.position;
   const activeId = () => params.activeId;
   const activeName = () => params.activeName;
@@ -127,10 +129,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       kind: "group",
       id: "agents",
       class: "sidebar-agent-menu__agent-list",
-      items: renderSidebarAgentMenuSwitcher({
-        ...params,
-        allAgentsScope: params.rosterMode && params.agents.length > 1,
-      }),
+      items: renderSidebarAgentMenuSwitcher(
+        { ...params, allAgentsScope: params.rosterMode && params.agents.length > 1 },
+        pinButtons,
+      ),
     },
     ...(params.agents.length > 0
       ? [
@@ -175,6 +177,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       tabFocusTarget={params.tabFocusTarget}
       label={menuLabel()}
       focusOnOpen={params.openMode !== "hover"}
+      ref={params.ref}
       items={items()}
       onPointerEnter={params.onPointerEnter}
       onPointerLeave={params.onPointerLeave}
