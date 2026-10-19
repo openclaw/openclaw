@@ -1,6 +1,7 @@
-import { once } from "node:events";
-import type { Server } from "node:net";
+import { once, type EventEmitter } from "node:events";
+import net, { type Server } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { WebSocket } from "ws";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
@@ -20,6 +21,51 @@ export function closeServer(server: Server) {
   return new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
+}
+
+export function waitForClose(emitter: EventEmitter) {
+  return new Promise<void>((resolve) => {
+    emitter.once("close", () => resolve());
+  });
+}
+
+export function handlePeerTeardownError(error: NodeJS.ErrnoException): void {
+  if (error.code !== "ECONNRESET" && error.code !== "EPIPE") {
+    throw error;
+  }
+}
+
+export async function expectUnauthorizedUpgrade(url: string, cleanup: Array<() => Promise<void>>) {
+  const ws = new WebSocket(url);
+  cleanup.push(async () => ws.terminate());
+  await new Promise<void>((resolve, reject) => {
+    ws.once("open", () => reject(new Error("unauthorized upgrade was accepted")));
+    ws.once("unexpected-response", (_request, response) => {
+      expect(response.statusCode).toBe(401);
+      response.resume();
+      resolve();
+    });
+    ws.once("error", () => undefined);
+  });
+}
+
+export function createSocketServer(
+  cleanup: Array<() => Promise<void>>,
+  accept: (socket: net.Socket) => void,
+) {
+  const peers = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    peers.add(socket);
+    socket.once("close", () => peers.delete(socket));
+    accept(socket);
+  });
+  cleanup.push(async () => {
+    for (const peer of peers) {
+      peer.destroy();
+    }
+    await closeServer(server);
+  });
+  return { server, peers };
 }
 
 export function setupDesktopDiagnostics(

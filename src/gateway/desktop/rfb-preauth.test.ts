@@ -70,20 +70,6 @@ function bigIntBuffer(value: bigint, length: number): Buffer {
   return Buffer.from(value.toString(16).padStart(length * 2, "0"), "hex");
 }
 
-function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  let result = 1n;
-  let factor = base % modulus;
-  let power = exponent;
-  while (power > 0n) {
-    if ((power & 1n) === 1n) {
-      result = (result * factor) % modulus;
-    }
-    factor = (factor * factor) % modulus;
-    power >>= 1n;
-  }
-  return result;
-}
-
 async function completeSyntheticBrowserHandshake(browser: ScriptedPeer, ready?: () => void) {
   expect(await browser.readExactly(12)).toEqual(VERSION_3_8);
   await browser.write(VERSION_3_8);
@@ -101,45 +87,45 @@ async function offerSecurity(server: ScriptedPeer, types: number[], banner = VER
 }
 
 function ardHeader(keyLength: number) {
-  const header = Buffer.alloc(4);
-  header.writeUInt16BE(5, 0);
-  header.writeUInt16BE(keyLength, 2);
-  return header;
+  return Buffer.from([0, 5, keyLength >> 8, keyLength & 255]);
 }
 
 async function runPreauth(params: {
-  preauth: RfbPreauthDescriptor;
+  preauth?: RfbPreauthDescriptor;
   serverScript: (server: ScriptedPeer) => Promise<void>;
   browserScript?: (browser: ScriptedPeer) => Promise<void>;
   assertCurrent?: () => void;
 }): Promise<void> {
   const [gatewayServer, fakeServerStream] = duplexPair();
   const [gatewayBrowserStream, fakeBrowserStream] = duplexPair();
-  const gatewayBrowser = new ScriptedPeer(gatewayBrowserStream);
-  const fakeServer = new ScriptedPeer(fakeServerStream);
-  const fakeBrowser = new ScriptedPeer(fakeBrowserStream);
   try {
     await Promise.all([
       preauthenticateRfb({
         server: gatewayServer,
-        browser: gatewayBrowser,
-        preauth: params.preauth,
+        browser: new ScriptedPeer(gatewayBrowserStream),
+        preauth: params.preauth ?? VNC,
         assertCurrent: params.assertCurrent,
       }),
-      params.serverScript(fakeServer),
-      (params.browserScript ?? completeSyntheticBrowserHandshake)(fakeBrowser),
+      params.serverScript(new ScriptedPeer(fakeServerStream)),
+      (params.browserScript ?? completeSyntheticBrowserHandshake)(
+        new ScriptedPeer(fakeBrowserStream),
+      ),
     ]);
   } finally {
-    gatewayServer.destroy();
-    fakeServerStream.destroy();
-    gatewayBrowserStream.destroy();
-    fakeBrowserStream.destroy();
+    for (const stream of [
+      gatewayServer,
+      fakeServerStream,
+      gatewayBrowserStream,
+      fakeBrowserStream,
+    ]) {
+      stream.destroy();
+    }
   }
 }
 
 async function writeArdOffer(server: ScriptedPeer, keyLength: number): Promise<void> {
   await offerSecurity(server, [30, 33, 36, 35], Buffer.from("RFB 003.889\n", "ascii"));
-  const serverPublic = modPow(DH.generator, DH.privateKey, DH.modulus);
+  const serverPublic = DH.generator ** DH.privateKey % DH.modulus;
   await server.write(
     Buffer.concat([
       ardHeader(keyLength),
@@ -183,7 +169,6 @@ describe("RFB server-side pre-authentication", () => {
     const browserReady = createDeferred();
     const events: string[] = [];
     await runPreauth({
-      preauth: VNC,
       serverScript: async (server) => {
         await offerSecurity(server, [2]);
         await server.write(Buffer.from("0123456789abcdef"));
@@ -205,7 +190,6 @@ describe("RFB server-side pre-authentication", () => {
   it("rejects a bad browser handshake without waiting for an upstream banner", async () => {
     await expect(
       runPreauth({
-        preauth: VNC,
         serverScript: async (server) => {
           await server.readExactly(12);
         },
@@ -229,7 +213,7 @@ describe("RFB server-side pre-authentication", () => {
         expect(response).toHaveLength(128 + keyLength);
 
         const clientPublic = BigInt(`0x${response.subarray(128).toString("hex")}`);
-        const shared = modPow(clientPublic, DH.privateKey, DH.modulus);
+        const shared = clientPublic ** DH.privateKey % DH.modulus;
         const key = createHash("md5").update(bigIntBuffer(shared, keyLength)).digest();
         const decipher = createDecipheriv("aes-128-ecb", key, null);
         decipher.setAutoPadding(false);
@@ -275,7 +259,6 @@ describe("RFB server-side pre-authentication", () => {
   ])("matches the VncAuth DES vector with server version %j", async (banner, reply, legacy) => {
     const challenge = Buffer.from("0123456789abcdef", "ascii");
     await runPreauth({
-      preauth: VNC,
       serverScript: async (server) => {
         await server.write(Buffer.from(banner));
         expect(await server.readExactly(12)).toEqual(Buffer.from(reply));

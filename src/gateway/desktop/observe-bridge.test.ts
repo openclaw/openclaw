@@ -9,7 +9,12 @@ import { WebSocket } from "ws";
 import { WebSocket as NpmWebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { closeServer, listenLoopback, setupDesktopDiagnostics } from "./desktop.test-support.js";
+import {
+  expectUnauthorizedUpgrade,
+  closeServer,
+  listenLoopback,
+  setupDesktopDiagnostics,
+} from "./desktop.test-support.js";
 import {
   DESKTOP_OBSERVE_PATH,
   handleDesktopObserveUpgrade,
@@ -53,6 +58,16 @@ function nextFrame(ws: WebSocket) {
   });
 }
 
+function mintUnused(overrides: Partial<Parameters<typeof mintDesktopObserverToken>[0]> = {}) {
+  return mintDesktopObserverToken({
+    sourceKey: "worker:unused",
+    ownerEpoch: 1,
+    control: false,
+    attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
+    ...overrides,
+  });
+}
+
 async function createProxyHarness(
   params: {
     control?: boolean;
@@ -89,9 +104,7 @@ async function createProxyHarness(
       registry: params.registry ?? {
         claimStream: () => params.stream,
         attachObserver: (_environmentId, observer) => {
-          closeObserver.mockImplementation((code: number, reason: string) => {
-            observer.close(code, reason);
-          });
+          closeObserver.mockImplementation(observer.close);
           return { release };
         },
       },
@@ -122,35 +135,20 @@ async function createProxyHarness(
   };
 }
 
-function readSocketBytes(socket: Duplex, byteLength: number): Promise<Buffer> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    let received = 0;
-    const onData = (chunk: Buffer) => {
-      chunks.push(chunk);
-      received += chunk.length;
-      if (received >= byteLength) {
-        socket.off("data", onData);
-        resolve(Buffer.concat(chunks));
-      }
-    };
-    socket.on("data", onData);
-  });
+async function readSocketBytes(socket: Duplex, byteLength: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let received = 0;
+  for await (const chunk of socket.iterator({ destroyOnReturn: false })) {
+    chunks.push(Buffer.from(chunk));
+    received += chunk.length;
+    if (received >= byteLength) {
+      return Buffer.concat(chunks);
+    }
+  }
+  throw new Error("desktop closed before the expected bytes arrived");
 }
 
-async function expectUnauthorizedObserver(url: string): Promise<void> {
-  const ws = new WebSocket(url);
-  cleanup.push(async () => ws.terminate());
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", () => reject(new Error("observer token was unexpectedly accepted")));
-    ws.once("unexpected-response", (_request, response) => {
-      expect(response.statusCode).toBe(401);
-      response.resume();
-      resolve();
-    });
-    ws.once("error", () => undefined);
-  });
-}
+const expectUnauthorizedObserver = (url: string) => expectUnauthorizedUpgrade(url, cleanup);
 
 describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
   it.each([
@@ -250,13 +248,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     const harness = await createProxyHarness();
     await expectUnauthorizedObserver(harness.observerUrl);
 
-    const expired = mintDesktopObserverToken({
-      sourceKey: "worker:expired",
-      ownerEpoch: 1,
-      control: false,
-      attachment: { kind: "unix-socket", socketPath: "/tmp/expired.sock" },
-      nowMs: 0,
-    });
+    const expired = mintUnused({ nowMs: 0 });
     const observerUrl = new URL(harness.observerUrl);
     observerUrl.searchParams.set("token", expired.token);
     await expectUnauthorizedObserver(observerUrl.toString());
@@ -278,11 +270,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       if (revocation === "abort-before-mint") {
         controller.abort();
       }
-      const minted = mintDesktopObserverToken({
-        sourceKey: "worker:revoked",
-        ownerEpoch: 1,
-        control: false,
-        attachment: { kind: "unix-socket", socketPath: "/tmp/revoked-desktop.sock" },
+      const minted = mintUnused({
         requester: {
           signal: controller.signal,
           isCurrent: () => !invalidated && !controller.signal.aborted,
@@ -327,11 +315,11 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       client.invalidated = true;
       if (trigger === "abort") {
         controller.abort();
-      } else if (trigger === "desktop") {
-        stream.push(Buffer.from("revoked framebuffer"));
-        harness.ws.send(Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]));
       } else {
-        harness.ws.send(Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]));
+        if (trigger === "desktop") {
+          stream.push(Buffer.from("revoked framebuffer"));
+        }
+        harness.ws.send(KEY_EVENT);
       }
       await expect.poll(() => harness.ws.readyState).toBe(WebSocket.CLOSED);
       await expect(closed).resolves.toEqual([4006, "authority_revoked"]);
@@ -392,8 +380,8 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       trigger: "browser-close",
       cleanupCode: 1000,
       closeCode: 1001,
+      closeReason: undefined,
     });
-    expect(logCapture.records[0]?.attributes?.closeReason).toBeUndefined();
     const serialized = JSON.stringify(logCapture.records);
     expect(serialized).not.toContain("browser left");
     expect(serialized).not.toContain(token);
@@ -460,11 +448,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   it("expires unused credential-bearing tokens without a later token operation", async () => {
     const harness = await createProxyHarness();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const minted = mintDesktopObserverToken({
-      sourceKey: "worker:unused",
-      ownerEpoch: 1,
-      control: false,
-      attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
+    const minted = mintUnused({
       preauth: {
         auth: "vnc-password",
         credentials: { password: "synthetic-memory-only-password" },

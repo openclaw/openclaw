@@ -4,34 +4,32 @@ import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { closeServer, listenLoopback, setupDesktopDiagnostics } from "./desktop.test-support.js";
+import {
+  expectUnauthorizedUpgrade,
+  closeServer,
+  listenLoopback,
+  setupDesktopDiagnostics,
+  waitForClose,
+} from "./desktop.test-support.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const captureLogs = setupDesktopDiagnostics(cleanups, "node-stream-broker-diagnostics-");
 
-async function startBrokerServer(params: {
-  broker: ReturnType<typeof createNodeDesktopStreamBroker>;
-  session: { connId: string; pairingGeneration: string };
-  pairingCurrent?: () => boolean | Promise<boolean>;
-}) {
+async function createBrokerFixture(pairingCurrent?: () => boolean | Promise<boolean>) {
+  const broker = createNodeDesktopStreamBroker();
+  const session = { connId: "conn-1", pairingGeneration: "generation-1" };
   const registry = {
     getForPairingGeneration: (_nodeId: string, pairingGeneration: string) =>
-      pairingGeneration === params.session.pairingGeneration
-        ? { connId: params.session.connId }
-        : undefined,
+      pairingGeneration === session.pairingGeneration ? { connId: session.connId } : undefined,
     isConnectionCurrentPairingState: async (connId: string) =>
-      connId === params.session.connId && (await (params.pairingCurrent?.() ?? true)),
+      connId === session.connId && (await (pairingCurrent?.() ?? true)),
   };
   const server = http.createServer();
   const upgradedSocketsClosed: Promise<void>[] = [];
   server.on("upgrade", (req, socket, head) => {
-    upgradedSocketsClosed.push(
-      new Promise<void>((resolve) => {
-        socket.once("close", () => resolve());
-      }),
-    );
-    void params.broker.handleUpgrade(req, socket, head, registry as never);
+    upgradedSocketsClosed.push(waitForClose(socket));
+    void broker.handleUpgrade(req, socket, head, registry as never);
   });
   const port = await listenLoopback(server);
   cleanups.push(async () => {
@@ -39,13 +37,7 @@ async function startBrokerServer(params: {
     // HTTP close excludes upgraded sockets; their late diagnostics belong to this test.
     await Promise.all(upgradedSocketsClosed);
   });
-  return `ws://127.0.0.1:${port}`;
-}
-
-async function createBrokerFixture(pairingCurrent?: () => boolean | Promise<boolean>) {
-  const broker = createNodeDesktopStreamBroker();
-  const session = { connId: "conn-1", pairingGeneration: "generation-1" };
-  return { broker, session, baseUrl: await startBrokerServer({ broker, session, pairingCurrent }) };
+  return { broker, session, baseUrl: `ws://127.0.0.1:${port}` };
 }
 
 async function openSocket(url: string): Promise<WebSocket> {
@@ -61,17 +53,7 @@ async function connectAndSend(url: string, metadata: object): Promise<WebSocket>
   return ws;
 }
 
-async function expectUnauthorized(url: string): Promise<void> {
-  const ws = new WebSocket(url);
-  cleanups.push(async () => ws.terminate());
-  await expect(
-    new Promise<number>((resolve, reject) => {
-      ws.once("unexpected-response", (_request, response) => resolve(response.statusCode ?? 0));
-      ws.once("open", () => reject(new Error("unexpected node desktop attachment")));
-      ws.once("error", () => undefined);
-    }),
-  ).resolves.toBe(401);
-}
+const expectUnauthorized = (url: string) => expectUnauthorizedUpgrade(url, cleanups);
 
 async function pendingPairingHandoff() {
   let pairingChecks = 0;
@@ -124,12 +106,8 @@ describe("node desktop stream tickets", () => {
       await expect.poll(() => Buffer.concat(streamBytes).toString()).toBe("resumed stream bytes");
       expect(ws.readyState).toBe(WebSocket.OPEN);
 
-      const closed = new Promise<void>((resolve) => {
-        ws.once("close", () => resolve());
-      });
-      const streamClosed = new Promise<void>((resolve) => {
-        stream.once("close", () => resolve());
-      });
+      const closed = waitForClose(ws);
+      const streamClosed = waitForClose(stream);
       if (closeMode === "peer-close") {
         ws.close(1012, `peer restart\n${minted.attachPath}`);
       } else {
@@ -172,8 +150,7 @@ describe("node desktop stream tickets", () => {
       const metadata = { auth, ...(vncPassword ? { vncPassword } : {}) };
       await connectAndSend(`${baseUrl}${minted.attachPath}`, metadata);
       const attached = await minted.attached;
-      expect(attached).toMatchObject(metadata);
-      expect(attached.vncPassword).toBe(vncPassword);
+      expect(attached).toMatchObject({ ...metadata, vncPassword });
       attached.stream.destroy();
 
       await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
