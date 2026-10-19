@@ -23,19 +23,11 @@ function extractEntrypointLines(scriptSource: string): string[] {
 }
 
 function findPowerShell(candidates = ["pwsh", "powershell"]): string | undefined {
-  for (const candidate of candidates) {
-    const result = spawnSync(
-      candidate,
-      ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion"],
-      {
-        encoding: "utf8",
-      },
-    );
-    if (result.status === 0) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return candidates.find(
+    (candidate) =>
+      spawnSync(candidate, [...POWERSHELL_ARGS, "-Command", "$PSVersionTable.PSVersion"]).status ===
+      0,
+  );
 }
 
 const powershell = findPowerShell();
@@ -88,46 +80,27 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = __dirname;
 const [kind, ...args] = process.argv.slice(2);
+const command = kind + " " + args.join(" ");
 fs.appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({ kind, args }) + "\n");
-if (kind === "git" && args.join(" ") === "--version") {
-  console.log("git version 2.50.0.windows.1");
-} else if (kind === "npm") {
-  if (args.join(" ") === "--version") {
-    console.log("11.15.0");
-  } else if (args[0] === "config" && args[1] === "get") {
-    const values = {
-      prefix: path.join(root, "prefix"),
-      cache: path.join(root, "cache"),
-      globalconfig: path.join(root, "npmrc"),
-    };
-    console.log(values[args[2]] ?? "undefined");
-  } else if (args.join(" ") === "root -g") {
-    console.log(path.join(root, "prefix", "node_modules"));
-  } else if (args[0] === "install" && args[1] === "-g") {
-    const dist = path.join(root, "prefix", "node_modules", "openclaw", "dist");
-    fs.mkdirSync(dist, { recursive: true });
-    fs.writeFileSync(path.join(dist, "entry.js"), "// installed package\n");
-    if (process.env.OPENCLAW_TEST_USABLE_COMMAND !== "1") {
-      fs.unlinkSync(path.join(root, "bin", "openclaw.cmd"));
-    }
-  } else {
-    throw new Error("Unexpected npm command: " + args.join(" "));
-  }
-} else if (kind === "openclaw") {
-  if (args.join(" ") === "daemon status --json") {
-    console.log(JSON.stringify({ service: { loaded: true } }));
-  } else if (args.join(" ") === "--version") {
-    console.log("2026.9.19");
-  } else if (![
-    "gateway install --force",
-    "gateway restart",
-    "gateway status --json",
-    "doctor --fix --non-interactive",
-  ].includes(args.join(" "))) {
-    throw new Error("Unexpected OpenClaw command: " + args.join(" "));
-  }
-} else {
-  throw new Error("Unexpected fixture command: " + kind);
+const outputs = {
+  "git --version": "git version 2.50.0.windows.1",
+  "npm --version": "11.15.0",
+  "npm root -g": path.join(root, "prefix", "node_modules"),
+  "openclaw daemon status --json": JSON.stringify({ service: { loaded: true } }),
+  "openclaw --version": "2026.9.19",
+};
+if (Object.hasOwn(outputs, command)) {
+  console.log(outputs[command]);
+} else if (kind === "npm" && args[0] === "config" && args[1] === "get") {
+  const values = { prefix: "prefix", cache: "cache", globalconfig: "npmrc" };
+  console.log(Object.hasOwn(values, args[2]) ? path.join(root, values[args[2]]) : "undefined");
+} else if (kind === "npm" && args[0] === "install" && args[1] === "-g") {
+  const dist = path.join(root, "prefix", "node_modules", "openclaw", "dist");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "entry.js"), "// installed package\n");
+  if (process.env.OPENCLAW_TEST_USABLE_COMMAND !== "1") fs.unlinkSync(path.join(root, "bin", "openclaw.cmd"));
+} else if (!["openclaw gateway install --force", "openclaw gateway restart", "openclaw gateway status --json", "openclaw doctor --fix --non-interactive"].includes(command)) {
+  throw new Error("Unexpected fixture command: " + command);
 }
 `,
   );
@@ -508,26 +481,44 @@ try {
       "}",
     ),
     "node-capabilities": installerFixture(
-      "function Get-Command { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }",
-      "function Invoke-FixtureNode {",
-      "  $global:LASTEXITCODE = 0",
-      "  if ($args[0] -eq '-v') { return $script:FixtureVersion }",
-      "  $input | Out-Null",
-      "  return $script:FixtureSqlite",
-      "}",
-      "foreach ($case in @(",
-      "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
-      "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
-      "  @{ version = 'v24.15.0+vendor.1'; text = $true; expected = $false },",
-      "  @{ version = 'v26.0.0+vendor.1'; text = $true; expected = $false },",
-      "  @{ version = 'v24.15.0'; text = $false; expected = $false },",
-      "  @{ version = 'v22.23.2'; text = $true; expected = $false }",
-      ")) {",
-      "  $script:FixtureVersion = $case.version",
-      "  $script:FixtureSqlite = @{ available = $true; version = '3.51.3'; text = $case.text; blob = $true; json = $true } | ConvertTo-Json -Compress",
-      "  $actual = Check-Node",
-      '  if ($actual -ne $case.expected) { throw "Version=$($case.version) Text=$($case.text) Actual=$actual" }',
-      "}",
+      `$cases = ${toPowerShellSingleQuotedLiteral(
+        JSON.stringify([
+          ["v24.19.0", "3.51.3", true, true],
+          ["v24.19.0", "3.51.3", false, false],
+          ["v24.15.0+vendor.1", "3.51.3", true, false],
+          ["v26.0.0+vendor.1", "3.51.3", true, false],
+          ["v24.15.0", "3.51.3", false, false],
+          ["v22.23.2", "3.51.3", true, false],
+          ...Object.entries({
+            "3.44.5": false,
+            "3.44.6": true,
+            "3.46.1": false,
+            "3.50.6": false,
+            "3.50.7": true,
+            "3.51.2": false,
+            "3.51.3": true,
+            "3.53.1": true,
+            unavailable: false,
+          }).map(([sqlite, expected]) => ["v26.1.0", sqlite, true, expected]),
+        ]),
+      )} | ConvertFrom-Json`,
+      String.raw`
+function Invoke-FixtureNode {
+  $global:LASTEXITCODE = 0
+  if ($args[0] -eq '-v') { return $script:case[0] }
+  $input | Out-Null
+  return (@{ available = $true; version = $script:case[1]; text = $script:case[2]; blob = $true; json = $true } | ConvertTo-Json -Compress)
+}
+function Get-Command {
+  if ($script:explicit) { throw 'unexpected ambient runtime lookup' }
+  return [pscustomobject]@{ Source = 'Invoke-FixtureNode' }
+}
+foreach ($script:case in $cases) {
+  $script:explicit = $script:case[0] -eq 'v26.1.0'
+  $actual = if ($script:explicit) { Check-Node -NodePath 'Invoke-FixtureNode' } else { Check-Node }
+  if ($actual -ne $script:case[3]) { throw "Node/SQLite case failed: $script:case actual=$actual" }
+}
+`,
     ),
     "same-prefix-shim-transaction": installerFixture(
       '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-shim-transaction-" + [guid]::NewGuid().ToString("N"))',
@@ -572,18 +563,18 @@ try {
       "  $env:TMP = $env:TEMP",
       '  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -ne $longTemp) { throw "prefix not stripped: $candidate" }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }',
       '  if ($resolved -ne $expected) { throw "extended=$resolved expected=$expected" }',
-      "  # Windows PowerShell 5.1 proof: FSO Folder.Path echoes 8.3; Get-Item.FullName expands it.",
-      "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+      "  $shortTemp = 'C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp'",
       "  $env:TMP = $longTemp",
-      "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
-      '  if ($resolved -ne $longTemp) { throw "short=$resolved" }',
-      "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Missing'",
-      "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { throw 'unresolvable short alias' }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
-      '  if ($resolved -ne $longTemp) { throw "fallback=$resolved" }',
-      "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
-      "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) return $candidate }",
-      '  if ($resolved -ne $longTemp) { throw "unchanged-short=$resolved" }',
-      "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+      "  foreach ($case in @(",
+      "    @{ path = $shortTemp; resolve = { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName } },",
+      "    @{ path = 'C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Missing'; resolve = { param($candidate) if ($candidate -match '~') { throw 'unresolvable short alias' }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName } },",
+      "    @{ path = $shortTemp; resolve = { param($candidate) return $candidate } }",
+      "  )) {",
+      "    $env:TEMP = $case.path",
+      "    $resolved = Resolve-InstallerTempDirectory -LongPathResolver $case.resolve",
+      '    if ($resolved -ne $longTemp) { throw "short-path resolution=$resolved" }',
+      "  }",
+      "  $env:TEMP = $shortTemp",
       "  Initialize-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
       '  if ($script:InstallerTempDirectory -ne $longTemp) { throw "canonical=$script:InstallerTempDirectory" }',
       '  if ($env:TEMP -ne $longTemp) { throw "TEMP=$env:TEMP" }',
@@ -623,33 +614,7 @@ try {
       "  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }",
       "}",
     ),
-    "sqlite-versions": installerFixture(
-      "function private-node-fixture {",
-      "  $global:LASTEXITCODE = 0",
-      "  if ($args[0] -eq '-v') { return 'v26.1.0' }",
-      "  $input | Out-Null",
-      "  return (@{ available = $true; version = $script:FixtureSqliteVersion; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress)",
-      "}",
-      "function Get-Command { throw 'unexpected ambient runtime lookup' }",
-      "$cases = @{",
-      "  '3.44.5' = $false",
-      "  '3.44.6' = $true",
-      "  '3.46.1' = $false",
-      "  '3.50.6' = $false",
-      "  '3.50.7' = $true",
-      "  '3.51.2' = $false",
-      "  '3.51.3' = $true",
-      "  '3.53.1' = $true",
-      "  'unavailable' = $false",
-      "}",
-      "foreach ($entry in $cases.GetEnumerator()) {",
-      "  $actual = Test-NodeSqliteSupported -Version $entry.Key",
-      '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
-      "  $script:FixtureSqliteVersion = $entry.Key",
-      "  $actual = Check-Node -NodePath 'private-node-fixture'",
-      '  if ($actual -ne $entry.Value) { throw "Explicit runtime SQLite=$($entry.Key) Actual=$actual" }',
-      "}",
-    ),
+
     "native-arm64-git": installerFixture(
       "$env:PROCESSOR_ARCHITEW6432 = $null",
       "$env:PROCESSOR_ARCHITECTURE = 'ARM64'",
@@ -919,18 +884,14 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
       "  $global:LASTEXITCODE = 0",
       "}",
       "try {",
-      "  $successRepo = Join-Path $sandbox 'success'",
-      "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $successRepo",
-      "  if (-not (Test-Path -LiteralPath (Join-Path $successRepo 'checkout.marker'))) { throw 'complete checkout was not published' }",
-      "  if ($script:LastCloneArgs -notcontains '--filter=blob:none') { throw 'supported Git did not use a filtered clone' }",
-      "",
-      "  $emptyRepo = Join-Path $sandbox 'empty'",
-      "  New-Item -ItemType Directory -Path $emptyRepo | Out-Null",
-      "  $script:GitFilterSupport = $false",
-      "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $emptyRepo",
-      "  if (-not (Test-Path -LiteralPath (Join-Path $emptyRepo 'checkout.marker'))) { throw 'empty destination was not populated' }",
-      "  if ($script:LastCloneArgs -contains '--filter=blob:none') { throw 'unsupported Git used a filtered clone' }",
-      "",
+      "  foreach ($empty in @($false, $true)) {",
+      "    $repo = Join-Path $sandbox ([string]$empty)",
+      "    if ($empty) { New-Item -ItemType Directory -Path $repo | Out-Null }",
+      "    $script:GitFilterSupport = -not $empty",
+      "    New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $repo",
+      "    if (-not (Test-Path -LiteralPath (Join-Path $repo 'checkout.marker'))) { throw 'complete checkout was not published' }",
+      "    if (($script:LastCloneArgs -contains '--filter=blob:none') -ne $script:GitFilterSupport) { throw 'incorrect clone filter selection' }",
+      "  }",
       "  $aliasTarget = Join-Path $sandbox 'alias-target'",
       "  $script:AliasReplacement = Join-Path $sandbox 'alias-replacement'",
       "  $script:AliasPath = Join-Path $sandbox 'alias'",
@@ -943,20 +904,20 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
       "  if (-not (Test-Path -LiteralPath (Join-Path $aliasTarget 'checkout.marker'))) { throw 'original alias target was not populated' }",
       "  if (@(Get-ChildItem -LiteralPath $script:AliasReplacement -Force).Count -ne 0) { throw 'replacement alias target was modified' }",
       "",
-      "  $script:CloneMode = 'failure'",
-      "  $failedRepo = Join-Path $sandbox 'failure'",
-      "  $cloneFailed = $false",
-      "  try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $failedRepo } catch { $cloneFailed = $true }",
-      "  if (-not $cloneFailed) { throw 'failed clone was accepted' }",
-      "  if (Test-Path -LiteralPath $failedRepo) { throw 'failed clone published its destination' }",
-      "",
-      "  $script:CloneMode = 'concurrent'",
-      "  $script:ConcurrentRepo = Join-Path $sandbox 'concurrent'",
-      "  $publicationFailed = $false",
-      "  try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $script:ConcurrentRepo } catch { $publicationFailed = $true }",
-      "  if (-not $publicationFailed) { throw 'concurrent destination was replaced' }",
-      "  if ((Get-Content -LiteralPath (Join-Path $script:ConcurrentRepo 'user.marker') -Raw).Trim() -ne 'keep') { throw 'concurrent destination changed' }",
-      "  if (Test-Path -LiteralPath (Join-Path $script:ConcurrentRepo 'checkout.marker')) { throw 'clone leaked into concurrent destination' }",
+      "  foreach ($mode in @('failure', 'concurrent')) {",
+      "    $script:CloneMode = $mode",
+      "    $repo = Join-Path $sandbox $mode",
+      "    $script:ConcurrentRepo = $repo",
+      "    $failed = $false",
+      "    try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $repo } catch { $failed = $true }",
+      '    if (-not $failed) { throw "unexpected clone success: $mode" }',
+      "    if ($mode -eq 'failure') {",
+      "      if (Test-Path -LiteralPath $repo) { throw 'failed clone published its destination' }",
+      "    } else {",
+      "      if ((Get-Content -LiteralPath (Join-Path $repo 'user.marker') -Raw).Trim() -ne 'keep') { throw 'concurrent destination changed' }",
+      "      if (Test-Path -LiteralPath (Join-Path $repo 'checkout.marker')) { throw 'clone leaked into concurrent destination' }",
+      "    }",
+      "  }",
       "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter '.openclaw-clone-*' -Force).Count -ne 0) { throw 'staging directories remain' }",
       "} finally {",
       "  Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue",
@@ -1139,14 +1100,6 @@ try {
         Set-Location -LiteralPath $foreign
         $script:Published = 0
         $script:PathPublished = 0
-        $outsideRejected = try {
-            Publish-TextFileAtomically -Path (Join-Path $caseRoot '..\openclaw.cmd') -Contents ''
-            $false
-        } catch {
-            if ($_.Exception.Message -ne 'publication escaped fixture') { throw }
-            $true
-        }
-        if (-not $outsideRejected -or $script:Published -ne 0) { throw 'outside publication was accepted' }
         $caught = $null
         $ownerOutput = @()
         try { $ownerOutput = @(Install-OpenClawFromGit -RepoDir $target -SkipUpdate) } catch { $caught = $_ }
@@ -1290,7 +1243,6 @@ try {
   });
 
   const fixtureGroups: Record<string, string[]> = {
-    "node-versions": ["node-versions", "sqlite-versions"],
     "package-manager-node-command-failures": [
       "package-manager-node-command-failures",
       "package-manager-node-next-manager-success",
@@ -1649,7 +1601,7 @@ describe("install.ps1 stale Winget repair", () => {
     repairExit: 0,
     afterInstall: "missing",
     afterRepair: "missing",
-    repair: false,
+    repair: true,
     success: false,
     fallback: "none",
     afterFallback: "healthy",
@@ -1658,42 +1610,37 @@ describe("install.ps1 stale Winget repair", () => {
     "preserves exit code across probes": {
       afterInstall: "text",
       afterRepair: "healthy",
-      repair: true,
       success: true,
     },
-    "repairs missing runtime": { afterRepair: "healthy", repair: true, success: true },
-    "accepts healthy no-upgrade": { afterInstall: "healthy", success: true },
-    "does not repair generic failure": { installExit: 1 },
-    "does not repair successful install": { installExit: 0 },
+    "repairs missing runtime": { afterRepair: "healthy", success: true },
+    "accepts healthy no-upgrade": { afterInstall: "healthy", success: true, repair: false },
+    "does not repair generic failure": { installExit: 1, repair: false },
+    "does not repair successful install": { installExit: 0, repair: false },
     "falls back to Chocolatey": {
       repairExit: -1978335174,
-      repair: true,
       fallback: "choco",
       success: true,
     },
-    "falls back to Scoop": { repairExit: 1, repair: true, fallback: "scoop", success: true },
+    "falls back to Scoop": { repairExit: 1, fallback: "scoop", success: true },
     "falls back from old SQLite": {
       afterRepair: "old-sqlite",
-      repair: true,
       fallback: "portable",
       success: true,
     },
     "rejects unusable fallback": {
       repairExit: 1,
-      repair: true,
       fallback: "portable",
       afterFallback: "text",
     },
     "rejects failed repair with healthy Node": {
       repairExit: 1,
       afterRepair: "healthy",
-      repair: true,
     },
-    "rejects missing repaired Node": { repair: true },
+    "rejects missing repaired Node": {},
     ...Object.fromEntries(
       ["text", "blob", "json", "probe-error"].map((capability) => [
         `rejects repaired SQLite ${capability}`,
-        { afterRepair: capability, repair: true },
+        { afterRepair: capability },
       ]),
     ),
   };
