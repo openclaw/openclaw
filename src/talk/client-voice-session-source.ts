@@ -183,7 +183,11 @@ export async function prepareClientVoiceSessionSourceChecks(
     publishedChecks.forEach(({ predicate }) => admitPublishedSessionSource(predicate));
   };
   if (foreign.size === 0) {
-    return { nativeSource: !canAdmitOnce, checks, assertCurrent: assertAuthoritiesCurrent };
+    return {
+      nativeSource: publishedChecks.length > 0,
+      checks,
+      assertCurrent: assertAuthoritiesCurrent,
+    };
   }
   const [
     { retainOpenClawAgentDatabaseReadOnly },
