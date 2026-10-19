@@ -13,7 +13,7 @@ import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-people.css";
 
-export type ChatDetailsPeopleFacts = {
+type ChatDetailsPeopleFacts = {
   /** Session people in the parent's order, including its projected owner/creator. */
   people: readonly SessionParticipant[];
   /** Distinct total for this union, if known; not the raw participantCount. */
