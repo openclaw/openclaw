@@ -13,6 +13,19 @@ const sessionTools = [
   "sessions_send",
   "session_status",
 ];
+const reachable = (id: string) =>
+  `- ${id}: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.`;
+const removed = (id: string) =>
+  `- ${id}: session tools removed by agent tool policy; its transcripts remain readable by the agents above.`;
+const roster = (entries: NonNullable<OpenClawConfig["agents"]>["entries"]): OpenClawConfig => ({
+  agents: { entries },
+});
+function expectFinding(cfg: OpenClawConfig, severity: "info" | "warn") {
+  const findings = collectCrossAgentSessionAccessFindings(cfg);
+  expect(findings).toHaveLength(1);
+  expect(findings[0]).toMatchObject({ checkId, severity });
+  return findings[0]!;
+}
 
 describe("security audit cross-agent session access", () => {
   it.each<{ name: string; cfg: OpenClawConfig }>([
@@ -36,14 +49,10 @@ describe("security audit cross-agent session access", () => {
     },
     {
       name: "agents with all session tools removed",
-      cfg: {
-        agents: {
-          entries: {
-            home: { tools: { deny: sessionTools } },
-            work: { tools: { deny: sessionTools } },
-          },
-        },
-      },
+      cfg: roster({
+        home: { tools: { deny: sessionTools } },
+        work: { tools: { deny: sessionTools } },
+      }),
     },
   ])("does not flag $name", ({ cfg }) => {
     expect(collectCrossAgentSessionAccessFindings(cfg)).toEqual([]);
@@ -71,9 +80,7 @@ describe("security audit cross-agent session access", () => {
   ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)(
     "reports one informational finding for $name",
     ({ cfg }) => {
-      const findings = collectCrossAgentSessionAccessFindings(cfg);
-      expect(findings).toHaveLength(1);
-      const finding = findings[0]!;
+      const finding = expectFinding(cfg, "info");
       expect(finding).toMatchObject({
         checkId,
         severity: "info",
@@ -84,10 +91,7 @@ describe("security audit cross-agent session access", () => {
         'tools.sessions.visibility resolves to "all"',
         "tools.agentToAgent",
         "Agents that can reach other agents' sessions, including other users' transcripts:",
-        ...["home", "work"].map(
-          (id) =>
-            `- ${id}: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.`,
-        ),
+        ...["home", "work"].map(reachable),
         "Incognito sessions remain hidden.",
       ]) {
         expect(finding.detail).toContain(detail);
@@ -138,12 +142,10 @@ describe("security audit cross-agent session access", () => {
   ] satisfies Array<{ name: string; cfg: OpenClawConfig; signals: string[] }>)(
     "warns for $name",
     ({ cfg, signals }) => {
-      const findings = collectCrossAgentSessionAccessFindings(cfg);
-      expect(findings).toHaveLength(1);
-      expect(findings[0]).toMatchObject({ checkId, severity: "warn" });
-      expect(findings[0]!.detail).toContain("different trust levels");
+      const finding = expectFinding(cfg, "warn");
+      expect(finding.detail).toContain("different trust levels");
       for (const signal of signals) {
-        expect(findings[0]!.detail).toContain(signal);
+        expect(finding.detail).toContain(signal);
       }
     },
   );
@@ -153,7 +155,7 @@ describe("security audit cross-agent session access", () => {
       name: "a sandboxed agent under the default clamp",
       cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
       detail: [
-        `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
+        `${reachable("home")}\n` +
           "- work: sandboxed sessions clamped to their spawn tree; its transcripts remain readable by the agents above.",
         'work: sandbox.mode="all"',
         "different trust levels",
@@ -186,47 +188,32 @@ describe("security audit cross-agent session access", () => {
     },
     {
       name: "an agent with all session tools removed",
-      cfg: {
-        agents: { entries: { home: {}, work: { tools: { deny: sessionTools } } } },
-      },
-      detail: [
-        `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- work: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
-      ],
+      cfg: roster({ home: {}, work: { tools: { deny: sessionTools } } }),
+      detail: [`${reachable("home")}\n${removed("work")}`],
       absent: "- work: unsandboxed",
     },
     {
       name: "an agent with only session status allowed",
-      cfg: {
-        agents: { entries: { home: {}, work: { tools: { profile: "minimal" } } } },
-      },
+      cfg: roster({ home: {}, work: { tools: { profile: "minimal" } } }),
       detail: [
-        `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
+        `${reachable("home")}\n` +
           "- work: unsandboxed sessions; allowed session tools: session_status.\n",
       ],
     },
     {
       name: "a non-reaching agent before a reaching agent in the roster",
-      cfg: {
-        agents: { entries: { home: { tools: { deny: sessionTools } }, work: {} } },
-      },
-      detail: [
-        "Agents: home, work",
-        `- work: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- home: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
-      ],
+      cfg: roster({ home: { tools: { deny: sessionTools } }, work: {} }),
+      detail: ["Agents: home, work", `${reachable("work")}\n${removed("home")}`],
     },
   ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[]; absent?: string }>)(
     "renders session reach for $name",
     ({ cfg, detail, absent }) => {
-      const findings = collectCrossAgentSessionAccessFindings(cfg);
-      expect(findings).toHaveLength(1);
-      expect(findings[0]).toMatchObject({ checkId, severity: "warn" });
+      const finding = expectFinding(cfg, "warn");
       for (const fragment of detail) {
-        expect(findings[0]!.detail).toContain(fragment);
+        expect(finding.detail).toContain(fragment);
       }
       if (absent) {
-        expect(findings[0]!.detail).not.toContain(absent);
+        expect(finding.detail).not.toContain(absent);
       }
     },
   );

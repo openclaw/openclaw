@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
@@ -22,22 +21,8 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
-function requireFinding(
-  checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
-  findings: SecurityAuditFinding[],
-) {
-  const finding = findings.find((entry) => entry.checkId === checkId);
-  if (!finding) {
-    throw new Error(`Expected ${checkId} finding`);
-  }
-  return finding;
-}
-
 describe("security audit exec surface findings", () => {
-  // Redirect the OpenClaw home (OPENCLAW_HOME wins over HOME/USERPROFILE in
-  // `resolveRawHomeDir`) to a per-test tempdir so `saveExecApprovals` never
-  // touches the real `~/.openclaw/exec-approvals.json` on the host running
-  // the suite.
+  // Redirect every home source so approvals never touch the real host state.
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let tempRoot = "";
   let tempCaseIndex = 0;
@@ -50,12 +35,8 @@ describe("security audit exec surface findings", () => {
     envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME", "USERPROFILE"]);
     const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
     await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
-    // OPENCLAW_HOME takes precedence over HOME/USERPROFILE in resolveRawHomeDir,
-    // so all three must point at the tempdir to neutralize whichever the host
-    // happens to have set.
     process.env.OPENCLAW_HOME = tempDir;
     process.env.HOME = tempDir;
-    // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
   });
 
@@ -74,9 +55,7 @@ describe("security audit exec surface findings", () => {
   it("warns when exec approvals enable autoAllowSkills", async () => {
     saveExecApprovals({
       version: 1,
-      defaults: {
-        autoAllowSkills: true,
-      },
+      defaults: { autoAllowSkills: true },
       agents: {},
     });
 
@@ -92,11 +71,7 @@ describe("security audit exec surface findings", () => {
   it("honors global strictInlineEval for a named default agent approval scope", async () => {
     saveExecApprovals({
       version: 1,
-      agents: {
-        ops: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
-        },
-      },
+      agents: { ops: { allowlist: [{ pattern: "/usr/bin/python3" }] } },
     });
 
     expect(
@@ -104,17 +79,9 @@ describe("security audit exec surface findings", () => {
         "tools.exec.allowlist_interpreter_without_strict_inline_eval",
         "warn",
         await collectSecurityAuditFindings({
-          agents: {
-            entries: {
-              ops: {},
-            },
-          },
-          tools: {
-            exec: {
-              strictInlineEval: true,
-            },
-          },
-        } satisfies OpenClawConfig),
+          agents: { entries: { ops: {} } },
+          tools: { exec: { strictInlineEval: true } },
+        }),
       ),
     ).toBe(false);
   });
@@ -122,11 +89,7 @@ describe("security audit exec surface findings", () => {
   it("honors a named default agent strictInlineEval override", async () => {
     saveExecApprovals({
       version: 1,
-      agents: {
-        ops: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
-        },
-      },
+      agents: { ops: { allowlist: [{ pattern: "/usr/bin/python3" }] } },
     });
 
     expect(
@@ -139,47 +102,26 @@ describe("security audit exec surface findings", () => {
               ops: { tools: { exec: { strictInlineEval: false } } },
             },
           },
-          tools: {
-            exec: {
-              strictInlineEval: true,
-            },
-          },
-        } satisfies OpenClawConfig),
+          tools: { exec: { strictInlineEval: true } },
+        }),
       ),
     ).toBe(true);
   });
 
   it("flags open channel access combined with exec-enabled scopes", async () => {
     const findings = await collectSecurityAuditFindings({
-      channels: {
-        discord: {
-          groupPolicy: "open",
-        },
-      },
-      tools: {
-        exec: {
-          mode: "allowlist",
-          host: "gateway",
-        },
-      },
-    } satisfies OpenClawConfig);
+      channels: { discord: { groupPolicy: "open" } },
+      tools: { exec: { mode: "allowlist", host: "gateway" } },
+    });
 
     expect(hasFinding("security.exposure.open_channels_with_exec", "warn", findings)).toBe(true);
   });
 
   it("escalates open channel exec exposure when full exec is configured", async () => {
     const findings = await collectSecurityAuditFindings({
-      channels: {
-        slack: {
-          dmPolicy: "open",
-        },
-      },
-      tools: {
-        exec: {
-          mode: "full",
-        },
-      },
-    } satisfies OpenClawConfig);
+      channels: { slack: { dmPolicy: "open" } },
+      tools: { exec: { mode: "full" } },
+    });
 
     expect(hasFinding("tools.exec.security_full_configured", "critical", findings)).toBe(true);
     expect(hasFinding("security.exposure.open_channels_with_exec", "critical", findings)).toBe(
@@ -199,27 +141,25 @@ describe("security audit exec surface findings", () => {
           },
         },
       },
-    } satisfies OpenClawConfig);
-
-    const finding = requireFinding("tools.exec.fs_tools_disabled_but_exec_enabled", findings);
-    expect(finding.detail).toContain("agents.entries.ops.tools");
+    });
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
+        detail: expect.stringContaining("agents.entries.ops.tools"),
+      }),
+    );
   });
 
   it("does not warn when sandbox filesystem policy constrains exec", async () => {
     const findings = await collectSecurityAuditFindings({
       agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            workspaceAccess: "ro",
-          },
-        },
+        defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
       },
       tools: {
         allow: ["read", "exec", "process"],
         deny: ["write", "edit", "apply_patch"],
       },
-    } satisfies OpenClawConfig);
+    });
 
     expect(hasFinding("tools.exec.fs_tools_disabled_but_exec_enabled", "warn", findings)).toBe(
       false,

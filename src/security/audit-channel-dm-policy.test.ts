@@ -80,6 +80,26 @@ function createDmPlugin(
   };
 }
 
+function dmFindings(cfg: OpenClawConfig, options: Parameters<typeof createDmPlugin>[0] = {}) {
+  return collectChannelSecurityFindingsCore({ cfg, plugins: [createDmPlugin(options)] });
+}
+
+function dmBinding(
+  id: string,
+  dmScope: NonNullable<OpenClawConfig["session"]>["dmScope"],
+  accountId?: string,
+) {
+  return {
+    agentId: "main",
+    match: {
+      channel: "whatsapp",
+      peer: { kind: "direct" as const, id },
+      ...(accountId ? { accountId } : {}),
+    },
+    session: { dmScope },
+  };
+}
+
 describe("security audit channel dm policy", () => {
   it.each(["audit"] as const)(
     "reports unowned DM routes without losing sibling findings in %s mode",
@@ -121,9 +141,7 @@ describe("security audit channel dm policy", () => {
   );
 
   it("keeps producer-owned channel severity through the audit summary", async () => {
-    const pluginOptions = {
-      accounts: { default: { policy: "disabled", allowFrom: [] } },
-    };
+    const pluginOptions = { accounts: { default: { policy: "disabled", allowFrom: [] } } };
     const plugin = createDmPlugin(pluginOptions);
     if (!plugin.security) {
       throw new Error("test plugin security adapter missing");
@@ -152,47 +170,37 @@ describe("security audit channel dm policy", () => {
   });
 
   it("counts identity-linked aliases as one logical principal", async () => {
-    const cfg: OpenClawConfig = {
+    const linkedFindings = await dmFindings({
       session: {
         dmScope: "main",
         identityLinks: { alice: ["whatsapp:user-a", "whatsapp:user-b"] },
       },
-    };
-    const plugin = createDmPlugin();
-
-    const linkedFindings = await collectChannelSecurityFindingsCore({ cfg, plugins: [plugin] });
-    const distinctFindings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [plugin],
     });
+    const distinctFindings = await dmFindings({ session: { dmScope: "main" } });
 
     expect(collisionFindings(linkedFindings)).toHaveLength(0);
     expect(collisionFindings(distinctFindings)).toHaveLength(1);
   });
 
   it("keeps separate collision topologies distinct", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: {
+    const findings = await dmFindings(
+      {
         agents: { entries: { alpha: {}, beta: {} } },
         session: { dmScope: "main" },
-        bindings: [
-          { agentId: "alpha", match: { channel: "whatsapp", accountId: "a" } },
-          { agentId: "alpha", match: { channel: "whatsapp", accountId: "b" } },
-          { agentId: "beta", match: { channel: "whatsapp", accountId: "c" } },
-          { agentId: "beta", match: { channel: "whatsapp", accountId: "d" } },
-        ],
+        bindings: ["a", "b", "c", "d"].map((accountId, index) => ({
+          agentId: index < 2 ? "alpha" : "beta",
+          match: { channel: "whatsapp", accountId },
+        })),
       },
-      plugins: [
-        createDmPlugin({
-          accounts: {
-            a: { allowFrom: ["user-a"] },
-            b: { allowFrom: ["user-b"] },
-            c: { allowFrom: ["user-c"] },
-            d: { allowFrom: ["user-d"] },
-          },
-        }),
-      ],
-    });
+      {
+        accounts: {
+          a: { allowFrom: ["user-a"] },
+          b: { allowFrom: ["user-b"] },
+          c: { allowFrom: ["user-c"] },
+          d: { allowFrom: ["user-d"] },
+        },
+      },
+    );
 
     const collisions = collisionFindings(findings);
     expect(collisions).toHaveLength(2);
@@ -246,69 +254,31 @@ describe("security audit channel dm policy", () => {
   });
 
   it("does not let exact bindings on finite probe strings hide an open-DM collision", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: {
+    const findings = await dmFindings(
+      {
         session: { dmScope: "main" },
-        bindings: [
-          {
-            agentId: "main",
-            match: {
-              channel: "whatsapp",
-              peer: { kind: "direct", id: "__openclaw_audit_unmatched_dm_1__" },
-            },
-            session: { dmScope: "per-channel-peer" },
-          },
-          {
-            agentId: "main",
-            match: {
-              channel: "whatsapp",
-              peer: { kind: "direct", id: "__openclaw_audit_unmatched_dm_2__" },
-            },
-            session: { dmScope: "per-channel-peer" },
-          },
-        ],
+        bindings: [1, 2].map((n) =>
+          dmBinding(`__openclaw_audit_unmatched_dm_${n}__`, "per-channel-peer"),
+        ),
       },
-      plugins: [
-        createDmPlugin({
-          accounts: { default: { policy: "open", allowFrom: ["*"] } },
-        }),
-      ],
-    });
+      {
+        accounts: { default: { policy: "open", allowFrom: ["*"] } },
+      },
+    );
 
     expect(collisionFindings(findings)).toHaveLength(1);
   });
 
   it("audits exact DM bindings admitted by wildcard policy", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: {
+    const findings = await dmFindings(
+      {
         session: { dmScope: "per-account-channel-peer" },
-        bindings: [
-          {
-            agentId: "main",
-            match: {
-              channel: "whatsapp",
-              accountId: "*",
-              peer: { kind: "direct", id: "bound-a" },
-            },
-            session: { dmScope: "main" },
-          },
-          {
-            agentId: "main",
-            match: {
-              channel: "whatsapp",
-              accountId: " WORK ",
-              peer: { kind: "direct", id: "bound-b" },
-            },
-            session: { dmScope: "main" },
-          },
-        ],
+        bindings: [dmBinding("bound-a", "main", "*"), dmBinding("bound-b", "main", " WORK ")],
       },
-      plugins: [
-        createDmPlugin({
-          accounts: { work: { policy: "open", allowFrom: ["*"] } },
-        }),
-      ],
-    });
+      {
+        accounts: { work: { policy: "open", allowFrom: ["*"] } },
+      },
+    );
 
     const collisions = collisionFindings(findings);
     expect(collisions).toHaveLength(1);
@@ -317,18 +287,16 @@ describe("security audit channel dm policy", () => {
   });
 
   it("warns when custom finite routing omits an unknown-principal policy", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [
-        createDmPlugin({
-          accounts: { default: { policy: "open", allowFrom: ["*"] } },
-          dmRouting: {
-            resolveDmRoute: ({ principalId, route }) =>
-              principalId === undefined ? undefined : { sessionKey: route.sessionKey },
-          },
-        }),
-      ],
-    });
+    const findings = await dmFindings(
+      { session: { dmScope: "main" } },
+      {
+        accounts: { default: { policy: "open", allowFrom: ["*"] } },
+        dmRouting: {
+          resolveDmRoute: ({ principalId, route }) =>
+            principalId === undefined ? undefined : { sessionKey: route.sessionKey },
+        },
+      },
+    );
 
     const finding = requireFinding(
       findings,
