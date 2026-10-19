@@ -154,7 +154,6 @@ export type ChatPaneConnectionScope = {
   headerOutcomeOwner: string;
   sessions: ApplicationContext["sessions"];
 };
-export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.
 const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
