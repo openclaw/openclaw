@@ -13,13 +13,14 @@ export default definePluginEntry({
   register(api) {
     let service: { scheduler: PluginServiceSchedulerV1; jobs: ResearchJobs } | undefined;
     api.registerService({
-      apiVersion: 2,
+      apiVersion: 3,
       id: "deep-research-jobs",
       async start(context) {
         const { ResearchJobs } = await loadJobs();
         context.scheduler.signal.throwIfAborted();
-        const jobs = new ResearchJobs(api, context.scheduler);
+        const jobs = new ResearchJobs(api, context.scheduler, context.sessionWork);
         service = { scheduler: context.scheduler, jobs };
+        await jobs.startRecovery();
       },
       async stop() {
         const owner = service;

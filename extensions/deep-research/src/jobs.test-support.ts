@@ -1,7 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  PluginServiceSchedulerV1,
+  PluginServiceSessionWorkV1,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
@@ -17,6 +20,7 @@ import { createResearchTool } from "./tool.js";
 
 export async function createResearchJobsFixture(
   fixtureOptions: {
+    sessionWork?: PluginServiceSessionWorkV1;
     scheduler?: PluginServiceSchedulerV1;
   },
   registerCleanup: (close: () => Promise<void>) => void,
@@ -46,7 +50,7 @@ export async function createResearchJobsFixture(
   };
   const api = { ...createCapturedPluginRegistration({ id: "deep-research" }).api, runtime };
   const scheduler = fixtureOptions.scheduler ?? createTestPluginServiceScheduler();
-  const jobs = new ResearchJobs(api, scheduler);
+  const jobs = new ResearchJobs(api, scheduler, fixtureOptions.sessionWork);
   const current = vi.fn();
   const context = {
     sessionKey: "agent:main:research-fixture",

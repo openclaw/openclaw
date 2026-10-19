@@ -2,6 +2,7 @@ import { isGatewayClientRequestError } from "openclaw/plugin-sdk/gateway-runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ResearchRequest, ResearchResult } from "./contract.js";
 import type { ResearchExecution } from "./execution.js";
+import type { ResearchJob } from "./job-state.js";
 import type {
   ResearchAdapterReply,
   ResearchAdapterRequest,
@@ -166,4 +167,26 @@ export function managedResult(snapshot: ResearchAdapterSnapshot): ResearchResult
     },
     route: { model: "google/managed-research", runtime: "managed-service" },
   };
+}
+
+/** Persist failures across wake/restart boundaries; a paused receipt is not unlimited retry permission. */
+export function recordManagedPollFailure(
+  job: ResearchJob,
+  response: Extract<ResearchAdapterReply, { ok: false }>,
+  now: number,
+) {
+  job.pollFailures = (job.pollFailures ?? 0) + 1;
+  job.state = "paused";
+  job.progress = response.reason;
+  if (
+    response.state === "blocked" ||
+    response.retryAfterMs === undefined ||
+    job.pollFailures >= 5
+  ) {
+    job.recovery = "deferred";
+    job.progress = `Automatic reconciliation deferred: ${response.reason}`;
+    delete job.nextWakeAt;
+  } else {
+    job.nextWakeAt = now + Math.max(response.retryAfterMs, 5000 * 2 ** (job.pollFailures - 1));
+  }
 }
