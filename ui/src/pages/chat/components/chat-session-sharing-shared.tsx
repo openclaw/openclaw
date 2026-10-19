@@ -50,6 +50,17 @@ export type ChatSessionSharingProps = {
   onMemberChange: (identityId: string, member: boolean) => ChatSessionSharingAction;
 };
 
+export type PreparedChatSessionSharing = Omit<
+  ChatSessionSharingProps,
+  "session" | "onVisibilityChange" | "onMemberChange" | "onPublicShareChange" | "onCopyPublicLink"
+> & {
+  session: GatewaySessionRow;
+  onVisibilityChange: (visibility: SessionVisibility) => Promise<ChatSessionSharingOutcome>;
+  onMemberChange: (identityId: string, member: boolean) => Promise<ChatSessionSharingOutcome>;
+  onPublicShareChange: (enabled: boolean) => Promise<ChatSessionSharingOutcome>;
+  onCopyPublicLink: () => Promise<ChatSessionSharingOutcome>;
+};
+
 export const VISIBILITY_LABEL_KEYS: Record<SessionVisibility, string> = {
   shared: "chat.sessionSharing.shared",
   "read-only": "chat.sessionSharing.readOnly",

@@ -22,6 +22,7 @@ import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingOutcome } from "./components/chat-session-sharing.solid.tsx";
 import {
   canManageChatSessionSharing,
@@ -30,17 +31,6 @@ import {
 } from "./components/chat-session-sharing.solid.tsx";
 
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
-
-export type PreparedChatSessionSharing = Omit<
-  ChatSessionSharingProps,
-  "session" | "onVisibilityChange" | "onMemberChange" | "onPublicShareChange" | "onCopyPublicLink"
-> & {
-  session: GatewaySessionRow;
-  onVisibilityChange: (visibility: SessionVisibility) => Promise<ChatSessionSharingOutcome>;
-  onMemberChange: (identityId: string, member: boolean) => Promise<ChatSessionSharingOutcome>;
-  onPublicShareChange: (enabled: boolean) => Promise<ChatSessionSharingOutcome>;
-  onCopyPublicLink: () => Promise<ChatSessionSharingOutcome>;
-};
 
 export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   private readonly sessionSharingPropsMemo = new ChatPaneHeaderMemo<PreparedChatSessionSharing>();

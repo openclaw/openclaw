@@ -895,7 +895,7 @@
   color: var(--text);
   font-size: 12px;
   text-align: start;
-  cursor: pointer;
+  cursor: default;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-public-toggle > svg {
@@ -975,7 +975,7 @@
   background: var(--bg-hover);
   color: var(--text);
   font-size: 11px;
-  cursor: pointer;
+  cursor: default;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-url-text {
@@ -1015,7 +1015,7 @@
   padding: 0;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-search-heading svg {
@@ -1067,7 +1067,7 @@
   color: var(--text);
   font-size: 12px;
   text-align: start;
-  cursor: pointer;
+  cursor: default;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-person:hover:not(:disabled) {
