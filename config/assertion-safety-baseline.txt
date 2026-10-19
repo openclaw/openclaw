@@ -2542,7 +2542,7 @@ ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	3
 ui/src/pages/chat/chat-queue.ts	1
-ui/src/pages/chat/chat-send-ack.ts	2
+ui/src/pages/chat/chat-send-ack.ts	1
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
