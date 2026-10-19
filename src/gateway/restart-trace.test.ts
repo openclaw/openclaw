@@ -138,6 +138,34 @@ describe("gateway shutdown diagnostics", () => {
     }
   });
 
+  it("reports current retained custody while shutdown is pending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const release = createDeferredCore();
+    const custody = { sources: 6, operations: 5, sourceWork: 5 };
+    const closing = measureGatewayCloseStep(
+      "restart.close.session-sources",
+      () => release.promise,
+      () => custody,
+    );
+    try {
+      clock = 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=1 restart.close.session-sources=5000ms sources=6.0 operations=5.0 sourceWork=5.0",
+      );
+      Object.assign(custody, { sources: 1, operations: 0, sourceWork: 1 });
+      clock = 10_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=1 restart.close.session-sources=10000ms sources=1.0 operations=0.0 sourceWork=1.0",
+      );
+    } finally {
+      release.resolve();
+      await closing;
+    }
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
+  });
+
   it("keeps the parent ready duration when recording child spans", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_RESTART_TRACE", "1");
     startGatewayRestartTrace("restart.signal.received");

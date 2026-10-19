@@ -5,7 +5,10 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  isGatewayWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -75,6 +78,7 @@ const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
 type WorkerPlacementSidecar = { stop: () => Promise<void> };
 
 export type GatewayWorkerPlacementRuntimeParams = {
+  githubPublicationRuntime?: ReturnType<typeof createGitHubPublicationRuntime>;
   scheduler: GatewayScheduler;
   placements: WorkerSessionPlacementStore;
   initialPlacements: readonly WorkerSessionPlacementRecord[];
@@ -103,16 +107,13 @@ export function createGatewayGitHubPublicationRuntime(params: {
 
 export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorkerPlacementRuntime>;
 
-export function createGatewayWorkerPlacementRuntime(
-  params: GatewayWorkerPlacementRuntimeParams & {
-    githubPublicationRuntime?: ReturnType<typeof createGitHubPublicationRuntime>;
-  },
-) {
+export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
   const { scheduler } = params;
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
   const isStopping = () =>
     stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted;
+  const isReconciliationPaused = () => isStopping() || isGatewayWorkAdmissionClosed();
   let scheduleDiskSpaceSweep: (() => void) | undefined;
   const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
     environments: params.environments,
@@ -465,7 +466,7 @@ export function createGatewayWorkerPlacementRuntime(
       return current;
     };
     const reconcileActivePlacements = (): Promise<void> => {
-      if (isStopping()) {
+      if (isReconciliationPaused()) {
         return Promise.resolve();
       }
       return (
@@ -476,15 +477,17 @@ export function createGatewayWorkerPlacementRuntime(
             await reconcilePhase("reconcile.session-retirement", () =>
               sessionRetirement.reconcile(optionalWorkSignal),
             );
-            if (isStopping()) {
+            if (isReconciliationPaused()) {
               return;
             }
             await reconcilePhase("reconcile.active", () => dispatchService.reconcileActive());
-            if (isStopping()) {
+            if (isReconciliationPaused()) {
               return;
             }
-            await reconcilePhase("reconcile.publications", () => reconcilePublications(isStopping));
-            if (!isStopping()) {
+            await reconcilePhase("reconcile.publications", () =>
+              reconcilePublications(isReconciliationPaused),
+            );
+            if (!isReconciliationPaused()) {
               void nodeWorkspaceRetention.schedule();
             }
           })(),
@@ -519,7 +522,7 @@ export function createGatewayWorkerPlacementRuntime(
     const sweepActivePlacements = async (): Promise<void> => {
       try {
         await reconcileActivePlacements();
-        if (isStopping() || operations.has("auto-suspend")) {
+        if (isReconciliationPaused() || operations.has("auto-suspend")) {
           return;
         }
         // Each reclaim reserves its own session after the recovery pass.

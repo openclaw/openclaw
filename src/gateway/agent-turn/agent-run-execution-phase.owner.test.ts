@@ -153,6 +153,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     "publication and cleanup failure",
     "cleanup failure",
     "completed cleanup failure",
+    "publication and completed cleanup failure",
     "prewriter abort",
   ] as const)("retains the exact run owner through runtime disposal: %s", async (outcome) => {
     const prewriter = outcome === "prewriter abort";
@@ -185,7 +186,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
     dispatchAgentRunFromGateway.mockImplementationOnce(actualDispatch.dispatchAgentRunFromGateway);
     const publicationFault = new Error("Synthetic final response refusal");
     const publicationFails =
-      outcome === "publication failure" || outcome === "publication and cleanup failure";
+      outcome === "publication failure" ||
+      outcome === "publication and cleanup failure" ||
+      outcome === "publication and completed cleanup failure";
     const cleanupFails =
       outcome === "cleanup failure" || outcome === "publication and cleanup failure";
     if (publicationFails) {
@@ -207,7 +210,10 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const callbackFault = new Error("Synthetic completed inspection callback failure");
     let database: DatabaseSync | undefined;
     let nativeDisposals = 0;
-    if (outcome === "completed cleanup failure") {
+    const completedCleanupFails =
+      outcome === "completed cleanup failure" ||
+      outcome === "publication and completed cleanup failure";
+    if (completedCleanupFails) {
       const registry = createEmptyPluginRegistry();
       const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
       resources.attach(registry);
@@ -315,8 +321,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
         expect(database.isOpen).toBe(true);
       }
       disposal.resolve();
-      if (outcome === "completed cleanup failure") {
+      if (completedCleanupFails) {
         expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
+        if (publicationFails) {
+          expect(collectNestedErrorCandidates(await observed)).toContain(publicationFault);
+        }
         expect(database?.isOpen).toBe(false);
         expect(nativeDisposals).toBe(1);
       } else if (outcome === "publication and cleanup failure") {
