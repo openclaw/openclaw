@@ -1,4 +1,3 @@
-/** Shared Windows schtasks fixtures and temp-env helpers for daemon tests. */
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -25,7 +24,6 @@ export const inspectPortUsageMock: MockFn<
 export const gatewayServiceProbeHostsMock: MockFn<() => Promise<readonly string[]>> = vi.fn();
 export const killProcessTreeMock: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
-/** Runs a test with Windows-like daemon environment paths and cleans the temp dir. */
 export async function withWindowsEnv(
   prefix: string,
   run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
@@ -50,8 +48,7 @@ export function resetSchtasksBaseMocks() {
   delete schtasksRegistration.response;
   delete schtasksRegistration.onCommand;
   inspectPortUsageMock.mockReset();
-  gatewayServiceProbeHostsMock.mockReset();
-  gatewayServiceProbeHostsMock.mockResolvedValue(["127.0.0.1"]);
+  gatewayServiceProbeHostsMock.mockReset().mockResolvedValue(["127.0.0.1"]);
   killProcessTreeMock.mockReset();
 }
 
@@ -64,7 +61,7 @@ export async function writeGatewayScript(
   env: Record<string, string>,
   port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
 ) {
-  await writeScript(resolveTaskScriptPath(env), [
+  return writeScript(resolveTaskScriptPath(env), [
     `set "OPENCLAW_GATEWAY_PORT=${port}"`,
     `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
   ]);
@@ -74,11 +71,7 @@ export function resolveStartupFixturePath(env: Record<string, string>, extension
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
     expectDefined(env.APPDATA, "env.APPDATA test invariant"),
-    "Microsoft",
-    "Windows",
-    "Start Menu",
-    "Programs",
-    "Startup",
+    "Microsoft/Windows/Start Menu/Programs/Startup",
     `${taskName}.${extension}`,
   );
 }
@@ -90,7 +83,7 @@ export async function writeStartupFallbackEntry(env: Record<string, string>, ext
 }
 
 export async function writeNodeScript(env: Record<string, string>, port = "18789") {
-  await writeScript(resolveTaskScriptPath(env), [
+  return writeScript(resolveTaskScriptPath(env), [
     `set "OPENCLAW_SERVICE_KIND=node"`,
     `set "OPENCLAW_GATEWAY_PORT=${port}"`,
     `"C:\\bin\\openclaw.cmd" node run --host 127.0.0.1 --port ${port}`,
@@ -132,9 +125,7 @@ export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): S
 export function createSpawnChild(unref: () => void, error?: Error): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
   child.unref = unref;
-  queueMicrotask(() => {
-    child.emit(error ? "error" : "spawn", error);
-  });
+  queueMicrotask(() => child.emit(error ? "error" : "spawn", error));
   return child;
 }
 
