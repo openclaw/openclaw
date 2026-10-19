@@ -144,13 +144,17 @@ it.each([
   { baseUrl: "https://api.cerebras.ai/v1", optOut: true, key: undefined },
 ])("sends native cache affinity at $baseUrl with optOut=$optOut", async (route) => {
   const provider = await registerSingleProviderPlugin(plugin);
-  const [seed] = buildCerebrasCatalogModels();
-  assert(seed);
   const model: Model = {
-    ...seed,
+    id: "fixture-text-model",
+    name: "Synthetic model",
     provider: "cerebras",
     api: "openai-completions",
     baseUrl: route.baseUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 128,
     compat: route.optOut ? { supportsPromptCacheKey: false } : undefined,
   };
   const normalized =

@@ -92,7 +92,7 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
     ["Quick Chat", "device"],
     ["Cookie sync", "device"],
     ["System-wide presence detection", "device-permissions"],
-  ]) {
+  ] as const) {
     expectSearch(query, capability, routeId);
     expectSearch(query, null);
     expectSearch(query, iosCapability);

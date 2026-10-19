@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../../../test-support/streaming-error-response.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -62,7 +62,9 @@ describe("twilioApiRequest", () => {
       }),
     ).resolves.toEqual({ sid: "CA123" });
 
-    const [[request]] = fetchWithSsrFGuardMock.mock.calls;
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    assert(call, "expected guarded fetch call");
+    const [request] = call;
     expect(request).toMatchObject({
       url: "https://api.twilio.com/2010-04-01/Accounts/AC123/Calls.json",
       auditContext: "voice-call.twilio.api",
@@ -89,7 +91,9 @@ describe("twilioApiRequest", () => {
     const baseUrl = resolveTwilioApiBaseUrl({ accountSid: "AC123", region: "ie1" });
     await twilioApiRequest({ baseUrl });
 
-    const [[{ url, policy }]] = fetchWithSsrFGuardMock.mock.calls;
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    assert(call, "expected guarded fetch call");
+    const [{ url, policy }] = call;
     expect(url).toBe("https://api.dublin.ie1.twilio.com/2010-04-01/Accounts/AC123/Calls.json");
     expect(policy).toEqual({ allowedHostnames: ["api.dublin.ie1.twilio.com"] });
     expect(release).toHaveBeenCalledTimes(1);

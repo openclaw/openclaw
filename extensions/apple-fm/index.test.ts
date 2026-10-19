@@ -39,8 +39,7 @@ function registeredProvider(location: { rootDir?: string; source: string } = bun
   return { provider, method, guided, setup, validate };
 }
 
-type SetupContext = ProviderAuthContext & ProviderAuthMethodNonInteractiveContext;
-function setupContext(config: OpenClawConfig = {}): SetupContext {
+function setupContext(config: OpenClawConfig = {}) {
   return {
     config,
     env: {},
@@ -54,7 +53,7 @@ function setupContext(config: OpenClawConfig = {}): SetupContext {
     opts: {},
     resolveApiKey: vi.fn(async () => null),
     toApiKeyCredential: vi.fn(() => null),
-  };
+  } satisfies ProviderAuthContext & ProviderAuthMethodNonInteractiveContext;
 }
 
 beforeEach(() => {

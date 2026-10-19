@@ -63,7 +63,7 @@ describe("portable theme definition", () => {
   });
 
   it.each([null])("keeps undeclared avatar hat %j out of personal definitions", (avatarHat) => {
-    const definition = { ...createThemeDefinitionFixture(), avatarHat };
+    const definition = { ...themeFixture(), avatarHat };
     expect(() => normalizeThemeDefinition(definition)).toThrow(
       "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
     );

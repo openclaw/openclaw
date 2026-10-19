@@ -108,7 +108,7 @@ it("measures caller replacements and rejects an oversized non-video body", async
 });
 
 it("sends ordered video_url content through the real Chat Completions transport", async () => {
-  let requestBody: Record<string, unknown> | undefined;
+  let requestBody: unknown;
   const server = createServer(async (request, response) => {
     requestBody = await json(request);
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -166,8 +166,7 @@ it("sends ordered video_url content through the real Chat Completions transport"
     expect(body).not.toMatch(/__openclaw|\/private\//u);
     expect(body).toContain("data:video/mp4;base64,dmlkZW8=");
     expect(requestBody, streamResult).toBeDefined();
-    const messages = requestBody?.messages as Array<{ content?: Array<Record<string, unknown>> }>;
-    expect(messages[0]?.content).toEqual([
+    expect(requestBody).toHaveProperty("messages.0.content", [
       { type: "text", text: "before" },
       { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
       { type: "video_url", video_url: { url: "data:video/mp4;base64,dmlkZW8=" } },

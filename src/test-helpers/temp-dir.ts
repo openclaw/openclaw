@@ -73,11 +73,14 @@ function acquireSyncPrefixRoot(options: RootOptions): PrefixRootState {
   return state;
 }
 
-function releasePrefixRoot(roots: Map<string, PrefixRootState>, options: RootOptions) {
+function releasePrefixRoot(
+  roots: Map<string, PrefixRootState>,
+  options: RootOptions,
+): PrefixRootState | undefined {
   const key = getRootKey(options);
   const state = roots.get(key);
   if (!state || --state.activeCount > 0) {
-    return;
+    return undefined;
   }
   roots.delete(key);
   return state;
