@@ -6,17 +6,16 @@ import {
 } from "./payload.js";
 
 function trackStringOperations(value: string) {
-  let indexedReads = 0;
-  let indexOfCalls = 0;
+  const counts = { indexedReads: 0, indexOfCalls: 0 };
   const source = Object(value) as object;
   const text = new Proxy(source, {
     get(target, property) {
       if (typeof property === "string" && /^(?:0|[1-9]\d*)$/.test(property)) {
-        indexedReads += 1;
+        counts.indexedReads += 1;
       }
       if (property === "indexOf") {
         return (searchString: string, position?: number) => {
-          indexOfCalls += 1;
+          counts.indexOfCalls += 1;
           return value.indexOf(searchString, position);
         };
       }
@@ -24,21 +23,34 @@ function trackStringOperations(value: string) {
       return typeof member === "function" ? member.bind(target) : member;
     },
   });
-  return {
-    get indexedReads() {
-      return indexedReads;
-    },
-    get indexOfCalls() {
-      return indexOfCalls;
-    },
-    text: text as unknown as string,
-  };
+  return { counts, text: text as unknown as string };
+}
+
+function expectStripped(
+  raw: string,
+  expected = raw,
+  options?: Parameters<typeof stripPlainTextToolCallBlocks>[1],
+) {
+  expect(stripPlainTextToolCallBlocks(raw, options)).toBe(expected);
+}
+
+function expectProjection(
+  raw: string,
+  text: string,
+  retainStart: number,
+  retainedOutputStart = 0,
+  options?: Parameters<typeof projectPlainTextToolCallBlocks>[1],
+) {
+  expect(projectPlainTextToolCallBlocks(raw, options)).toEqual({
+    text,
+    retainStart,
+    retainedOutputStart,
+  });
 }
 
 describe("scanPlainTextJsonToolCall", () => {
-  it.each([
-    ["Harmony", '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible'],
-  ])("returns the complete %s call before a visible suffix", (_syntax, raw) => {
+  it("returns the complete Harmony call before a visible suffix", () => {
+    const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible';
     const scan = scanPlainTextJsonToolCall(raw);
 
     expect(scan.kind).toBe("complete");
@@ -50,24 +62,21 @@ describe("scanPlainTextJsonToolCall", () => {
     expect(raw.slice(scan.payload.start, scan.payload.end)).toBe('{"path":"/tmp/file"}');
   });
 
-  it.each([["commentary to=read co", "harmony", "read", true]] as const)(
-    "classifies the streaming prefix %s",
-    (raw, syntax, name, nameComplete) => {
-      const scan = scanPlainTextJsonToolCall(raw);
+  it("classifies the streaming Harmony prefix", () => {
+    const raw = "commentary to=read co";
+    const scan = scanPlainTextJsonToolCall(raw);
 
-      expect(scan.kind).toBe("prefix");
-      if (scan.kind !== "prefix") {
-        return;
-      }
-      expect(scan.candidate?.syntax).toBe(syntax);
-      expect(scan.candidate?.nameComplete).toBe(nameComplete);
-      expect(
-        scan.candidate?.name
-          ? raw.slice(scan.candidate.name.start, scan.candidate.name.end)
-          : undefined,
-      ).toBe(name);
-    },
-  );
+    expect(scan.kind).toBe("prefix");
+    if (scan.kind !== "prefix") {
+      return;
+    }
+    expect(scan.candidate).toMatchObject({ syntax: "harmony", nameComplete: true });
+    expect(
+      scan.candidate?.name
+        ? raw.slice(scan.candidate.name.start, scan.candidate.name.end)
+        : undefined,
+    ).toBe("read");
+  });
 
   it.each([
     (name: string) => `[${name}]\n{}[/${name}]`,
@@ -86,13 +95,11 @@ describe("stripPlainTextToolCallBlocks", () => {
   it("does not scan payloads inside protected code examples", () => {
     const raw = "```text\n" + "[tool:read] {\n".repeat(128) + "```";
     const tracked = trackStringOperations(raw);
-    expect(
-      stripPlainTextToolCallBlocks(tracked.text, {
-        resolveProtectedRanges: () => [{ start: 0, end: raw.length }],
-      }),
-    ).toBe(raw);
-    expect(tracked.indexedReads).toBeGreaterThan(0);
-    expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
+    expectStripped(tracked.text, raw, {
+      resolveProtectedRanges: () => [{ start: 0, end: raw.length }],
+    });
+    expect(tracked.counts.indexedReads).toBeGreaterThan(0);
+    expect(tracked.counts.indexedReads).toBeLessThan(raw.length * 16);
   });
 
   it.each([
@@ -105,17 +112,14 @@ describe("stripPlainTextToolCallBlocks", () => {
 
     for (let end = 1; end <= raw.length; end++) {
       const prefix = raw.slice(0, end);
-      expect(stripPlainTextToolCallBlocks(prefix, { resolveProtectedRanges })).toBe(prefix);
+      expectStripped(prefix, prefix, { resolveProtectedRanges });
     }
     expect(resolveProtectedRanges).not.toHaveBeenCalled();
   });
 
-  it.each(['Example [tool:read]{"path":"example.txt"}'])(
-    "preserves inline bracket text: %s",
-    (raw) => {
-      expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
-    },
-  );
+  it("preserves inline bracket text", () => {
+    expectStripped('Example [tool:read]{"path":"example.txt"}');
+  });
 
   it.each([
     ["CR", "\r"],
@@ -127,12 +131,8 @@ describe("stripPlainTextToolCallBlocks", () => {
     const xml = "[tool:read]<parameter=path>example.txt</parameter>";
     const adjacent = '[tool:write]{"path":"output.txt"}';
 
-    expect(stripPlainTextToolCallBlocks(`${prefix}\u00a0\t${json}${suffix}`)).toBe(
-      `${prefix}After`,
-    );
-    expect(stripPlainTextToolCallBlocks(`${prefix}\u2003${xml} ${adjacent}${suffix}`)).toBe(
-      `${prefix}After`,
-    );
+    expectStripped(`${prefix}\u00a0\t${json}${suffix}`, `${prefix}After`);
+    expectStripped(`${prefix}\u2003${xml} ${adjacent}${suffix}`, `${prefix}After`);
   });
 
   it("preserves protected candidates while stripping adjacent unprotected calls", () => {
@@ -140,42 +140,35 @@ describe("stripPlainTextToolCallBlocks", () => {
     const unprotectedCall = '[read]\n{"path":"secret.txt"}\n[/read]';
     const raw = [protectedCall, unprotectedCall].join("\n");
 
-    expect(
-      stripPlainTextToolCallBlocks(raw, {
-        resolveProtectedRanges: () => [{ start: 0, end: protectedCall.length }],
-      }),
-    ).toBe(`${protectedCall}\n`);
-    expect(stripPlainTextToolCallBlocks(raw)).toBe("");
+    expectStripped(raw, `${protectedCall}\n`, {
+      resolveProtectedRanges: () => [{ start: 0, end: protectedCall.length }],
+    });
+    expectStripped(raw, "");
   });
 
   it("preserves a balanced tool block whose JSON is invalid", () => {
-    const raw = '[read]\n{"path":}\n[/read]';
-
-    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+    expectStripped('[read]\n{"path":}\n[/read]');
   });
 
-  it.each([["JSON", "[tool:read] {\n", scanPlainTextJsonToolCall]] as const)(
-    "preserves a long repeated incomplete %s candidate in one scan",
-    (_name, line, scan) => {
-      const raw = line.repeat(20_000);
-      const result = scan(raw);
+  it("preserves a long repeated incomplete JSON candidate in one scan", () => {
+    const raw = "[tool:read] {\n".repeat(20_000);
+    const result = scanPlainTextJsonToolCall(raw);
 
-      expect(result.kind).toBe("prefix");
-      if (result.kind !== "prefix") {
-        return;
-      }
-      expect(result.candidate?.payload?.end).toBe(raw.length);
-      expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
-    },
-  );
+    expect(result.kind).toBe("prefix");
+    if (result.kind !== "prefix") {
+      return;
+    }
+    expect(result.candidate?.payload?.end).toBe(raw.length);
+    expectStripped(raw);
+  });
 
   it("advances once through a far-invalid XML parameter", () => {
     const repeats = 256;
     const raw = "<function=read><parameter=x>x\n".repeat(repeats) + "</parameter>X";
     const tracked = trackStringOperations(raw);
 
-    expect(stripPlainTextToolCallBlocks(tracked.text)).toBe(raw);
-    expect(tracked.indexOfCalls).toBeLessThan(repeats * 8);
+    expectStripped(tracked.text, raw);
+    expect(tracked.counts.indexOfCalls).toBeLessThan(repeats * 8);
   });
 
   it("advances once through a far-invalid named JSON payload", () => {
@@ -183,8 +176,8 @@ describe("stripPlainTextToolCallBlocks", () => {
     const raw = "[read]\n{\n".repeat(repeats) + "}".repeat(repeats) + "[/wrong]";
     const tracked = trackStringOperations(raw);
 
-    expect(stripPlainTextToolCallBlocks(tracked.text)).toBe(raw);
-    expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
+    expectStripped(tracked.text, raw);
+    expect(tracked.counts.indexedReads).toBeLessThan(raw.length * 16);
   });
 });
 
@@ -197,40 +190,21 @@ describe("projectPlainTextToolCallBlocks", () => {
     ["[read]\n{}[/read] [write]\n", " [write]\n"],
   ])("retains calls whose suffix can change the projection: %s", (pending, visible) => {
     const prefix = "Before\n";
-    expect(projectPlainTextToolCallBlocks(prefix + pending)).toEqual({
-      text: prefix + visible,
-      retainStart: prefix.length,
-      retainedOutputStart: prefix.length,
-    });
+    expectProjection(prefix + pending, prefix + visible, prefix.length, prefix.length);
   });
 
   it("reports source and output boundaries after a settled removed line", () => {
     const settled = "Before\n[read]\n{}[/read]\n";
-    expect(projectPlainTextToolCallBlocks(`${settled}Tail`)).toEqual({
-      text: "Before\nTail",
-      retainStart: settled.length,
-      retainedOutputStart: "Before\n".length,
-    });
-    expect(
-      projectPlainTextToolCallBlocks(`${settled}Tail`, { settleBefore: "Before\n".length }),
-    ).toEqual({
-      text: "Before\nTail",
-      retainStart: "Before\n".length,
-      retainedOutputStart: "Before\n".length,
+    const before = "Before\n".length;
+    expectProjection(`${settled}Tail`, "Before\nTail", settled.length, before);
+    expectProjection(`${settled}Tail`, "Before\nTail", before, before, {
+      settleBefore: before,
     });
   });
 
   it("retains a terminal CR until newline consumption settles", () => {
     const source = "[read]\n{}[/read]\r";
-    expect(projectPlainTextToolCallBlocks(source)).toEqual({
-      text: "",
-      retainStart: 0,
-      retainedOutputStart: 0,
-    });
-    expect(projectPlainTextToolCallBlocks(`${source}\n`)).toEqual({
-      text: "",
-      retainStart: source.length + 1,
-      retainedOutputStart: 0,
-    });
+    expectProjection(source, "", 0);
+    expectProjection(`${source}\n`, "", source.length + 1);
   });
 });
