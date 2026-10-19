@@ -13,7 +13,9 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
-import { MATRIX_INBOUND_DEDUPE_TTL_MS } from "./src/matrix/monitor/inbound-dedupe-migration.js";
+
+// Released Matrix replay markers retain their identities for 30 days.
+export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function createContext(
   env?: NodeJS.ProcessEnv,

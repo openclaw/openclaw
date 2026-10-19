@@ -265,6 +265,8 @@ If local session state requires Doctor, status prints any installation drift to 
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
+- Missing log files are omitted from `status --all`. Unreadable logs show an
+  unavailable message with guidance to check the file path and permissions.
 
 ## Plugin reload
 

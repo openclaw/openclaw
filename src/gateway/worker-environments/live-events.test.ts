@@ -745,7 +745,7 @@ describe("worker live events", () => {
       });
       const stop = onAgentRuntimeEvent((event) => {
         if (event.runId === RUN && event.stream === stream) {
-          rx.clearEnvironment(ID.environmentId, EPOCH);
+          rx.clearEnvironment(ID.environmentId);
         }
       });
       try {
@@ -777,9 +777,8 @@ describe("worker live events", () => {
   it("clears on detach", async () => {
     await ack(msg(1, "delivered"));
     await ack(msg(3, "buffered", 1), 1);
-    rx.clearEnvironment(ID.environmentId, EPOCH);
+    rx.clearEnvironment(ID.environmentId);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    await fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
   });
 
   it("clears an ownerless Gateway run context on terminal process turnover", async () => {

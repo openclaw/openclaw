@@ -795,9 +795,6 @@ describe("image tool implicit imageModel config", () => {
               : {}),
           }),
         ).toEqual(cli ? codexImageModel : null);
-        if (!persisted && !cli) {
-          expect(createImageTool({ config: openAiPrimaryCfg, agentDir })).toBeNull();
-        }
       });
     },
   );
@@ -849,7 +846,6 @@ describe("image tool implicit imageModel config", () => {
       const tool = createImageTool({
         config: cfg,
         agentDir,
-        deferAutoModelResolution: true,
       });
 
       expect(typeof tool?.execute).toBe("function");
@@ -875,7 +871,6 @@ describe("image tool implicit imageModel config", () => {
       const tool = createRequiredImageTool({
         config: cfg,
         agentDir,
-        deferAutoModelResolution: true,
       });
 
       const result = await tool.execute("t1", {

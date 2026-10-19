@@ -16,6 +16,7 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MATRIX_INBOUND_DEDUPE_TTL_MS,
   migrationById,
   accountStorageRoot,
   createMigrationParams,
@@ -39,10 +40,7 @@ import {
   readMatrixIdbSnapshotJson,
   writeMatrixIdbSnapshotJson,
 } from "./src/matrix/crypto-state-store.js";
-import {
-  importInboundDedupeMarkersToIngress,
-  MATRIX_INBOUND_DEDUPE_TTL_MS,
-} from "./src/matrix/monitor/inbound-dedupe-migration.js";
+import { importInboundDedupeMarkersToIngress } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { restoreIdbFromDisk } from "./src/matrix/sdk/idb-persistence.js";
 import {
   clearAllIndexedDbState,

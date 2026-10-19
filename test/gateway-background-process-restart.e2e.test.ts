@@ -409,12 +409,16 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             agentId: "main",
             permissionMode: "full",
           });
-          await client.request(
+          const accepted = await client.request<{ runId: string }>(
             "chat.send",
             { sessionKey, message, idempotencyKey: sessionKey },
             { expectFinal: false },
           );
           await waitForIdleFinal(sessionKey, final);
+          // Wait for this request's terminal replay before changing session permissions.
+          expect(
+            await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok" });
         }
         await client.request("sessions.patch", { key: REVOKED_KEY, permissionMode: "read-only" });
         expect(await readFile(path.join(instance.state.workspaceDir, "exec-count"), "utf8")).toBe(

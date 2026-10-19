@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -19,6 +19,7 @@ import {
   ChatModelProviderIcon,
 } from "./chat-model-picker-options.tsx";
 import {
+  ChatModelSearchContext,
   handleModelSearchKeydown,
   toggleModelProviderGroup,
   updateModelSearch,
@@ -98,8 +99,10 @@ function prepareChatModelPickerPanel(params: ChatModelPickerParams) {
 }
 
 function ModelList(props: { label: string; more?: boolean; children: JSX.Element }) {
+  const search = useContext(ChatModelSearchContext);
   return (
     <div
+      ref={search?.ref(search.lists)}
       class="chat-controls__provider-model-list"
       data-chat-model-list="true"
       data-chat-model-more={props.more ? "" : undefined}
@@ -116,6 +119,7 @@ export function ChatModelPickerPanel(panel: {
   onSelectionClose: (event: MouseEvent) => void;
   searchRef: (element: HTMLInputElement) => void;
 }) {
+  const search = useContext(ChatModelSearchContext);
   const state = createMemo(() => prepareChatModelPickerPanel(panel.params));
   const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
@@ -202,6 +206,7 @@ export function ChatModelPickerPanel(panel: {
           title={[routeDetail(), authLabel()].filter(Boolean).join(" · ") || undefined}
         >
           <button
+            ref={search?.ref(search.groups)}
             class="chat-controls__provider-toggle"
             type="button"
             data-chat-model-group-toggle
@@ -258,6 +263,7 @@ export function ChatModelPickerPanel(panel: {
         {props.more.length > 0 ? (
           <>
             <button
+              ref={search?.ref(search.more)}
               class="chat-controls__inline-select-option chat-controls__model-more-toggle"
               type="button"
               data-chat-model-more-toggle
@@ -284,6 +290,7 @@ export function ChatModelPickerPanel(panel: {
   }
   return (
     <div
+      ref={search?.ref(search.menus)}
       class="chat-controls__inline-select-menu chat-controls__model-menu"
       aria-label={t("chat.selectors.model")}
     >
@@ -301,7 +308,7 @@ export function ChatModelPickerPanel(panel: {
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
-                ref={panel.searchRef}
+                ref={[search?.ref(search.inputs), panel.searchRef]}
                 class="chat-controls__model-search"
                 data-chat-model-search="true"
                 type="search"
@@ -408,7 +415,12 @@ export function ChatModelPickerPanel(panel: {
                   />
                 ) : undefined}
               </div>
-              <div class="chat-controls__model-search-empty" data-chat-model-search-empty hidden>
+              <div
+                ref={search?.ref(search.empty)}
+                class="chat-controls__model-search-empty"
+                data-chat-model-search-empty
+                hidden
+              >
                 {t("chat.modelControls.noMatchingModels")}
               </div>
               {panel.params.contextWindow ? (

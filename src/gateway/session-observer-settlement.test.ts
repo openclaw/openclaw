@@ -37,7 +37,7 @@ describe("session observer physical settlement", () => {
     const published = createDeferred();
     harness.broadcastToConnIds.mockImplementation(() => published.resolve());
     try {
-      startAndAddToolNotes(harness.observer);
+      await startAndAddToolNotes(harness.observer);
       await vi.advanceTimersByTimeAsync(12_000);
       expect(completeModel).toHaveBeenCalledOnce();
       const requestSignal = completeModel.mock.calls[0]?.[0].abortSignal as AbortSignal;
@@ -76,7 +76,7 @@ describe("session observer physical settlement", () => {
       let disposed = false;
       let disposal: Promise<void> | undefined;
       try {
-        startAndAddToolNotes(harness.observer);
+        await startAndAddToolNotes(harness.observer);
         await vi.advanceTimersByTimeAsync(42_000);
         expect(harness.prepareModel).toHaveBeenCalledOnce();
         expect(harness.completeModel).toHaveBeenCalledTimes(stage === "preparation" ? 0 : 1);
@@ -148,21 +148,21 @@ describe("session observer physical settlement", () => {
       );
       const timers = createObserverTimerTracker();
       const harness = createHarness({ subscribe: false, completeModel });
-      const observe = (index: number) => {
+      const observe = async (index: number) => {
         const sessionKey = `agent:main:session-${index}`;
         const connId = `conn-${index}`;
         harness.subscribers.subscribe(connId, sessionKey)?.commit();
         declareObserverVisibility(harness.observer, connId);
-        startAndAddToolNotes(harness.observer, { sessionKey, runId: `run-${index}` });
+        await startAndAddToolNotes(harness.observer, { sessionKey, runId: `run-${index}` });
       };
       try {
         for (let index = 0; index < 6; index += 1) {
-          observe(index);
+          await observe(index);
         }
         await vi.advanceTimersByTimeAsync(12_000);
         expect(completeModel).toHaveBeenCalledTimes(6);
         if (kind === "replaced") {
-          startAndAddToolNotes(harness.observer, {
+          await startAndAddToolNotes(harness.observer, {
             sessionKey: "agent:main:session-0",
             runId: "replacement",
           });
@@ -170,7 +170,7 @@ describe("session observer physical settlement", () => {
           if (kind === "unsubscribed") {
             harness.subscribers.unsubscribe("conn-0", "agent:main:session-0");
           }
-          observe(6);
+          await observe(6);
         }
         expect(signals[0]?.aborted).toBe(true);
         await vi.advanceTimersByTimeAsync(12_000);

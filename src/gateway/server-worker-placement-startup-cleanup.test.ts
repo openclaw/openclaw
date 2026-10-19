@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -102,6 +103,69 @@ describe("worker placement startup cleanup ownership", () => {
   beforeEach(() => {
     runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
     runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
+  });
+
+  it("stops the active sweep before queued retention writes and candidate reads after remote cancellation", async () => {
+    for (let index = 0; index < 3; index++) {
+      await seedReadyNodeDesktop(`shutdown-tail-${index}`);
+    }
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const entered = createDeferredCore();
+    const remote = createDeferredCore<{ status: "active" }>();
+    const blockedStore = createDeferredCore();
+    let holdInspection = false;
+    const environments = createEnvironments(
+      {
+        inspect: async ({ signal }) => {
+          if (!holdInspection) {
+            return { status: "active" };
+          }
+          entered.resolve();
+          return racePromiseWithAbortSignal(remote.promise, signal);
+        },
+      },
+      { scheduler },
+    );
+    const placements = createPlacements();
+    const runtime = createRuntime({ placements, environments, scheduler });
+    const sidecar = await startRuntime(runtime);
+    await time.advanceBy(60_000);
+    const tailEntered = createDeferredCore<string>();
+    const readCandidates = placements.readRecoveryCandidates.bind(placements);
+    const prune = testState.store.pruneTerminalEnvironments.bind(testState.store);
+    vi.spyOn(placements, "readRecoveryCandidates").mockImplementation(async () => {
+      if (environments.isStopping()) {
+        tailEntered.resolve("candidate-read");
+        await blockedStore.promise;
+      }
+      return readCandidates();
+    });
+    vi.spyOn(testState.store, "pruneTerminalEnvironments").mockImplementation(async (input) => {
+      if (environments.isStopping()) {
+        tailEntered.resolve("retention-write");
+        await blockedStore.promise;
+      }
+      return prune(input);
+    });
+    let stopping: Promise<void> | undefined;
+    let sweeping: void | Promise<void> = undefined;
+    try {
+      holdInspection = true;
+      sweeping = time.advanceBy(60_000);
+      await entered.promise;
+      stopping = sidecar.stop();
+      expect(await Promise.race([stopping.then(() => "stopped"), tailEntered.promise])).toBe(
+        "stopped",
+      );
+      expect(testState.store.list()).toHaveLength(3);
+    } finally {
+      blockedStore.resolve();
+      remote.resolve({ status: "active" });
+      await (stopping ?? sidecar.stop());
+      await sweeping;
+      await scheduler.stop();
+    }
   });
 
   it("settles an accepted retirement and stops before the next reconciliation candidate", async ({

@@ -12,7 +12,7 @@ import {
 } from "../sqlite-transaction.js";
 import { PostgresSyncConnection } from "./connection.js";
 
-const input: {
+export type PostgresLockWorkerInput = {
   connection: string;
   schema: string;
   storeId: string;
@@ -24,7 +24,8 @@ const input: {
   holdStatement?: boolean;
   holdAdmission?: boolean;
   holdRead?: boolean;
-} = workerData;
+};
+const input: PostgresLockWorkerInput = workerData;
 if (!parentPort) {
   throw new Error("PostgreSQL lock fixture requires a worker");
 }

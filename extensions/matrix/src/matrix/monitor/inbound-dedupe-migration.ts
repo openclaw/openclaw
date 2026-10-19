@@ -336,7 +336,7 @@ function resolveMatrixIngressQueueOpener(context: PluginDoctorStateMigrationCont
 
 // These are the released replay guard's persisted namespace and retention, kept
 // only to move its committed identities into the ingress owner's tombstones.
-export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MATRIX_INBOUND_DEDUPE_STATE_MAX_ENTRIES = 20_000;
 const MATRIX_INBOUND_DEDUPE_STATE_NAMESPACE = `matrix.inbound-dedupe.${createHash("sha256").update("global").digest("hex").slice(0, 32)}`;
 
