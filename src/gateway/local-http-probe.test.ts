@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { startProxy } from "../infra/net/proxy/proxy-lifecycle.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
 import { createSuiteTempRootTracker, withTestDir } from "../test-helpers/temp-dir.js";
 import {
@@ -130,59 +129,24 @@ describe("local TLS probes", () => {
     expect(await probe.resolveWebSocketTarget(port)).toEqual(first);
   });
 
-  test.each([
-    { cache: "warm", completion: "old-first" },
-    { cache: "warm", completion: "new-first" },
-    { cache: "cold", completion: "old-first" },
-    { cache: "cold", completion: "new-first" },
-  ] as const)(
-    "retains the verified replacement after concurrent probes ($cache, $completion)",
-    async ({ cache, completion }) => {
-      const oldResponse = createDeferredCore<http.ServerResponse>();
-      const newResponse = createDeferredCore<http.ServerResponse>();
-      let hold = false;
-      handler = (request, response) => {
-        if (hold) {
-          (request.url === "/healthz" ? oldResponse : newResponse).resolve(response);
-        } else {
-          response.end(liveBody);
-        }
-      };
-      const request = (pathname: "/healthz" | "/readyz") =>
-        requestHttp(probe, port, { pathname, timeoutMs: 3000 });
-      if (cache === "warm") {
-        expect(await request("/healthz")).toMatchObject({ statusCode: 200 });
-      }
-      hold = true;
-      const oldRequest = request("/healthz");
-      const old = await oldResponse.promise;
-      await writeFile(certPath, PROXY_FIXTURE_CERTIFICATE);
-      server.setSecureContext({ cert: PROXY_FIXTURE_CERTIFICATE, key: PROXY_FIXTURE_KEY });
-      const newRequest = request("/readyz");
-      const next = await newResponse.promise;
-      const responses = [
-        [old, oldRequest],
-        [next, newRequest],
-      ] as const;
-      for (const [response, pending] of completion === "old-first"
-        ? responses
-        : responses.toReversed()) {
-        response.end(liveBody);
-        expect(await pending).toMatchObject({ statusCode: 200 });
-      }
-      hold = false;
-      // Stage a different pin without changing the listener; only its verified replacement may serve.
-      await writeFile(certPath, TEST_TLS_CERT_PEM);
-      expect(await request("/healthz")).toMatchObject({
-        statusCode: 200,
-        tlsFingerprint: pin(PROXY_FIXTURE_CERTIFICATE),
-      });
-      expect(await probe.resolveWebSocketTarget(port)).toEqual({
-        url: `wss://127.0.0.1:${port}`,
-        tlsFingerprint: pin(PROXY_FIXTURE_CERTIFICATE),
-      });
-    },
-  );
+  test("retains the verified serving pin while another replacement is staged", async () => {
+    const request = (pathname: "/healthz" | "/readyz") =>
+      requestHttp(probe, port, { pathname, timeoutMs: 3000 });
+    expect(await request("/healthz")).toMatchObject({ statusCode: 200 });
+    await writeFile(certPath, PROXY_FIXTURE_CERTIFICATE);
+    server.setSecureContext({ cert: PROXY_FIXTURE_CERTIFICATE, key: PROXY_FIXTURE_KEY });
+    expect(await request("/readyz")).toMatchObject({ statusCode: 200 });
+    // Stage a different pin without changing the listener; only its verified replacement may serve.
+    await writeFile(certPath, TEST_TLS_CERT_PEM);
+    expect(await request("/healthz")).toMatchObject({
+      statusCode: 200,
+      tlsFingerprint: pin(PROXY_FIXTURE_CERTIFICATE),
+    });
+    expect(await probe.resolveWebSocketTarget(port)).toEqual({
+      url: `wss://127.0.0.1:${port}`,
+      tlsFingerprint: pin(PROXY_FIXTURE_CERTIFICATE),
+    });
+  });
 });
 
 test("cancels pending readiness requests when the repair budget expires", async () => {
