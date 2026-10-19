@@ -98,7 +98,7 @@ export type QaGatewayChildParams = {
 
 const OPENCLAW_QA_CODEX_API_KEY_HANDOFF = "OPENCLAW_QA_CODEX_API_KEY_HANDOFF";
 
-const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
+const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS: readonly string[] = [
   // QA owns this child; parent service and test-runner markers describe a different process.
   ...SUPERVISOR_HINT_ENV_VARS,
   "VITEST",
@@ -115,7 +115,7 @@ const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
   "SHELLOPTS",
-]);
+];
 
 function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const envKey of QA_GATEWAY_CHILD_BLOCKED_ENV_VARS) {
