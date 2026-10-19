@@ -86,7 +86,9 @@ async function readSpill(read: ReturnType<typeof createSandboxedReadTool>, fileP
   return JSON.stringify(await read.execute("read", { path: filePath, offset: 1_000, limit: 30 }));
 }
 
-beforeEach(() => fetchMock.mockImplementation(async () => mockResponse()));
+beforeEach(() => {
+  fetchMock.mockImplementation(async () => mockResponse());
+});
 afterEach(() => fetchMock.mockReset());
 
 it("removes the owned sandbox output directory when release rejects publication", async () => {
@@ -104,7 +106,9 @@ it("removes the owned sandbox output directory when release rejects publication"
       created = path.join(inbound, entries[0]);
       const files = await fs.readdir(created);
       expect(files).toContain("openclaw-web-fetch.log");
-      expect(await fs.readFile(path.join(created, "openclaw-web-fetch.log"), "utf8")).toContain(marker);
+      expect(await fs.readFile(path.join(created, "openclaw-web-fetch.log"), "utf8")).toContain(
+        marker,
+      );
       throw reason;
     },
   }));
