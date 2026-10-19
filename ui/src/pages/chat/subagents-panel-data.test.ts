@@ -35,6 +35,22 @@ function child(id: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessi
   };
 }
 
+function runningChild(id: string, extra: Partial<GatewaySessionRow> = {}) {
+  return child(id, { status: "running", hasActiveRun: true, activeRunIds: ["run-1"], ...extra });
+}
+
+function rowFixture(row: () => GatewaySessionRow, readHistory = () => history(row())) {
+  return fixture((method, params) => {
+    if (method === "sessions.list") {
+      return page(params.spawnedBy ? [row()] : []);
+    }
+    if (method === "chat.history") {
+      return readHistory();
+    }
+    throw new Error(`Unexpected method: ${method}`);
+  });
+}
+
 function page(
   rows: GatewaySessionRow[],
   extra: Partial<SessionsListResult> = {},
@@ -116,7 +132,22 @@ function fixture(read: (method: string, params: Record<string, unknown>) => unkn
   };
   const open = (sessionKey = parentKey) =>
     data.sync({ sessionKey, agentId: "main", presented: true });
-  return { data, when, open, request, connection, subscriptions, released, changed };
+  const publish = (
+    row: GatewaySessionRow,
+    payload: Record<string, unknown>,
+    envelope: { event?: string; runId?: string; stream?: string; seq?: number; ts?: number } = {},
+  ) => {
+    const { event = "agent", runId = "run-1", stream = "item", ...rest } = envelope;
+    connection.publishEvent(event, {
+      sessionKey: row.key,
+      agentId: "worker",
+      runId,
+      stream,
+      data: payload,
+      ...rest,
+    });
+  };
+  return { data, when, open, request, connection, subscriptions, released, changed, publish };
 }
 
 describe("Subagents panel data ownership", () => {
@@ -178,11 +209,7 @@ describe("Subagents panel data ownership", () => {
   );
 
   it("withdraws readable rows and their message subscription when the child list is denied", async () => {
-    const row = child("running", {
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: ["run-1"],
-    });
+    const row = runningChild("running");
     let denied = false;
     const f = fixture((method, params) => {
       if (method === "sessions.list") {
@@ -249,20 +276,8 @@ describe("Subagents panel data ownership", () => {
   );
 
   it("rejects a stale Stop target while allowing the current run to be stopped exactly", async () => {
-    let row = child("stop", {
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: ["original-run"],
-    });
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        return page(params.spawnedBy ? [row] : []);
-      }
-      if (method === "chat.history") {
-        return history(row);
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
+    let row = runningChild("stop", { activeRunIds: ["original-run"] });
+    const f = rowFixture(() => row);
     f.open();
     await f.when(() => f.data.rows[0]?.canStop === true);
     const rendered = f.data.rows[0]!;
@@ -279,20 +294,8 @@ describe("Subagents panel data ownership", () => {
   });
 
   it("withdraws an exact count on an item-only live frame without losing public activity", async () => {
-    const row = child("activity", {
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: ["run-1"],
-    });
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        return page(params.spawnedBy ? [row] : []);
-      }
-      if (method === "chat.history") {
-        return history(row);
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
+    const row = runningChild("activity", { activeRunIds: ["run-1"] });
+    const f = rowFixture(() => row);
     f.open();
     await f.when(() => f.data.rows[0]?.callCount?.count === 0);
     const data = {
@@ -305,15 +308,7 @@ describe("Subagents panel data ownership", () => {
       progressText: "Reading source",
     };
     const publish = (item: Record<string, unknown>, seq: number) =>
-      f.connection.publishEvent("session.tool", {
-        sessionKey: row.key,
-        agentId: "worker",
-        runId: "run-1",
-        stream: "item",
-        ts: 1000 + seq,
-        seq,
-        data: item,
-      });
+      f.publish(row, item, { event: "session.tool", seq, ts: 1000 + seq });
     publish(data, 1);
     expect(f.data.rows[0]?.callCount).toBeUndefined();
     expect(f.data.rows[0]?.activity).toBe("Reading source");
@@ -323,9 +318,7 @@ describe("Subagents panel data ownership", () => {
   });
 
   it("prefers public progress and tool purpose over the observer digest while hiding routine calls", async () => {
-    const row = child("tool-only", {
-      status: "running",
-      hasActiveRun: true,
+    const row = runningChild("tool-only", {
       activeRunIds: ["run-1"],
       observerDigest: {
         runId: "run-1",
@@ -335,15 +328,7 @@ describe("Subagents panel data ownership", () => {
         updatedAt: 1,
       },
     });
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        return page(params.spawnedBy ? [row] : []);
-      }
-      if (method === "chat.history") {
-        return history(row);
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
+    const f = rowFixture(() => row);
     f.open();
     await f.when(() => f.data.rows[0]?.callCount !== undefined);
     expect(f.data.rows[0]?.activity).toBe(row.observerDigest?.headline);
@@ -357,14 +342,7 @@ describe("Subagents panel data ownership", () => {
       title: "Exec Retry failed benchmark targets",
       meta: "Retry failed benchmark targets",
     };
-    const publish = (data: Record<string, unknown>) =>
-      f.connection.publishEvent("agent", {
-        sessionKey: row.key,
-        agentId: "worker",
-        runId: "run-1",
-        stream: "item",
-        data,
-      });
+    const publish = (data: Record<string, unknown>) => f.publish(row, data);
     publish(item);
     expect(f.data.rows[0]?.activity).toBe(item.meta);
     for (const flag of ["hideFromChannelProgress", "suppressChannelProgress"]) {
@@ -385,11 +363,7 @@ describe("Subagents panel data ownership", () => {
   });
 
   it("keeps previous-run steps out of a continuation headline while counting the whole session", async () => {
-    const row = child("continuation", {
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: ["continuation-run"],
-    });
+    const row = runningChild("continuation", { activeRunIds: ["continuation-run"] });
     const previous = {
       itemId: "previous-item",
       toolCallId: "exec-call",
@@ -403,28 +377,17 @@ describe("Subagents panel data ownership", () => {
     const messages = [
       { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
     ];
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        return page(params.spawnedBy ? [row] : []);
-      }
-      if (method === "chat.history") {
-        return {
-          sessionId: row.sessionId,
-          messages,
-          hasMore: false,
-          totalMessages: messages.length,
-        };
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
+    const f = rowFixture(
+      () => row,
+      () => ({
+        sessionId: row.sessionId,
+        messages,
+        hasMore: false,
+        totalMessages: messages.length,
+      }),
+    );
     const publish = (runId: string, data: Record<string, unknown>) =>
-      f.connection.publishEvent("agent", {
-        sessionKey: row.key,
-        agentId: "worker",
-        runId,
-        stream: "item",
-        data,
-      });
+      f.publish(row, data, { runId });
     f.open();
     await f.when(() => f.data.rows[0]?.callCount?.count === 1);
     expect(f.data.rows[0]?.activity).toBeUndefined();
@@ -445,26 +408,12 @@ describe("Subagents panel data ownership", () => {
   });
 
   it("ignores unrelated deltas without skipping lifecycle activity cleanup", async () => {
-    let row = child("streams", { status: "running", hasActiveRun: true, activeRunIds: ["run-1"] });
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        return page(params.spawnedBy ? [row] : []);
-      }
-      if (method === "chat.history") {
-        return history(row);
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
+    let row = runningChild("streams");
+    const f = rowFixture(() => row);
     f.open();
     await f.when(() => f.data.rows[0]?.callCount?.count === 0);
     const publish = (runId: string, stream: string, data: Record<string, unknown>) =>
-      f.connection.publishEvent("agent", {
-        sessionKey: row.key,
-        agentId: "worker",
-        runId,
-        stream,
-        data,
-      });
+      f.publish(row, data, { runId, stream });
     publish("run-1", "item", {
       itemId: "read-item",
       toolCallId: "read-call",

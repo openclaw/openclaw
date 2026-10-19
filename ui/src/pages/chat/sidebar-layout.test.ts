@@ -23,6 +23,21 @@ import {
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
+function column(
+  panels: SidebarLayout["columns"][number]["panels"] = [],
+  extra: Partial<SidebarLayout["columns"][number]> = {},
+) {
+  return {
+    id: "side-panel-column",
+    side: "right" as const,
+    panels,
+    activePanelId: "",
+    height: 360,
+    width: 480,
+    ...extra,
+  };
+}
+
 function openAll(): SidebarLayout {
   return openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "dashboard"), "detail");
 }
@@ -81,7 +96,6 @@ describe("sidebar layout", () => {
     const shown = presentNarrowSidebarLayout(saved);
     expect(isSidebarSlotVisible(shown, "subagents")).toBe(true);
     expect(isSidebarSlotVisible(shown, "conversation")).toBe(false);
-    // Presentation only: the layout is untouched and the same view comes back each time.
     expect(saved).toEqual(before);
     expect(presentNarrowSidebarLayout(saved)).toBe(shown);
     expect(
@@ -90,7 +104,6 @@ describe("sidebar layout", () => {
         "conversation",
       ),
     ).toBe(false);
-    // Every other state is shown as it is: another panel, a closed side, a focused main view.
     for (const layout of [
       openSlot(saved, "terminal"),
       setSidebarOpen(saved, false),
@@ -173,17 +186,7 @@ describe("sidebar layout", () => {
   it("collapses the panel after its final tab closes", () => {
     const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
     expect(closed).toEqual({
-      columns: [
-        {
-          browserWidthPending: true,
-          id: "side-panel-column",
-          side: "right",
-          panels: [],
-          activePanelId: "",
-          height: 360,
-          width: 480,
-        },
-      ],
+      columns: [column([], { browserWidthPending: true })],
       open: false,
     });
   });
@@ -268,20 +271,19 @@ describe("sidebar layout", () => {
   it.each([true, false])(
     "migrates a legacy expanded dashboard with open=%s without changing visible content",
     (open) => {
-      const layout = normalizeSidebarLayout({
-        columns: [
-          {
-            id: "side-panel-column",
-            side: "right",
-            panels: [
-              { id: "chat", slot: "chat" },
-              { id: "terminal", slot: "terminal" },
-            ],
-            activePanelId: "chat",
-            height: 520,
-            width: 640,
-          },
+      const legacyColumn = {
+        id: "side-panel-column",
+        side: "right",
+        panels: [
+          { id: "chat", slot: "chat" },
+          { id: "terminal", slot: "terminal" },
         ],
+        activePanelId: "chat",
+        height: 520,
+        width: 640,
+      };
+      const layout = normalizeSidebarLayout({
+        columns: [structuredClone(legacyColumn)],
         dock: "bottom",
         open,
         expanded: true,
@@ -289,16 +291,13 @@ describe("sidebar layout", () => {
       expect(layout).toEqual({
         columns: [
           {
-            id: "side-panel-column",
-            side: "right",
+            ...legacyColumn,
             panels: [
               { id: "chat", slot: "dashboard" },
               { id: "terminal", slot: "terminal" },
               { id: "conversation", slot: "conversation" },
             ],
             activePanelId: open ? "conversation" : "chat",
-            height: 520,
-            width: 640,
           },
         ],
         mainPanelId: open ? "chat" : "conversation",
@@ -315,16 +314,7 @@ describe("sidebar layout", () => {
   it("deduplicates slots and repairs untrusted persisted values", () => {
     expect(normalizeSidebarLayout(null)).toEqual({ columns: [], open: false, expanded: false });
     expect(normalizeSidebarLayout({ columns: [], open: true })).toEqual({
-      columns: [
-        {
-          id: "side-panel-column",
-          side: "right",
-          panels: [],
-          activePanelId: "",
-          height: 360,
-          width: 480,
-        },
-      ],
+      columns: [column()],
       dock: "right",
       open: true,
       expanded: false,
@@ -374,18 +364,14 @@ describe("sidebar layout", () => {
       }),
     ).toEqual({
       columns: [
-        {
-          id: "same",
-          side: "right",
-          panels: [
+        column(
+          [
             { id: "same-panel", slot: "detail" },
             { id: "same-panel-2", slot: "discussion" },
             { id: "conversation", slot: "conversation" },
           ],
-          activePanelId: "same-panel-2",
-          height: 360,
-          width: 1_200,
-        },
+          { id: "same", activePanelId: "same-panel-2", width: 1_200 },
+        ),
       ],
       mainPanelId: "conversation",
       dock: "right",

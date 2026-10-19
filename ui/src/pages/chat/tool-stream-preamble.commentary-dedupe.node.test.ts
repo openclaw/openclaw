@@ -16,6 +16,8 @@ import { handleAgentEvent } from "./tool-stream.ts";
 const COMMENTARY = "I'll list the workspace files first.";
 const RUN_ID = "run-1";
 
+const assistant = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+
 function renderedTexts(host: ChatState) {
   return buildChatItems({
     paneId: "commentary-dedupe",
@@ -44,6 +46,15 @@ function commentaryHarness() {
   host.chatRunId = RUN_ID;
   let seq = 0;
   let messageSeq = 0;
+  const agent = (stream: "item" | "tool", data: Record<string, unknown>) =>
+    handleAgentEvent(host, {
+      runId: RUN_ID,
+      seq: ++seq,
+      stream,
+      ts: TOOL_STREAM_TEST_NOW + seq,
+      sessionKey: "main",
+      data,
+    });
   const deliver = () => {
     const projected = gateway.resolveBuffer(RUN_ID);
     const delta = gateway.takeBufferDelta(RUN_ID, projected.text);
@@ -54,7 +65,7 @@ function commentaryHarness() {
         seq: ++seq,
         state: "delta",
         ...delta,
-        message: { role: "assistant", content: [{ type: "text", text: projected.text }] },
+        message: assistant(projected.text),
       });
     }
   };
@@ -67,20 +78,12 @@ function commentaryHarness() {
       // The producer's assistantProjection hands this exact source to the keyed preamble.
       stream(sourceId, "", true);
     }
-    handleAgentEvent(host, {
-      runId: RUN_ID,
-      seq: ++seq,
-      stream: "item",
-      ts: TOOL_STREAM_TEST_NOW + seq,
-      sessionKey: "main",
-      data: { kind: "preamble", itemId, progressText: text },
-    });
+    agent("item", { kind: "preamble", itemId, progressText: text });
   };
   const persist = (itemId: string, text: string) => {
     const messageId = `saved-${itemId}`;
     const durable = {
-      role: "assistant",
-      content: [{ type: "text", text }],
+      ...assistant(text),
       __openclaw: { id: messageId, seq: ++messageSeq, runId: RUN_ID },
       openclawStreamFallback: { source: "segment", itemId },
     };
@@ -96,13 +99,11 @@ function commentaryHarness() {
     return durable;
   };
   const tool = () =>
-    handleAgentEvent(host, {
-      runId: RUN_ID,
-      seq: ++seq,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW + seq,
-      sessionKey: "main",
-      data: { phase: "start", toolCallId: "call_1", name: "list_files", args: {} },
+    agent("tool", {
+      phase: "start",
+      toolCallId: "call_1",
+      name: "list_files",
+      args: {},
     });
   const parts = () =>
     visibleAssistantStreamParts(host, {
@@ -111,13 +112,12 @@ function commentaryHarness() {
     });
   return {
     host,
-    gateway,
     stream,
     preamble,
     persist,
     tool,
-    parts,
-    visible: () => parts().map((part) => ({ text: part.text.trim(), itemId: part.itemId })),
+    expectParts: (...expected: [string, string | undefined][]) =>
+      expect(parts().map((part) => [part.text.trim(), part.itemId])).toEqual(expected),
     reconnect: async () => {
       history.inFlightRun = projectInFlightRunSnapshot({ chatRunState: gateway, runId: RUN_ID });
       const restored = createState(history);
@@ -167,16 +167,13 @@ describe("keyed commentary after an unphased live stream", () => {
   it("renders tool-boundary commentary once across item and chat stream", () => {
     const h = commentaryHarness();
     h.stream("source-a", `${COMMENTARY}\n\n`);
-    expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: undefined }]);
+    h.expectParts([COMMENTARY, undefined]);
     h.preamble("sig-1", COMMENTARY, "source-a");
-    expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: "sig-1" }]);
+    h.expectParts([COMMENTARY, "sig-1"]);
     h.tool();
-    expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: "sig-1" }]);
+    h.expectParts([COMMENTARY, "sig-1"]);
     h.stream("source-b", "Found a match, now let me read the file");
-    expect(h.visible()).toEqual([
-      { text: COMMENTARY, itemId: "sig-1" },
-      { text: "Found a match, now let me read the file", itemId: undefined },
-    ]);
+    h.expectParts([COMMENTARY, "sig-1"], ["Found a match, now let me read the file", undefined]);
   });
 
   it("does not let a late item update consume a later identical occurrence", () => {
@@ -185,15 +182,9 @@ describe("keyed commentary after an unphased live stream", () => {
     h.preamble("item-a", COMMENTARY, "source-a");
     h.stream("source-b", `${COMMENTARY}\n\n`);
     h.preamble("item-a", COMMENTARY);
-    expect(h.visible()).toEqual([
-      { text: COMMENTARY, itemId: "item-a" },
-      { text: COMMENTARY, itemId: undefined },
-    ]);
+    h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, undefined]);
     h.preamble("item-b", COMMENTARY, "source-b");
-    expect(h.visible()).toEqual([
-      { text: COMMENTARY, itemId: "item-a" },
-      { text: COMMENTARY, itemId: "item-b" },
-    ]);
+    h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, "item-b"]);
   });
 
   it("retires a saved owner's first occurrence only, including delayed updates", () => {
@@ -201,11 +192,11 @@ describe("keyed commentary after an unphased live stream", () => {
     const saved = h.persist("item-a", COMMENTARY);
     h.stream("item-a", `${COMMENTARY}\n\n`);
     h.preamble("item-a", COMMENTARY);
-    expect(h.visible()).toEqual([]);
+    h.expectParts();
     expect(h.host.chatMessages).toEqual([saved]);
     h.stream("source-b", COMMENTARY);
     h.preamble("item-a", COMMENTARY);
-    expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: undefined }]);
+    h.expectParts([COMMENTARY, undefined]);
   });
 
   it("does not reacquire an occurrence after an item is cleared", () => {
@@ -215,10 +206,7 @@ describe("keyed commentary after an unphased live stream", () => {
     h.preamble("item-a", "");
     h.stream("source-b", COMMENTARY);
     h.preamble("item-a", COMMENTARY);
-    expect(h.visible()).toEqual([
-      { text: COMMENTARY, itemId: "item-a" },
-      { text: COMMENTARY, itemId: undefined },
-    ]);
+    h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, undefined]);
   });
 
   it("keeps earlier different cumulative text visible when a later occurrence becomes keyed", () => {
@@ -230,7 +218,7 @@ describe("keyed commentary after an unphased live stream", () => {
     h.stream("source-a", `${COMMENTARY}\n\n`);
     h.preamble("item-a", COMMENTARY, "source-a");
     expect(h.host.chatMessages).toEqual([saved]);
-    expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: "item-a" }]);
+    h.expectParts([COMMENTARY, "item-a"]);
   });
 
   it("completes a keyed handoff when the last chat chunk arrives between update and end", () => {
@@ -241,12 +229,9 @@ describe("keyed commentary after an unphased live stream", () => {
     h.preamble("item-a", text.slice(0, -4), "source-a");
     h.stream("source-a", text);
     h.preamble("item-a", text, "source-a");
-    expect(h.visible()).toEqual([{ text, itemId: "item-a" }]);
+    h.expectParts([text, "item-a"]);
     h.stream("source-b", "A later observation.");
     h.preamble("item-a", text);
-    expect(h.visible()).toEqual([
-      { text, itemId: "item-a" },
-      { text: "A later observation.", itemId: undefined },
-    ]);
+    h.expectParts([text, "item-a"], ["A later observation.", undefined]);
   });
 });
