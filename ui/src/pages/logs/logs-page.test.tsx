@@ -34,11 +34,8 @@ function mountPage(initial: TestContext) {
       <LogsPage />
     </ApplicationProvider>
   ));
-  const query = <T extends Element = HTMLElement>(selector: string) =>
-    container.querySelector<T>(selector);
   return {
     container,
-    query,
     replaceContext(next: TestContext) {
       setContext(next);
       flush();
@@ -46,7 +43,7 @@ function mountPage(initial: TestContext) {
     dispose,
     lines: () => Array.from(container.querySelectorAll(".log-message"), (row) => row.textContent),
     async refresh() {
-      query<HTMLButtonElement>(".settings-section__actions button")!.click();
+      container.querySelector<HTMLButtonElement>(".settings-section__actions button")!.click();
       await settle();
     },
   };
@@ -273,19 +270,23 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
   if (loaded) {
     await page.refresh();
     expect(page.lines()).toEqual(["old"]);
-    expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing stale data");
+    expect(page.container.querySelector(".logs-refresh-status")?.textContent).toContain(
+      "Showing stale data",
+    );
   } else {
     expect(page.container.textContent).toContain("logs unavailable");
     expect(page.container.textContent).not.toContain("No log entries.");
     context.gateway.publish({ ...context.gateway.snapshot });
     expect(request).toHaveBeenCalledOnce();
-    expect(page.query(".logs-refresh-status button")).toBeNull();
+    expect(page.container.querySelector(".logs-refresh-status button")).toBeNull();
   }
-  expect(page.query(".logs-refresh-status")?.textContent).toContain("logs unavailable");
+  expect(page.container.querySelector(".logs-refresh-status")?.textContent).toContain(
+    "logs unavailable",
+  );
   await (loaded ? page.refresh() : poll());
   expect(page.lines()).toEqual(["recovered"]);
   expect(page.container.textContent).not.toContain("logs unavailable");
-  expect(page.query(".logs-refresh-status")).toBeNull();
+  expect(page.container.querySelector(".logs-refresh-status")).toBeNull();
 });
 
 it("keeps text and level filters active as quiet polls append rows", async () => {
@@ -296,12 +297,12 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
     tail(2, [line("alpha next", "ERROR"), line("beta next", "ERROR")]),
   );
   const { page } = await setup(request);
-  const filter = page.query<HTMLInputElement>(".settings-input")!;
+  const filter = page.container.querySelector<HTMLInputElement>(".settings-input")!;
   filter.value = "alpha";
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(page.lines()).toEqual(["alpha info", "alpha error"]);
-  page.query<HTMLInputElement>(".log-chip.info input")!.click();
+  page.container.querySelector<HTMLInputElement>(".log-chip.info input")!.click();
   flush();
   expect(page.lines()).toEqual(["alpha error"]);
   await poll();
@@ -311,9 +312,11 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
 
 it("forces a scroll when auto-follow is re-enabled away from the bottom", async () => {
   const { page } = await setup(vi.fn().mockResolvedValue(tail(1, ["one"])));
-  const stream = page.query(".log-stream")!;
+  const stream = page.container.querySelector<HTMLElement>(".log-stream")!;
   Object.defineProperties(stream, { scrollHeight: { value: 500 }, clientHeight: { value: 100 } });
-  const toggle = page.query<HTMLInputElement>(".settings-toggle input, input.settings-toggle")!;
+  const toggle = page.container.querySelector<HTMLInputElement>(
+    ".settings-toggle input, input.settings-toggle",
+  )!;
   toggle.click();
   flush();
   stream.scrollTop = 0;
@@ -330,7 +333,7 @@ it("drops queued scroll work after a same-client reconnect", async () => {
   const request = responding(tail(1, ["one"])).mockReturnValue(new Promise(() => {}));
   const frames = captureFrames();
   const { context, page } = await setup(request);
-  const stream = page.query(".log-stream")!;
+  const stream = page.container.querySelector<HTMLElement>(".log-stream")!;
   Object.defineProperty(stream, "scrollHeight", { value: 500 });
   stream.scrollTop = 0;
   context.gateway.publish({ ...context.gateway.snapshot, phase: "stopped" });

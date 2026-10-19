@@ -156,7 +156,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         expect(servers).toHaveLength(firstWriteCount + 1);
         for (const server of servers) {
           expect(server.listening).toBe(false);
-          expect(await promisify(server.getConnections).call(server)).toBe(0);
+          expect(await promisify(server.getConnections.bind(server))()).toBe(0);
         }
         expect(process.argv).toBe(originalProcess.argv);
         expect(process.exitCode).toBe(originalProcess.exitCode);
