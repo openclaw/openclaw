@@ -26,7 +26,11 @@ const prepareInput = expectDefined(
 );
 const prepare = (input: Parameters<typeof prepareInput>[0]["input"]) =>
   prepareInput({ cfg: {}, accountId: DEFAULT_ACCOUNT_ID, input, runtime: {} as never });
-const apply = nextcloudTalkSetupContract.applyAccountConfig;
+const apply = (
+  input: Parameters<typeof nextcloudTalkSetupContract.applyAccountConfig>[0]["input"],
+  cfg: CoreConfig = talkConfig({}),
+  accountId = DEFAULT_ACCOUNT_ID,
+) => nextcloudTalkSetupContract.applyAccountConfig({ cfg, accountId, input });
 const validate = (
   input: Parameters<typeof validateInput>[0]["input"],
   accountId = DEFAULT_ACCOUNT_ID,
@@ -86,20 +90,16 @@ describe("nextcloud talk setup", () => {
     ).toBeNull();
     expect(validate({ secret: "secret", baseUrl: "http://cloud.example.com" })).toBeNull();
 
-    expect(
-      apply({
-        cfg: talkConfig({}),
-        accountId: DEFAULT_ACCOUNT_ID,
-        input: { name: "Default", baseUrl: ` ${baseUrl}/// `, secret: "bot-secret" },
-      } as never),
-    ).toEqual(talkConfig({ enabled: true, name: "Default", baseUrl, botSecret: "bot-secret" }));
+    expect(apply({ name: "Default", baseUrl: ` ${baseUrl}/// `, secret: "bot-secret" })).toEqual(
+      talkConfig({ enabled: true, name: "Default", baseUrl, botSecret: "bot-secret" }),
+    );
 
     expect(
-      apply({
-        cfg: talkConfig({ accounts: { work: { botSecret: "old-secret" } } }),
-        accountId: "work",
-        input: { name: "Work", useEnv: true, baseUrl },
-      } as never),
+      apply(
+        { name: "Work", useEnv: true, baseUrl },
+        talkConfig({ accounts: { work: { botSecret: "old-secret" } } }),
+        "work",
+      ),
     ).toEqual(
       talkConfig({
         enabled: true,
@@ -138,14 +138,13 @@ describe("nextcloud talk setup", () => {
 
   it("replaces only the selected account's API password when the wizard sets a credential", async () => {
     const credential = expectDefined(credentials[1], "Nextcloud Talk API credential");
+    const work = { baseUrl, botSecret: "work-secret", apiUser: "bot" };
     const next = await credential.applySet?.({
       cfg: talkConfig({
         botSecret: "root-secret",
         accounts: {
           work: {
-            baseUrl,
-            botSecret: "work-secret",
-            apiUser: "bot",
+            ...work,
             apiPassword: "old-password",
             apiPasswordFile: "/run/secrets/old-api-password",
           },
@@ -160,9 +159,7 @@ describe("nextcloud talk setup", () => {
     expect(next?.channels?.["nextcloud-talk"]?.botSecret).toBe("root-secret");
     expect(next?.channels?.["nextcloud-talk"]?.accounts?.work).toEqual({
       enabled: true,
-      baseUrl,
-      botSecret: "work-secret",
-      apiUser: "bot",
+      ...work,
       apiPassword: "new-password",
     });
   });

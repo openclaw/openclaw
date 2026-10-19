@@ -190,27 +190,6 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("recovers an uncompleted webhook with a fresh drain exactly once", async () => {
-    const rawEvent = createRawEvent({ messageId: "msg-restart", text: "ordinary text" });
-    const interrupted = startSpool(queue, deferredDelivery());
-    await expect(interrupted.receive(rawEvent)).resolves.toBe("accepted");
-    await interrupted.waitForIdle();
-    await expectClaim("msg-restart", "room:test-room-token", rawEvent);
-    await interrupted.stop();
-
-    const recoveredDeliver = adoptedDelivery();
-    await withSpool(startSpool(queue, recoveredDeliver), async (recovered) => {
-      await recovered.waitForIdle();
-      expect(recoveredDeliver).toHaveBeenCalledTimes(1);
-      expectDelivered(recoveredDeliver, {
-        messageId: "msg-restart",
-        roomToken: "test-room-token",
-        text: "ordinary text",
-        mediaType: "text/plain",
-      });
-    });
-  });
-
   it("drains other rooms while keeping unadopted same-room deliveries ordered", async () => {
     const roomADelivery = Promise.withResolvers<void>();
     const roomAStarted = Promise.withResolvers<void>();
@@ -330,39 +309,51 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("replays an interrupted file_shared activity once in its original room lane", async () => {
-    const body = createFileSharedActivityBody();
-    const interrupted = startSpool(queue, deferredDelivery());
-    await interrupted.receive(body);
-    await interrupted.waitForIdle();
-    await expectClaim("4242", "room:redacted-room-token");
-    await interrupted.stop();
-
-    const recoveredDeliver = adoptedDelivery();
-    await withSpool(startSpool(queue, recoveredDeliver), async (recovered) => {
-      await recovered.waitForIdle();
-      await receive(recovered, body);
-      expect(recoveredDeliver).toHaveBeenCalledTimes(1);
-      expectDelivered(recoveredDeliver, {
+  it.each([
+    {
+      kind: "text",
+      body: createRawEvent({ messageId: "msg-restart", text: "ordinary text" }),
+      id: "msg-restart",
+      lane: "room:test-room-token",
+      message: {
+        messageId: "msg-restart",
+        roomToken: "test-room-token",
+        text: "ordinary text",
+        mediaType: "text/plain",
+      },
+    },
+    {
+      kind: "file_shared",
+      body: createFileSharedActivityBody(),
+      id: "4242",
+      lane: "room:redacted-room-token",
+      message: {
         messageId: "4242",
         roomToken: "redacted-room-token",
         attachment: expect.objectContaining({ fileId: "9001" }),
-      });
+      },
+    },
+  ])("recovers $kind in its original lane exactly once", async ({ body, id, lane, message }) => {
+    const interrupted = startSpool(queue, deferredDelivery());
+    await receive(interrupted, body);
+    await expectClaim(id, lane, body);
+    await interrupted.stop();
+    const deliver = adoptedDelivery();
+    await withSpool(startSpool(queue, deliver), async (spool) => {
+      await spool.waitForIdle();
+      await receive(spool, body);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expectDelivered(deliver, message);
     });
   });
 
-  it("durably admits Talk file_shared activities", async () => {
-    const body = createFileSharedActivityBody();
-    const deliver = deferredDelivery();
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await receive(spool, body);
-      await expectClaim("4242", "room:redacted-room-token", body);
-      expectDelivered(deliver, {
+  it.each([
+    {
+      kind: "file_shared",
+      body: createFileSharedActivityBody(),
+      message: {
         messageId: "4242",
-        roomToken: "redacted-room-token",
         roomName: "Receipts",
-        senderId: "users/alice",
-        senderName: "Alice",
         text: "@openclaw please inspect this receipt",
         timestamp: expect.any(Number),
         attachment: {
@@ -373,6 +364,35 @@ describe("Nextcloud Talk durable ingress", () => {
           shareUrl: "https://nextcloud.example/s/redacted-share-token",
           hideDownload: false,
         },
+      },
+    },
+    {
+      kind: "voice",
+      body: createVoiceMessageActivityBody(),
+      message: {
+        messageId: "4250",
+        roomName: "Voice notes",
+        text: "",
+        attachment: {
+          fileId: "9010",
+          name: "voice-note.wav",
+          mimeType: "audio/wav",
+          declaredSizeBytes: 557_804,
+          shareUrl: "https://nextcloud.example/s/redacted-voice-share-token",
+          hideDownload: false,
+        },
+      },
+    },
+  ])("durably admits $kind activities", async ({ body, message }) => {
+    const deliver = deferredDelivery();
+    await withSpool(startSpool(queue, deliver), async (spool) => {
+      await receive(spool, body);
+      await expectClaim(message.messageId, "room:redacted-room-token", body);
+      expectDelivered(deliver, {
+        ...message,
+        roomToken: "redacted-room-token",
+        senderId: "users/alice",
+        senderName: "Alice",
       });
     });
   });
@@ -383,31 +403,6 @@ describe("Nextcloud Talk durable ingress", () => {
       await receive(spool, createFileSharedActivityBody({ fileSize: 1_234_567 }));
       expectDelivered(deliver, {
         attachment: expect.objectContaining({ declaredSizeBytes: 1_234_567 }),
-      });
-    });
-  });
-
-  it("durably admits canonical native Talk voice-message activities", async () => {
-    const body = createVoiceMessageActivityBody();
-    const deliver = deferredDelivery();
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await receive(spool, body);
-      await expectClaim("4250", "room:redacted-room-token", body);
-      expectDelivered(deliver, {
-        messageId: "4250",
-        roomToken: "redacted-room-token",
-        roomName: "Voice notes",
-        senderId: "users/alice",
-        senderName: "Alice",
-        text: "",
-        attachment: {
-          fileId: "9010",
-          name: "voice-note.wav",
-          mimeType: "audio/wav",
-          declaredSizeBytes: 557_804,
-          shareUrl: "https://nextcloud.example/s/redacted-voice-share-token",
-          hideDownload: false,
-        },
       });
     });
   });
