@@ -22,6 +22,7 @@ const segment = (text: string, start = 0, speaker_id?: string) => ({
   end: start + 1,
   speaker_id,
 });
+const texts = (callback: ReturnType<typeof vi.fn>) => callback.mock.calls.map(([text]) => text);
 
 function createSession(
   baseUrl: string,
@@ -34,7 +35,7 @@ function createSession(
 }
 
 async function terminalSession(events: Record<string, unknown>[]) {
-  const { baseUrl, closed } = await createRealtimeServer(() => {}, events);
+  const { baseUrl, closed } = await createRealtimeServer([events]);
   const onPartial = vi.fn();
   const onTranscript = vi.fn();
   const onError = vi.fn();
@@ -46,35 +47,25 @@ async function terminalSession(events: Record<string, unknown>[]) {
 }
 
 async function createRealtimeServer(
-  onRequest: (url: URL) => void,
-  transcriptionEvents: readonly Record<string, unknown>[] = [],
-  eventsByConnection?: readonly (readonly Record<string, unknown>[])[],
+  eventsByConnection: readonly (readonly Record<string, unknown>[])[] = [[]],
   onConnection?: (socket: WebSocket) => void,
 ) {
+  const requests: URL[] = [];
   const closed = createDeferred<void>();
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const clients = new Set<WebSocket>();
   let connectionCount = 0;
   server.on("upgrade", (request, socket, head) => {
-    onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
+    requests.push(new URL(request.url ?? "/", "http://127.0.0.1"));
     wss.handleUpgrade(request, socket, head, (ws) => {
       const connectionIndex = connectionCount++;
-      clients.add(ws);
       onConnection?.(ws);
-      ws.on("close", () => {
-        clients.delete(ws);
-        closed.resolve();
-      });
+      ws.on("close", () => closed.resolve());
       ws.on("message", (data) => {
-        const bytes = Buffer.isBuffer(data)
-          ? data
-          : Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.from(data);
-        const message = JSON.parse(bytes.toString("utf8")) as { type?: unknown };
+        // This fixture uses ws's default nodebuffer binaryType.
+        const message = JSON.parse(data.toString()) as { type?: unknown };
         if (message.type === "session.update") {
-          for (const event of eventsByConnection?.[connectionIndex] ?? transcriptionEvents) {
+          for (const event of eventsByConnection[connectionIndex] ?? []) {
             ws.send(JSON.stringify(event));
           }
         }
@@ -86,7 +77,7 @@ async function createRealtimeServer(
     server.listen(0, "127.0.0.1", resolve);
   });
   cleanup = async () => {
-    for (const ws of clients) {
+    for (const ws of wss.clients) {
       ws.terminate();
     }
     await new Promise<void>((resolve) => {
@@ -97,6 +88,7 @@ async function createRealtimeServer(
     });
   };
   return {
+    requests,
     baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
     closed: closed.promise,
   };
@@ -142,8 +134,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   });
 
   it("connects through the public session boundary with the configured URL params", async () => {
-    const requests: URL[] = [];
-    const { baseUrl } = await createRealtimeServer((url) => requests.push(url));
+    const { baseUrl, requests } = await createRealtimeServer();
     const session = provider.createSession({
       providerConfig: {
         apiKey: "fixture-value",
@@ -166,18 +157,8 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
 
   it.each<[string, Record<string, unknown>[], string[], string[]]>([
     ["terminal-only text", [done("final transcript")], [], ["final transcript"]],
-    [
-      "corrected final replaces deltas",
-      [delta("draft"), delta(" words"), done("corrected final transcript")],
-      ["draft", "draft words"],
-      ["corrected final transcript"],
-    ],
-    [
-      "final does not repeat segment",
-      [delta("draft"), segment("final transcript"), done("final transcript")],
-      ["draft"],
-      ["final transcript"],
-    ],
+    ["corrected final", [delta("a"), delta("b"), done("c")], ["a", "ab"], ["c"]],
+    ["segment dedup", [delta("a"), segment("b"), done("b")], ["a"], ["b"]],
     [
       "identical independently timed segments",
       [segment("echo", 0, "first"), segment("echo", 1, "second"), done("echo echo")],
@@ -190,16 +171,11 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       ["hello", " new", " new speech"],
       ["hello", " new speech"],
     ],
-    [
-      "does not replay rewritten aggregate",
-      [segment("hello"), segment("world", 1), done("greetings earth")],
-      [],
-      ["hello", "world"],
-    ],
+    ["aggregate rewrite", [segment("a"), segment("b", 1), done("c")], [], ["a", "b"]],
   ])("%s", async (_name, events, partials, transcripts) => {
     const { onPartial, onTranscript } = await terminalSession(events);
-    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
-    expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
+    expect(texts(onTranscript)).toEqual(transcripts);
+    expect(texts(onPartial)).toEqual(partials);
   });
 
   it.each<[string, string, string, string[]]>([
@@ -214,18 +190,15 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       done(aggregate),
     ]);
     expect(onPartial).toHaveBeenCalledExactlyOnceWith(pending);
-    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
+    expect(texts(onTranscript)).toEqual(transcripts);
   });
 
   it.each<[string, string[], string[]]>([
     ["terminal-only speech", [], []],
     ["isolates interrupted partials", ["old fragment "], ["new fragment"]],
   ])("%s after a real provider reconnect", async (_name, firstPartials, nextPartials) => {
-    const requests: URL[] = [];
     let firstSocket: WebSocket | undefined;
-    const { baseUrl } = await createRealtimeServer(
-      (url) => requests.push(url),
-      [],
+    const { baseUrl, requests } = await createRealtimeServer(
       [
         [{ type: "transcription.segment", text: "earlier turn" }, ...firstPartials.map(delta)],
         [...nextPartials.map(delta), done("replacement final")],
@@ -242,8 +215,8 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     try {
       await session.connect();
       await vi.waitFor(() => {
-        expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(["earlier turn"]);
-        expect(onPartial.mock.calls.map(([text]) => text)).toEqual(firstPartials);
+        expect(texts(onTranscript)).toEqual(["earlier turn"]);
+        expect(texts(onPartial)).toEqual(firstPartials);
       });
       if (!firstSocket) {
         throw new Error("Mistral fixture did not establish its first WebSocket");
@@ -259,18 +232,12 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
         () => {
           expect(requests).toHaveLength(2);
           expect(session.isConnected()).toBe(false);
-          expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-            "earlier turn",
-            "replacement final",
-          ]);
+          expect(texts(onTranscript)).toEqual(["earlier turn", "replacement final"]);
         },
         { timeout: 3_000 },
       );
 
-      expect(onPartial.mock.calls.map(([text]) => text)).toEqual([
-        ...firstPartials,
-        ...nextPartials,
-      ]);
+      expect(texts(onPartial)).toEqual([...firstPartials, ...nextPartials]);
       expect(onError).not.toHaveBeenCalled();
     } finally {
       session.close();
@@ -289,18 +256,17 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       delta("\ude42"),
       done(),
     ]);
-    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-      "first segment",
-      splitSurrogateTranscript,
-    ]);
+    expect(texts(onTranscript)).toEqual(["first segment", splitSurrogateTranscript]);
     expect(onError).not.toHaveBeenCalled();
   });
 
   it("fails once and ignores late terminal events after 10,000 runaway deltas", async () => {
-    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
-      ...Array.from({ length: 10_000 }, () => delta("x".repeat(32))),
-      segment("late segment"),
-      done("late done"),
+    const { baseUrl, closed } = await createRealtimeServer([
+      [
+        ...Array.from({ length: 10_000 }, () => delta("x".repeat(32))),
+        segment("late segment"),
+        done("late done"),
+      ],
     ]);
     const errorReceived = createDeferred<void>();
     const onError = vi.fn(() => errorReceived.resolve());
