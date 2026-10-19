@@ -297,7 +297,7 @@ it.each(["commit", "rollback", "unknown"] as const)(
           scheduled = true;
           // Subscribe after this notification: listeners added during it see the live Set.
           queueMicrotask(() => {
-            acquired = retainConversationBindingFacts([conversationRef]);
+            acquired = retainConversationBindingFacts([conversationRef], scope.storePath);
             acquired.acknowledge(snapshot);
             const sql = observeMainThreadSql();
             try {

@@ -133,7 +133,10 @@ export function retainSessionEntryWorkerPublication(params: {
 }) {
   const creation = preparedSharingChanges.current.getStore();
   const transcript = retainSessionTranscriptWorkerPublication(params);
-  const conversation = retainConversationWorkerPublication(params.databaseIdentity);
+  const conversation = retainConversationWorkerPublication(
+    params.databaseIdentity,
+    params.storePath,
+  );
   const completion = createDeferredCore();
   const owner: PendingSessionEntryPublication = {
     superseded: new Set(),

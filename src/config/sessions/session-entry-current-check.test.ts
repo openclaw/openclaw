@@ -16,6 +16,8 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { buildConversationIdentity } from "./conversation-identity.js";
+import { captureConversationBindingFacts } from "./conversation-registry.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -478,9 +480,13 @@ it("revokes cold conversation authority when its database reader is retired", as
   }
 });
 
-it.each([false, true])(
-  "isolates foreign conversation absence (existing store=%s)",
-  async (existing) => {
+it.each([
+  { existing: false, native: false },
+  { existing: true, native: false },
+  { existing: false, native: true },
+])(
+  "isolates foreign conversation absence (existing store=$existing, native=$native)",
+  async ({ existing, native }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-stores-") };
     const scope = {
       agentId: "main",
@@ -516,17 +522,52 @@ it.each([false, true])(
         },
       ],
     });
+    const { conversationRef } = buildConversationIdentity({
+      ...conversationAddress,
+      deliveryTarget: conversationAddress.peerId,
+    })!;
+    const binding = await captureConversationBindingFacts(foreign, [conversationRef]);
+    const assertBinding = (expected: string | null) => {
+      const sql = observeMainThreadSql();
+      try {
+        expect(binding.currentSessionKey(conversationRef)).toBe(expected);
+        expect(sql.count()).toBe(0);
+      } finally {
+        sql.restore();
+      }
+    };
     try {
+      assertBinding(null);
       expectConversationCurrentWithoutSql(check, true);
       await replaceSessionEntry(scope, {
         ...conversationEntry("chosen", 20),
         displayName: "Updated",
       });
+      assertBinding(null);
       expectConversationCurrentWithoutSql(check, true);
-      await replaceSessionEntry(foreign, conversationEntry("foreign", 30));
+      if (native) {
+        const rollback = new Error("roll back first foreign conversation");
+        expect(() =>
+          runOpenClawAgentWriteTransaction(
+            () => {
+              replaceSessionEntrySync(foreign, conversationEntry("foreign", 30));
+              assertBinding(foreign.sessionKey);
+              throw rollback;
+            },
+            { agentId: foreign.agentId, path: foreign.storePath, env },
+          ),
+        ).toThrow(rollback);
+        assertBinding(null);
+        replaceSessionEntrySync(foreign, conversationEntry("foreign", 30));
+      } else {
+        await replaceSessionEntry(foreign, conversationEntry("foreign", 30));
+      }
+      // Exercise the publication owner directly, without platform path-currentness guards.
+      assertBinding(foreign.sessionKey);
       expectConversationCurrentWithoutSql(check, false);
       await expect(check.isCurrent()).resolves.toBe(false);
     } finally {
+      binding.release();
       check.release();
     }
   },

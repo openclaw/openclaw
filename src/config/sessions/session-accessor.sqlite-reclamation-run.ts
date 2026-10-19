@@ -481,7 +481,10 @@ async function runPreparedSqliteSessionReclamation(
       await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
-          const conversations = retainConversationWorkerPublication(identity);
+          const conversations = retainConversationWorkerPublication(
+            identity,
+            plan.databaseOptions.path,
+          );
           let refusal: { error: unknown } | undefined;
           let publishCommitted: (() => void) | undefined;
           try {

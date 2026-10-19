@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { getChildLogger } from "../../logging/logger.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
-import { resolveSessionPublicShare } from "./session-public-share.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Apply retained logical-node policy to an already normalized entry before writing it. */
@@ -98,22 +97,6 @@ export function applySessionEntryWritePolicy(
   ) {
     // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
     normalizedEntry.updatedAt = 0;
-  }
-  // Public/plugin projections omit this server-owned field. Same-session replacements
-  // retain publication; only an explicit field clear or a new session id revokes it.
-  if (
-    !Object.hasOwn(normalizedEntry, "publicShare") &&
-    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
-  ) {
-    normalizedEntry.publicShare = resolveSessionPublicShare(canonicalPreviousEntry);
-  }
-  // A copied or reset entry must never publish its replacement generation.
-  // Checking the embedded binding also covers forks into previously absent nodes.
-  if (
-    normalizedEntry.incognito === true ||
-    normalizedEntry.publicShare?.sessionId !== normalizedEntry.sessionId
-  ) {
-    delete normalizedEntry.publicShare;
   }
   // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {

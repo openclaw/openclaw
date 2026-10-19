@@ -184,14 +184,16 @@ export async function captureConversationBindingFacts(
       },
     };
   }
-  const facts = retainConversationBindingFacts(refs);
+  let releaseFacts: (() => void) | undefined;
   let retained: ReturnType<typeof retainSessionHistoryWorkerDatabase> | undefined;
   const release = () => {
-    facts.release();
+    releaseFacts?.();
     retained?.release();
   };
   try {
     return await withConversationRead(scope, async ({ reader, database, assertCurrent }) => {
+      const facts = retainConversationBindingFacts(refs, database.path);
+      releaseFacts = () => facts.release();
       retained = retainSessionHistoryWorkerDatabase(database);
       const snapshot = await reader.readConversationBindings({
         conversationRefs: refs,
@@ -381,7 +383,10 @@ export async function registerConversationAddresses(
             return withConversationPublication(
               source.createAdmission(binding),
               () => binding.assertCurrent(),
-              () => execution.captureGenerationClaim(),
+              () => ({
+                ...execution.captureGenerationClaim(),
+                canonicalPath: execution.fileIdentity!.nativeLocation,
+              }),
               () => [
                 ...new Set(
                   input.identities.map((identity) =>

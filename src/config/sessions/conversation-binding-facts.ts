@@ -51,7 +51,10 @@ function applyFacts(
 }
 
 /** A request-scoped projection of the publication owner, retaining every possible winner. */
-export function retainConversationBindingFacts(conversationRefs: readonly string[]) {
+export function retainConversationBindingFacts(
+  conversationRefs: readonly string[],
+  databasePath: string,
+) {
   const refs = new Set(conversationRefs);
   let facts = new Map<string, ConversationFact>();
   let source: ConversationBindingSnapshot["source"];
@@ -60,8 +63,10 @@ export function retainConversationBindingFacts(conversationRefs: readonly string
   let active = true;
   const queued: ConversationFactChange[] = [];
   const pending = new Set<object>();
-  const sameSource = (receipt: ConversationPublication) =>
-    receipt.source.identity === source?.identity;
+  const sameSource = (receipt: Pick<ConversationPublication, "source">) =>
+    source
+      ? receipt.source.identity === source.identity
+      : receipt.source.canonicalPath === databasePath;
   const relevant = (receipt: ConversationPublication) =>
     [...receipt.facts].some(
       ([key, fact]) =>
@@ -80,19 +85,22 @@ export function retainConversationBindingFacts(conversationRefs: readonly string
       if (!sameSource(change)) {
         return;
       }
+      // An absent store has only its captured path until its first committed publication.
+      source ??= change.source;
       if ([...change.facts.values()].some((fact) => fact.kind === "unknown")) {
         known = false;
       }
       applyFacts(facts, change.facts);
     } else if (change.kind === "unknown") {
-      if (change.source.identity === source?.identity) {
+      if (sameSource(change)) {
         known = false;
       }
     } else if (change.kind === "pending") {
       if (
-        change.databaseIdentity === undefined ||
-        (change.databaseIdentity === source?.identity &&
-          (change.receipts === undefined || change.receipts.some(relevant)))
+        (source
+          ? change.databaseIdentity === source.identity
+          : change.databasePath === databasePath) &&
+        (change.receipts === undefined || change.receipts.some(relevant))
       ) {
         pending.add(change.operation);
       }

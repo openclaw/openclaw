@@ -2400,6 +2400,9 @@ Conversation authority retains all candidates for its requested references,
 including historical associations that can become current after another binding
 is deleted. New subscribers synchronously inherit active pending operations before
 acquiring their snapshot and refuse authority until relevant operations settle.
+An absent store is matched by its captured physical path until the first committed
+publication supplies its identity. Native tentative writes use that same path and
+disappear on rollback; creation in another store cannot change the captured absence.
 Commit installs its facts; absent or uncertain receipts retire the retained view.
 The existing generic settlement also retires a known rollback without a received
 commit receipt, so a fresh capture is required. Session-entry and metadata receipts

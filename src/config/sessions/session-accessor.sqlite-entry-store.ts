@@ -77,6 +77,7 @@ import {
   type SessionEntryWritePostimage,
   type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
+import { resolveSessionPublicShare } from "./session-public-share.js";
 import {
   readStagedSessionTranscriptUpdatedAt,
   readStagedSessionTranscriptAuthority,
@@ -431,6 +432,22 @@ export function writeSessionEntry(
     options,
   );
   normalizedEntry = normalized.entry;
+  // Public/plugin projections omit this server-owned field. Same-session replacements
+  // retain publication; only an explicit field clear or a new session id revokes it.
+  if (
+    !Object.hasOwn(normalizedEntry, "publicShare") &&
+    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
+  ) {
+    normalizedEntry.publicShare = resolveSessionPublicShare(canonicalPreviousEntry);
+  }
+  // A copied or reset entry must never publish its replacement generation.
+  // Checking the embedded binding also covers forks into previously absent nodes.
+  if (
+    normalizedEntry.incognito === true ||
+    normalizedEntry.publicShare?.sessionId !== normalizedEntry.sessionId
+  ) {
+    delete normalizedEntry.publicShare;
+  }
   const previousEntry = normalized.previousEntry;
   const updatedAt = normalizedEntry.updatedAt;
   const canonicalEntry = stripRuntimeOnlySessionSkillsFields(

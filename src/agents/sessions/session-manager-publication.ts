@@ -101,7 +101,10 @@ export function createSessionManagerPublicationHooks(params: {
       };
       pending.entry = retainSessionEntryWorkerPublication(pending.scope);
       pending.transcript = retainSessionTranscriptWorkerPublication(pending.scope);
-      pending.conversation = retainConversationWorkerPublication(databaseIdentity);
+      pending.conversation = retainConversationWorkerPublication(
+        databaseIdentity,
+        params.storePath,
+      );
       pending.conversation.begin(conversationPublication);
       const unchanged = entryPublication.flatMap((receipt) =>
         [...receipt.facts].flatMap(([key, fact]) =>

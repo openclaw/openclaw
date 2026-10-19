@@ -220,7 +220,10 @@ export function createSqliteSessionActorExecutor(
     let candidate: unknown;
     const conversation =
       target.database.kind === "file"
-        ? retainConversationWorkerPublication(target.database.physicalIdentity)
+        ? retainConversationWorkerPublication(
+            target.database.physicalIdentity,
+            target.database.nativeLocation,
+          )
         : undefined;
     const transfer = createSqliteWorkerTransferCollector("outcome", (value) => {
       if (candidate !== undefined) {

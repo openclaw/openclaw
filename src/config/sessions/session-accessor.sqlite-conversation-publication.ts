@@ -46,14 +46,19 @@ export type ConversationFact =
   | { kind: "node"; row: ConversationBindingNode }
   | { kind: "window"; row: ConversationBindingWindow }
   | { kind: "rehome"; sessionKey: string; sessionId?: string; previousKeys?: readonly string[] };
-export type ConversationPublication = SqliteCommitReceipt<ConversationFact>;
+type ConversationPublicationSource = SqliteCommitSource & { canonicalPath: string };
+export type ConversationPublication = SqliteCommitReceipt<
+  ConversationFact,
+  ConversationPublicationSource
+>;
 export type ConversationFactChange =
   | ConversationPublication
-  | { kind: "unknown"; source: SqliteCommitSource }
+  | { kind: "unknown"; source: ConversationPublicationSource }
   | {
       kind: "pending" | "settled";
       operation: object;
-      databaseIdentity?: string;
+      databaseIdentity: string;
+      databasePath: string;
       receipts?: readonly ConversationPublication[];
       outcome?: "published" | "unknown";
     };
@@ -252,8 +257,8 @@ export function parseConversationPublications(
     return undefined;
   }
   try {
-    return publications.map((receipt) =>
-      readSqliteCommitReceipt<ConversationFact>(receipt, {
+    return publications.map((publication) => {
+      const receipt = readSqliteCommitReceipt<ConversationFact>(publication, {
         domain: "conversation-catalogue-associations",
         isFact: (_key, fact) => {
           if (fact.kind === "absent") {
@@ -304,15 +309,26 @@ export function parseConversationPublications(
               return false;
           }
         },
-      }),
-    );
+      });
+      const canonicalPath =
+        isRecord(publication) && isRecord(publication.source)
+          ? publication.source.canonicalPath
+          : undefined;
+      if (typeof canonicalPath !== "string") {
+        throw new Error("Conversation receipt omitted its database path");
+      }
+      return { ...receipt, source: { ...receipt.source, canonicalPath } };
+    });
   } catch {
     return undefined;
   }
 }
 
 /** The existing commit grant owns the unavailable interval through native settlement. */
-export function retainConversationWorkerPublication(databaseIdentity: string) {
+export function retainConversationWorkerPublication(
+  databaseIdentity: string,
+  databasePath: string,
+) {
   const operation = {};
   let pending = false;
   let overtaken = false;
@@ -323,7 +339,13 @@ export function retainConversationWorkerPublication(databaseIdentity: string) {
         return;
       }
       pending = true;
-      installFacts({ kind: "pending", operation, databaseIdentity, receipts });
+      installFacts({
+        kind: "pending",
+        operation,
+        databaseIdentity,
+        databasePath: receipts?.[0]?.source.canonicalPath ?? databasePath,
+        receipts,
+      });
       unsubscribe = conversationPublication.subscribeFacts((change) => {
         if ("facts" in change && change.source.identity === databaseIdentity) {
           overtaken = true;
@@ -341,7 +363,7 @@ export function retainConversationWorkerPublication(databaseIdentity: string) {
       const invalidate = () =>
         installFacts({
           kind: "unknown",
-          source: { identity: databaseIdentity, incarnation: "" },
+          source: { identity: databaseIdentity, incarnation: "", canonicalPath: databasePath },
         });
       const finish = () => {
         if (!pending) {
@@ -352,6 +374,7 @@ export function retainConversationWorkerPublication(databaseIdentity: string) {
           kind: "settled",
           operation,
           databaseIdentity,
+          databasePath,
           outcome: unavailable ? "unknown" : "published",
         });
       };
@@ -375,7 +398,7 @@ export function retainConversationWorkerPublication(databaseIdentity: string) {
 export function withConversationPublication(
   factory: SqliteWorkerAdmissionFactory,
   assertCurrent: () => void,
-  expectedSource: () => { identity: string; incarnation: string },
+  expectedSource: () => ConversationPublicationSource & { identity: string },
   expectedKeys: () => readonly string[],
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
@@ -386,7 +409,12 @@ export function withConversationPublication(
     let owner: ReturnType<SqliteWorkerAdmissionFactory>;
     const source = expectedSource();
     try {
-      installFacts({ kind: "pending", operation, databaseIdentity: source.identity });
+      installFacts({
+        kind: "pending",
+        operation,
+        databaseIdentity: source.identity,
+        databasePath: source.canonicalPath,
+      });
       owner = factory(operation);
     } catch (error) {
       listeners.pending.delete(operation);
@@ -394,6 +422,7 @@ export function withConversationPublication(
         kind: "settled",
         operation,
         databaseIdentity: source.identity,
+        databasePath: source.canonicalPath,
         outcome: "unknown",
       });
       throw error;
@@ -428,6 +457,7 @@ export function withConversationPublication(
           kind: "settled",
           operation,
           databaseIdentity: source.identity,
+          databasePath: source.canonicalPath,
           outcome:
             published && !unknown && owner.admission.settlement?.kind === "completed"
               ? "published"
@@ -451,6 +481,7 @@ export function withConversationPublication(
       });
       const installed = {
         ...receipt,
+        source,
         facts: new Map(
           [...receipt.facts].map(([key, fact]) => [
             key,
